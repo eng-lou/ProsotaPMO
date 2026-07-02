@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ACTIVITY_TYPES, type Activity, type ActivityType } from './types'
+import { ACTIVITY_TYPES, CONSTRAINT_TYPES, type Activity, type ActivityType, type ConstraintType } from './types'
 
 export interface ActivityFormValues {
   task_name: string
@@ -12,6 +12,8 @@ export interface ActivityFormValues {
   remaining_duration_days: string
   pct_complete: string
   commentary: string
+  constraint_type: ConstraintType | ''
+  constraint_date: string
 }
 
 function toFormValues(activity: Activity | null): ActivityFormValues {
@@ -26,11 +28,14 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
     remaining_duration_days: activity?.remaining_duration_days?.toString() ?? '',
     pct_complete: activity?.pct_complete ?? '',
     commentary: activity?.commentary ?? '',
+    constraint_type: activity?.constraint_type ?? '',
+    constraint_date: activity?.constraint_date ?? '',
   }
 }
 
 export function toActivityPayload(values: ActivityFormValues) {
   const isMilestone = values.activity_type === 'milestone'
+  const isAsap = !values.constraint_type || values.constraint_type === 'asap'
   return {
     task_name: values.task_name,
     activity_type: values.activity_type,
@@ -42,6 +47,8 @@ export function toActivityPayload(values: ActivityFormValues) {
     remaining_duration_days: values.remaining_duration_days ? Number(values.remaining_duration_days) : null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
     commentary: values.commentary || null,
+    constraint_type: isAsap ? null : values.constraint_type,
+    constraint_date: isAsap ? null : values.constraint_date || null,
   }
 }
 
@@ -65,6 +72,7 @@ export function ActivityForm({ activity, onCancel, onSubmit }: Props) {
     setValues(v => ({ ...v, [key]: value }))
 
   const isMilestone = values.activity_type === 'milestone'
+  const isAsap = !values.constraint_type || values.constraint_type === 'asap'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,6 +139,26 @@ export function ActivityForm({ activity, onCancel, onSubmit }: Props) {
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>
         <input type="number" min={0} max={100} value={values.pct_complete} onChange={e => set('pct_complete', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Type</label>
+        <select
+          value={values.constraint_type}
+          onChange={e => set('constraint_type', e.target.value as ConstraintType | '')}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        >
+          {CONSTRAINT_TYPES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Date</label>
+        <input
+          type="date"
+          value={isAsap ? '' : values.constraint_date}
+          disabled={isAsap}
+          onChange={e => set('constraint_date', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+        />
       </div>
       <div className="col-span-2">
         <label className="block text-xs font-semibold text-gray-600 mb-1">Commentary</label>

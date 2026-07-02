@@ -4,6 +4,7 @@ from app.models.user import User
 from app.models.project import Project
 from app.models.period import Period
 from app.models.activity import Activity
+from app.models.activity_relationship import ActivityRelationship
 from app.models.risk import Risk
 from app.models.risk_mitigation_action import RiskMitigationAction
 from app.models.risk_criteria import RiskProbabilityCriterion, RiskImpactCriterion
@@ -25,6 +26,7 @@ __all__ = [
     "Project",
     "Period",
     "Activity",
+    "ActivityRelationship",
     "Risk",
     "RiskMitigationAction",
     "RiskProbabilityCriterion",

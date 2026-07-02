@@ -56,3 +56,10 @@ class Activity(Base, TimestampMixin):
     total_float: Mapped[int | None] = mapped_column(Integer)
     is_critical: Mapped[bool | None] = mapped_column(Boolean)
     commentary: Mapped[str | None] = mapped_column(Text)
+    # asap | snet (Start On or After) | ms (Mandatory Start) | fnlt (Finish On or Before).
+    # constraint_date is required for every type except asap — see app/schemas/activity.py.
+    # Per PMBOK7/Rita Mulcahy Ch. 8: soft constraints (snet/fnlt) can still be pushed by
+    # the network; ms is hard and can produce negative float if infeasible. Honoured by
+    # Phase 5's CPM engine; not yet enforced anywhere before that exists.
+    constraint_type: Mapped[str | None] = mapped_column(String(10))
+    constraint_date: Mapped[date | None] = mapped_column(Date)

@@ -8,6 +8,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ActivityType = Literal["task", "milestone", "wbs_summary"]
+ConstraintType = Literal["asap", "snet", "ms", "fnlt"]
+
+
+def _validate_constraint(constraint_type: ConstraintType | None, constraint_date: date | None) -> None:
+    if constraint_type in (None, "asap") and constraint_date is not None:
+        raise ValueError("constraint_date must be null unless a constraint type requiring a date is set")
+    if constraint_type not in (None, "asap") and constraint_date is None:
+        raise ValueError(f"constraint_date is required for constraint_type '{constraint_type}'")
 
 
 class ActivityBase(BaseModel):
@@ -25,6 +33,8 @@ class ActivityBase(BaseModel):
     remaining_duration_days: int | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
+    constraint_type: ConstraintType | None = None
+    constraint_date: date | None = None
 
     @model_validator(mode="after")
     def milestones_have_zero_duration(self) -> "ActivityBase":
@@ -32,6 +42,11 @@ class ActivityBase(BaseModel):
             if self.duration_days not in (None, 0):
                 raise ValueError("milestones have zero duration")
             self.duration_days = 0
+        return self
+
+    @model_validator(mode="after")
+    def constraint_date_matches_type(self) -> "ActivityBase":
+        _validate_constraint(self.constraint_type, self.constraint_date)
         return self
 
 
@@ -52,6 +67,8 @@ class ActivityUpdate(BaseModel):
     remaining_duration_days: int | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
+    constraint_type: ConstraintType | None = None
+    constraint_date: date | None = None
 
 
 class ActivityResponse(ActivityBase):

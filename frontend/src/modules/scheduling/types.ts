@@ -31,6 +31,31 @@ export interface Activity {
   is_critical: boolean | null
   pct_complete: string | null
   commentary: string | null
+  constraint_type: ConstraintType | null
+  constraint_date: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ConstraintType = 'asap' | 'snet' | 'ms' | 'fnlt'
+
+export const CONSTRAINT_TYPES: { value: ConstraintType; label: string }[] = [
+  { value: 'asap', label: 'As Soon As Possible' },
+  { value: 'snet', label: 'Start On or After' },
+  { value: 'ms', label: 'Mandatory Start' },
+  { value: 'fnlt', label: 'Finish On or Before' },
+]
+
+export type RelationshipType = 'FS' | 'SS' | 'FF' | 'SF'
+
+export const RELATIONSHIP_TYPES: RelationshipType[] = ['FS', 'SS', 'FF', 'SF']
+
+export interface ActivityRelationship {
+  id: string
+  predecessor_id: string
+  successor_id: string
+  relationship_type: RelationshipType
+  lag_days: number
   created_at: string
   updated_at: string
 }

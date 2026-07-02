@@ -5,12 +5,13 @@ from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.activity_relationship import ActivityRelationship
 from app.models.period import Period
-from app.schemas.activity import ActivityCreate, ActivityUpdate
+from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
 from app.services.reference_codes import next_code
 
 
@@ -231,11 +232,33 @@ async def update_activity(
             db, activity.period_id, activity.parent_id, exclude_id=activity.id
         )
 
+    # ActivityUpdate can't run this as a schema-level validator (a partial PATCH can't
+    # tell "field not sent" from "explicitly cleared to null"), so it's checked here
+    # against the activity's final, fully-resolved state instead.
+    try:
+        _validate_constraint(activity.constraint_type, activity.constraint_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     _apply_computed_fields(activity)
     await db.commit()
 
     await _recompute_hierarchy(db, activity.period_id)
     return activity
+
+
+async def _subtree_ids(db: AsyncSession, period_id: uuid.UUID, root_id: uuid.UUID) -> set[uuid.UUID]:
+    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    children = _build_children_map(list(result.scalars().all()))
+    ids: set[uuid.UUID] = {root_id}
+
+    def visit(node_id: uuid.UUID) -> None:
+        for child in children.get(node_id, []):
+            ids.add(child.id)
+            visit(child.id)
+
+    visit(root_id)
+    return ids
 
 
 async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> None:
@@ -247,6 +270,26 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     activity = await get_activity(db, activity_id)
     await _require_live_period(db, activity.period_id)
     period_id = activity.period_id
+
+    # Explicitly ORM-delete any activity_relationships touching the row(s) about to be
+    # removed *before* the activity delete, rather than leaning on the FK's ON DELETE
+    # CASCADE alone. A DB-level cascade the ORM doesn't know about leaves a dangling,
+    # merely-expired ActivityRelationship object (it holds FK columns) in the session's
+    # identity map; a later unrelated query's autoflush pass touching that object's
+    # expired FK attributes raises MissingGreenlet trying to refresh a row that no
+    # longer exists. Doing the delete explicitly keeps the session's own state honest.
+    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
+    rel_result = await db.execute(
+        select(ActivityRelationship).where(
+            or_(
+                ActivityRelationship.predecessor_id.in_(doomed_ids),
+                ActivityRelationship.successor_id.in_(doomed_ids),
+            )
+        )
+    )
+    for rel in rel_result.scalars().all():
+        await db.delete(rel)
+    await db.commit()
 
     if not cascade:
         result = await db.execute(select(Activity).where(Activity.parent_id == activity_id))
@@ -262,9 +305,17 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     # at the DB level — none left if cascade=False since they were just reparented away.
     # The ORM has no idea a DB-level cascade happened — only `activity` was explicitly
     # session.delete()'d — so any cascade-deleted descendants stay as stale "alive"
-    # objects in this session's identity map until expired; without this, a later
-    # db.get() for one of them returns the stale in-memory object instead of 404.
+    # objects in the session's identity map afterward. expunge_all() (not expire_all())
+    # detaches every object from the session without invalidating their already-loaded
+    # attribute values — objects like the test/request-scoped Project or Period fixtures
+    # that nothing here ever touches again stay perfectly readable off their last-known
+    # values. expire_all() instead marks every attribute on every session object as
+    # needing a fresh reload on next touch; if an unrelated later query's autoflush
+    # pass ends up dirty-checking one of those expired objects mid-flight (observed with
+    # ActivityRelationship's FK columns above before this was extracted into its own
+    # explicit delete), reloading it requires a *nested* DB round-trip that the async
+    # driver can't service from inside another one, raising MissingGreenlet.
     await db.delete(activity)
     await db.commit()
-    db.expire_all()
+    db.expunge_all()
     await _recompute_hierarchy(db, period_id)

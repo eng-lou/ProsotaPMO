@@ -3,8 +3,9 @@ import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
+import { ActivityLogic } from './ActivityLogic'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
-import type { Activity } from './types'
+import type { Activity, ActivityRelationship } from './types'
 
 const PANE_MAX_HEIGHT = 600
 
@@ -12,10 +13,12 @@ export function Scheduling() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
   const [activities, setActivities] = useState<Activity[]>([])
+  const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
@@ -42,10 +45,18 @@ export function Scheduling() {
     async function load() {
       try {
         setLoading(true)
-        const { data } = await api.get<Activity[]>('/api/v1/activities/', {
-          params: { project_id: selectedProject!.id, period_id: period!.id },
-        })
-        if (!cancelled) setActivities(data)
+        const [activitiesRes, relationshipsRes] = await Promise.all([
+          api.get<Activity[]>('/api/v1/activities/', {
+            params: { project_id: selectedProject!.id, period_id: period!.id },
+          }),
+          api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
+            params: { period_id: period!.id },
+          }),
+        ])
+        if (!cancelled) {
+          setActivities(activitiesRes.data)
+          setRelationships(relationshipsRes.data)
+        }
       } catch {
         if (!cancelled) setError('Failed to load schedule')
       } finally {
@@ -61,10 +72,16 @@ export function Scheduling() {
 
   const refresh = async () => {
     if (!period) return
-    const { data } = await api.get<Activity[]>('/api/v1/activities/', {
-      params: { project_id: selectedProject.id, period_id: period.id },
-    })
-    setActivities(data)
+    const [activitiesRes, relationshipsRes] = await Promise.all([
+      api.get<Activity[]>('/api/v1/activities/', {
+        params: { project_id: selectedProject.id, period_id: period.id },
+      }),
+      api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
+        params: { period_id: period.id },
+      }),
+    ])
+    setActivities(activitiesRes.data)
+    setRelationships(relationshipsRes.data)
   }
 
   const handleCreate = async (values: ActivityFormValues) => {
@@ -125,6 +142,7 @@ export function Scheduling() {
   }
 
   const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
+  const expandedActivity = activities.find(a => a.id === expandedId) ?? null
 
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400">Loading schedule…</div>
@@ -187,7 +205,11 @@ export function Scheduling() {
             </thead>
             <tbody>
               {activities.map((a, index) => (
-                <tr key={a.id} style={{ height: GANTT_ROW_HEIGHT }} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                <tr
+                  key={a.id}
+                  style={{ height: GANTT_ROW_HEIGHT }}
+                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
+                >
                   <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap">{a.code}</td>
                   <td className="px-3 py-1 text-gray-400 font-mono text-xs whitespace-nowrap">{a.wbs_path ?? '—'}</td>
                   <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
@@ -203,6 +225,13 @@ export function Scheduling() {
                   <td className="px-3 py-1 text-gray-600">{a.variance_days ?? '—'}</td>
                   <td className="px-3 py-1 text-gray-600">{a.pct_complete ?? 0}%</td>
                   <td className="px-3 py-1 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
+                      title="Logic (predecessors/successors)"
+                      className={`text-xs mr-2 ${expandedId === a.id ? 'text-blue-600 font-semibold' : 'text-gray-400 hover:text-blue-600'}`}
+                    >
+                      🔗
+                    </button>
                     <button
                       onClick={() => handleOutdent(a)}
                       disabled={!a.parent_id}
@@ -241,9 +270,21 @@ export function Scheduling() {
           className="flex-1 overflow-auto border-l border-gray-200"
           style={{ maxHeight: PANE_MAX_HEIGHT }}
         >
-          <GanttChart activities={activities} />
+          <GanttChart activities={activities} relationships={relationships} />
         </div>
       </div>
+
+      {expandedActivity && (
+        <div className="bg-white border border-gray-200 rounded-lg mt-3 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+            <div className="text-sm font-semibold text-gray-700">
+              Logic — {expandedActivity.code}: {expandedActivity.task_name}
+            </div>
+            <button onClick={() => setExpandedId(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+          </div>
+          <ActivityLogic activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh} />
+        </div>
+      )}
     </div>
   )
 }

@@ -1,16 +1,17 @@
 import { useMemo } from 'react'
-import type { Activity } from './types'
+import type { Activity, ActivityRelationship } from './types'
 
 // Row height must match the data grid's row height exactly (Scheduling.tsx) so the
 // two panes stay visually aligned under the shared scroll-sync — see the "Gantt Chart
-// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Fidelity (dependency
-// arrows, critical-path colour, baseline ghost bars) is added in later phases; this is
-// deliberately just plain bars + a milestone diamond for Phase 1.
+// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Fidelity (critical-path
+// colour, baseline ghost bars) grows in later phases; dependency arrows land here in
+// Phase 3, once activity_relationships exists.
 export const GANTT_ROW_HEIGHT = 40
 const DAY_WIDTH = 14
 // Must match the data grid's <thead> row height (Scheduling.tsx) so week labels and
 // activity rows line up between the two panes.
 const HEADER_HEIGHT = 36
+const BAR_INSET = 7
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null
@@ -34,7 +35,34 @@ function mondayOnOrBefore(d: Date): Date {
   return result
 }
 
-export function GanttChart({ activities }: { activities: Activity[] }) {
+interface BarGeometry {
+  top: number
+  centerY: number
+  left: number
+  right: number
+}
+
+// Elbow-routed dependency line, MS Project style: out from the source connection
+// point, across, then into the target connection point.
+function elbowPath(x1: number, y1: number, x2: number, y2: number): string {
+  const stub = 10
+  if (x2 >= x1 + stub || (y1 === y2 && x2 >= x1)) {
+    const midX = Math.min(x1 + stub, Math.max(x1, x2 - stub))
+    return `M ${x1},${y1} H ${midX} V ${y2} H ${x2}`
+  }
+  const outX = x1 + stub
+  const inX = x2 - stub
+  const midY = (y1 + y2) / 2
+  return `M ${x1},${y1} H ${outX} V ${midY} H ${inX} V ${y2} H ${x2}`
+}
+
+export function GanttChart({
+  activities,
+  relationships = [],
+}: {
+  activities: Activity[]
+  relationships?: ActivityRelationship[]
+}) {
   const { rangeStart, totalDays, weekMarks } = useMemo(() => {
     const dates = activities
       .flatMap(a => [parseDate(a.start), parseDate(a.finish)])
@@ -58,6 +86,30 @@ export function GanttChart({ activities }: { activities: Activity[] }) {
   }, [activities])
 
   const width = totalDays * DAY_WIDTH
+  const height = activities.length * GANTT_ROW_HEIGHT
+
+  const geometry = useMemo(() => {
+    const map = new Map<string, BarGeometry>()
+    activities.forEach((a, i) => {
+      const top = i * GANTT_ROW_HEIGHT
+      const centerY = top + GANTT_ROW_HEIGHT / 2
+      const start = parseDate(a.start)
+      const finish = parseDate(a.finish)
+
+      if (a.activity_type === 'milestone') {
+        const at = start ?? finish
+        if (!at) return
+        const x = daysBetween(rangeStart, at) * DAY_WIDTH
+        map.set(a.id, { top, centerY, left: x, right: x })
+        return
+      }
+      if (!start || !finish) return
+      const left = daysBetween(rangeStart, start) * DAY_WIDTH
+      const right = left + Math.max(daysBetween(start, finish) * DAY_WIDTH, 6)
+      map.set(a.id, { top, centerY, left, right })
+    })
+    return map
+  }, [activities, rangeStart])
 
   return (
     <div style={{ width, minWidth: '100%' }}>
@@ -72,36 +124,52 @@ export function GanttChart({ activities }: { activities: Activity[] }) {
           </div>
         ))}
       </div>
-      <div className="relative" style={{ width, height: activities.length * GANTT_ROW_HEIGHT }}>
-        {activities.map((a, i) => {
-          const top = i * GANTT_ROW_HEIGHT
-          const start = parseDate(a.start)
-          const finish = parseDate(a.finish)
+      <div className="relative" style={{ width, height }}>
+        <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
+          <defs>
+            <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
+            </marker>
+          </defs>
+          {relationships.map(r => {
+            const pred = geometry.get(r.predecessor_id)
+            const succ = geometry.get(r.successor_id)
+            if (!pred || !succ) return null
+            const x1 = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? pred.left : pred.right
+            const x2 = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succ.right : succ.left
+            return (
+              <path
+                key={r.id}
+                d={elbowPath(x1, pred.centerY, x2, succ.centerY)}
+                fill="none"
+                stroke="#94a3b8"
+                strokeWidth={1.5}
+                markerEnd="url(#gantt-arrow)"
+              />
+            )
+          })}
+        </svg>
+        {activities.map(a => {
+          const geo = geometry.get(a.id)
+          if (!geo) return null
 
           if (a.activity_type === 'milestone') {
-            const at = start ?? finish
-            if (!at) return null
-            const left = daysBetween(rangeStart, at) * DAY_WIDTH
             return (
               <div
                 key={a.id}
                 className="absolute h-3 w-3 rotate-45 bg-purple-500"
-                style={{ top: top + GANTT_ROW_HEIGHT / 2 - 6, left: left - 6 }}
+                style={{ top: geo.centerY - 6, left: geo.left - 6 }}
                 title={`${a.task_name} — ${a.start ?? a.finish}`}
               />
             )
           }
 
-          if (!start || !finish) return null
-          const left = daysBetween(rangeStart, start) * DAY_WIDTH
-          const barWidth = Math.max(daysBetween(start, finish) * DAY_WIDTH, 6)
           const pct = a.pct_complete ? Math.min(Number(a.pct_complete), 100) : 0
-
           return (
             <div
               key={a.id}
               className="absolute overflow-hidden rounded bg-blue-100"
-              style={{ top: top + 7, left, width: barWidth, height: GANTT_ROW_HEIGHT - 14 }}
+              style={{ top: geo.top + BAR_INSET, left: geo.left, width: geo.right - geo.left, height: GANTT_ROW_HEIGHT - BAR_INSET * 2 }}
               title={`${a.task_name}: ${a.start} → ${a.finish} (${pct}% complete)`}
             >
               <div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
