@@ -8,6 +8,7 @@ import { ActivityLogic } from './ActivityLogic'
 import { CalendarWidget } from './CalendarWidget'
 import { downloadActivitiesCsv } from './exportActivities'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
+import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import type { Activity, ActivityRelationship, Calendar } from './types'
 
@@ -26,6 +27,7 @@ export function Scheduling() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
+  const [rescheduleWidgetOpen, setRescheduleWidgetOpen] = useState(false)
   const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
 
   // Search / Filters — client-side, matching the prototype's toolbar row. No separate
@@ -247,6 +249,12 @@ export function Scheduling() {
         </div>
       )}
 
+      {rescheduleWidgetOpen && period && (
+        <div className="no-print">
+          <RescheduleWidget periodId={period.id} onApplied={refresh} onClose={() => setRescheduleWidgetOpen(false)} />
+        </div>
+      )}
+
       {formOpen && (
         <div className="no-print">
           <ActivityForm activity={null} calendars={calendars} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />
@@ -286,6 +294,15 @@ export function Scheduling() {
             }`}
           >
             🔬 Quality Check
+          </button>
+          <button
+            onClick={() => setRescheduleWidgetOpen(o => !o)}
+            disabled={activities.length === 0}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
+              rescheduleWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            🔄 Reschedule
           </button>
         </div>
       )}

@@ -9,6 +9,7 @@ from app.database import get_db
 from app.schemas.activity import ActivityCreate, ActivityResponse, ActivityUpdate
 from app.services import activity as svc
 from app.services import scheduling_baseline
+from app.services import scheduling_reschedule
 
 router = APIRouter(prefix="/activities", tags=["activities"])
 
@@ -30,14 +31,23 @@ async def create_activity(
     return await svc.create_activity(db, data)
 
 
-# Registered before /{activity_id} — "set-baseline" would otherwise be attempted as
-# a UUID path param by that route first.
+# Registered before /{activity_id} — "set-baseline"/"reschedule" would otherwise be
+# attempted as a UUID path param by that route first.
 @router.post("/set-baseline", response_model=list[ActivityResponse])
 async def set_baseline(
     period_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list:
     return await scheduling_baseline.set_baseline(db, period_id)
+
+
+@router.post("/reschedule")
+async def reschedule(
+    period_id: uuid.UUID,
+    shift_days: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await scheduling_reschedule.reschedule(db, period_id, shift_days)
 
 
 @router.get("/{activity_id}", response_model=ActivityResponse)

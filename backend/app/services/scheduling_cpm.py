@@ -103,6 +103,16 @@ def _cpm_participants(activities: list[Activity]) -> list[Activity]:
     return [a for a in activities if a.activity_type in ("task", "milestone")]
 
 
+async def get_project_finish(db: AsyncSession, period_id: uuid.UUID) -> date | None:
+    """The project finish date is, by definition, the latest computed finish among
+    the CPM network's participants — used by app/services/scheduling_reschedule.py
+    for a real before/after impact figure rather than a mocked-up number."""
+    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    participants = _cpm_participants(list(result.scalars().all()))
+    finishes = [a.finish for a in participants if a.finish is not None]
+    return max(finishes) if finishes else None
+
+
 def _find_cycle(edges: list[tuple[uuid.UUID, uuid.UUID]], node_ids: set[uuid.UUID]) -> bool:
     """DFS three-colour cycle check over predecessor->successor edges."""
     graph: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
