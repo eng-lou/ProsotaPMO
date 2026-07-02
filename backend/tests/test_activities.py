@@ -20,10 +20,14 @@ async def test_create_activity(client: AsyncClient, project: Project, live_perio
     assert resp.status_code == 201
     data = resp.json()
     assert data["task_name"] == "Excavation works"
-    # is_critical/total_float are computed by the (not-yet-built) CPM engine,
-    # never accepted as input — see app/services/activity.py:_apply_computed_fields.
-    assert data["is_critical"] is None
-    assert data["total_float"] is None
+    # is_critical/total_float/start/finish are computed by the CPM engine (Phase 5),
+    # never accepted as input — see app/services/scheduling_cpm.py. A lone activity
+    # with no predecessors/successors is trivially on the critical path (it alone
+    # determines the project finish date), so total_float is genuinely 0 here.
+    assert data["is_critical"] is True
+    assert data["total_float"] == 0
+    assert data["start"] is not None
+    assert data["finish"] is not None
     assert data["code"] == "ACT-0001"
     assert "id" in data
     assert data["project_id"] == str(project.id)
@@ -36,15 +40,19 @@ async def test_create_activity_ignores_computed_fields(
         "project_id": str(project.id),
         "period_id": str(live_period.id),
         "task_name": "Piling",
-        "is_critical": True,
-        "total_float": 5,
+        "is_critical": False,
+        "total_float": 99,
+        "start": "1999-01-01",
+        "finish": "1999-01-01",
         "bl_start": "2025-01-01",
         "bl_finish": "2025-02-01",
     })
     assert resp.status_code == 201
     data = resp.json()
-    assert data["is_critical"] is None
-    assert data["total_float"] is None
+    # Real CPM-computed values, not the (ignored) posted junk.
+    assert data["is_critical"] is True
+    assert data["total_float"] == 0
+    assert data["start"] != "1999-01-01"
     assert data["bl_start"] is None
     assert data["bl_finish"] is None
 
@@ -76,18 +84,24 @@ async def test_variance_days_computed_from_finish_vs_baseline(
 ):
     from datetime import date
 
-    activity = Activity(
-        project_id=project.id,
-        period_id=live_period.id,
-        task_name="Piling",
-        code="ACT-9999",
-        bl_finish=date(2025, 5, 1),
-    )
-    db.add(activity)
+    # A Monday anchor + a 5-day (Mon-Fri) duration keeps the CPM-computed finish
+    # deterministic without needing to replicate working-day-skipping arithmetic here.
+    live_period.start_date = date(2025, 6, 2)
     await db.commit()
-    await db.refresh(activity)
 
-    resp = await client.patch(f"/api/v1/activities/{activity.id}", json={"finish": "2025-05-08"})
+    create = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "period_id": str(live_period.id),
+        "task_name": "Piling", "duration_days": 5,
+    })
+    assert create.status_code == 201
+    activity_id = create.json()["id"]
+    assert create.json()["finish"] == "2025-06-06"  # Friday of that week
+
+    activity = await db.get(Activity, uuid.UUID(activity_id))
+    activity.bl_finish = date(2025, 5, 30)
+    await db.commit()
+
+    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"task_name": "Piling (renamed)"})
     assert resp.status_code == 200
     assert resp.json()["variance_days"] == 7
 
@@ -316,23 +330,32 @@ async def test_reparent_to_self_rejected(client: AsyncClient, project: Project, 
 
 
 async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Project, live_period: Period):
+    # Dates are CPM-computed (Phase 5) rather than typed in, so this asserts the
+    # rollup formula against whatever the two children actually compute to, linked
+    # FS so child2 genuinely starts after child1 (exercising min-start/max-finish
+    # rather than two independent, potentially-identical-start activities).
     parent = await _create(client, project, live_period, task_name="Phase 1")
-    await _create(
+    child1 = await _create(
         client, project, live_period, task_name="Piling", parent_id=parent["id"],
-        start="2025-03-01", finish="2025-04-01", duration_days=31, pct_complete=100,
+        duration_days=10, pct_complete=100,
     )
-    await _create(
+    child2 = await _create(
         client, project, live_period, task_name="Pile caps", parent_id=parent["id"],
-        start="2025-04-01", finish="2025-05-01", duration_days=30, pct_complete=0,
+        duration_days=5, pct_complete=0,
     )
+    await client.post("/api/v1/activity-relationships/", json={
+        "predecessor_id": child1["id"], "successor_id": child2["id"],
+    })
 
+    c1 = (await client.get(f"/api/v1/activities/{child1['id']}")).json()
+    c2 = (await client.get(f"/api/v1/activities/{child2['id']}")).json()
     resp = await client.get(f"/api/v1/activities/{parent['id']}")
     data = resp.json()
-    assert data["start"] == "2025-03-01"
-    assert data["finish"] == "2025-05-01"
-    assert data["duration_days"] == 61
-    # Duration-weighted average: (31*100 + 30*0) / 61 = 50.82
-    assert 50 < float(data["pct_complete"]) < 51
+
+    assert data["start"] == c1["start"]
+    assert data["finish"] == c2["finish"]
+    # Duration-weighted average: (10*100 + 5*0) / 15 = 66.67
+    assert 66 < float(data["pct_complete"]) < 67
 
 
 async def test_delete_summary_cascades_to_children(

@@ -3,9 +3,9 @@ import type { Activity, ActivityRelationship } from './types'
 
 // Row height must match the data grid's row height exactly (Scheduling.tsx) so the
 // two panes stay visually aligned under the shared scroll-sync — see the "Gantt Chart
-// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Fidelity (critical-path
-// colour, baseline ghost bars) grows in later phases; dependency arrows land here in
-// Phase 3, once activity_relationships exists.
+// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Baseline ghost bars land
+// in Phase 6. Dependency arrows (Phase 3) and critical-path colouring (Phase 5, once
+// the CPM engine computes is_critical) are both in place.
 export const GANTT_ROW_HEIGHT = 40
 const DAY_WIDTH = 14
 // Must match the data grid's <thead> row height (Scheduling.tsx) so week labels and
@@ -111,6 +111,8 @@ export function GanttChart({
     return map
   }, [activities, rangeStart])
 
+  const criticalById = useMemo(() => new Map(activities.map(a => [a.id, a.is_critical === true])), [activities])
+
   return (
     <div style={{ width, minWidth: '100%' }}>
       <div className="relative border-b border-gray-200 bg-gray-50" style={{ height: HEADER_HEIGHT, width }}>
@@ -130,6 +132,9 @@ export function GanttChart({
             <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
             </marker>
+            <marker id="gantt-arrow-critical" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#ef4444" />
+            </marker>
           </defs>
           {relationships.map(r => {
             const pred = geometry.get(r.predecessor_id)
@@ -137,14 +142,15 @@ export function GanttChart({
             if (!pred || !succ) return null
             const x1 = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? pred.left : pred.right
             const x2 = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succ.right : succ.left
+            const critical = criticalById.get(r.predecessor_id) && criticalById.get(r.successor_id)
             return (
               <path
                 key={r.id}
                 d={elbowPath(x1, pred.centerY, x2, succ.centerY)}
                 fill="none"
-                stroke="#94a3b8"
+                stroke={critical ? '#ef4444' : '#94a3b8'}
                 strokeWidth={1.5}
-                markerEnd="url(#gantt-arrow)"
+                markerEnd={critical ? 'url(#gantt-arrow-critical)' : 'url(#gantt-arrow)'}
               />
             )
           })}
@@ -152,14 +158,15 @@ export function GanttChart({
         {activities.map(a => {
           const geo = geometry.get(a.id)
           if (!geo) return null
+          const critical = a.is_critical === true
 
           if (a.activity_type === 'milestone') {
             return (
               <div
                 key={a.id}
-                className="absolute h-3 w-3 rotate-45 bg-purple-500"
+                className={`absolute h-3 w-3 rotate-45 ${critical ? 'bg-red-500' : 'bg-purple-500'}`}
                 style={{ top: geo.centerY - 6, left: geo.left - 6 }}
-                title={`${a.task_name} — ${a.start ?? a.finish}`}
+                title={`${a.task_name} — ${a.start ?? a.finish}${critical ? ' (critical)' : ''}`}
               />
             )
           }
@@ -168,11 +175,11 @@ export function GanttChart({
           return (
             <div
               key={a.id}
-              className="absolute overflow-hidden rounded bg-blue-100"
+              className={`absolute overflow-hidden rounded ${critical ? 'bg-red-100' : 'bg-blue-100'}`}
               style={{ top: geo.top + BAR_INSET, left: geo.left, width: geo.right - geo.left, height: GANTT_ROW_HEIGHT - BAR_INSET * 2 }}
-              title={`${a.task_name}: ${a.start} → ${a.finish} (${pct}% complete)`}
+              title={`${a.task_name}: ${a.start} → ${a.finish} (${pct}% complete)${critical ? ' — critical path' : ''}`}
             >
-              <div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
+              <div className={`h-full ${critical ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
             </div>
           )
         })}

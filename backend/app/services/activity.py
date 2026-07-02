@@ -13,6 +13,7 @@ from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
 from app.models.period import Period
 from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
+from app.services import scheduling_cpm
 from app.services.reference_codes import next_code
 
 
@@ -84,11 +85,14 @@ def _apply_computed_fields(activity: Activity) -> None:
 
     Per PMBOK7 / Rita Mulcahy Ch. 8 ("Schedule"): variance is finish vs. the
     captured baseline finish — meaningless (and left null) until a baseline
-    actually exists. total_float/is_critical are outputs of the Critical Path
-    Method's forward/backward pass, not opinions a user types in — same class
-    of bug already fixed for Risk's EMV and Cost's CPI/SPI. Until Phase 5's
-    CPM engine exists (docs/SCHEDULING_MODULE_PLAN.md), they stay honestly
-    null rather than holding a fake or stale value.
+    actually exists (Phase 6). total_float/free_float/is_critical are outputs of
+    the Critical Path Method's forward/backward pass
+    (app/services/scheduling_cpm.py), not opinions a user types in — same class
+    of bug already fixed for Risk's EMV and Cost's CPI/SPI. Set to null here as
+    this activity's starting state; scheduling_cpm.recompute_schedule (called
+    right after this, in create/update/delete_activity) overwrites them
+    moments later for real CPM participants — wbs_summary rows genuinely keep
+    them null, they're outside the CPM network.
     """
     activity.variance_days = (
         (activity.finish - activity.bl_finish).days
@@ -96,6 +100,7 @@ def _apply_computed_fields(activity: Activity) -> None:
         else None
     )
     activity.total_float = None
+    activity.free_float = None
     activity.is_critical = None
 
 
@@ -217,6 +222,7 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
     await db.refresh(activity)
 
     await _recompute_hierarchy(db, data.period_id)
+    await scheduling_cpm.recompute_schedule(db, data.period_id)
     return activity
 
 
@@ -257,6 +263,7 @@ async def update_activity(
     await db.commit()
 
     await _recompute_hierarchy(db, activity.period_id)
+    await scheduling_cpm.recompute_schedule(db, activity.period_id)
     return activity
 
 
@@ -332,3 +339,4 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     await db.commit()
     db.expunge_all()
     await _recompute_hierarchy(db, period_id)
+    await scheduling_cpm.recompute_schedule(db, period_id)

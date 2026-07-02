@@ -16,18 +16,22 @@ export interface Activity {
   wbs_path: string | null
   sort_order: number | null
   duration_days: number | null
+  // Computed by the CPM forward/backward pass (app/services/scheduling_cpm.py) from
+  // duration + logic + calendar + constraints — never accepted as input from Phase 5
+  // onward. wbs_summary rows are the exception: theirs are rollups from children.
   start: string | null
   finish: string | null
   actual_start: string | null
   actual_finish: string | null
   remaining_duration_days: number | null
   // Computed server-side only (see backend app/services/activity.py). bl_start/
-  // bl_finish stay null until Phase 6 (Set Baseline); total_float/is_critical stay
-  // null until Phase 5 (CPM engine) — see docs/SCHEDULING_MODULE_PLAN.md.
+  // bl_finish stay null until Phase 6 (Set Baseline). total_float/free_float/
+  // is_critical are null for wbs_summary rows (outside the CPM network).
   bl_start: string | null
   bl_finish: string | null
   variance_days: number | null
   total_float: number | null
+  free_float: number | null
   is_critical: boolean | null
   pct_complete: string | null
   commentary: string | null

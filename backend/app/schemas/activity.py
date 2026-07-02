@@ -26,8 +26,6 @@ class ActivityBase(BaseModel):
     activity_type: ActivityType = "task"
     parent_id: uuid.UUID | None = None
     duration_days: int | None = Field(default=None, ge=0)
-    start: date | None = None
-    finish: date | None = None
     actual_start: date | None = None
     actual_finish: date | None = None
     remaining_duration_days: int | None = Field(default=None, ge=0)
@@ -62,8 +60,6 @@ class ActivityUpdate(BaseModel):
     activity_type: ActivityType | None = None
     parent_id: uuid.UUID | None = None
     duration_days: int | None = Field(default=None, ge=0)
-    start: date | None = None
-    finish: date | None = None
     actual_start: date | None = None
     actual_finish: date | None = None
     remaining_duration_days: int | None = Field(default=None, ge=0)
@@ -83,13 +79,17 @@ class ActivityResponse(ActivityBase):
     period_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
-    # Computed server-side only — see app/services/activity.py:_apply_computed_fields.
-    # bl_start/bl_finish stay null until Phase 6 (Set Baseline); total_float/is_critical
-    # stay null until Phase 5 (CPM engine) rather than holding a placeholder value.
+    # start/finish are computed by app/services/scheduling_cpm.py (forward/backward
+    # pass) from Phase 5 onward — never accepted as API input. bl_start/bl_finish stay
+    # null until Phase 6 (Set Baseline); total_float/free_float/is_critical are null
+    # for wbs_summary rows (outside the CPM network) rather than a placeholder value.
+    start: date | None = None
+    finish: date | None = None
     bl_start: date | None = None
     bl_finish: date | None = None
     variance_days: int | None = None
     total_float: int | None = None
+    free_float: int | None = None
     is_critical: bool | None = None
     # Server-managed outline position — see app/services/activity.py:_recompute_hierarchy.
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.

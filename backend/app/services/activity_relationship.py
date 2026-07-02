@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.schemas.activity_relationship import ActivityRelationshipCreate, ActivityRelationshipUpdate
-from app.services.activity import _require_live_period
+from app.services import scheduling_cpm
+from app.services.activity import _recompute_hierarchy, _require_live_period
 
 
 async def _get_activity_in_period(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
@@ -17,6 +18,14 @@ async def _get_activity_in_period(db: AsyncSession, activity_id: uuid.UUID) -> A
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found")
     return activity
+
+
+async def _recompute_period(db: AsyncSession, period_id: uuid.UUID) -> None:
+    # CPM first (sets task/milestone dates from the now-changed logic), then the WBS
+    # rollup (app/services/activity.py:_recompute_hierarchy) — summary rows roll up
+    # from children's dates, so they'd go stale if rolled up before CPM runs.
+    await scheduling_cpm.recompute_schedule(db, period_id)
+    await _recompute_hierarchy(db, period_id)
 
 
 async def list_relationships(db: AsyncSession, period_id: uuid.UUID) -> list[ActivityRelationship]:
@@ -64,9 +73,9 @@ async def create_relationship(
             detail="A relationship already exists between these two activities",
         )
 
-    # Full multi-hop cycle detection runs as part of Phase 5's CPM pass (it needs a
-    # cycle-free graph to terminate anyway); here we only reject the direct reverse of
-    # an existing link, per docs/SCHEDULING_MODULE_PLAN.md Phase 3.
+    # Direct reverse of an existing link (checked here, cheaply, before the general
+    # multi-hop check) plus any longer cycle (A->B->C->A) — the latter is what Phase 5's
+    # CPM engine needs a cycle-free graph for, per docs/SCHEDULING_MODULE_PLAN.md Phase 3.
     reverse = await db.execute(
         select(ActivityRelationship).where(
             ActivityRelationship.predecessor_id == data.successor_id,
@@ -78,11 +87,15 @@ async def create_relationship(
             status_code=422,
             detail="The reverse relationship already exists between these two activities",
         )
+    if await scheduling_cpm.would_create_cycle(db, predecessor.period_id, data.predecessor_id, data.successor_id):
+        raise HTTPException(status_code=422, detail="This relationship would create a circular dependency")
 
     rel = ActivityRelationship(**data.model_dump())
     db.add(rel)
     await db.commit()
     await db.refresh(rel)
+
+    await _recompute_period(db, predecessor.period_id)
     return rel
 
 
@@ -96,6 +109,8 @@ async def update_relationship(
         setattr(rel, field, value)
     await db.commit()
     await db.refresh(rel)
+
+    await _recompute_period(db, predecessor.period_id)
     return rel
 
 
@@ -105,3 +120,5 @@ async def delete_relationship(db: AsyncSession, relationship_id: uuid.UUID) -> N
     await _require_live_period(db, predecessor.period_id)
     await db.delete(rel)
     await db.commit()
+
+    await _recompute_period(db, predecessor.period_id)

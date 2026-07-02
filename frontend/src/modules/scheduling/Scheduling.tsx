@@ -170,9 +170,9 @@ export function Scheduling() {
         )}
       </div>
       <p className="text-gray-500 text-sm mb-6">
-        Activities for {selectedProject.name}. Calendars can be created and assigned, but dates aren't yet computed
-        from them — the critical path and baselines are still pending too. See{' '}
-        <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
+        Activities for {selectedProject.name}. Start/finish dates, float, and the critical path are computed from
+        duration + logic + calendars — set duration and link activities to see them. Baselines are still pending.
+        See <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
       </p>
 
       {(error || periodError) && (
@@ -232,6 +232,7 @@ export function Scheduling() {
                 <th className="px-3 py-2.5 w-24">Start</th>
                 <th className="px-3 py-2.5 w-24">Finish</th>
                 <th className="px-3 py-2.5 w-16">Var (d)</th>
+                <th className="px-3 py-2.5 w-16">Float</th>
                 <th className="px-3 py-2.5 w-20">% Comp</th>
                 <th className="px-3 py-2.5 w-28"></th>
               </tr>
@@ -241,7 +242,9 @@ export function Scheduling() {
                 <tr
                   key={a.id}
                   style={{ height: GANTT_ROW_HEIGHT }}
-                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
+                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
+                    expandedId === a.id ? 'bg-blue-50/50' : a.is_critical ? 'bg-red-50/40' : ''
+                  }`}
                 >
                   <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap">{a.code}</td>
                   <td className="px-3 py-1 text-gray-400 font-mono text-xs whitespace-nowrap">{a.wbs_path ?? '—'}</td>
@@ -256,6 +259,9 @@ export function Scheduling() {
                   <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{a.start ?? '—'}</td>
                   <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{a.finish ?? '—'}</td>
                   <td className="px-3 py-1 text-gray-600">{a.variance_days ?? '—'}</td>
+                  <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                    {a.total_float ?? '—'}
+                  </td>
                   <td className="px-3 py-1 text-gray-600">{a.pct_complete ?? 0}%</td>
                   <td className="px-3 py-1 text-right whitespace-nowrap">
                     <button
@@ -289,7 +295,7 @@ export function Scheduling() {
               ))}
               {activities.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm">
                     No activities yet for this period. Add the first one above.
                   </td>
                 </tr>

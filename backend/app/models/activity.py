@@ -39,21 +39,28 @@ class Activity(Base, TimestampMixin):
     # — never accepted as API input from Phase 2 onward.
     wbs_path: Mapped[str | None] = mapped_column(String(500))
     duration_days: Mapped[int | None] = mapped_column(Integer)
+    # start/finish are computed by app/services/scheduling_cpm.py's forward/backward
+    # pass (duration + logic + calendar + constraints), never accepted as API input
+    # from Phase 5 onward — see docs/SCHEDULING_MODULE_PLAN.md. wbs_summary rows are
+    # the exception: theirs stay rollups from children (_recompute_hierarchy).
     start: Mapped[date | None] = mapped_column(Date)
     finish: Mapped[date | None] = mapped_column(Date)
     actual_start: Mapped[date | None] = mapped_column(Date)
     actual_finish: Mapped[date | None] = mapped_column(Date)
     remaining_duration_days: Mapped[int | None] = mapped_column(Integer)
-    # bl_start/bl_finish/variance_days/total_float/is_critical are never accepted as API
-    # input (see app/services/activity.py:_apply_computed_fields) — same discipline as
-    # Risk's EMV and Cost's CPI/SPI fixes. bl_start/bl_finish stay null until Phase 6's
-    # dedicated "Set Baseline" action exists; total_float/is_critical stay null until
-    # Phase 5's CPM engine exists, rather than holding a fake computed value early.
+    # bl_start/bl_finish/variance_days/total_float/free_float/is_critical are never
+    # accepted as API input (see app/services/activity.py:_apply_computed_fields and
+    # app/services/scheduling_cpm.py) — same discipline as Risk's EMV and Cost's
+    # CPI/SPI fixes. bl_start/bl_finish stay null until Phase 6's dedicated "Set
+    # Baseline" action exists. total_float/free_float/is_critical are null for
+    # wbs_summary rows (outside the CPM network) and, before Phase 5, were null for
+    # everything rather than holding a fake computed value early.
     bl_start: Mapped[date | None] = mapped_column(Date)
     bl_finish: Mapped[date | None] = mapped_column(Date)
     variance_days: Mapped[int | None] = mapped_column(Integer)
     pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     total_float: Mapped[int | None] = mapped_column(Integer)
+    free_float: Mapped[int | None] = mapped_column(Integer)
     is_critical: Mapped[bool | None] = mapped_column(Boolean)
     commentary: Mapped[str | None] = mapped_column(Text)
     # asap | snet (Start On or After) | ms (Mandatory Start) | fnlt (Finish On or Before).

@@ -5,8 +5,6 @@ export interface ActivityFormValues {
   task_name: string
   activity_type: ActivityType
   duration_days: string
-  start: string
-  finish: string
   actual_start: string
   actual_finish: string
   remaining_duration_days: string
@@ -22,8 +20,6 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
     duration_days: activity?.duration_days?.toString() ?? '',
-    start: activity?.start ?? '',
-    finish: activity?.finish ?? '',
     actual_start: activity?.actual_start ?? '',
     actual_finish: activity?.actual_finish ?? '',
     remaining_duration_days: activity?.remaining_duration_days?.toString() ?? '',
@@ -42,8 +38,6 @@ export function toActivityPayload(values: ActivityFormValues) {
     task_name: values.task_name,
     activity_type: values.activity_type,
     duration_days: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) : null,
-    start: values.start || null,
-    finish: values.finish || null,
     actual_start: values.actual_start || null,
     actual_finish: values.actual_finish || null,
     remaining_duration_days: values.remaining_duration_days ? Number(values.remaining_duration_days) : null,
@@ -120,14 +114,26 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
           className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Start</label>
-        <input type="date" value={values.start} onChange={e => set('start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
-      </div>
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Finish</label>
-        <input type="date" value={values.finish} onChange={e => set('finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
-      </div>
+      {activity && (
+        <div className="col-span-2 grid grid-cols-4 gap-3 bg-gray-50 rounded-md p-2.5 text-xs">
+          <div>
+            <div className="text-gray-400 mb-0.5">Start (computed)</div>
+            <div className="font-medium text-gray-700">{activity.start ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">Finish (computed)</div>
+            <div className="font-medium text-gray-700">{activity.finish ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">Total Float</div>
+            <div className="font-medium text-gray-700">{activity.total_float ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">Critical?</div>
+            <div className="font-medium text-gray-700">{activity.is_critical === null ? '—' : activity.is_critical ? 'Yes' : 'No'}</div>
+          </div>
+        </div>
+      )}
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Start</label>
         <input type="date" value={values.actual_start} onChange={e => set('actual_start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
