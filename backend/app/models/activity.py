@@ -63,3 +63,9 @@ class Activity(Base, TimestampMixin):
     # Phase 5's CPM engine; not yet enforced anywhere before that exists.
     constraint_type: Mapped[str | None] = mapped_column(String(10))
     constraint_date: Mapped[date | None] = mapped_column(Date)
+    # Null = inherit the project's default calendar (app/services/calendar.py). SET NULL
+    # on delete: removing a custom calendar reverts any activities using it back to the
+    # project default rather than blocking the delete or leaving a dangling reference.
+    calendar_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL")
+    )

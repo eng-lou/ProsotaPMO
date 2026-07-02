@@ -4,8 +4,9 @@ import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
+import { CalendarWidget } from './CalendarWidget'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
-import type { Activity, ActivityRelationship } from './types'
+import type { Activity, ActivityRelationship, Calendar } from './types'
 
 const PANE_MAX_HEIGHT = 600
 
@@ -14,11 +15,13 @@ export function Scheduling() {
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
   const [activities, setActivities] = useState<Activity[]>([])
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
+  const [calendars, setCalendars] = useState<Calendar[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
@@ -45,17 +48,21 @@ export function Scheduling() {
     async function load() {
       try {
         setLoading(true)
-        const [activitiesRes, relationshipsRes] = await Promise.all([
+        const [activitiesRes, relationshipsRes, calendarsRes] = await Promise.all([
           api.get<Activity[]>('/api/v1/activities/', {
             params: { project_id: selectedProject!.id, period_id: period!.id },
           }),
           api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
             params: { period_id: period!.id },
           }),
+          api.get<Calendar[]>('/api/v1/calendars/', {
+            params: { project_id: selectedProject!.id },
+          }),
         ])
         if (!cancelled) {
           setActivities(activitiesRes.data)
           setRelationships(relationshipsRes.data)
+          setCalendars(calendarsRes.data)
         }
       } catch {
         if (!cancelled) setError('Failed to load schedule')
@@ -72,16 +79,20 @@ export function Scheduling() {
 
   const refresh = async () => {
     if (!period) return
-    const [activitiesRes, relationshipsRes] = await Promise.all([
+    const [activitiesRes, relationshipsRes, calendarsRes] = await Promise.all([
       api.get<Activity[]>('/api/v1/activities/', {
         params: { project_id: selectedProject.id, period_id: period.id },
       }),
       api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
         params: { period_id: period.id },
       }),
+      api.get<Calendar[]>('/api/v1/calendars/', {
+        params: { project_id: selectedProject.id },
+      }),
     ])
     setActivities(activitiesRes.data)
     setRelationships(relationshipsRes.data)
+    setCalendars(calendarsRes.data)
   }
 
   const handleCreate = async (values: ActivityFormValues) => {
@@ -159,23 +170,45 @@ export function Scheduling() {
         )}
       </div>
       <p className="text-gray-500 text-sm mb-6">
-        Activities for {selectedProject.name}. Logic, calendars, the critical path and baselines aren't computed
-        yet — see <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
+        Activities for {selectedProject.name}. Calendars can be created and assigned, but dates aren't yet computed
+        from them — the critical path and baselines are still pending too. See{' '}
+        <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
       </p>
 
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
       )}
 
-      {formOpen && <ActivityForm activity={null} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />}
+      {calendarWidgetOpen && (
+        <CalendarWidget
+          projectId={selectedProject.id}
+          calendars={calendars}
+          onChange={refresh}
+          onClose={() => setCalendarWidgetOpen(false)}
+        />
+      )}
+
+      {formOpen && (
+        <ActivityForm activity={null} calendars={calendars} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />
+      )}
       {editingActivity && (
-        <ActivityForm activity={editingActivity} onCancel={() => setEditingActivity(null)} onSubmit={handleUpdate} />
+        <ActivityForm activity={editingActivity} calendars={calendars} onCancel={() => setEditingActivity(null)} onSubmit={handleUpdate} />
       )}
 
       {!formOpen && !editingActivity && (
-        <button onClick={() => setFormOpen(true)} className="mb-4 text-sm text-blue-600 hover:text-blue-700 font-medium">
-          + Add Activity
-        </button>
+        <div className="mb-4 flex items-center gap-3">
+          <button onClick={() => setFormOpen(true)} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+            + Add Activity
+          </button>
+          <button
+            onClick={() => setCalendarWidgetOpen(o => !o)}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+              calendarWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            📆 Calendar
+          </button>
+        </div>
       )}
 
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">

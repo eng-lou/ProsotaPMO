@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ACTIVITY_TYPES, CONSTRAINT_TYPES, type Activity, type ActivityType, type ConstraintType } from './types'
+import { ACTIVITY_TYPES, CONSTRAINT_TYPES, type Activity, type ActivityType, type Calendar, type ConstraintType } from './types'
 
 export interface ActivityFormValues {
   task_name: string
@@ -14,6 +14,7 @@ export interface ActivityFormValues {
   commentary: string
   constraint_type: ConstraintType | ''
   constraint_date: string
+  calendar_id: string
 }
 
 function toFormValues(activity: Activity | null): ActivityFormValues {
@@ -30,6 +31,7 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
     commentary: activity?.commentary ?? '',
     constraint_type: activity?.constraint_type ?? '',
     constraint_date: activity?.constraint_date ?? '',
+    calendar_id: activity?.calendar_id ?? '',
   }
 }
 
@@ -49,11 +51,13 @@ export function toActivityPayload(values: ActivityFormValues) {
     commentary: values.commentary || null,
     constraint_type: isAsap ? null : values.constraint_type,
     constraint_date: isAsap ? null : values.constraint_date || null,
+    calendar_id: values.calendar_id || null,
   }
 }
 
 interface Props {
   activity: Activity | null
+  calendars: Calendar[]
   onCancel: () => void
   onSubmit: (values: ActivityFormValues) => Promise<void>
 }
@@ -64,7 +68,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
   wbs_summary: 'WBS Summary',
 }
 
-export function ActivityForm({ activity, onCancel, onSubmit }: Props) {
+export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props) {
   const [values, setValues] = useState<ActivityFormValues>(toFormValues(activity))
   const [submitting, setSubmitting] = useState(false)
 
@@ -159,6 +163,19 @@ export function ActivityForm({ activity, onCancel, onSubmit }: Props) {
           onChange={e => set('constraint_date', e.target.value)}
           className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Calendar</label>
+        <select
+          value={values.calendar_id}
+          onChange={e => set('calendar_id', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        >
+          <option value="">(inherit project default)</option>
+          {calendars.map(c => (
+            <option key={c.id} value={c.id}>{c.name}{c.is_project_default ? ' (default)' : ''}</option>
+          ))}
+        </select>
       </div>
       <div className="col-span-2">
         <label className="block text-xs font-semibold text-gray-600 mb-1">Commentary</label>

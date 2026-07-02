@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.activities import router as activities_router
 from app.api.activity_relationships import router as activity_relationships_router
+from app.api.calendar_exceptions import router as calendar_exceptions_router
+from app.api.calendars import router as calendars_router
 from app.api.cost_commitments import router as cost_commitments_router
 from app.api.cost_elements import router as cost_elements_router
 from app.api.cost_rate_lines import router as cost_rate_lines_router
@@ -38,6 +40,8 @@ app.include_router(projects_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(periods_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(activities_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(activity_relationships_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(calendars_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(calendar_exceptions_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risks_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risk_mitigation_actions_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risk_criteria_router, prefix="/api/v1", dependencies=_auth)

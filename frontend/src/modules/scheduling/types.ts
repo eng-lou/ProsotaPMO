@@ -33,6 +33,8 @@ export interface Activity {
   commentary: string | null
   constraint_type: ConstraintType | null
   constraint_date: string | null
+  // Null = inherit the project's default calendar — see Calendar below.
+  calendar_id: string | null
   created_at: string
   updated_at: string
 }
@@ -56,6 +58,44 @@ export interface ActivityRelationship {
   successor_id: string
   relationship_type: RelationshipType
   lag_days: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Calendar {
+  id: string
+  project_id: string
+  name: string
+  is_project_default: boolean
+  hours_per_day: string
+  works_monday: boolean
+  works_tuesday: boolean
+  works_wednesday: boolean
+  works_thursday: boolean
+  works_friday: boolean
+  works_saturday: boolean
+  works_sunday: boolean
+  created_at: string
+  updated_at: string
+}
+
+export const WEEKDAY_FIELDS = [
+  { key: 'works_monday', label: 'Mon' },
+  { key: 'works_tuesday', label: 'Tue' },
+  { key: 'works_wednesday', label: 'Wed' },
+  { key: 'works_thursday', label: 'Thu' },
+  { key: 'works_friday', label: 'Fri' },
+  { key: 'works_saturday', label: 'Sat' },
+  { key: 'works_sunday', label: 'Sun' },
+] as const
+
+export interface CalendarException {
+  id: string
+  calendar_id: string
+  label: string
+  start_date: string
+  end_date: string
+  is_working: boolean
   created_at: string
   updated_at: string
 }

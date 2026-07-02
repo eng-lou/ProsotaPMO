@@ -5,6 +5,7 @@ from app.models.project import Project
 from app.models.period import Period
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
+from app.models.calendar import Calendar, CalendarException
 from app.models.risk import Risk
 from app.models.risk_mitigation_action import RiskMitigationAction
 from app.models.risk_criteria import RiskProbabilityCriterion, RiskImpactCriterion
@@ -27,6 +28,8 @@ __all__ = [
     "Period",
     "Activity",
     "ActivityRelationship",
+    "Calendar",
+    "CalendarException",
     "Risk",
     "RiskMitigationAction",
     "RiskProbabilityCriterion",

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
+from app.models.calendar import Calendar
 from app.models.period import Period
 from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
 from app.services.reference_codes import next_code
@@ -24,6 +25,12 @@ async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
             status_code=422,
             detail=f"Period '{period.period_label}' is {period.freeze_status}. Writes to frozen periods are not allowed.",
         )
+
+
+async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    calendar = await db.get(Calendar, calendar_id)
+    if calendar is None or calendar.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Calendar not found in this project")
 
 
 def _build_children_map(activities: list[Activity]) -> dict[uuid.UUID | None, list[Activity]]:
@@ -198,6 +205,9 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
         if parent is None or parent.period_id != data.period_id:
             raise HTTPException(status_code=404, detail="Parent activity not found in this period")
 
+    if data.calendar_id is not None:
+        await _validate_calendar_in_project(db, data.calendar_id, data.project_id)
+
     next_sort_order = await _next_sibling_sort_order(db, data.period_id, data.parent_id)
     code = await next_code(db, Activity, "ACT", data.project_id)
     activity = Activity(**data.model_dump(), code=code, sort_order=next_sort_order)
@@ -223,6 +233,9 @@ async def update_activity(
         _validate_no_cycle(by_id, activity_id, updates["parent_id"])
         if updates["parent_id"] not in by_id:
             raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+
+    if updates.get("calendar_id") is not None:
+        await _validate_calendar_in_project(db, updates["calendar_id"], activity.project_id)
 
     parent_changed = "parent_id" in updates and updates["parent_id"] != activity.parent_id
     for field, value in updates.items():
