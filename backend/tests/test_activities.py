@@ -348,6 +348,42 @@ async def test_delete_summary_cascades_to_children(
     assert resp.status_code == 404
 
 
+async def test_delete_without_cascade_promotes_children(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    grandparent = await _create(client, project, live_period, task_name="Project")
+    parent = await _create(client, project, live_period, task_name="Phase 1", parent_id=grandparent["id"])
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+
+    resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
+    assert resp.status_code == 204
+
+    # Parent is gone, but the child survives, now level with what were the parent's
+    # own siblings — i.e. parented directly under the grandparent.
+    resp = await client.get(f"/api/v1/activities/{parent['id']}")
+    assert resp.status_code == 404
+
+    resp = await client.get(f"/api/v1/activities/{child['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["parent_id"] == grandparent["id"]
+
+
+async def test_delete_without_cascade_promotes_children_to_root(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    parent = await _create(client, project, live_period, task_name="Phase 1")
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+
+    resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/api/v1/activities/{child['id']}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["parent_id"] is None
+    assert data["activity_type"] == "task"  # no longer anyone's child, no longer a summary
+
+
 async def test_list_activities_returns_outline_order(
     client: AsyncClient, project: Project, live_period: Period
 ):

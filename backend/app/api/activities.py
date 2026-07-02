@@ -49,7 +49,10 @@ async def update_activity(
 @router.delete("/{activity_id}", status_code=204)
 async def delete_activity(
     activity_id: uuid.UUID,
+    cascade: bool = True,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    await svc.delete_activity(db, activity_id)
+    """cascade=false promotes direct children to the deleted activity's own parent
+    (they end up "level with" its former siblings) instead of deleting them too."""
+    await svc.delete_activity(db, activity_id, cascade=cascade)
     return Response(status_code=204)

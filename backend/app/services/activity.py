@@ -238,16 +238,32 @@ async def update_activity(
     return activity
 
 
-async def delete_activity(db: AsyncSession, activity_id: uuid.UUID) -> None:
+async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> None:
+    """Delete an activity. cascade=True (default) removes its whole WBS subtree too
+    (MS Project's usual "delete summary task" behaviour). cascade=False deletes only
+    this row and promotes its direct children up to its own level — they become
+    siblings of what used to be this activity's siblings, per Maro's confirmed spec.
+    """
     activity = await get_activity(db, activity_id)
     await _require_live_period(db, activity.period_id)
     period_id = activity.period_id
-    # ON DELETE CASCADE (see app/models/activity.py) removes the whole subtree at the
-    # DB level, matching MS Project's "deleting a summary task deletes its subtasks".
-    # The ORM has no idea the cascade happened — only `activity` was explicitly
-    # session.delete()'d — so any descendants stay as stale "alive" objects in this
-    # session's identity map until expired; without this, a later db.get() for a
-    # cascade-deleted descendant returns the stale in-memory object instead of 404.
+
+    if not cascade:
+        result = await db.execute(select(Activity).where(Activity.parent_id == activity_id))
+        children = list(result.scalars().all())
+        for child in children:
+            child.parent_id = activity.parent_id
+            child.sort_order = await _next_sibling_sort_order(
+                db, period_id, activity.parent_id, exclude_id=child.id
+            )
+        await db.commit()
+
+    # ON DELETE CASCADE (see app/models/activity.py) removes any remaining descendants
+    # at the DB level — none left if cascade=False since they were just reparented away.
+    # The ORM has no idea a DB-level cascade happened — only `activity` was explicitly
+    # session.delete()'d — so any cascade-deleted descendants stay as stale "alive"
+    # objects in this session's identity map until expired; without this, a later
+    # db.get() for one of them returns the stale in-memory object instead of 404.
     await db.delete(activity)
     await db.commit()
     db.expire_all()

@@ -87,9 +87,20 @@ export function Scheduling() {
 
   const handleDelete = async (activity: Activity) => {
     const childCount = activities.filter(a => a.parent_id === activity.id).length
-    const warning = childCount > 0 ? ` and its ${childCount} sub-activit${childCount === 1 ? 'y' : 'ies'}` : ''
-    if (!window.confirm(`Delete activity "${activity.task_name}"${warning}? This cannot be undone.`)) return
-    await api.delete(`/api/v1/activities/${activity.id}`)
+    let cascade = true
+
+    if (childCount > 0) {
+      const label = `${childCount} sub-activit${childCount === 1 ? 'y' : 'ies'}`
+      cascade = window.confirm(
+        `"${activity.task_name}" has ${label}. Delete them too?\n\n` +
+        `OK = delete "${activity.task_name}" and all ${label}.\n` +
+        `Cancel = delete only "${activity.task_name}" — its ${label} move up to its level instead.`
+      )
+    } else if (!window.confirm(`Delete activity "${activity.task_name}"? This cannot be undone.`)) {
+      return
+    }
+
+    await api.delete(`/api/v1/activities/${activity.id}`, { params: { cascade } })
     await refresh()
   }
 
