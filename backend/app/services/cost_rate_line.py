@@ -42,9 +42,21 @@ async def get_rate_line(db: AsyncSession, line_id: uuid.UUID) -> CostRateLine:
     return line
 
 
+async def _unlink_if_schedule_managed(db: AsyncSession, element: CostElement) -> None:
+    """Resources module: rate lines under a schedule-managed element are normally
+    maintained automatically (app/services/cost_sync.py, which writes directly to
+    the ORM and never calls create/update/delete_rate_line). Reaching one of these
+    functions means a user is editing the breakdown directly via Cost Plan's own
+    UI — that permanently unlinks the parent element, per Maro's confirmed spec
+    (docs/RESOURCES_MODULE_PLAN.md)."""
+    if element.source == "schedule":
+        element.source = "manual"
+
+
 async def create_rate_line(db: AsyncSession, data: CostRateLineCreate) -> CostRateLineResponse:
     element = await _get_parent_element(db, data.cost_element_id)
     await _require_live_period(db, element.period_id)
+    await _unlink_if_schedule_managed(db, element)
     line = CostRateLine(**data.model_dump())
     db.add(line)
     await db.commit()
@@ -58,6 +70,7 @@ async def update_rate_line(
     line = await get_rate_line(db, line_id)
     element = await _get_parent_element(db, line.cost_element_id)
     await _require_live_period(db, element.period_id)
+    await _unlink_if_schedule_managed(db, element)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(line, field, value)
     await db.commit()
@@ -69,5 +82,6 @@ async def delete_rate_line(db: AsyncSession, line_id: uuid.UUID) -> None:
     line = await get_rate_line(db, line_id)
     element = await _get_parent_element(db, line.cost_element_id)
     await _require_live_period(db, element.period_id)
+    await _unlink_if_schedule_managed(db, element)
     await db.delete(line)
     await db.commit()

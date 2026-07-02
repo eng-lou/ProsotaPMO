@@ -23,10 +23,9 @@ export interface CostElement {
   computed_budget: string | null
   computed_forecast: string | null
   computed_actuals: string | null
-  // Cost-side EVM — always server-computed, never sent as input. Schedule-side
-  // EVM (SV/SPI) isn't exposed — no real time-phased planned value exists
-  // without the Scheduling module. forecast is not a separate manual field —
-  // it IS the computed EAC (falling back to budget before any progress exists).
+  // Cost-side EVM — always server-computed, never sent as input. forecast is not
+  // a separate manual field — it IS the computed EAC (falling back to budget
+  // before any progress exists).
   forecast: string | null
   variance: string | null
   cost_per_m2: string | null
@@ -36,6 +35,20 @@ export interface CostElement {
   etc: string | null
   vac: string | null
   tcpi: string | null
+  // Schedule-side EVM (Resources module, Phase 3) — only populated for a
+  // "schedule"-sourced element (source below) whose linked activity has captured
+  // baseline dates; null otherwise, same "leave it blank" discipline as everything
+  // else here.
+  pv: string | null
+  ev: string | null
+  sv: string | null
+  spi: string | null
+  // Resources module — never sent as input, always server-managed. "schedule" =
+  // this element's budget/rate lines are auto-managed from an activity's resource
+  // assignments; editing budget or a rate line directly in Cost Plan unlinks it
+  // to "manual" permanently. See app/services/cost_sync.py.
+  source: 'manual' | 'schedule'
+  linked_activity_id: string | null
   created_at: string
   updated_at: string
 }

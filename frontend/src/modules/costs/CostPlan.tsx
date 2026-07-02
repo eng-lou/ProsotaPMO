@@ -327,7 +327,7 @@ export function CostPlan() {
                   )}
                 </div>
               )}
-              <CostRateLines costElementId={el.id} />
+              <CostRateLines costElementId={el.id} isScheduleLinked={el.source === 'schedule'} />
               <CostCommitments costElementId={el.id} />
               <ReassessmentLog
                 recordType="cost_element"

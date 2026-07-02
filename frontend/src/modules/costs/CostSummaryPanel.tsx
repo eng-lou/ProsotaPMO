@@ -49,6 +49,16 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
 
   const gfa = gfaM2 !== null ? Number(gfaM2) : null
 
+  // Schedule Performance (SPI) — only elements with a real time-phased PV exist
+  // (schedule-linked, baselined) contribute; summed the same way Budget vs
+  // Forecast is, not a separate endpoint. See app/services/cost_element.py's
+  // _schedule_evm (Resources module, Phase 3).
+  const scheduleLinked = elements.filter(el => el.pv !== null && el.ev !== null)
+  const totalPv = scheduleLinked.reduce((sum, el) => sum + Number(el.pv), 0)
+  const totalEv = scheduleLinked.reduce((sum, el) => sum + Number(el.ev), 0)
+  const projectSpi = totalPv !== 0 ? totalEv / totalPv : null
+  const projectSv = totalEv - totalPv
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4 sticky top-0">
       <div className="font-semibold text-sm mb-3 pb-2 border-b border-gray-100">Cost Summary</div>
@@ -98,6 +108,31 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
           <span>{formatCurrency(forecastVariance)}{forecastVariancePct !== null ? ` (${forecastVariance >= 0 ? '+' : ''}${forecastVariancePct.toFixed(1)}%)` : ''}</span>
         </div>
       </div>
+
+      {scheduleLinked.length > 0 && (
+        <>
+          <div
+            className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 pt-2 border-t border-gray-100"
+            title="Only resource-loaded activities with a captured baseline contribute — see the Resources tab on an activity, and Set Baseline in Scheduling."
+          >
+            Schedule Performance (SPI)
+          </div>
+          <div className={`rounded-md p-2.5 text-xs mb-3 ${projectSpi !== null && projectSpi < 1 ? 'bg-orange-50 border border-orange-200' : 'bg-green-50 border border-green-200'}`}>
+            <div className="flex justify-between mb-1">
+              <span>Planned Value (PV)</span>
+              <span className="font-medium">{formatCurrency(totalPv)}</span>
+            </div>
+            <div className="flex justify-between mb-1">
+              <span>Earned Value (EV)</span>
+              <span className="font-medium">{formatCurrency(totalEv)}</span>
+            </div>
+            <div className="flex justify-between pt-1 border-t border-gray-200 font-semibold">
+              <span>SPI {projectSpi !== null && (projectSpi >= 1 ? '(ahead)' : '(behind)')}</span>
+              <span>{projectSpi !== null ? projectSpi.toFixed(2) : '—'} ({projectSv >= 0 ? '+' : ''}{formatCurrency(projectSv)})</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {topVarianceDrivers.length > 0 && (
         <>

@@ -50,3 +50,15 @@ class CostElement(Base, TimestampMixin):
     # Bumped automatically whenever a reassessment is logged (see Reassessment);
     # editable directly too, mirroring Risk/ICD's Monitor-Costs pattern.
     last_reviewed_date: Mapped[date | None] = mapped_column(Date)
+    # Resources module (Phase 2, 2026-07-02): "schedule" = auto-managed from an
+    # activity's resource assignments (app/services/cost_sync.py) — budget and rate
+    # lines are kept in sync one-way, Scheduling -> Cost Plan. "manual" (default) =
+    # a normal, independently-editable line, same as always. Editing budget or this
+    # element's rate lines directly (app/services/cost_element.py,
+    # cost_rate_line.py) permanently flips a "schedule" element to "manual" — per
+    # Maro's confirmed spec (docs/RESOURCES_MODULE_PLAN.md), schedule data drives
+    # cost until a user deliberately overrides it, then it's unlinked for good.
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    linked_activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), unique=True
+    )

@@ -73,6 +73,10 @@ class CostElementResponse(CostElementBase):
     period_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    # Resources module (Phase 2) — never accepted as create/update input, always
+    # server-managed. See app/services/cost_sync.py.
+    source: Literal["manual", "schedule"] = "manual"
+    linked_activity_id: uuid.UUID | None = None
     # Populated at query time for percentage elements; None for fixed elements
     computed_budget: Decimal | None = None
     computed_forecast: Decimal | None = None
@@ -97,3 +101,11 @@ class CostElementResponse(CostElementBase):
     etc: Decimal | None = None
     vac: Decimal | None = None
     tcpi: Decimal | None = None
+    # Schedule-side EVM (Resources module, Phase 3) — only computable for a
+    # "schedule"-sourced element whose linked activity has captured baseline dates
+    # (bl_start/bl_finish); null otherwise, same "leave it blank rather than show a
+    # fake number" discipline used everywhere else. See app/services/cost_element.py.
+    pv: Decimal | None = None
+    ev: Decimal | None = None
+    sv: Decimal | None = None
+    spi: Decimal | None = None

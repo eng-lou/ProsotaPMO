@@ -13,15 +13,24 @@ const EMPTY_FORM: NewLineForm = { description: '', qty: '', unit: '', rate: '' }
 
 interface CostRateLinesProps {
   costElementId: string
+  // Resources module: rate lines under a "schedule"-sourced element are normally
+  // auto-managed from resource assignments in Scheduling. Adding/deleting one
+  // directly here unlinks the parent element permanently — confirm first, same
+  // as CostForm.tsx does for editing budget directly.
+  isScheduleLinked?: boolean
 }
 
 function formatCurrency(value: string) {
   return `£${Number(value).toLocaleString()}`
 }
 
+const UNLINK_WARNING =
+  'This element\'s rate lines are currently managed automatically from Scheduling resource assignments. ' +
+  'Editing them directly will unlink it permanently — future resource assignment changes won\'t update it anymore. Continue?'
+
 // Qty x Unit x Rate build-up per cost element (e.g. "CFA piles to 8.5m x267 @
 // £576/nr"), matching the prototype's Budget & Versions tab Rate Card.
-export function CostRateLines({ costElementId }: CostRateLinesProps) {
+export function CostRateLines({ costElementId, isScheduleLinked = false }: CostRateLinesProps) {
   const [lines, setLines] = useState<CostRateLine[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -41,6 +50,7 @@ export function CostRateLines({ costElementId }: CostRateLinesProps) {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.description.trim() || form.qty === '' || form.rate === '') return
+    if (isScheduleLinked && !window.confirm(UNLINK_WARNING)) return
     try {
       await api.post('/api/v1/cost-rate-lines/', {
         cost_element_id: costElementId,
@@ -58,7 +68,8 @@ export function CostRateLines({ costElementId }: CostRateLinesProps) {
   }
 
   const deleteLine = async (line: CostRateLine) => {
-    if (!window.confirm(`Delete "${line.description}"?`)) return
+    const message = isScheduleLinked ? `${UNLINK_WARNING}\n\n(This will also delete "${line.description}".)` : `Delete "${line.description}"?`
+    if (!window.confirm(message)) return
     await api.delete(`/api/v1/cost-rate-lines/${line.id}`)
     load()
   }
@@ -70,6 +81,11 @@ export function CostRateLines({ costElementId }: CostRateLinesProps) {
   return (
     <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
       <div className="text-xs font-semibold text-gray-600 mb-2">Rate card</div>
+      {isScheduleLinked && (
+        <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1.5 mb-2">
+          🔗 Managed automatically from Scheduling resource assignments — editing a line directly unlinks it.
+        </p>
+      )}
       {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
 
       {lines.length === 0 && !adding && (

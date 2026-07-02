@@ -264,16 +264,16 @@ async def test_evm_computed_from_budget_actuals_and_pct_complete(
 ):
     """BAC=budget, AC=actuals, EV=BAC*pct_complete/100 — cost-side EVM only
     (CV=EV-AC, CPI=EV/AC, EAC=BAC/CPI, ETC=EAC-AC, VAC=BAC-EAC,
-    TCPI=(BAC-EV)/(BAC-AC)). Schedule-side EVM (SV/SPI) is deliberately not
-    computed/exposed — it would need a real time-phased planned value, which
-    doesn't exist without the Scheduling module; without it SPI would just
-    equal pct_complete/100 restated, not an independent schedule signal."""
+    TCPI=(BAC-EV)/(BAC-AC)). Schedule-side EVM (PV/EV/SV/SPI, Resources module
+    Phase 3) stays null for a plain "manual" element with no linked activity to
+    source a real time-phased planned value from — see test_cost_sync.py for the
+    schedule-linked case where these actually populate."""
     el = await _create(client, project, live_period,
         description="Piling", budget="100000.00", actuals="80000.00", pct_complete=70,
     )
     assert float(el["cv"]) == -10000.00    # EV(70000) - AC(80000)
-    assert "sv" not in el
-    assert "spi" not in el
+    assert el["sv"] is None
+    assert el["spi"] is None
     assert float(el["cpi"]) == 0.875       # 70000 / 80000
     assert float(el["eac"]) == 114285.71   # BAC / CPI
     assert float(el["etc"]) == 34285.71    # EAC - AC

@@ -85,6 +85,13 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
     field => (costElement[field] ?? '') !== values[field]
   )
 
+  // Resources module: a "schedule"-sourced element's budget is normally kept in
+  // sync automatically from resource assignments in Scheduling. Editing it here
+  // directly unlinks it permanently — warn before that happens, matching how
+  // Scheduling's own inline-edit-Start confirms before applying a constraint.
+  const isScheduleLinked = costElement?.source === 'schedule'
+  const budgetChanged = costElement !== null && (costElement.budget ?? '') !== values.budget
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!values.description.trim()) {
@@ -93,6 +100,12 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
     }
     if (values.element_type === 'percentage' && values.rate === '') {
       setError('Rate is required for percentage elements')
+      return
+    }
+    if (isScheduleLinked && budgetChanged && !window.confirm(
+      'This line\'s budget is currently managed automatically from Scheduling resource assignments. ' +
+      'Editing it directly will unlink it permanently — future resource assignment changes won\'t update it anymore. Continue?'
+    )) {
       return
     }
     setSubmitting(true)
@@ -114,6 +127,13 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
       className="bg-white border border-gray-200 rounded-lg p-5 space-y-4 mb-6"
     >
       <h2 className="font-medium text-gray-900 text-sm">{costElement ? 'Edit cost element' : 'New cost element'}</h2>
+
+      {isScheduleLinked && (
+        <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-800">
+          🔗 This line is managed automatically from Scheduling resource assignments (see the linked activity's
+          Resources tab). Editing Budget below will unlink it permanently — resource changes won't update it anymore.
+        </div>
+      )}
 
       {error && (
         <div className="p-2 bg-red-50 border border-red-200 rounded-md text-red-700 text-xs">
