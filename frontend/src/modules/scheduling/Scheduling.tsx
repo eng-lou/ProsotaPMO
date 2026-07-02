@@ -152,6 +152,17 @@ export function Scheduling() {
     await refresh()
   }
 
+  const handleSetBaseline = async () => {
+    if (!period) return
+    const already = activities.some(a => a.bl_start !== null)
+    const message = already
+      ? 'Re-set the baseline? This overwrites the current baseline dates with today\'s planned dates for every activity in this period.'
+      : 'Set the baseline? This captures today\'s planned dates as the reference point variance is measured against.'
+    if (!window.confirm(message)) return
+    await api.post('/api/v1/activities/set-baseline', null, { params: { period_id: period.id } })
+    await refresh()
+  }
+
   const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
   const expandedActivity = activities.find(a => a.id === expandedId) ?? null
 
@@ -207,6 +218,14 @@ export function Scheduling() {
             }`}
           >
             📆 Calendar
+          </button>
+          <button
+            onClick={handleSetBaseline}
+            disabled={activities.length === 0}
+            title="Capture today's planned dates as the reference point variance is measured against"
+            className="text-xs px-3 py-1.5 rounded-md font-medium border bg-white text-gray-600 border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            🎯 Set Baseline
           </button>
         </div>
       )}

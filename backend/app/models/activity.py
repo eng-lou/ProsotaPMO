@@ -48,15 +48,20 @@ class Activity(Base, TimestampMixin):
     actual_start: Mapped[date | None] = mapped_column(Date)
     actual_finish: Mapped[date | None] = mapped_column(Date)
     remaining_duration_days: Mapped[int | None] = mapped_column(Integer)
-    # bl_start/bl_finish/variance_days/total_float/free_float/is_critical are never
-    # accepted as API input (see app/services/activity.py:_apply_computed_fields and
+    # bl_start/bl_finish/bl_duration_days/variance_days/total_float/free_float/
+    # is_critical are never accepted as API input (see
+    # app/services/activity.py:_apply_computed_fields and
     # app/services/scheduling_cpm.py) — same discipline as Risk's EMV and Cost's
-    # CPI/SPI fixes. bl_start/bl_finish stay null until Phase 6's dedicated "Set
-    # Baseline" action exists. total_float/free_float/is_critical are null for
-    # wbs_summary rows (outside the CPM network) and, before Phase 5, were null for
-    # everything rather than holding a fake computed value early.
+    # CPI/SPI fixes. bl_start/bl_finish/bl_duration_days are set only by the "Set
+    # Baseline" action (app/services/scheduling_baseline.py) — snapshotting current
+    # start/finish/duration_days, not the one-shot-at-creation freeze Cost Plan's
+    # rev_a_baseline uses, since a schedule baseline is a deliberate, repeatable
+    # capture (client-agreed revisions), not a value fixed forever at row creation.
+    # total_float/free_float/is_critical are null for wbs_summary rows (outside the
+    # CPM network).
     bl_start: Mapped[date | None] = mapped_column(Date)
     bl_finish: Mapped[date | None] = mapped_column(Date)
+    bl_duration_days: Mapped[int | None] = mapped_column(Integer)
     variance_days: Mapped[int | None] = mapped_column(Integer)
     pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     total_float: Mapped[int | None] = mapped_column(Integer)

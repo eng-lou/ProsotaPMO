@@ -3,9 +3,9 @@ import type { Activity, ActivityRelationship } from './types'
 
 // Row height must match the data grid's row height exactly (Scheduling.tsx) so the
 // two panes stay visually aligned under the shared scroll-sync — see the "Gantt Chart
-// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Baseline ghost bars land
-// in Phase 6. Dependency arrows (Phase 3) and critical-path colouring (Phase 5, once
-// the CPM engine computes is_critical) are both in place.
+// — Rendering Plan" section of docs/SCHEDULING_MODULE_PLAN.md. Dependency arrows
+// (Phase 3), critical-path colouring (Phase 5), and baseline ghost bars (Phase 6,
+// once bl_start/bl_finish are captured via "Set Baseline") are all in place.
 export const GANTT_ROW_HEIGHT = 40
 const DAY_WIDTH = 14
 // Must match the data grid's <thead> row height (Scheduling.tsx) so week labels and
@@ -65,7 +65,7 @@ export function GanttChart({
 }) {
   const { rangeStart, totalDays, weekMarks } = useMemo(() => {
     const dates = activities
-      .flatMap(a => [parseDate(a.start), parseDate(a.finish)])
+      .flatMap(a => [parseDate(a.start), parseDate(a.finish), parseDate(a.bl_start), parseDate(a.bl_finish)])
       .filter((d): d is Date => d !== null)
 
     const today = new Date()
@@ -113,6 +113,20 @@ export function GanttChart({
 
   const criticalById = useMemo(() => new Map(activities.map(a => [a.id, a.is_critical === true])), [activities])
 
+  const baselineGeometry = useMemo(() => {
+    const map = new Map<string, { top: number; left: number; right: number }>()
+    activities.forEach((a, i) => {
+      const start = parseDate(a.bl_start)
+      const finish = parseDate(a.bl_finish)
+      if (!start || !finish) return
+      const top = i * GANTT_ROW_HEIGHT
+      const left = daysBetween(rangeStart, start) * DAY_WIDTH
+      const right = left + Math.max(daysBetween(start, finish) * DAY_WIDTH, 6)
+      map.set(a.id, { top, left, right })
+    })
+    return map
+  }, [activities, rangeStart])
+
   return (
     <div style={{ width, minWidth: '100%' }}>
       <div className="relative border-b border-gray-200 bg-gray-50" style={{ height: HEADER_HEIGHT, width }}>
@@ -155,6 +169,18 @@ export function GanttChart({
             )
           })}
         </svg>
+        {activities.map(a => {
+          const bl = baselineGeometry.get(a.id)
+          if (!bl) return null
+          return (
+            <div
+              key={`bl-${a.id}`}
+              className="absolute rounded-sm border border-gray-400 bg-gray-200/60"
+              style={{ top: bl.top + GANTT_ROW_HEIGHT - 8, left: bl.left, width: Math.max(bl.right - bl.left, 4), height: 4 }}
+              title={`Baseline: ${a.bl_start} → ${a.bl_finish}`}
+            />
+          )
+        })}
         {activities.map(a => {
           const geo = geometry.get(a.id)
           if (!geo) return null

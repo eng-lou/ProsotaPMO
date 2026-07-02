@@ -80,13 +80,15 @@ class ActivityResponse(ActivityBase):
     created_at: datetime
     updated_at: datetime
     # start/finish are computed by app/services/scheduling_cpm.py (forward/backward
-    # pass) from Phase 5 onward — never accepted as API input. bl_start/bl_finish stay
-    # null until Phase 6 (Set Baseline); total_float/free_float/is_critical are null
-    # for wbs_summary rows (outside the CPM network) rather than a placeholder value.
+    # pass) from Phase 5 onward — never accepted as API input. bl_start/bl_finish/
+    # bl_duration_days are set only by the "Set Baseline" action
+    # (app/services/scheduling_baseline.py); total_float/free_float/is_critical are
+    # null for wbs_summary rows (outside the CPM network) rather than a placeholder.
     start: date | None = None
     finish: date | None = None
     bl_start: date | None = None
     bl_finish: date | None = None
+    bl_duration_days: int | None = None
     variance_days: int | None = None
     total_float: int | None = None
     free_float: int | None = None

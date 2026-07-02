@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.activity import ActivityCreate, ActivityResponse, ActivityUpdate
 from app.services import activity as svc
+from app.services import scheduling_baseline
 
 router = APIRouter(prefix="/activities", tags=["activities"])
 
@@ -27,6 +28,16 @@ async def create_activity(
     db: AsyncSession = Depends(get_db),
 ):
     return await svc.create_activity(db, data)
+
+
+# Registered before /{activity_id} — "set-baseline" would otherwise be attempted as
+# a UUID path param by that route first.
+@router.post("/set-baseline", response_model=list[ActivityResponse])
+async def set_baseline(
+    period_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list:
+    return await scheduling_baseline.set_baseline(db, period_id)
 
 
 @router.get("/{activity_id}", response_model=ActivityResponse)

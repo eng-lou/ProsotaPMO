@@ -132,6 +132,20 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
             <div className="text-gray-400 mb-0.5">Critical?</div>
             <div className="font-medium text-gray-700">{activity.is_critical === null ? '—' : activity.is_critical ? 'Yes' : 'No'}</div>
           </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">BL Start</div>
+            <div className="font-medium text-gray-700">{activity.bl_start ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">BL Finish</div>
+            <div className="font-medium text-gray-700">{activity.bl_finish ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">Variance (d)</div>
+            <div className={`font-medium ${(activity.variance_days ?? 0) > 0 ? 'text-red-600' : 'text-gray-700'}`}>
+              {activity.variance_days ?? '—'}
+            </div>
+          </div>
         </div>
       )}
       <div>
