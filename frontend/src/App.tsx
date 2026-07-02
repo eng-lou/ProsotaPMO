@@ -4,6 +4,7 @@ import { Layout } from './components/Layout'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
+import { Scheduling } from './modules/scheduling/Scheduling'
 import { RiskRegister } from './modules/risks/RiskRegister'
 import { CostPlan } from './modules/costs/CostPlan'
 import { IcdTracker } from './modules/icd/IcdTracker'
@@ -54,7 +55,7 @@ function AuthenticatedApp() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/projects" element={<ProjectSelector />} />
           <Route path="/dashboard" element={<Placeholder title="Controls Dashboard" />} />
-          <Route path="/scheduling" element={<Placeholder title="Scheduling" />} />
+          <Route path="/scheduling" element={<Scheduling />} />
           <Route path="/risks" element={<RiskRegister />} />
           <Route path="/costs" element={<CostPlan />} />
           <Route path="/icd" element={<IcdTracker />} />

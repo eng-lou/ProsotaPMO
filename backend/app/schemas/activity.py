@@ -3,21 +3,33 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+ActivityType = Literal["task", "milestone", "wbs_summary"]
 
 
 class ActivityBase(BaseModel):
     task_name: str
+    activity_type: ActivityType = "task"
     wbs_path: str | None = None
+    duration_days: int | None = Field(default=None, ge=0)
     start: date | None = None
     finish: date | None = None
-    bl_start: date | None = None
-    bl_finish: date | None = None
-    variance_days: int | None = None
+    actual_start: date | None = None
+    actual_finish: date | None = None
+    remaining_duration_days: int | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
-    total_float: int | None = None
-    is_critical: bool = False
+    commentary: str | None = None
+
+    @model_validator(mode="after")
+    def milestones_have_zero_duration(self) -> "ActivityBase":
+        if self.activity_type == "milestone":
+            if self.duration_days not in (None, 0):
+                raise ValueError("milestones have zero duration")
+            self.duration_days = 0
+        return self
 
 
 class ActivityCreate(ActivityBase):
@@ -27,22 +39,32 @@ class ActivityCreate(ActivityBase):
 
 class ActivityUpdate(BaseModel):
     task_name: str | None = None
+    activity_type: ActivityType | None = None
     wbs_path: str | None = None
+    duration_days: int | None = Field(default=None, ge=0)
     start: date | None = None
     finish: date | None = None
-    bl_start: date | None = None
-    bl_finish: date | None = None
-    variance_days: int | None = None
+    actual_start: date | None = None
+    actual_finish: date | None = None
+    remaining_duration_days: int | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
-    total_float: int | None = None
-    is_critical: bool | None = None
+    commentary: str | None = None
 
 
 class ActivityResponse(ActivityBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    code: str
     project_id: uuid.UUID
     period_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    # Computed server-side only — see app/services/activity.py:_apply_computed_fields.
+    # bl_start/bl_finish stay null until Phase 6 (Set Baseline); total_float/is_critical
+    # stay null until Phase 5 (CPM engine) rather than holding a placeholder value.
+    bl_start: date | None = None
+    bl_finish: date | None = None
+    variance_days: int | None = None
+    total_float: int | None = None
+    is_critical: bool | None = None

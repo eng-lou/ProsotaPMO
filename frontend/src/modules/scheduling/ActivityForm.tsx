@@ -1,0 +1,149 @@
+import { useState } from 'react'
+import { ACTIVITY_TYPES, type Activity, type ActivityType } from './types'
+
+export interface ActivityFormValues {
+  task_name: string
+  activity_type: ActivityType
+  duration_days: string
+  start: string
+  finish: string
+  actual_start: string
+  actual_finish: string
+  remaining_duration_days: string
+  pct_complete: string
+  commentary: string
+}
+
+function toFormValues(activity: Activity | null): ActivityFormValues {
+  return {
+    task_name: activity?.task_name ?? '',
+    activity_type: activity?.activity_type ?? 'task',
+    duration_days: activity?.duration_days?.toString() ?? '',
+    start: activity?.start ?? '',
+    finish: activity?.finish ?? '',
+    actual_start: activity?.actual_start ?? '',
+    actual_finish: activity?.actual_finish ?? '',
+    remaining_duration_days: activity?.remaining_duration_days?.toString() ?? '',
+    pct_complete: activity?.pct_complete ?? '',
+    commentary: activity?.commentary ?? '',
+  }
+}
+
+export function toActivityPayload(values: ActivityFormValues) {
+  const isMilestone = values.activity_type === 'milestone'
+  return {
+    task_name: values.task_name,
+    activity_type: values.activity_type,
+    duration_days: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) : null,
+    start: values.start || null,
+    finish: values.finish || null,
+    actual_start: values.actual_start || null,
+    actual_finish: values.actual_finish || null,
+    remaining_duration_days: values.remaining_duration_days ? Number(values.remaining_duration_days) : null,
+    pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
+    commentary: values.commentary || null,
+  }
+}
+
+interface Props {
+  activity: Activity | null
+  onCancel: () => void
+  onSubmit: (values: ActivityFormValues) => Promise<void>
+}
+
+const TYPE_LABELS: Record<ActivityType, string> = {
+  task: 'Task',
+  milestone: 'Milestone',
+  wbs_summary: 'WBS Summary',
+}
+
+export function ActivityForm({ activity, onCancel, onSubmit }: Props) {
+  const [values, setValues] = useState<ActivityFormValues>(toFormValues(activity))
+  const [submitting, setSubmitting] = useState(false)
+
+  const set = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) =>
+    setValues(v => ({ ...v, [key]: value }))
+
+  const isMilestone = values.activity_type === 'milestone'
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    try {
+      await onSubmit(values)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-5 mb-4 grid grid-cols-2 gap-4">
+      <div className="col-span-2">
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Activity Name</label>
+        <input
+          value={values.task_name}
+          onChange={e => set('task_name', e.target.value)}
+          required
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Type</label>
+        <select
+          value={values.activity_type}
+          onChange={e => set('activity_type', e.target.value as ActivityType)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        >
+          {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Duration (days)</label>
+        <input
+          type="number"
+          min={0}
+          value={isMilestone ? 0 : values.duration_days}
+          disabled={isMilestone}
+          onChange={e => set('duration_days', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Start</label>
+        <input type="date" value={values.start} onChange={e => set('start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Finish</label>
+        <input type="date" value={values.finish} onChange={e => set('finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Start</label>
+        <input type="date" value={values.actual_start} onChange={e => set('actual_start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Finish</label>
+        <input type="date" value={values.actual_finish} onChange={e => set('actual_finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Remaining Duration (days)</label>
+        <input type="number" min={0} value={values.remaining_duration_days} onChange={e => set('remaining_duration_days', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>
+        <input type="number" min={0} max={100} value={values.pct_complete} onChange={e => set('pct_complete', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+      </div>
+      <div className="col-span-2">
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Commentary</label>
+        <textarea value={values.commentary} onChange={e => set('commentary', e.target.value)} rows={2} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm resize-y" />
+      </div>
+      <div className="col-span-2 flex gap-2 justify-end">
+        <button type="button" onClick={onCancel} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50">
+          Cancel
+        </button>
+        <button type="submit" disabled={submitting} className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+          {activity ? 'Save' : 'Create'}
+        </button>
+      </div>
+    </form>
+  )
+}

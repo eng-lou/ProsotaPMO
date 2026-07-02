@@ -16,14 +16,80 @@ async def test_create_activity(client: AsyncClient, project: Project, live_perio
         "project_id": str(project.id),
         "period_id": str(live_period.id),
         "task_name": "Excavation works",
-        "is_critical": True,
     })
     assert resp.status_code == 201
     data = resp.json()
     assert data["task_name"] == "Excavation works"
-    assert data["is_critical"] is True
+    # is_critical/total_float are computed by the (not-yet-built) CPM engine,
+    # never accepted as input — see app/services/activity.py:_apply_computed_fields.
+    assert data["is_critical"] is None
+    assert data["total_float"] is None
+    assert data["code"] == "ACT-0001"
     assert "id" in data
     assert data["project_id"] == str(project.id)
+
+
+async def test_create_activity_ignores_computed_fields(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    resp = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id),
+        "period_id": str(live_period.id),
+        "task_name": "Piling",
+        "is_critical": True,
+        "total_float": 5,
+        "bl_start": "2025-01-01",
+        "bl_finish": "2025-02-01",
+    })
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["is_critical"] is None
+    assert data["total_float"] is None
+    assert data["bl_start"] is None
+    assert data["bl_finish"] is None
+
+
+async def test_milestone_forces_zero_duration(client: AsyncClient, project: Project, live_period: Period):
+    resp = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id),
+        "period_id": str(live_period.id),
+        "task_name": "Practical Completion",
+        "activity_type": "milestone",
+    })
+    assert resp.status_code == 201
+    assert resp.json()["duration_days"] == 0
+
+
+async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: Project, live_period: Period):
+    resp = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id),
+        "period_id": str(live_period.id),
+        "task_name": "Bad milestone",
+        "activity_type": "milestone",
+        "duration_days": 5,
+    })
+    assert resp.status_code == 422
+
+
+async def test_variance_days_computed_from_finish_vs_baseline(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    from datetime import date
+
+    activity = Activity(
+        project_id=project.id,
+        period_id=live_period.id,
+        task_name="Piling",
+        code="ACT-9999",
+        bl_finish=date(2025, 5, 1),
+    )
+    db.add(activity)
+    await db.commit()
+    await db.refresh(activity)
+
+    resp = await client.patch(f"/api/v1/activities/{activity.id}", json={"finish": "2025-05-08"})
+    assert resp.status_code == 200
+    assert resp.json()["variance_days"] == 7
 
 
 async def test_list_activities_by_project(client: AsyncClient, project: Project, live_period: Period):
@@ -67,7 +133,9 @@ async def test_list_activities_filter_by_period(
         "task_name": "In live period",
     })
     # Insert directly to frozen period (bypassing API freeze check)
-    frozen_activity = Activity(project_id=project.id, period_id=frozen_period.id, task_name="In frozen period")
+    frozen_activity = Activity(
+        project_id=project.id, period_id=frozen_period.id, task_name="In frozen period", code="ACT-9001"
+    )
     db.add(frozen_activity)
     await db.commit()
 
@@ -122,15 +190,15 @@ async def test_update_activity_partial(client: AsyncClient, project: Project, li
         "project_id": str(project.id),
         "period_id": str(live_period.id),
         "task_name": "Original",
-        "is_critical": False,
+        "duration_days": 10,
     })
     activity_id = create.json()["id"]
 
-    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"is_critical": True})
+    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"duration_days": 15})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["task_name"] == "Original"  # unchanged
-    assert data["is_critical"] is True      # updated
+    assert data["task_name"] == "Original"     # unchanged
+    assert data["duration_days"] == 15         # updated
 
 
 async def test_delete_activity(client: AsyncClient, project: Project, live_period: Period):
@@ -161,7 +229,9 @@ async def test_create_rejects_frozen_period(client: AsyncClient, project: Projec
 async def test_update_rejects_frozen_period(
     client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
 ):
-    activity = Activity(project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity")
+    activity = Activity(
+        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9002"
+    )
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
@@ -173,7 +243,9 @@ async def test_update_rejects_frozen_period(
 async def test_delete_rejects_frozen_period(
     client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
 ):
-    activity = Activity(project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity")
+    activity = Activity(
+        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9002"
+    )
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
