@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { ACTIVITY_TYPES, CONSTRAINT_TYPES, type Activity, type ActivityType, type Calendar, type ConstraintType } from './types'
+import {
+  ACTIVITY_TYPES,
+  CONSTRAINT_TYPES,
+  REASSESSMENT_TRIGGER_FIELDS,
+  type Activity,
+  type ActivityType,
+  type Calendar,
+  type ConstraintType,
+} from './types'
 
 export interface ActivityFormValues {
   task_name: string
@@ -53,7 +61,7 @@ interface Props {
   activity: Activity | null
   calendars: Calendar[]
   onCancel: () => void
-  onSubmit: (values: ActivityFormValues) => Promise<void>
+  onSubmit: (values: ActivityFormValues, reassessmentNote: string | null) => Promise<void>
 }
 
 const TYPE_LABELS: Record<ActivityType, string> = {
@@ -65,6 +73,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
 export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props) {
   const [values, setValues] = useState<ActivityFormValues>(toFormValues(activity))
   const [submitting, setSubmitting] = useState(false)
+  const [reassessmentNote, setReassessmentNote] = useState('')
 
   const set = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) =>
     setValues(v => ({ ...v, [key]: value }))
@@ -72,11 +81,16 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
   const isMilestone = values.activity_type === 'milestone'
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
 
+  const hasTriggerChanges = activity !== null && REASSESSMENT_TRIGGER_FIELDS.some(field => {
+    const activityValue = activity[field]
+    return (activityValue ?? '').toString() !== (values[field] ?? '').toString()
+  })
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
     try {
-      await onSubmit(values)
+      await onSubmit(values, hasTriggerChanges && reassessmentNote.trim() ? reassessmentNote.trim() : null)
     } finally {
       setSubmitting(false)
     }
@@ -201,6 +215,20 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
         <label className="block text-xs font-semibold text-gray-600 mb-1">Commentary</label>
         <textarea value={values.commentary} onChange={e => set('commentary', e.target.value)} rows={2} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm resize-y" />
       </div>
+      {hasTriggerChanges && (
+        <div className="col-span-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+          <label className="block text-xs font-semibold text-gray-600 mb-1">
+            Duration, % complete, or constraint changed — what changed and why? (optional, logged with today's date)
+          </label>
+          <textarea
+            value={reassessmentNote}
+            onChange={e => setReassessmentNote(e.target.value)}
+            className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+            rows={2}
+            placeholder="e.g. Duration extended from 5 to 8 days following a revised piling sequence."
+          />
+        </div>
+      )}
       <div className="col-span-2 flex gap-2 justify-end">
         <button type="button" onClick={onCancel} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50">
           Cancel

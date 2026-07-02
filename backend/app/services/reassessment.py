@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.activity import Activity
 from app.models.cost_element import CostElement
 from app.models.icd_item import IcdItem
 from app.models.reassessment import Reassessment
@@ -21,6 +22,7 @@ _PARENT_MODELS: dict[str, type] = {
     "risk": Risk,
     "icd_item": IcdItem,
     "cost_element": CostElement,
+    "activity": Activity,
 }
 
 

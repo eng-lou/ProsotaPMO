@@ -35,6 +35,7 @@ class ActivityBase(BaseModel):
     constraint_date: date | None = None
     # Null = inherit the project's default calendar — see app/services/calendar.py.
     calendar_id: uuid.UUID | None = None
+    last_reviewed_date: date | None = None
 
     @model_validator(mode="after")
     def milestones_have_zero_duration(self) -> "ActivityBase":
@@ -68,6 +69,7 @@ class ActivityUpdate(BaseModel):
     constraint_type: ConstraintType | None = None
     constraint_date: date | None = None
     calendar_id: uuid.UUID | None = None
+    last_reviewed_date: date | None = None
 
 
 class ActivityResponse(ActivityBase):

@@ -418,3 +418,22 @@ async def test_list_activities_returns_outline_order(
     names = [a["task_name"] for a in resp.json()]
     # Piling (child of Phase 1) must appear immediately after Phase 1, before Phase 2.
     assert names == ["Phase 1", "Piling", "Phase 2"]
+
+
+# --- Reassessment log (Phase 8, reusing the shared polymorphic pattern) ------
+
+async def test_log_reassessment_against_activity(client: AsyncClient, project: Project, live_period: Period):
+    activity = await _create(client, project, live_period, task_name="Piling", duration_days=5)
+
+    resp = await client.post("/api/v1/reassessments/", json={
+        "record_type": "activity", "record_id": activity["id"],
+        "note": "Duration extended from 5 to 8 days following a revised piling sequence.",
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["record_type"] == "activity"
+
+    resp = await client.get("/api/v1/reassessments/", params={
+        "record_type": "activity", "record_id": activity["id"],
+    })
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1

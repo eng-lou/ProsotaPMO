@@ -81,3 +81,7 @@ class Activity(Base, TimestampMixin):
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL")
     )
+    # Matches Risk/ICD/Cost's field of the same name — manually settable, and
+    # auto-bumped whenever a reassessment is logged against this activity
+    # (app/services/reassessment.py).
+    last_reviewed_date: Mapped[date | None] = mapped_column(Date)

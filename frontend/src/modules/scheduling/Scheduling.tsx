@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
+import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
 import { CalendarWidget } from './CalendarWidget'
+import { downloadActivitiesCsv } from './exportActivities'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import type { Activity, ActivityRelationship, Calendar } from './types'
@@ -24,6 +26,19 @@ export function Scheduling() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
+  const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
+
+  // Search / Filters — client-side, matching the prototype's toolbar row. No separate
+  // Group-by control: unlike Risk/ICD/Cost (flat lists needing an artificial grouping
+  // mechanism), activities are already organised by the WBS outline hierarchy
+  // (Phase 2) — a second grouping layer would duplicate it, and would also break the
+  // Gantt's fixed per-row index alignment the same way an inline-expanding row did
+  // (see the Logic panel's history in this file).
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [filterCritical, setFilterCritical] = useState(false)
+  const [filterDelayed, setFilterDelayed] = useState(false)
+  const [filterAtRisk, setFilterAtRisk] = useState(false)
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
@@ -77,6 +92,23 @@ export function Scheduling() {
     return () => { cancelled = true }
   }, [selectedProject, period])
 
+  // Delayed/At Risk are computed badges, not stored fields — consistent with how
+  // Cost Plan's variance-band fix went (never expose a derivable value as manual
+  // input). Delayed = finished later than baseline; At Risk = has float, but not much.
+  const visibleActivities = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return activities.filter(a => {
+      if (q) {
+        const haystack = [a.code, a.task_name, a.commentary].filter(Boolean).join(' ').toLowerCase()
+        if (!haystack.includes(q)) return false
+      }
+      if (filterCritical && a.is_critical !== true) return false
+      if (filterDelayed && !(a.variance_days !== null && a.variance_days > 0)) return false
+      if (filterAtRisk && !(a.total_float !== null && a.total_float > 0 && a.total_float <= 5)) return false
+      return true
+    })
+  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk])
+
   if (!selectedProject) return null
 
   const refresh = async () => {
@@ -108,9 +140,15 @@ export function Scheduling() {
     await refresh()
   }
 
-  const handleUpdate = async (values: ActivityFormValues) => {
+  const handleUpdate = async (values: ActivityFormValues, reassessmentNote: string | null) => {
     if (!editingActivity) return
     await api.patch(`/api/v1/activities/${editingActivity.id}`, toActivityPayload(values))
+    if (reassessmentNote) {
+      await api.post('/api/v1/reassessments/', {
+        record_type: 'activity', record_id: editingActivity.id, note: reassessmentNote,
+      })
+      setReassessmentRefreshKey(k => k + 1)
+    }
     setEditingActivity(null)
     await refresh()
   }
@@ -140,9 +178,9 @@ export function Scheduling() {
   // parent_id PATCH; the server re-derives wbs_path/activity_type/rollups. MS Project
   // style, per docs/SCHEDULING_MODULE_PLAN.md Phase 2.
   const handleIndent = async (activity: Activity) => {
-    const index = activities.findIndex(a => a.id === activity.id)
+    const index = visibleActivities.findIndex(a => a.id === activity.id)
     if (index <= 0) return
-    const newParent = activities[index - 1]
+    const newParent = visibleActivities[index - 1]
     await api.patch(`/api/v1/activities/${activity.id}`, { parent_id: newParent.id })
     await refresh()
   }
@@ -193,27 +231,35 @@ export function Scheduling() {
       )}
 
       {calendarWidgetOpen && (
-        <CalendarWidget
-          projectId={selectedProject.id}
-          calendars={calendars}
-          onChange={refresh}
-          onClose={() => setCalendarWidgetOpen(false)}
-        />
+        <div className="no-print">
+          <CalendarWidget
+            projectId={selectedProject.id}
+            calendars={calendars}
+            onChange={refresh}
+            onClose={() => setCalendarWidgetOpen(false)}
+          />
+        </div>
       )}
 
       {qualityWidgetOpen && period && (
-        <SchedulingQualityWidget periodId={period.id} onClose={() => setQualityWidgetOpen(false)} />
+        <div className="no-print">
+          <SchedulingQualityWidget periodId={period.id} onClose={() => setQualityWidgetOpen(false)} />
+        </div>
       )}
 
       {formOpen && (
-        <ActivityForm activity={null} calendars={calendars} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />
+        <div className="no-print">
+          <ActivityForm activity={null} calendars={calendars} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />
+        </div>
       )}
       {editingActivity && (
-        <ActivityForm activity={editingActivity} calendars={calendars} onCancel={() => setEditingActivity(null)} onSubmit={handleUpdate} />
+        <div className="no-print">
+          <ActivityForm activity={editingActivity} calendars={calendars} onCancel={() => setEditingActivity(null)} onSubmit={handleUpdate} />
+        </div>
       )}
 
       {!formOpen && !editingActivity && (
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex items-center gap-3 no-print">
           <button onClick={() => setFormOpen(true)} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
             + Add Activity
           </button>
@@ -244,6 +290,69 @@ export function Scheduling() {
         </div>
       )}
 
+      <div className="flex items-center gap-2 mb-3 flex-wrap no-print">
+        <div className="relative max-w-xs w-full">
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search activities…"
+            className="w-full border border-gray-300 rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          onClick={() => setFiltersOpen(o => !o)}
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            filtersOpen || filterCritical || filterDelayed || filterAtRisk
+              ? 'bg-gray-900 text-white border-gray-900'
+              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          ⚙ Filters{[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length > 0
+            ? ` (${[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length})` : ''}
+        </button>
+        <button
+          onClick={() => downloadActivitiesCsv(visibleActivities, selectedProject.name)}
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          title="Exports the activities currently shown (respecting search/filters) as a CSV file, opens directly in Excel."
+        >
+          ⇩ Export ({visibleActivities.length})
+        </button>
+        <button
+          onClick={() => window.print()}
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          title="Print the activity list exactly as currently shown (respecting search/filters)."
+        >
+          🖨️ Print
+        </button>
+      </div>
+
+      {filtersOpen && (
+        <div className="no-print bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-6 flex-wrap">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <input type="checkbox" checked={filterCritical} onChange={e => setFilterCritical(e.target.checked)} />
+            Critical only
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <input type="checkbox" checked={filterDelayed} onChange={e => setFilterDelayed(e.target.checked)} />
+            Delayed (finish later than baseline)
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <input type="checkbox" checked={filterAtRisk} onChange={e => setFilterAtRisk(e.target.checked)} />
+            At risk (float 1–5 days)
+          </label>
+          {(filterCritical || filterDelayed || filterAtRisk) && (
+            <button
+              onClick={() => { setFilterCritical(false); setFilterDelayed(false); setFilterAtRisk(false) }}
+              className="text-xs text-gray-400 hover:text-red-600"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
@@ -267,11 +376,11 @@ export function Scheduling() {
                 <th className="px-3 py-2.5 w-16">Var (d)</th>
                 <th className="px-3 py-2.5 w-16">Float</th>
                 <th className="px-3 py-2.5 w-20">% Comp</th>
-                <th className="px-3 py-2.5 w-28"></th>
+                <th className="px-3 py-2.5 w-28 no-print"></th>
               </tr>
             </thead>
             <tbody>
-              {activities.map((a, index) => (
+              {visibleActivities.map((a, index) => (
                 <tr
                   key={a.id}
                   style={{ height: GANTT_ROW_HEIGHT }}
@@ -296,7 +405,7 @@ export function Scheduling() {
                     {a.total_float ?? '—'}
                   </td>
                   <td className="px-3 py-1 text-gray-600">{a.pct_complete ?? 0}%</td>
-                  <td className="px-3 py-1 text-right whitespace-nowrap">
+                  <td className="px-3 py-1 text-right whitespace-nowrap no-print">
                     <button
                       onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
                       title="Logic (predecessors/successors)"
@@ -326,10 +435,12 @@ export function Scheduling() {
                   </td>
                 </tr>
               ))}
-              {activities.length === 0 && (
+              {visibleActivities.length === 0 && (
                 <tr>
                   <td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm">
-                    No activities yet for this period. Add the first one above.
+                    {activities.length === 0
+                      ? 'No activities yet for this period. Add the first one above.'
+                      : 'No activities match your search/filters.'}
                   </td>
                 </tr>
               )}
@@ -339,22 +450,28 @@ export function Scheduling() {
         <div
           ref={rightPaneRef}
           onScroll={() => syncScroll('right')}
-          className="flex-1 overflow-auto border-l border-gray-200"
+          className="flex-1 overflow-auto border-l border-gray-200 no-print"
           style={{ maxHeight: PANE_MAX_HEIGHT }}
         >
-          <GanttChart activities={activities} relationships={relationships} />
+          <GanttChart activities={visibleActivities} relationships={relationships} />
         </div>
       </div>
 
       {expandedActivity && (
-        <div className="bg-white border border-gray-200 rounded-lg mt-3 overflow-hidden">
+        <div className="bg-white border border-gray-200 rounded-lg mt-3 overflow-hidden no-print">
           <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
             <div className="text-sm font-semibold text-gray-700">
-              Logic — {expandedActivity.code}: {expandedActivity.task_name}
+              {expandedActivity.code}: {expandedActivity.task_name}
             </div>
             <button onClick={() => setExpandedId(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
           </div>
           <ActivityLogic activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh} />
+          <ReassessmentLog
+            recordType="activity"
+            recordId={expandedActivity.id}
+            refreshKey={reassessmentRefreshKey}
+            onLogged={() => refresh()}
+          />
         </div>
       )}
     </div>

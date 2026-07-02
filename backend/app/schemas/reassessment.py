@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-RecordType = Literal["risk", "icd_item", "cost_element"]
+RecordType = Literal["risk", "icd_item", "cost_element", "activity"]
 
 
 class ReassessmentCreate(BaseModel):

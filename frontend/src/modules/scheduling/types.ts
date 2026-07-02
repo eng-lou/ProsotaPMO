@@ -2,6 +2,14 @@ export type ActivityType = 'task' | 'milestone' | 'wbs_summary'
 
 export const ACTIVITY_TYPES: ActivityType[] = ['task', 'milestone', 'wbs_summary']
 
+// Fields that, if changed, prompt for a reassessment note — same user-prompted
+// pattern as Risk/ICD/Cost (frontend/src/components/ReassessmentLog.tsx). start/
+// finish aren't here since Phase 5 made them computed, not user-editable; duration
+// is the actual editable driver of those dates, so it stands in for them.
+export const REASSESSMENT_TRIGGER_FIELDS = [
+  'duration_days', 'pct_complete', 'constraint_type', 'constraint_date',
+] as const
+
 export interface Activity {
   id: string
   code: string

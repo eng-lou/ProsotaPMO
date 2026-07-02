@@ -121,7 +121,7 @@ async def test_list_reassessments_newest_first(client: AsyncClient, project: Pro
 
 async def test_reassessment_rejects_unknown_record_type(client: AsyncClient, project: Project, live_period: Period):
     resp = await client.post("/api/v1/reassessments/", json={
-        "record_type": "activity", "record_id": str(uuid.uuid4()), "note": "Should be rejected",
+        "record_type": "widget", "record_id": str(uuid.uuid4()), "note": "Should be rejected",
     })
     assert resp.status_code == 422
 
