@@ -157,4 +157,4 @@ No separate "Phase 10: build the Gantt" — the chart is a rendering layer over 
 
 ---
 
-**Status:** Approved — proceeding phase by phase, staged (TaskCreate-tracked, verified and confirmed by Maro at each phase before moving on) — per Decision 6 above.
+**Status:** All 9 phases complete (2026-07-02) — Logic (predecessor/successor relationships), WBS hierarchy, calendars, the CPM engine, baseline capture, DCMA-style quality checks (1-12), reassessment history, and reschedule are all real, computed features. Every commit passed the full backend suite (242 tests) and `tsc --noEmit` with zero new errors. Not yet clicked through end-to-end by Maro in the browser — see PROJECT_STATE.md Section 9 for the session log and what's still open (real Import/Resources modules remain deliberately deferred, per the plan's scope-limit notes throughout).
