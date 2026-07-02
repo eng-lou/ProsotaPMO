@@ -9,7 +9,12 @@ export interface Activity {
   period_id: string
   task_name: string
   activity_type: ActivityType
+  // Self-referencing outline hierarchy (MS Project style — no separate WBS-dictionary
+  // entity). wbs_path/sort_order are server-managed, never sent as input — see backend
+  // app/services/activity.py:_recompute_hierarchy.
+  parent_id: string | null
   wbs_path: string | null
+  sort_order: number | null
   duration_days: number | null
   start: string | null
   finish: string | null

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -23,6 +25,29 @@ async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
         )
 
 
+def _build_children_map(activities: list[Activity]) -> dict[uuid.UUID | None, list[Activity]]:
+    children: dict[uuid.UUID | None, list[Activity]] = defaultdict(list)
+    for a in activities:
+        children[a.parent_id].append(a)
+    for siblings in children.values():
+        siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
+    return children
+
+
+def _dfs_order(activities: list[Activity]) -> list[Activity]:
+    """Flatten the outline into display order (parent, then its children, recursively)."""
+    children = _build_children_map(activities)
+    ordered: list[Activity] = []
+
+    def visit(parent_id: uuid.UUID | None) -> None:
+        for node in children.get(parent_id, []):
+            ordered.append(node)
+            visit(node.id)
+
+    visit(None)
+    return ordered
+
+
 async def list_activities(
     db: AsyncSession,
     project_id: uuid.UUID,
@@ -32,7 +57,11 @@ async def list_activities(
     if period_id is not None:
         q = q.where(Activity.period_id == period_id)
     result = await db.execute(q)
-    return list(result.scalars().all())
+    activities = list(result.scalars().all())
+    # Returned in outline order (parent immediately followed by its subtree) so the
+    # frontend's data grid / Gantt rows line up with the WBS without re-deriving the
+    # tree client-side — see docs/SCHEDULING_MODULE_PLAN.md Phase 2.
+    return _dfs_order(activities)
 
 
 async def get_activity(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
@@ -62,14 +91,121 @@ def _apply_computed_fields(activity: Activity) -> None:
     activity.is_critical = None
 
 
+def _validate_no_cycle(
+    by_id: dict[uuid.UUID, Activity], activity_id: uuid.UUID | None, new_parent_id: uuid.UUID
+) -> None:
+    cursor: uuid.UUID | None = new_parent_id
+    seen: set[uuid.UUID] = set()
+    while cursor is not None:
+        if cursor == activity_id:
+            raise HTTPException(status_code=422, detail="Cannot set parent: would create a cycle in the WBS")
+        if cursor in seen:
+            break  # already-inconsistent data — don't loop forever
+        seen.add(cursor)
+        parent = by_id.get(cursor)
+        cursor = parent.parent_id if parent else None
+
+
+async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
+    """Re-derive activity_type/wbs_path/rollups for the whole period's outline.
+
+    Runs after every create/update/delete that could touch the tree — cheap at
+    expected schedule sizes (hundreds to low thousands of activities) and far
+    simpler than tracking exactly which subtree changed. Per Maro's confirmed
+    MS-Project-style decision: any row becomes a WBS Summary automatically as
+    soon as something is indented under it, and reverts to a task when it no
+    longer has children (docs/SCHEDULING_MODULE_PLAN.md Phase 2).
+    """
+    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    activities = list(result.scalars().all())
+    children = _build_children_map(activities)
+
+    for a in activities:
+        has_children = bool(children.get(a.id))
+        if has_children and a.activity_type != "wbs_summary":
+            a.activity_type = "wbs_summary"
+        elif not has_children and a.activity_type == "wbs_summary":
+            a.activity_type = "task"
+
+    def assign_codes(parent_id: uuid.UUID | None, prefix: str) -> None:
+        for i, child in enumerate(children.get(parent_id, []), start=1):
+            code = str(i) if not prefix else f"{prefix}.{i}"
+            child.wbs_path = code
+            assign_codes(child.id, code)
+
+    assign_codes(None, "")
+
+    def rollup(node_id: uuid.UUID) -> None:
+        for child in children.get(node_id, []):
+            rollup(child.id)
+
+    by_id = {a.id: a for a in activities}
+    for root in children.get(None, []):
+        rollup(root.id)
+
+    for node in activities:
+        if node.activity_type != "wbs_summary":
+            continue
+        kids = children.get(node.id, [])
+        starts = [k.start for k in kids if k.start is not None]
+        finishes = [k.finish for k in kids if k.finish is not None]
+        node.start = min(starts) if starts else None
+        node.finish = max(finishes) if finishes else None
+        node.duration_days = (node.finish - node.start).days if node.start and node.finish else None
+        weighted = [(k.pct_complete, k.duration_days or 0) for k in kids if k.pct_complete is not None]
+        total_weight = sum(w for _, w in weighted)
+        if weighted and total_weight > 0:
+            node.pct_complete = sum(Decimal(str(p)) * w for p, w in weighted) / Decimal(total_weight)
+        elif weighted:
+            node.pct_complete = sum(Decimal(str(p)) for p, _ in weighted) / len(weighted)
+        else:
+            node.pct_complete = None
+        _apply_computed_fields(node)
+
+    # Flush + refresh every row this pass touched. Without this, an object mutated
+    # here (e.g. a parent promoted to wbs_summary) keeps a server-computed column
+    # (updated_at's onupdate=func.now()) expired in the session's identity map; the
+    # next unrelated read of that same object in the same session — a later request
+    # sharing this session, e.g. in tests — raises MissingGreenlet trying to lazily
+    # refresh it outside an awaited context. Real request handling gets a fresh
+    # session per call (app/database.py:get_db) so this is latent rather than a
+    # request-facing bug today, but it's cheap to close properly.
+    await db.commit()
+    for a in activities:
+        await db.refresh(a)
+
+
+def _parent_filter(parent_id: uuid.UUID | None):
+    return Activity.parent_id.is_(None) if parent_id is None else Activity.parent_id == parent_id
+
+
+async def _next_sibling_sort_order(
+    db: AsyncSession, period_id: uuid.UUID, parent_id: uuid.UUID | None, exclude_id: uuid.UUID | None = None
+) -> int:
+    q = select(Activity).where(Activity.period_id == period_id, _parent_filter(parent_id))
+    if exclude_id is not None:
+        q = q.where(Activity.id != exclude_id)
+    siblings = list((await db.execute(q)).scalars().all())
+    return max((s.sort_order or 0) for s in siblings) + 1 if siblings else 0
+
+
 async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
     await _require_live_period(db, data.period_id)
+
+    if data.parent_id is not None:
+        parent = await db.get(Activity, data.parent_id)
+        if parent is None or parent.period_id != data.period_id:
+            raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+
+    next_sort_order = await _next_sibling_sort_order(db, data.period_id, data.parent_id)
     code = await next_code(db, Activity, "ACT", data.project_id)
-    activity = Activity(**data.model_dump(), code=code)
+    activity = Activity(**data.model_dump(), code=code, sort_order=next_sort_order)
     _apply_computed_fields(activity)
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
+
+    await _recompute_hierarchy(db, data.period_id)
     return activity
 
 
@@ -78,16 +214,41 @@ async def update_activity(
 ) -> Activity:
     activity = await get_activity(db, activity_id)
     await _require_live_period(db, activity.period_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+
+    updates = data.model_dump(exclude_unset=True)
+    if "parent_id" in updates and updates["parent_id"] is not None:
+        result = await db.execute(select(Activity).where(Activity.period_id == activity.period_id))
+        by_id = {a.id: a for a in result.scalars().all()}
+        _validate_no_cycle(by_id, activity_id, updates["parent_id"])
+        if updates["parent_id"] not in by_id:
+            raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+
+    parent_changed = "parent_id" in updates and updates["parent_id"] != activity.parent_id
+    for field, value in updates.items():
         setattr(activity, field, value)
+    if parent_changed:
+        activity.sort_order = await _next_sibling_sort_order(
+            db, activity.period_id, activity.parent_id, exclude_id=activity.id
+        )
+
     _apply_computed_fields(activity)
     await db.commit()
-    await db.refresh(activity)
+
+    await _recompute_hierarchy(db, activity.period_id)
     return activity
 
 
 async def delete_activity(db: AsyncSession, activity_id: uuid.UUID) -> None:
     activity = await get_activity(db, activity_id)
     await _require_live_period(db, activity.period_id)
+    period_id = activity.period_id
+    # ON DELETE CASCADE (see app/models/activity.py) removes the whole subtree at the
+    # DB level, matching MS Project's "deleting a summary task deletes its subtasks".
+    # The ORM has no idea the cascade happened — only `activity` was explicitly
+    # session.delete()'d — so any descendants stay as stale "alive" objects in this
+    # session's identity map until expired; without this, a later db.get() for a
+    # cascade-deleted descendant returns the stale in-memory object instead of 404.
     await db.delete(activity)
     await db.commit()
+    db.expire_all()
+    await _recompute_hierarchy(db, period_id)

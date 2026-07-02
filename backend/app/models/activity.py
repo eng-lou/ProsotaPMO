@@ -21,9 +21,22 @@ class Activity(Base, TimestampMixin):
     period_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("periods.id"), nullable=False)
     task_name: Mapped[str] = mapped_column(String(500), nullable=False)
     # task | milestone | wbs_summary. Milestones always have zero duration; wbs_summary
-    # rows roll up from children once the WBS hierarchy exists (Phase 2) — see
-    # docs/SCHEDULING_MODULE_PLAN.md.
+    # is never accepted as API input directly — it's auto-assigned/removed by
+    # app/services/activity.py:_recompute_hierarchy whenever an activity gains or loses
+    # children (MS Project style: any row becomes a summary as soon as something is
+    # indented under it). See docs/SCHEDULING_MODULE_PLAN.md Phase 2.
     activity_type: Mapped[str] = mapped_column(String(20), nullable=False, default="task")
+    # Self-referencing outline hierarchy — no separate WBS-dictionary entity (P6 style);
+    # the activity list *is* the WBS (MS Project style, per Maro 2026-07-02). Cascades on
+    # delete: removing a summary task removes its subtree, matching MS Project behaviour.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE")
+    )
+    # Sibling order within a parent — entirely server-managed (see _recompute_hierarchy),
+    # never accepted as API input, same discipline as wbs_path below.
+    sort_order: Mapped[int | None] = mapped_column(Integer)
+    # Computed from parent_id + sort_order outline position ("1", "1.1", "1.2", "2"...)
+    # — never accepted as API input from Phase 2 onward.
     wbs_path: Mapped[str | None] = mapped_column(String(500))
     duration_days: Mapped[int | None] = mapped_column(Integer)
     start: Mapped[date | None] = mapped_column(Date)

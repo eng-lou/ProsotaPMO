@@ -86,10 +86,34 @@ export function Scheduling() {
   }
 
   const handleDelete = async (activity: Activity) => {
-    if (!window.confirm(`Delete activity "${activity.task_name}"? This cannot be undone.`)) return
+    const childCount = activities.filter(a => a.parent_id === activity.id).length
+    const warning = childCount > 0 ? ` and its ${childCount} sub-activit${childCount === 1 ? 'y' : 'ies'}` : ''
+    if (!window.confirm(`Delete activity "${activity.task_name}"${warning}? This cannot be undone.`)) return
     await api.delete(`/api/v1/activities/${activity.id}`)
     await refresh()
   }
+
+  // Indent = become a child of the row immediately above it in outline order (which the
+  // API already returns pre-sorted — see app/services/activity.py:list_activities).
+  // Outdent = move up one level, to the current parent's parent. Both are just a
+  // parent_id PATCH; the server re-derives wbs_path/activity_type/rollups. MS Project
+  // style, per docs/SCHEDULING_MODULE_PLAN.md Phase 2.
+  const handleIndent = async (activity: Activity) => {
+    const index = activities.findIndex(a => a.id === activity.id)
+    if (index <= 0) return
+    const newParent = activities[index - 1]
+    await api.patch(`/api/v1/activities/${activity.id}`, { parent_id: newParent.id })
+    await refresh()
+  }
+
+  const handleOutdent = async (activity: Activity) => {
+    if (!activity.parent_id) return
+    const parent = activities.find(a => a.id === activity.parent_id)
+    await api.patch(`/api/v1/activities/${activity.id}`, { parent_id: parent?.parent_id ?? null })
+    await refresh()
+  }
+
+  const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
 
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400">Loading schedule…</div>
@@ -139,6 +163,7 @@ export function Scheduling() {
                 className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide sticky top-0"
               >
                 <th className="px-3 py-2.5 w-24">Code</th>
+                <th className="px-3 py-2.5 w-16">WBS</th>
                 <th className="px-3 py-2.5 w-56">Activity</th>
                 <th className="px-3 py-2.5 w-24">Type</th>
                 <th className="px-3 py-2.5 w-16">Dur</th>
@@ -146,15 +171,17 @@ export function Scheduling() {
                 <th className="px-3 py-2.5 w-24">Finish</th>
                 <th className="px-3 py-2.5 w-16">Var (d)</th>
                 <th className="px-3 py-2.5 w-20">% Comp</th>
-                <th className="px-3 py-2.5 w-16"></th>
+                <th className="px-3 py-2.5 w-28"></th>
               </tr>
             </thead>
             <tbody>
-              {activities.map(a => (
+              {activities.map((a, index) => (
                 <tr key={a.id} style={{ height: GANTT_ROW_HEIGHT }} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
                   <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap">{a.code}</td>
-                  <td className="px-3 py-1">
+                  <td className="px-3 py-1 text-gray-400 font-mono text-xs whitespace-nowrap">{a.wbs_path ?? '—'}</td>
+                  <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
                     <button onClick={() => setEditingActivity(a)} className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]">
+                      {a.activity_type === 'wbs_summary' && '📦 '}
                       {a.task_name}
                     </button>
                   </td>
@@ -165,6 +192,22 @@ export function Scheduling() {
                   <td className="px-3 py-1 text-gray-600">{a.variance_days ?? '—'}</td>
                   <td className="px-3 py-1 text-gray-600">{a.pct_complete ?? 0}%</td>
                   <td className="px-3 py-1 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => handleOutdent(a)}
+                      disabled={!a.parent_id}
+                      title="Outdent"
+                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
+                    >
+                      ⇤
+                    </button>
+                    <button
+                      onClick={() => handleIndent(a)}
+                      disabled={index === 0}
+                      title="Indent"
+                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
+                    >
+                      ⇥
+                    </button>
                     <button onClick={() => handleDelete(a)} className="text-xs text-gray-400 hover:text-red-600">
                       Delete
                     </button>
@@ -173,7 +216,7 @@ export function Scheduling() {
               ))}
               {activities.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td colSpan={10} className="px-4 py-10 text-center text-gray-400 text-sm">
                     No activities yet for this period. Add the first one above.
                   </td>
                 </tr>

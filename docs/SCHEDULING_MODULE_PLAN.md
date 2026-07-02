@@ -135,6 +135,8 @@ The DCMA 14-Point Assessment is a US Defense Contract Management Agency standard
 5. **Status field** — confirmed: defer to Claude's judgement. Proceeding with computed badges (critical/delayed/at-risk), no new manual `status` column, per the reasoning in the original question.
 6. **Rollout** — confirmed **staged**, not one continuous authorized run. Each phase gets implemented, verified (tests + `tsc --noEmit` + manual click-through where relevant), and confirmed by Maro before moving to the next phase — same discipline as the Risk Module's rollout, not Cost Plan's single continuous pass.
 
+**Revised 2026-07-02 (post-Phase-1):** Maro click-tested Phase 1 and said to carry on through the remaining phases without pausing for review each time, withholding detailed comments until all phases are complete. Verification discipline (tests + `tsc --noEmit` + clean server restarts after every migration) continues unchanged per phase; only the *manual click-through checkpoint* moves from "after every phase" to "once, at the end" — closer to how Cost Plan's session ran.
+
 ---
 
 ## E. Gantt Chart — Rendering Plan

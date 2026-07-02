@@ -12,8 +12,11 @@ ActivityType = Literal["task", "milestone", "wbs_summary"]
 
 class ActivityBase(BaseModel):
     task_name: str
+    # activity_type is client-settable at create time, but from then on it's
+    # auto-managed by app/services/activity.py:_recompute_hierarchy whenever the
+    # activity gains/loses children (MS Project style — see Phase 2 of the plan).
     activity_type: ActivityType = "task"
-    wbs_path: str | None = None
+    parent_id: uuid.UUID | None = None
     duration_days: int | None = Field(default=None, ge=0)
     start: date | None = None
     finish: date | None = None
@@ -40,7 +43,7 @@ class ActivityCreate(ActivityBase):
 class ActivityUpdate(BaseModel):
     task_name: str | None = None
     activity_type: ActivityType | None = None
-    wbs_path: str | None = None
+    parent_id: uuid.UUID | None = None
     duration_days: int | None = Field(default=None, ge=0)
     start: date | None = None
     finish: date | None = None
@@ -68,3 +71,7 @@ class ActivityResponse(ActivityBase):
     variance_days: int | None = None
     total_float: int | None = None
     is_critical: bool | None = None
+    # Server-managed outline position — see app/services/activity.py:_recompute_hierarchy.
+    # Never accepted as API input; sort_order is exposed for future drag-reorder use.
+    wbs_path: str | None = None
+    sort_order: int | None = None

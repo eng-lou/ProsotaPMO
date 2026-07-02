@@ -252,3 +252,110 @@ async def test_delete_rejects_frozen_period(
 
     resp = await client.delete(f"/api/v1/activities/{activity.id}")
     assert resp.status_code == 422
+
+
+# --- WBS hierarchy (Phase 2) -------------------------------------------------
+
+async def _create(client: AsyncClient, project: Project, period: Period, **overrides) -> dict:
+    payload = {"project_id": str(project.id), "period_id": str(period.id), "task_name": "Activity"}
+    payload.update(overrides)
+    resp = await client.post("/api/v1/activities/", json=payload)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_wbs_path_assigned_from_outline_position(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    a = await _create(client, project, live_period, task_name="Phase 1")
+    b = await _create(client, project, live_period, task_name="Phase 2")
+    assert a["wbs_path"] == "1"
+    assert b["wbs_path"] == "2"
+
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=a["id"])
+    assert child["wbs_path"] == "1.1"
+
+
+async def test_indent_promotes_parent_to_wbs_summary(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    parent = await _create(client, project, live_period, task_name="Phase 1")
+    assert parent["activity_type"] == "task"
+
+    await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+
+    resp = await client.get(f"/api/v1/activities/{parent['id']}")
+    assert resp.json()["activity_type"] == "wbs_summary"
+
+
+async def test_outdent_demotes_back_to_task(client: AsyncClient, project: Project, live_period: Period):
+    parent = await _create(client, project, live_period, task_name="Phase 1")
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+
+    resp = await client.patch(f"/api/v1/activities/{child['id']}", json={"parent_id": None})
+    assert resp.status_code == 200
+
+    resp = await client.get(f"/api/v1/activities/{parent['id']}")
+    assert resp.json()["activity_type"] == "task"
+
+
+async def test_reparent_rejects_cycle(client: AsyncClient, project: Project, live_period: Period):
+    grandparent = await _create(client, project, live_period, task_name="Phase 1")
+    parent = await _create(client, project, live_period, task_name="Sub-phase", parent_id=grandparent["id"])
+
+    # Attempt to make the grandparent a child of its own descendant.
+    resp = await client.patch(f"/api/v1/activities/{grandparent['id']}", json={"parent_id": parent["id"]})
+    assert resp.status_code == 422
+    assert "cycle" in resp.json()["detail"].lower()
+
+
+async def test_reparent_to_self_rejected(client: AsyncClient, project: Project, live_period: Period):
+    a = await _create(client, project, live_period, task_name="Solo")
+    resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"parent_id": a["id"]})
+    assert resp.status_code == 422
+
+
+async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Project, live_period: Period):
+    parent = await _create(client, project, live_period, task_name="Phase 1")
+    await _create(
+        client, project, live_period, task_name="Piling", parent_id=parent["id"],
+        start="2025-03-01", finish="2025-04-01", duration_days=31, pct_complete=100,
+    )
+    await _create(
+        client, project, live_period, task_name="Pile caps", parent_id=parent["id"],
+        start="2025-04-01", finish="2025-05-01", duration_days=30, pct_complete=0,
+    )
+
+    resp = await client.get(f"/api/v1/activities/{parent['id']}")
+    data = resp.json()
+    assert data["start"] == "2025-03-01"
+    assert data["finish"] == "2025-05-01"
+    assert data["duration_days"] == 61
+    # Duration-weighted average: (31*100 + 30*0) / 61 = 50.82
+    assert 50 < float(data["pct_complete"]) < 51
+
+
+async def test_delete_summary_cascades_to_children(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    parent = await _create(client, project, live_period, task_name="Phase 1")
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+
+    resp = await client.delete(f"/api/v1/activities/{parent['id']}")
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/api/v1/activities/{child['id']}")
+    assert resp.status_code == 404
+
+
+async def test_list_activities_returns_outline_order(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    phase1 = await _create(client, project, live_period, task_name="Phase 1")
+    await _create(client, project, live_period, task_name="Phase 2")
+    await _create(client, project, live_period, task_name="Piling", parent_id=phase1["id"])
+
+    resp = await client.get("/api/v1/activities/", params={"project_id": str(project.id)})
+    names = [a["task_name"] for a in resp.json()]
+    # Piling (child of Phase 1) must appear immediately after Phase 1, before Phase 2.
+    assert names == ["Phase 1", "Piling", "Phase 2"]
