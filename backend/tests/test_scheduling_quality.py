@@ -40,8 +40,8 @@ async def test_fully_linked_chain_passes_logic_checks(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
     await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "A", duration_days=5)
-    b = await _create_activity(client, project, live_period, "B", duration_days=5)
+    a = await _create_activity(client, project, live_period, "A", duration_hours=40)
+    b = await _create_activity(client, project, live_period, "B", duration_hours=40)
     await client.post("/api/v1/activity-relationships/", json={
         "predecessor_id": a["id"], "successor_id": b["id"],
     })
@@ -58,9 +58,9 @@ async def test_fully_linked_chain_passes_logic_checks(
 
 async def test_hard_constraint_detected(client: AsyncClient, db: AsyncSession, project: Project, live_period: Period):
     await _anchor(db, live_period)
-    await _create_activity(client, project, live_period, "A", duration_days=5)
+    await _create_activity(client, project, live_period, "A", duration_hours=40)
     await _create_activity(
-        client, project, live_period, "B", duration_days=5,
+        client, project, live_period, "B", duration_hours=40,
         constraint_type="ms", constraint_date="2025-06-02",
     )
 
@@ -72,7 +72,7 @@ async def test_hard_constraint_detected(client: AsyncClient, db: AsyncSession, p
 
 async def test_high_duration_flagged(client: AsyncClient, db: AsyncSession, project: Project, live_period: Period):
     await _anchor(db, live_period)
-    await _create_activity(client, project, live_period, "Long haul", duration_days=50)
+    await _create_activity(client, project, live_period, "Long haul", duration_hours=400)
 
     resp = await client.get("/api/v1/scheduling-quality/", params={"period_id": str(live_period.id)})
     data = resp.json()
@@ -82,7 +82,7 @@ async def test_high_duration_flagged(client: AsyncClient, db: AsyncSession, proj
 
 async def test_negative_float_detected(client: AsyncClient, db: AsyncSession, project: Project, live_period: Period):
     await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "Excavation", duration_days=5)
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
     milestone = await _create_activity(
         client, project, live_period, "Design freeze", activity_type="milestone",
         constraint_type="fnlt", constraint_date="2025-06-06",
@@ -103,8 +103,8 @@ async def test_critical_path_test_passes_for_single_chain(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
     await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "A", duration_days=5)
-    b = await _create_activity(client, project, live_period, "B", duration_days=5)
+    a = await _create_activity(client, project, live_period, "A", duration_hours=40)
+    b = await _create_activity(client, project, live_period, "B", duration_hours=40)
     await client.post("/api/v1/activity-relationships/", json={
         "predecessor_id": a["id"], "successor_id": b["id"],
     })
@@ -116,7 +116,7 @@ async def test_critical_path_test_passes_for_single_chain(
 
 async def test_missed_task_detected(client: AsyncClient, db: AsyncSession, project: Project, live_period: Period):
     await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "Excavation", duration_days=5)
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
     await client.post("/api/v1/activities/set-baseline", params={"period_id": str(live_period.id)})
 
     resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"actual_finish": "2025-06-20"})

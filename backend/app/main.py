@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.activities import router as activities_router
 from app.api.activity_relationships import router as activity_relationships_router
+from app.api.calendar_breaks import router as calendar_breaks_router
 from app.api.calendar_exceptions import router as calendar_exceptions_router
 from app.api.calendars import router as calendars_router
 from app.api.cost_commitments import router as cost_commitments_router
@@ -17,6 +18,8 @@ from app.api.periods import router as periods_router
 from app.api.projects import router as projects_router
 from app.api.reassessments import router as reassessments_router
 from app.api.record_links import router as record_links_router
+from app.api.resource_assignments import router as resource_assignments_router
+from app.api.resources import router as resources_router
 from app.api.risk_criteria import router as risk_criteria_router
 from app.api.risk_mitigation_actions import router as risk_mitigation_actions_router
 from app.api.risks import router as risks_router
@@ -43,7 +46,10 @@ app.include_router(activities_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(activity_relationships_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(calendars_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(calendar_exceptions_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(calendar_breaks_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(scheduling_quality_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(resources_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(resource_assignments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risks_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risk_mitigation_actions_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(risk_criteria_router, prefix="/api/v1", dependencies=_auth)

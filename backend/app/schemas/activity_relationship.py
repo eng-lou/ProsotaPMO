@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -13,8 +14,9 @@ class ActivityRelationshipBase(BaseModel):
     predecessor_id: uuid.UUID
     successor_id: uuid.UUID
     relationship_type: RelationshipType = "FS"
-    # Positive = lag (wait after the trigger event), negative = lead (overlap).
-    lag_days: int = 0
+    # Positive = lag (wait after the trigger event), negative = lead (overlap). Hours,
+    # not days, since Phase 10 (hour-level CPM) — see docs/SCHEDULING_MODULE_PLAN.md.
+    lag_hours: Decimal = Decimal("0")
 
 
 class ActivityRelationshipCreate(ActivityRelationshipBase):
@@ -25,7 +27,7 @@ class ActivityRelationshipUpdate(BaseModel):
     # predecessor_id/successor_id are not editable — delete and recreate to change
     # the endpoints of a link, same as every other sub-list in this codebase.
     relationship_type: RelationshipType | None = None
-    lag_days: int | None = None
+    lag_hours: Decimal | None = None
 
 
 class ActivityRelationshipResponse(ActivityRelationshipBase):

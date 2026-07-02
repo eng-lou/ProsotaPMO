@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,43 +38,59 @@ class Activity(Base, TimestampMixin):
     # Computed from parent_id + sort_order outline position ("1", "1.1", "1.2", "2"...)
     # — never accepted as API input from Phase 2 onward.
     wbs_path: Mapped[str | None] = mapped_column(String(500))
-    duration_days: Mapped[int | None] = mapped_column(Integer)
+    # Phase 10 (hour-level CPM): duration_hours is now the primary input. duration_days
+    # is the OLD field name repurposed as a computed, display-only value (duration_hours
+    # / the activity's resolved calendar's net hours/day) — refreshed by
+    # scheduling_cpm.recompute_schedule alongside start/finish, never accepted as API
+    # input, same as those. Numeric now (was Integer) since it can be fractional.
+    duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    duration_days: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     # start/finish are computed by app/services/scheduling_cpm.py's forward/backward
     # pass (duration + logic + calendar + constraints), never accepted as API input
     # from Phase 5 onward — see docs/SCHEDULING_MODULE_PLAN.md. wbs_summary rows are
     # the exception: theirs stay rollups from children (_recompute_hierarchy).
-    start: Mapped[date | None] = mapped_column(Date)
-    finish: Mapped[date | None] = mapped_column(Date)
-    actual_start: Mapped[date | None] = mapped_column(Date)
-    actual_finish: Mapped[date | None] = mapped_column(Date)
-    remaining_duration_days: Mapped[int | None] = mapped_column(Integer)
-    # bl_start/bl_finish/bl_duration_days/variance_days/total_float/free_float/
-    # is_critical are never accepted as API input (see
+    # DateTime since Phase 10 — hour-of-day now genuinely matters (a task can start
+    # mid-morning and finish mid-afternoon), not just the calendar date.
+    start: Mapped[datetime | None] = mapped_column(DateTime)
+    finish: Mapped[datetime | None] = mapped_column(DateTime)
+    actual_start: Mapped[datetime | None] = mapped_column(DateTime)
+    actual_finish: Mapped[datetime | None] = mapped_column(DateTime)
+    remaining_duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    # bl_start/bl_finish/bl_duration_hours/variance_days/total_float_hours/
+    # free_float_hours/is_critical are never accepted as API input (see
     # app/services/activity.py:_apply_computed_fields and
     # app/services/scheduling_cpm.py) — same discipline as Risk's EMV and Cost's
-    # CPI/SPI fixes. bl_start/bl_finish/bl_duration_days are set only by the "Set
+    # CPI/SPI fixes. bl_start/bl_finish/bl_duration_hours are set only by the "Set
     # Baseline" action (app/services/scheduling_baseline.py) — snapshotting current
-    # start/finish/duration_days, not the one-shot-at-creation freeze Cost Plan's
+    # start/finish/duration_hours, not the one-shot-at-creation freeze Cost Plan's
     # rev_a_baseline uses, since a schedule baseline is a deliberate, repeatable
     # capture (client-agreed revisions), not a value fixed forever at row creation.
-    # total_float/free_float/is_critical are null for wbs_summary rows (outside the
-    # CPM network).
-    bl_start: Mapped[date | None] = mapped_column(Date)
-    bl_finish: Mapped[date | None] = mapped_column(Date)
-    bl_duration_days: Mapped[int | None] = mapped_column(Integer)
+    # total_float_hours/free_float_hours/is_critical are null for wbs_summary rows
+    # (outside the CPM network).
+    bl_start: Mapped[datetime | None] = mapped_column(DateTime)
+    bl_finish: Mapped[datetime | None] = mapped_column(DateTime)
+    bl_duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    # Whole-day wall-clock slip (finish vs bl_finish) — deliberately stays a simple
+    # calendar-day count even post-Phase-10, since that's the unit planners actually
+    # report variance in; duration/float (below) are the fields that needed hour
+    # precision, not this summary figure.
     variance_days: Mapped[int | None] = mapped_column(Integer)
     pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    total_float: Mapped[int | None] = mapped_column(Integer)
-    free_float: Mapped[int | None] = mapped_column(Integer)
+    # Renamed from total_float/free_float (Integer, whole working days) — Phase 10
+    # makes float a genuinely fractional, hour-precision quantity (e.g. "4.5 hours of
+    # float", not just whole days), so the rename makes the unit change impossible to
+    # miss in code that reads these fields.
+    total_float_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    free_float_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     is_critical: Mapped[bool | None] = mapped_column(Boolean)
     commentary: Mapped[str | None] = mapped_column(Text)
     # asap | snet (Start On or After) | ms (Mandatory Start) | fnlt (Finish On or Before).
     # constraint_date is required for every type except asap — see app/schemas/activity.py.
     # Per PMBOK7/Rita Mulcahy Ch. 8: soft constraints (snet/fnlt) can still be pushed by
-    # the network; ms is hard and can produce negative float if infeasible. Honoured by
-    # Phase 5's CPM engine; not yet enforced anywhere before that exists.
+    # the network; ms is hard and can produce negative float if infeasible. DateTime since
+    # Phase 10 — a Mandatory Start can now pin an exact hour, not just a date.
     constraint_type: Mapped[str | None] = mapped_column(String(10))
-    constraint_date: Mapped[date | None] = mapped_column(Date)
+    constraint_date: Mapped[datetime | None] = mapped_column(DateTime)
     # Null = inherit the project's default calendar (app/services/calendar.py). SET NULL
     # on delete: removing a custom calendar reverts any activities using it back to the
     # project default rather than blocking the delete or leaving a dangling reference.
@@ -83,5 +99,6 @@ class Activity(Base, TimestampMixin):
     )
     # Matches Risk/ICD/Cost's field of the same name — manually settable, and
     # auto-bumped whenever a reassessment is logged against this activity
-    # (app/services/reassessment.py).
+    # (app/services/reassessment.py). Stays a plain Date — "last reviewed" only ever
+    # needed day granularity, unlike the CPM-facing fields above.
     last_reviewed_date: Mapped[date | None] = mapped_column(Date)

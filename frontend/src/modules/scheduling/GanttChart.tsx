@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { formatDateTime } from './dateTime'
 import type { Activity, ActivityRelationship } from './types'
 
 // Row height must match the data grid's row height exactly (Scheduling.tsx) so the
@@ -13,14 +14,19 @@ const DAY_WIDTH = 14
 const HEADER_HEIGHT = 36
 const BAR_INSET = 7
 
+// Phase 10: start/finish/bl_start/bl_finish are full ISO datetimes, not date-only
+// strings — parsed directly rather than forced to midnight.
 function parseDate(value: string | null): Date | null {
   if (!value) return null
-  const d = new Date(`${value}T00:00:00`)
+  const d = new Date(value)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+// Unrounded — a bar's pixel position/width should reflect its actual hour-of-day
+// span (e.g. a task starting at noon shouldn't render as starting at day-start),
+// even though DAY_WIDTH is coarse enough that sub-day differences are subtle.
 function daysBetween(a: Date, b: Date): number {
-  return Math.round((b.getTime() - a.getTime()) / 86_400_000)
+  return (b.getTime() - a.getTime()) / 86_400_000
 }
 
 function formatWeekLabel(d: Date): string {
@@ -88,6 +94,13 @@ export function GanttChart({
   const width = totalDays * DAY_WIDTH
   const height = activities.length * GANTT_ROW_HEIGHT
 
+  // A "today" marker gives the chart a real anchor point — null (not drawn) if
+  // today falls outside the currently-rendered date range.
+  const todayOffset = useMemo(() => {
+    const offset = daysBetween(rangeStart, new Date()) * DAY_WIDTH
+    return offset >= 0 && offset <= width ? offset : null
+  }, [rangeStart, width])
+
   const geometry = useMemo(() => {
     const map = new Map<string, BarGeometry>()
     activities.forEach((a, i) => {
@@ -141,6 +154,15 @@ export function GanttChart({
         ))}
       </div>
       <div className="relative" style={{ width, height }}>
+        {activities.map((a, i) => (
+          i % 2 === 1 && (
+            <div
+              key={`stripe-${a.id}`}
+              className="absolute bg-gray-50/70"
+              style={{ top: i * GANTT_ROW_HEIGHT, left: 0, width, height: GANTT_ROW_HEIGHT }}
+            />
+          )
+        ))}
         <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
           <defs>
             <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -150,6 +172,16 @@ export function GanttChart({
               <path d="M0,0 L8,4 L0,8 Z" fill="#ef4444" />
             </marker>
           </defs>
+          {weekMarks.map(m => (
+            <line
+              key={`grid-${m.offset}`}
+              x1={m.offset * DAY_WIDTH} y1={0} x2={m.offset * DAY_WIDTH} y2={height}
+              stroke="#e5e7eb" strokeWidth={1}
+            />
+          ))}
+          {todayOffset !== null && (
+            <line x1={todayOffset} y1={0} x2={todayOffset} y2={height} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 3" />
+          )}
           {relationships.map(r => {
             const pred = geometry.get(r.predecessor_id)
             const succ = geometry.get(r.successor_id)
@@ -177,7 +209,7 @@ export function GanttChart({
               key={`bl-${a.id}`}
               className="absolute rounded-sm border border-gray-400 bg-gray-200/60"
               style={{ top: bl.top + GANTT_ROW_HEIGHT - 8, left: bl.left, width: Math.max(bl.right - bl.left, 4), height: 4 }}
-              title={`Baseline: ${a.bl_start} → ${a.bl_finish}`}
+              title={`Baseline: ${formatDateTime(a.bl_start)} → ${formatDateTime(a.bl_finish)}`}
             />
           )
         })}
@@ -190,20 +222,24 @@ export function GanttChart({
             return (
               <div
                 key={a.id}
-                className={`absolute h-3 w-3 rotate-45 ${critical ? 'bg-red-500' : 'bg-purple-500'}`}
-                style={{ top: geo.centerY - 6, left: geo.left - 6 }}
-                title={`${a.task_name} — ${a.start ?? a.finish}${critical ? ' (critical)' : ''}`}
+                className={`absolute h-3.5 w-3.5 rotate-45 border ${critical ? 'bg-red-500 border-red-700' : 'bg-purple-500 border-purple-700'}`}
+                style={{ top: geo.centerY - 7, left: geo.left - 7 }}
+                title={`${a.task_name} — ${formatDateTime(a.start ?? a.finish)}${critical ? ' (critical)' : ''}`}
               />
             )
           }
 
           const pct = a.pct_complete ? Math.min(Number(a.pct_complete), 100) : 0
+          // Pale fills (e.g. blue-100) with no outline barely register against the
+          // pane's white background, especially at 0% progress where the darker
+          // inner fill is invisible too — a solid border makes the bar's extent
+          // legible at a glance regardless of progress.
           return (
             <div
               key={a.id}
-              className={`absolute overflow-hidden rounded ${critical ? 'bg-red-100' : 'bg-blue-100'}`}
+              className={`absolute overflow-hidden rounded border-2 ${critical ? 'bg-red-200 border-red-500' : 'bg-blue-200 border-blue-500'}`}
               style={{ top: geo.top + BAR_INSET, left: geo.left, width: geo.right - geo.left, height: GANTT_ROW_HEIGHT - BAR_INSET * 2 }}
-              title={`${a.task_name}: ${a.start} → ${a.finish} (${pct}% complete)${critical ? ' — critical path' : ''}`}
+              title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)} (${pct}% complete)${critical ? ' — critical path' : ''}`}
             >
               <div className={`h-full ${critical ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
             </div>

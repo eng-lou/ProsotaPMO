@@ -20,12 +20,12 @@ async def test_create_activity(client: AsyncClient, project: Project, live_perio
     assert resp.status_code == 201
     data = resp.json()
     assert data["task_name"] == "Excavation works"
-    # is_critical/total_float/start/finish are computed by the CPM engine (Phase 5),
-    # never accepted as input — see app/services/scheduling_cpm.py. A lone activity
-    # with no predecessors/successors is trivially on the critical path (it alone
-    # determines the project finish date), so total_float is genuinely 0 here.
+    # is_critical/total_float_hours/start/finish are computed by the CPM engine
+    # (Phase 5), never accepted as input — see app/services/scheduling_cpm.py. A lone
+    # activity with no predecessors/successors is trivially on the critical path (it
+    # alone determines the project finish date), so total_float_hours is genuinely 0.
     assert data["is_critical"] is True
-    assert data["total_float"] == 0
+    assert float(data["total_float_hours"]) == 0.0
     assert data["start"] is not None
     assert data["finish"] is not None
     assert data["code"] == "ACT-0001"
@@ -41,18 +41,18 @@ async def test_create_activity_ignores_computed_fields(
         "period_id": str(live_period.id),
         "task_name": "Piling",
         "is_critical": False,
-        "total_float": 99,
-        "start": "1999-01-01",
-        "finish": "1999-01-01",
-        "bl_start": "2025-01-01",
-        "bl_finish": "2025-02-01",
+        "total_float_hours": 99,
+        "start": "1999-01-01T00:00:00",
+        "finish": "1999-01-01T00:00:00",
+        "bl_start": "2025-01-01T00:00:00",
+        "bl_finish": "2025-02-01T00:00:00",
     })
     assert resp.status_code == 201
     data = resp.json()
     # Real CPM-computed values, not the (ignored) posted junk.
     assert data["is_critical"] is True
-    assert data["total_float"] == 0
-    assert data["start"] != "1999-01-01"
+    assert float(data["total_float_hours"]) == 0.0
+    assert data["start"] != "1999-01-01T00:00:00"
     assert data["bl_start"] is None
     assert data["bl_finish"] is None
 
@@ -65,7 +65,7 @@ async def test_milestone_forces_zero_duration(client: AsyncClient, project: Proj
         "activity_type": "milestone",
     })
     assert resp.status_code == 201
-    assert resp.json()["duration_days"] == 0
+    assert float(resp.json()["duration_days"]) == 0.0
 
 
 async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: Project, live_period: Period):
@@ -74,7 +74,7 @@ async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: 
         "period_id": str(live_period.id),
         "task_name": "Bad milestone",
         "activity_type": "milestone",
-        "duration_days": 5,
+        "duration_hours": 5,
     })
     assert resp.status_code == 422
 
@@ -82,7 +82,7 @@ async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: 
 async def test_variance_days_computed_from_finish_vs_baseline(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
-    from datetime import date
+    from datetime import date, datetime
 
     # A Monday anchor + a 5-day (Mon-Fri) duration keeps the CPM-computed finish
     # deterministic without needing to replicate working-day-skipping arithmetic here.
@@ -91,14 +91,14 @@ async def test_variance_days_computed_from_finish_vs_baseline(
 
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "task_name": "Piling", "duration_days": 5,
+        "task_name": "Piling", "duration_hours": 40,
     })
     assert create.status_code == 201
     activity_id = create.json()["id"]
-    assert create.json()["finish"] == "2025-06-06"  # Friday of that week
+    assert create.json()["finish"] == "2025-06-06T17:00:00"  # Friday close of that week
 
     activity = await db.get(Activity, uuid.UUID(activity_id))
-    activity.bl_finish = date(2025, 5, 30)
+    activity.bl_finish = datetime(2025, 5, 30)
     await db.commit()
 
     resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"task_name": "Piling (renamed)"})
@@ -199,20 +199,44 @@ async def test_update_activity(client: AsyncClient, project: Project, live_perio
     assert float(data["pct_complete"]) == 75.0
 
 
+async def test_update_code_to_unique_value(client: AsyncClient, project: Project, live_period: Period):
+    create = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Piling",
+    })
+    activity_id = create.json()["id"]
+
+    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"code": "PILE-01"})
+    assert resp.status_code == 200
+    assert resp.json()["code"] == "PILE-01"
+
+
+async def test_update_code_rejects_duplicate(client: AsyncClient, project: Project, live_period: Period):
+    a = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Excavation",
+    })
+    b = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Piling",
+    })
+    resp = await client.patch(f"/api/v1/activities/{b.json()['id']}", json={"code": a.json()["code"]})
+    assert resp.status_code == 422
+    assert "already in use" in resp.json()["detail"].lower()
+
+
 async def test_update_activity_partial(client: AsyncClient, project: Project, live_period: Period):
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
         "period_id": str(live_period.id),
         "task_name": "Original",
-        "duration_days": 10,
+        "duration_hours": 80,
     })
     activity_id = create.json()["id"]
 
-    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"duration_days": 15})
+    resp = await client.patch(f"/api/v1/activities/{activity_id}", json={"duration_hours": 120})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["task_name"] == "Original"     # unchanged
-    assert data["duration_days"] == 15         # updated
+    assert data["task_name"] == "Original"           # unchanged
+    assert float(data["duration_hours"]) == 120.0    # updated
+    assert float(data["duration_days"]) == 15.0      # computed display (120h / 8h per day)
 
 
 async def test_delete_activity(client: AsyncClient, project: Project, live_period: Period):
@@ -337,11 +361,11 @@ async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Pr
     parent = await _create(client, project, live_period, task_name="Phase 1")
     child1 = await _create(
         client, project, live_period, task_name="Piling", parent_id=parent["id"],
-        duration_days=10, pct_complete=100,
+        duration_hours=80, pct_complete=100,
     )
     child2 = await _create(
         client, project, live_period, task_name="Pile caps", parent_id=parent["id"],
-        duration_days=5, pct_complete=0,
+        duration_hours=40, pct_complete=0,
     )
     await client.post("/api/v1/activity-relationships/", json={
         "predecessor_id": child1["id"], "successor_id": child2["id"],
@@ -423,7 +447,7 @@ async def test_list_activities_returns_outline_order(
 # --- Reassessment log (Phase 8, reusing the shared polymorphic pattern) ------
 
 async def test_log_reassessment_against_activity(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create(client, project, live_period, task_name="Piling", duration_days=5)
+    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=40)
 
     resp = await client.post("/api/v1/reassessments/", json={
         "record_type": "activity", "record_id": activity["id"],

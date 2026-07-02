@@ -158,3 +158,63 @@ No separate "Phase 10: build the Gantt" — the chart is a rendering layer over 
 ---
 
 **Status:** All 9 phases complete (2026-07-02) — Logic (predecessor/successor relationships), WBS hierarchy, calendars, the CPM engine, baseline capture, DCMA-style quality checks (1-12), reassessment history, and reschedule are all real, computed features. Every commit passed the full backend suite (242 tests) and `tsc --noEmit` with zero new errors. Not yet clicked through end-to-end by Maro in the browser — see PROJECT_STATE.md Section 9 for the session log and what's still open (real Import/Resources modules remain deliberately deferred, per the plan's scope-limit notes throughout).
+
+---
+
+## F. Phase 10 (2026-07-02) — Spreadsheet UX + Hour-Level CPM
+
+A follow-up feature backlog: Show/Hide Columns, Inline Editing, Copy & Paste, and an
+"Advanced Calendar Editor" supporting detailed working/non-working periods (e.g.
+"08:00-09:00 non-working"). The calendar editor item had a real fork — cosmetic
+label vs. genuinely changing computed CPM dates — put to Maro directly; he chose
+**"Full hour-level CPM scheduling."**
+
+**Data model rearchitecture** (`app/models/calendar.py`, `activity.py`,
+`activity_relationship.py`, migration `461c6ed379ec`):
+- `Calendar.hours_per_day` (typed-in number) removed. Replaced with `day_start_time`/
+  `day_end_time` (the working envelope) plus a new `CalendarBreak` table (recurring
+  daily non-working windows, e.g. lunch). Net hours/day is now *derived*
+  (`app/services/calendar_time.py:compute_hours_per_day`) — same "never expose a
+  derivable value as a manual input" discipline as Risk's EMV/Cost's CPI-SPI.
+- `CalendarException` gains optional `start_time`/`end_time` for partial-day
+  overrides (null = whole day, unchanged Phase 4 behaviour).
+- `Activity.duration_days` (Integer input) → `duration_hours` (Numeric input);
+  `duration_days` repurposed as a computed, read-only display value. `start`/
+  `finish`/`actual_start`/`actual_finish`/`bl_start`/`bl_finish`/`constraint_date`:
+  Date → DateTime. `total_float`/`free_float` → `total_float_hours`/
+  `free_float_hours` (renamed, not just retyped, since the unit change — whole days
+  to fractional hours — is easy to miss silently otherwise).
+- `ActivityRelationship.lag_days` → `lag_hours`.
+- The default "Standard Calendar" is seeded with a 12:00-13:00 lunch break so its net
+  hours/day stays this project's long-standing default of 8 (08:00-17:00 envelope
+  minus the break) — same seed applied to pre-existing calendars via the migration's
+  data conversion, so existing dev data's *8 hour conversions stay consistent with
+  each calendar's real envelope post-migration.
+
+**CPM engine rewrite** (`app/services/scheduling_cpm.py`): the whole
+`_CalendarLookup` class rebuilt around datetime/time arithmetic instead of date
+arithmetic — `is_working_instant`, `snap_forward`/`snap_backward`,
+`add_duration`/`subtract_duration` (walk day-by-day, consuming/measuring working
+minutes against each day's computed working windows), `offset_hours` (signed
+lag/lead application), `working_hours_between` (float calculation). The FS
+relationship's old "+1 day" gap convention is gone — with hour precision, a
+zero-lag FS successor simply starts the instant its predecessor finishes,
+naturally rolling to the next working instant via the same snap-forward logic if
+that instant falls outside working time (e.g. a Friday-close finish rolls to
+Monday open with zero added hours). This is the "cleaner, more correct model" the
+day-granularity convention was standing in for.
+
+**Frontend**: `ActivityForm` (duration in hours, `datetime-local` inputs for
+actual/constraint dates), `CalendarWidget` (day-envelope + breaks CRUD +
+partial-day exception UI), `GanttChart`/`Scheduling.tsx`/`ActivityLogic`/
+`RescheduleWidget` updated for the renamed/retyped fields, plus a shared
+`dateTime.ts` helper for consistent display formatting. Show/Hide Columns, Inline
+Editing (double-click a cell), and row-level Copy/Paste were built first as
+smaller, independent items — cell-level copy/paste comes for free once a cell is
+an inline-editable text input (native browser clipboard), so no separate
+clipboard-event handling was built for that case.
+
+**Status:** Complete (2026-07-02). 250 backend tests passing (was 242), full
+`tsc --noEmit` and production build clean. Migration is reversible
+(`alembic downgrade`/`upgrade` both verified). Not yet clicked through by Maro in
+the browser.

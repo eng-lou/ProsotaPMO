@@ -15,4 +15,9 @@
   .print-only {
     display: block !important;
   }
+  /* Landscape maximizes the width available to the table+Gantt side-by-side
+     layout — most browsers honor this as a default/hint in the print dialog. */
+  @page {
+    size: landscape;
+  }
 }

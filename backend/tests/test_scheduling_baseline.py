@@ -22,7 +22,7 @@ async def test_set_baseline_snapshots_current_dates(
     await _anchor(db, live_period)
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "task_name": "Piling", "duration_days": 5,
+        "task_name": "Piling", "duration_hours": 40,
     })
     activity = create.json()
     assert activity["bl_start"] is None  # not yet baselined
@@ -32,7 +32,7 @@ async def test_set_baseline_snapshots_current_dates(
     baselined = next(a for a in resp.json() if a["id"] == activity["id"])
     assert baselined["bl_start"] == activity["start"]
     assert baselined["bl_finish"] == activity["finish"]
-    assert baselined["bl_duration_days"] == 5
+    assert float(baselined["bl_duration_hours"]) == 40.0
     assert baselined["variance_days"] == 0  # finish == bl_finish at the moment of capture
 
 
@@ -42,11 +42,11 @@ async def test_variance_appears_after_baseline_when_schedule_shifts(
     await _anchor(db, live_period)
     a = (await client.post("/api/v1/activities/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "task_name": "Excavation", "duration_days": 5,
+        "task_name": "Excavation", "duration_hours": 40,
     })).json()
     b = (await client.post("/api/v1/activities/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "task_name": "Piling", "duration_days": 5,
+        "task_name": "Piling", "duration_hours": 40,
     })).json()
 
     await client.post("/api/v1/activities/set-baseline", params={"period_id": str(live_period.id)})
@@ -69,7 +69,7 @@ async def test_set_baseline_is_repeatable(
     await _anchor(db, live_period)
     a = (await client.post("/api/v1/activities/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "task_name": "Excavation", "duration_days": 5,
+        "task_name": "Excavation", "duration_hours": 40,
     })).json()
 
     first = await client.post("/api/v1/activities/set-baseline", params={"period_id": str(live_period.id)})

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
-import { WEEKDAY_FIELDS, type Calendar, type CalendarException } from './types'
+import { WEEKDAY_FIELDS, type Calendar, type CalendarBreak, type CalendarException } from './types'
 
 interface Props {
   projectId: string
@@ -11,7 +11,8 @@ interface Props {
 
 interface NewCalendarValues {
   name: string
-  hours_per_day: string
+  day_start_time: string
+  day_end_time: string
   works_monday: boolean
   works_tuesday: boolean
   works_wednesday: boolean
@@ -23,7 +24,8 @@ interface NewCalendarValues {
 
 const BLANK_NEW_CALENDAR: NewCalendarValues = {
   name: '',
-  hours_per_day: '8',
+  day_start_time: '08:00',
+  day_end_time: '17:00',
   works_monday: true,
   works_tuesday: true,
   works_wednesday: true,
@@ -37,23 +39,46 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   const [creating, setCreating] = useState(false)
   const [newCalendar, setNewCalendar] = useState<NewCalendarValues>(BLANK_NEW_CALENDAR)
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null)
+  const [breaks, setBreaks] = useState<CalendarBreak[]>([])
   const [exceptions, setExceptions] = useState<CalendarException[]>([])
+
+  const [addingBreak, setAddingBreak] = useState(false)
+  const [breakLabel, setBreakLabel] = useState('')
+  const [breakStart, setBreakStart] = useState('12:00')
+  const [breakEnd, setBreakEnd] = useState('13:00')
+
   const [addingException, setAddingException] = useState(false)
   const [exceptionLabel, setExceptionLabel] = useState('')
   const [exceptionStart, setExceptionStart] = useState('')
   const [exceptionEnd, setExceptionEnd] = useState('')
   const [exceptionIsWorking, setExceptionIsWorking] = useState(false)
+  const [exceptionPartialDay, setExceptionPartialDay] = useState(false)
+  const [exceptionStartTime, setExceptionStartTime] = useState('08:00')
+  const [exceptionEndTime, setExceptionEndTime] = useState('09:00')
 
   useEffect(() => {
     if (!selectedCalendarId) {
+      setBreaks([])
       setExceptions([])
       return
     }
     let cancelled = false
-    api.get<CalendarException[]>('/api/v1/calendar-exceptions/', { params: { calendar_id: selectedCalendarId } })
-      .then(res => { if (!cancelled) setExceptions(res.data) })
+    Promise.all([
+      api.get<CalendarBreak[]>('/api/v1/calendar-breaks/', { params: { calendar_id: selectedCalendarId } }),
+      api.get<CalendarException[]>('/api/v1/calendar-exceptions/', { params: { calendar_id: selectedCalendarId } }),
+    ]).then(([breaksRes, exceptionsRes]) => {
+      if (cancelled) return
+      setBreaks(breaksRes.data)
+      setExceptions(exceptionsRes.data)
+    })
     return () => { cancelled = true }
   }, [selectedCalendarId])
+
+  const refreshBreaks = async () => {
+    if (!selectedCalendarId) return
+    const { data } = await api.get<CalendarBreak[]>('/api/v1/calendar-breaks/', { params: { calendar_id: selectedCalendarId } })
+    setBreaks(data)
+  }
 
   const refreshExceptions = async () => {
     if (!selectedCalendarId) return
@@ -66,7 +91,8 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     await api.post('/api/v1/calendars/', {
       project_id: projectId,
       name: newCalendar.name,
-      hours_per_day: newCalendar.hours_per_day,
+      day_start_time: newCalendar.day_start_time,
+      day_end_time: newCalendar.day_end_time,
       works_monday: newCalendar.works_monday,
       works_tuesday: newCalendar.works_tuesday,
       works_wednesday: newCalendar.works_wednesday,
@@ -92,6 +118,25 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     await onChange()
   }
 
+  const handleAddBreak = async () => {
+    if (!selectedCalendarId || !breakLabel.trim() || !breakStart || !breakEnd) return
+    await api.post('/api/v1/calendar-breaks/', {
+      calendar_id: selectedCalendarId, label: breakLabel, start_time: breakStart, end_time: breakEnd,
+    })
+    setAddingBreak(false)
+    setBreakLabel('')
+    setBreakStart('12:00')
+    setBreakEnd('13:00')
+    await refreshBreaks()
+    await onChange() // hours_per_day changed
+  }
+
+  const handleDeleteBreak = async (id: string) => {
+    await api.delete(`/api/v1/calendar-breaks/${id}`)
+    await refreshBreaks()
+    await onChange()
+  }
+
   const handleAddException = async () => {
     if (!selectedCalendarId || !exceptionLabel.trim() || !exceptionStart || !exceptionEnd) return
     await api.post('/api/v1/calendar-exceptions/', {
@@ -100,12 +145,15 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
       start_date: exceptionStart,
       end_date: exceptionEnd,
       is_working: exceptionIsWorking,
+      start_time: exceptionPartialDay ? exceptionStartTime : null,
+      end_time: exceptionPartialDay ? exceptionEndTime : null,
     })
     setAddingException(false)
     setExceptionLabel('')
     setExceptionStart('')
     setExceptionEnd('')
     setExceptionIsWorking(false)
+    setExceptionPartialDay(false)
     await refreshExceptions()
   }
 
@@ -119,7 +167,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">📆</span>
         <div className="font-bold text-sm">Project Calendar</div>
-        <div className="text-xs text-gray-400">Working day patterns, exceptions &amp; non-working periods</div>
+        <div className="text-xs text-gray-400">Working day patterns, breaks &amp; non-working periods</div>
         <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
       </div>
 
@@ -131,7 +179,8 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
               <tr className="bg-gray-50 text-left text-gray-500">
                 <th className="px-2 py-1.5 border border-gray-200">Calendar</th>
                 <th className="px-2 py-1.5 border border-gray-200">Working Days</th>
-                <th className="px-2 py-1.5 border border-gray-200">Hours/Day</th>
+                <th className="px-2 py-1.5 border border-gray-200">Day Envelope</th>
+                <th className="px-2 py-1.5 border border-gray-200">Net Hours/Day</th>
                 <th className="px-2 py-1.5 border border-gray-200"></th>
               </tr>
             </thead>
@@ -149,7 +198,12 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                   <td className="px-2 py-1.5 border border-gray-200 text-gray-500">
                     {WEEKDAY_FIELDS.filter(w => c[w.key]).map(w => w.label).join('/') || 'None'}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{c.hours_per_day}h</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                    {c.day_start_time.slice(0, 5)}–{c.day_end_time.slice(0, 5)}
+                  </td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" title="Envelope minus this calendar's breaks — computed, not editable directly">
+                    {c.hours_per_day}h
+                  </td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
                     {!c.is_project_default && (
                       <>
@@ -186,17 +240,30 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                     {w.label}
                   </label>
                 ))}
-                <label className="flex items-center gap-1 text-xs text-gray-600 ml-auto">
-                  Hours/day
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1 text-xs text-gray-600">
+                  Day starts
                   <input
-                    type="number"
-                    min={1}
-                    max={24}
-                    value={newCalendar.hours_per_day}
-                    onChange={e => setNewCalendar(v => ({ ...v, hours_per_day: e.target.value }))}
-                    className="w-14 border border-gray-300 rounded px-1.5 py-0.5"
+                    type="time"
+                    value={newCalendar.day_start_time}
+                    onChange={e => setNewCalendar(v => ({ ...v, day_start_time: e.target.value }))}
+                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
                   />
                 </label>
+                <label className="flex items-center gap-1 text-xs text-gray-600">
+                  Day ends
+                  <input
+                    type="time"
+                    value={newCalendar.day_end_time}
+                    onChange={e => setNewCalendar(v => ({ ...v, day_end_time: e.target.value }))}
+                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  />
+                </label>
+              </div>
+              <div className="text-[10px] text-gray-400">
+                Net working hours/day is derived from this envelope minus any breaks you add after creating the
+                calendar — not typed in directly.
               </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setCreating(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
@@ -208,71 +275,144 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
           )}
         </div>
 
-        <div>
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            Non-Working Exceptions{selectedCalendarId ? '' : ' — select a calendar'}
-          </div>
-          {selectedCalendarId && (
-            <>
-              <table className="w-full text-xs border-collapse mb-2">
-                <thead>
-                  <tr className="bg-gray-50 text-left text-gray-500">
-                    <th className="px-2 py-1.5 border border-gray-200">Exception</th>
-                    <th className="px-2 py-1.5 border border-gray-200">Dates</th>
-                    <th className="px-2 py-1.5 border border-gray-200">Type</th>
-                    <th className="px-2 py-1.5 border border-gray-200"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {exceptions.map(ex => (
-                    <tr key={ex.id}>
-                      <td className="px-2 py-1.5 border border-gray-200">{ex.label}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
-                        {ex.start_date}{ex.start_date !== ex.end_date ? ` – ${ex.end_date}` : ''}
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200">
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${ex.is_working ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                          {ex.is_working ? 'Working' : 'Non-Working'}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">
-                        <button onClick={() => handleDeleteException(ex.id)} className="text-gray-400 hover:text-red-600">✕</button>
-                      </td>
+        <div className="space-y-4">
+          <div>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Daily Breaks{selectedCalendarId ? '' : ' — select a calendar'}
+            </div>
+            {selectedCalendarId && (
+              <>
+                <table className="w-full text-xs border-collapse mb-2">
+                  <thead>
+                    <tr className="bg-gray-50 text-left text-gray-500">
+                      <th className="px-2 py-1.5 border border-gray-200">Break</th>
+                      <th className="px-2 py-1.5 border border-gray-200">Time</th>
+                      <th className="px-2 py-1.5 border border-gray-200"></th>
                     </tr>
-                  ))}
-                  {exceptions.length === 0 && (
-                    <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400 border border-gray-200">None yet</td></tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {breaks.map(b => (
+                      <tr key={b.id}>
+                        <td className="px-2 py-1.5 border border-gray-200">{b.label}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                          {b.start_time.slice(0, 5)}–{b.end_time.slice(0, 5)}
+                        </td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">
+                          <button onClick={() => handleDeleteBreak(b.id)} className="text-gray-400 hover:text-red-600">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {breaks.length === 0 && (
+                      <tr><td colSpan={3} className="px-2 py-3 text-center text-gray-400 border border-gray-200">None yet</td></tr>
+                    )}
+                  </tbody>
+                </table>
 
-              {addingException ? (
-                <div className="border border-gray-200 rounded p-3 space-y-2">
-                  <input
-                    value={exceptionLabel}
-                    onChange={e => setExceptionLabel(e.target.value)}
-                    placeholder="Label (e.g. Christmas Shutdown)"
-                    className="w-full text-xs border border-gray-300 rounded px-2 py-1"
-                  />
-                  <div className="flex items-center gap-2">
-                    <input type="date" value={exceptionStart} onChange={e => setExceptionStart(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                    <span className="text-gray-400">–</span>
-                    <input type="date" value={exceptionEnd} onChange={e => setExceptionEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                    <label className="flex items-center gap-1 text-xs text-gray-600 ml-2">
-                      <input type="checkbox" checked={exceptionIsWorking} onChange={e => setExceptionIsWorking(e.target.checked)} />
-                      Working (e.g. planned Saturday)
+                {addingBreak ? (
+                  <div className="border border-gray-200 rounded p-3 space-y-2">
+                    <input
+                      value={breakLabel}
+                      onChange={e => setBreakLabel(e.target.value)}
+                      placeholder="Label (e.g. Lunch)"
+                      className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input type="time" value={breakStart} onChange={e => setBreakStart(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                      <span className="text-gray-400">–</span>
+                      <input type="time" value={breakEnd} onChange={e => setBreakEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button onClick={() => setAddingBreak(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={handleAddBreak} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Break</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setAddingBreak(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Break</button>
+                )}
+              </>
+            )}
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Non-Working Exceptions{selectedCalendarId ? '' : ' — select a calendar'}
+            </div>
+            {selectedCalendarId && (
+              <>
+                <table className="w-full text-xs border-collapse mb-2">
+                  <thead>
+                    <tr className="bg-gray-50 text-left text-gray-500">
+                      <th className="px-2 py-1.5 border border-gray-200">Exception</th>
+                      <th className="px-2 py-1.5 border border-gray-200">Dates</th>
+                      <th className="px-2 py-1.5 border border-gray-200">Type</th>
+                      <th className="px-2 py-1.5 border border-gray-200"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {exceptions.map(ex => (
+                      <tr key={ex.id}>
+                        <td className="px-2 py-1.5 border border-gray-200">{ex.label}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                          {ex.start_date}{ex.start_date !== ex.end_date ? ` – ${ex.end_date}` : ''}
+                          {ex.start_time && ex.end_time && (
+                            <span className="text-gray-400"> ({ex.start_time.slice(0, 5)}–{ex.end_time.slice(0, 5)})</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 border border-gray-200">
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${ex.is_working ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {ex.is_working ? 'Working' : 'Non-Working'}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">
+                          <button onClick={() => handleDeleteException(ex.id)} className="text-gray-400 hover:text-red-600">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {exceptions.length === 0 && (
+                      <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400 border border-gray-200">None yet</td></tr>
+                    )}
+                  </tbody>
+                </table>
+
+                {addingException ? (
+                  <div className="border border-gray-200 rounded p-3 space-y-2">
+                    <input
+                      value={exceptionLabel}
+                      onChange={e => setExceptionLabel(e.target.value)}
+                      placeholder="Label (e.g. Christmas Shutdown)"
+                      className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={exceptionStart} onChange={e => setExceptionStart(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                      <span className="text-gray-400">–</span>
+                      <input type="date" value={exceptionEnd} onChange={e => setExceptionEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                      <label className="flex items-center gap-1 text-xs text-gray-600 ml-2">
+                        <input type="checkbox" checked={exceptionIsWorking} onChange={e => setExceptionIsWorking(e.target.checked)} />
+                        Working (e.g. planned Saturday)
+                      </label>
+                    </div>
+                    <label className="flex items-center gap-1 text-xs text-gray-600">
+                      <input type="checkbox" checked={exceptionPartialDay} onChange={e => setExceptionPartialDay(e.target.checked)} />
+                      Only part of the day (e.g. "08:00–09:00 non-working") — leave unchecked for the whole day
                     </label>
+                    {exceptionPartialDay && (
+                      <div className="flex items-center gap-2">
+                        <input type="time" value={exceptionStartTime} onChange={e => setExceptionStartTime(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                        <span className="text-gray-400">–</span>
+                        <input type="time" value={exceptionEndTime} onChange={e => setExceptionEndTime(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                      </div>
+                    )}
+                    <div className="flex gap-2 justify-end">
+                      <button onClick={() => setAddingException(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={handleAddException} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Exception</button>
+                    </div>
                   </div>
-                  <div className="flex gap-2 justify-end">
-                    <button onClick={() => setAddingException(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                    <button onClick={handleAddException} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Exception</button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => setAddingException(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Exception</button>
-              )}
-            </>
-          )}
+                ) : (
+                  <button onClick={() => setAddingException(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Exception</button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

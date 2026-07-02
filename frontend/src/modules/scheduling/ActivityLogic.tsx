@@ -40,7 +40,7 @@ function LinkTable({
                     <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">{r.relationship_type}</span>
                   </td>
                   <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">
-                    {r.lag_days === 0 ? '—' : r.lag_days > 0 ? `+${r.lag_days}d` : `${r.lag_days}d`}
+                    {r.lag_hours === 0 ? '—' : r.lag_hours > 0 ? `+${r.lag_hours}h` : `${r.lag_hours}h`}
                   </td>
                   <td className="py-1 text-right">
                     <button onClick={() => onDelete(r.id)} className="text-gray-400 hover:text-red-600">✕</button>
@@ -60,7 +60,7 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
   const [addingSucc, setAddingSucc] = useState(false)
   const [candidateId, setCandidateId] = useState('')
   const [relType, setRelType] = useState<RelationshipType>('FS')
-  const [lagDays, setLagDays] = useState('0')
+  const [lagHours, setLagHours] = useState('0')
 
   const activitiesById = new Map(activities.map(a => [a.id, a]))
   const predecessors = relationships.filter(r => r.successor_id === activity.id)
@@ -72,14 +72,14 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
     setAddingSucc(false)
     setCandidateId('')
     setRelType('FS')
-    setLagDays('0')
+    setLagHours('0')
   }
 
   const handleAdd = async (mode: 'predecessor' | 'successor') => {
     if (!candidateId) return
     const payload = mode === 'predecessor'
-      ? { predecessor_id: candidateId, successor_id: activity.id, relationship_type: relType, lag_days: Number(lagDays) || 0 }
-      : { predecessor_id: activity.id, successor_id: candidateId, relationship_type: relType, lag_days: Number(lagDays) || 0 }
+      ? { predecessor_id: candidateId, successor_id: activity.id, relationship_type: relType, lag_hours: Number(lagHours) || 0 }
+      : { predecessor_id: activity.id, successor_id: candidateId, relationship_type: relType, lag_hours: Number(lagHours) || 0 }
     await api.post('/api/v1/activity-relationships/', payload)
     resetAddForm()
     await onChange()
@@ -101,9 +101,9 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
       </select>
       <input
         type="number"
-        value={lagDays}
-        onChange={e => setLagDays(e.target.value)}
-        title="Lag (days) — positive = lag, negative = lead"
+        value={lagHours}
+        onChange={e => setLagHours(e.target.value)}
+        title="Lag (hours) — positive = lag, negative = lead"
         className="text-xs border border-gray-300 rounded px-2 py-1 w-16"
       />
       <button onClick={() => handleAdd(mode)} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add</button>

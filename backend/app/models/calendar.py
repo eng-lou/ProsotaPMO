@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
-from decimal import Decimal
+from datetime import date, time
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String
+from sqlalchemy import Boolean, Date, ForeignKey, String, Time
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,12 +11,18 @@ from app.models.base import Base, TimestampMixin
 
 
 class Calendar(Base, TimestampMixin):
-    """Working-day pattern + hours/day, project-scoped. Exactly one calendar per
-    project is the default (activities with a null calendar_id inherit it) — see
-    app/services/calendar.py. Per Maro's confirmed spec (docs/SCHEDULING_MODULE_PLAN.md
-    Phase 4): whole project can sit on one calendar while individual activities
-    override onto another (e.g. a Saturday-working calendar for one excavation
-    activity needing weekend resource availability)."""
+    """Working-day pattern + daily working-hour envelope, project-scoped. Exactly one
+    calendar per project is the default (activities with a null calendar_id inherit
+    it) — see app/services/calendar.py. Per Maro's confirmed spec
+    (docs/SCHEDULING_MODULE_PLAN.md Phase 4): whole project can sit on one calendar
+    while individual activities override onto another (e.g. a Saturday-working
+    calendar for one excavation activity needing weekend resource availability).
+
+    Phase 10 (hour-level CPM): hours_per_day used to be a directly-entered number.
+    It's now derived (day_end_time - day_start_time, minus CalendarBreak spans) —
+    same "never expose a derivable value as a manual input" discipline already
+    applied to Risk's EMV and Cost's CPI/SPI — see app/services/calendar_time.py.
+    """
 
     __tablename__ = "calendars"
 
@@ -25,7 +30,8 @@ class Calendar(Base, TimestampMixin):
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_project_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    hours_per_day: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False, default=8)
+    day_start_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(8, 0))
+    day_end_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(17, 0))
     works_monday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     works_tuesday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     works_wednesday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -35,10 +41,32 @@ class Calendar(Base, TimestampMixin):
     works_sunday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class CalendarBreak(Base, TimestampMixin):
+    """A recurring daily non-working window (e.g. 12:00-13:00 lunch) subtracted from
+    every working day's envelope on this calendar. Phase 10 addition — the "intuitive
+    time editor" building block for the working/non-working-periods feature request."""
+
+    __tablename__ = "calendar_breaks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calendar_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+
+
 class CalendarException(Base, TimestampMixin):
     """A date or date range that overrides the calendar's normal working-day
     pattern — either removing working days (bank holidays, shutdowns) or adding
-    one (planned Saturday working), per the prototype's two example categories."""
+    one (planned Saturday working), per the prototype's two example categories.
+
+    Phase 10: start_time/end_time (both null, or both set) let an exception target
+    just part of a day instead of the whole thing — e.g. "08:00-09:00 non-working"
+    on one specific date, rather than marking the entire date non-working. Null
+    start_time/end_time keeps the original whole-day behaviour.
+    """
 
     __tablename__ = "calendar_exceptions"
 
@@ -50,3 +78,5 @@ class CalendarException(Base, TimestampMixin):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_working: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    start_time: Mapped[time | None] = mapped_column(Time)
+    end_time: Mapped[time | None] = mapped_column(Time)

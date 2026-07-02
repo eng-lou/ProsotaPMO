@@ -3,6 +3,9 @@ export interface Period {
   project_id: string
   period_label: string
   freeze_status: string
+  // The CPM anchor / "data date" — activities with no predecessors can't start
+  // earlier than this. Reschedule (Scheduling module) shifts it directly.
+  start_date: string | null
 }
 
 export type RecordType = 'activity' | 'risk' | 'cost_element' | 'issue' | 'change' | 'decision'

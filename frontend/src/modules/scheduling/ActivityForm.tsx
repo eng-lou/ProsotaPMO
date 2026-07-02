@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { formatDateTime, toDatetimeLocalValue } from './dateTime'
+import { resolveHoursPerDay } from './durationDisplay'
 import {
   ACTIVITY_TYPES,
   CONSTRAINT_TYPES,
@@ -12,45 +14,52 @@ import {
 export interface ActivityFormValues {
   task_name: string
   activity_type: ActivityType
+  // Collected in days (what planners actually type), converted to duration_hours
+  // in toActivityPayload below — the backend's hour-precision CPM engine (Phase
+  // 10) is unaffected, this is purely a display/input convenience.
   duration_days: string
   actual_start: string
   actual_finish: string
   remaining_duration_days: string
   pct_complete: string
-  commentary: string
   constraint_type: ConstraintType | ''
   constraint_date: string
   calendar_id: string
 }
 
-function toFormValues(activity: Activity | null): ActivityFormValues {
+function toFormValues(activity: Activity | null, calendars: Calendar[]): ActivityFormValues {
   return {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
     duration_days: activity?.duration_days?.toString() ?? '',
-    actual_start: activity?.actual_start ?? '',
-    actual_finish: activity?.actual_finish ?? '',
-    remaining_duration_days: activity?.remaining_duration_days?.toString() ?? '',
+    actual_start: toDatetimeLocalValue(activity?.actual_start),
+    actual_finish: toDatetimeLocalValue(activity?.actual_finish),
+    // remaining_duration_hours has no computed "days" counterpart from the
+    // backend (unlike duration_hours/duration_days) — approximated here using
+    // the activity's own resolved calendar, same conversion toActivityPayload
+    // uses on the way back out.
+    remaining_duration_days: activity?.remaining_duration_hours != null
+      ? String(Number(activity.remaining_duration_hours) / resolveHoursPerDay(activity, calendars))
+      : '',
     pct_complete: activity?.pct_complete ?? '',
-    commentary: activity?.commentary ?? '',
     constraint_type: activity?.constraint_type ?? '',
-    constraint_date: activity?.constraint_date ?? '',
+    constraint_date: toDatetimeLocalValue(activity?.constraint_date),
     calendar_id: activity?.calendar_id ?? '',
   }
 }
 
-export function toActivityPayload(values: ActivityFormValues) {
+export function toActivityPayload(values: ActivityFormValues, calendars: Calendar[]) {
   const isMilestone = values.activity_type === 'milestone'
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
+  const hoursPerDay = resolveHoursPerDay({ calendar_id: values.calendar_id || null }, calendars)
   return {
     task_name: values.task_name,
     activity_type: values.activity_type,
-    duration_days: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) : null,
+    duration_hours: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) * hoursPerDay : null,
     actual_start: values.actual_start || null,
     actual_finish: values.actual_finish || null,
-    remaining_duration_days: values.remaining_duration_days ? Number(values.remaining_duration_days) : null,
+    remaining_duration_hours: values.remaining_duration_days ? Number(values.remaining_duration_days) * hoursPerDay : null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
-    commentary: values.commentary || null,
     constraint_type: isAsap ? null : values.constraint_type,
     constraint_date: isAsap ? null : values.constraint_date || null,
     calendar_id: values.calendar_id || null,
@@ -62,6 +71,10 @@ interface Props {
   calendars: Calendar[]
   onCancel: () => void
   onSubmit: (values: ActivityFormValues, reassessmentNote: string | null) => Promise<void>
+  // True when rendered inside the unified activity-detail panel (Scheduling.tsx),
+  // which already provides its own white/border/rounded chrome — the standalone
+  // "+ Add Activity" flow (activity === null) still needs its own.
+  embedded?: boolean
 }
 
 const TYPE_LABELS: Record<ActivityType, string> = {
@@ -70,8 +83,9 @@ const TYPE_LABELS: Record<ActivityType, string> = {
   wbs_summary: 'WBS Summary',
 }
 
-export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props) {
-  const [values, setValues] = useState<ActivityFormValues>(toFormValues(activity))
+export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded = false }: Props) {
+  const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity, calendars))
+  const [values, setValues] = useState<ActivityFormValues>(initialValues)
   const [submitting, setSubmitting] = useState(false)
   const [reassessmentNote, setReassessmentNote] = useState('')
 
@@ -81,10 +95,13 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
   const isMilestone = values.activity_type === 'milestone'
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
 
-  const hasTriggerChanges = activity !== null && REASSESSMENT_TRIGGER_FIELDS.some(field => {
-    const activityValue = activity[field]
-    return (activityValue ?? '').toString() !== (values[field] ?? '').toString()
-  })
+  // Compared against the form's own initial snapshot (not the raw activity object) —
+  // constraint_date/actual_* are datetime-local values truncated to the minute, while
+  // the activity carries full ISO datetimes with seconds; comparing against the raw
+  // activity would flag every untouched datetime field as "changed".
+  const hasTriggerChanges = activity !== null && REASSESSMENT_TRIGGER_FIELDS.some(
+    field => (initialValues[field] ?? '') !== (values[field] ?? '')
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -97,7 +114,10 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-5 mb-4 grid grid-cols-2 gap-4">
+    <form
+      onSubmit={handleSubmit}
+      className={embedded ? 'p-4 grid grid-cols-2 gap-4' : 'bg-white border border-gray-200 rounded-lg p-5 mb-4 grid grid-cols-2 gap-4'}
+    >
       <div className="col-span-2">
         <label className="block text-xs font-semibold text-gray-600 mb-1">Activity Name</label>
         <input
@@ -122,6 +142,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
         <input
           type="number"
           min={0}
+          step={0.5}
           value={isMilestone ? 0 : values.duration_days}
           disabled={isMilestone}
           onChange={e => set('duration_days', e.target.value)}
@@ -132,15 +153,17 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
         <div className="col-span-2 grid grid-cols-4 gap-3 bg-gray-50 rounded-md p-2.5 text-xs">
           <div>
             <div className="text-gray-400 mb-0.5">Start (computed)</div>
-            <div className="font-medium text-gray-700">{activity.start ?? '—'}</div>
+            <div className="font-medium text-gray-700">{formatDateTime(activity.start)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Finish (computed)</div>
-            <div className="font-medium text-gray-700">{activity.finish ?? '—'}</div>
+            <div className="font-medium text-gray-700">{formatDateTime(activity.finish)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Total Float</div>
-            <div className="font-medium text-gray-700">{activity.total_float ?? '—'}</div>
+            <div className="font-medium text-gray-700">
+              {activity.total_float_hours ?? '—'}{activity.total_float_hours !== null ? 'h' : ''}
+            </div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Critical?</div>
@@ -148,11 +171,11 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">BL Start</div>
-            <div className="font-medium text-gray-700">{activity.bl_start ?? '—'}</div>
+            <div className="font-medium text-gray-700">{formatDateTime(activity.bl_start)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">BL Finish</div>
-            <div className="font-medium text-gray-700">{activity.bl_finish ?? '—'}</div>
+            <div className="font-medium text-gray-700">{formatDateTime(activity.bl_finish)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Variance (d)</div>
@@ -160,19 +183,23 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
               {activity.variance_days ?? '—'}
             </div>
           </div>
+          <div>
+            <div className="text-gray-400 mb-0.5">Duration (hours)</div>
+            <div className="font-medium text-gray-700">{activity.duration_hours ?? '—'}</div>
+          </div>
         </div>
       )}
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Start</label>
-        <input type="date" value={values.actual_start} onChange={e => set('actual_start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+        <input type="datetime-local" value={values.actual_start} onChange={e => set('actual_start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
       </div>
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Finish</label>
-        <input type="date" value={values.actual_finish} onChange={e => set('actual_finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+        <input type="datetime-local" value={values.actual_finish} onChange={e => set('actual_finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
       </div>
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">Remaining Duration (days)</label>
-        <input type="number" min={0} value={values.remaining_duration_days} onChange={e => set('remaining_duration_days', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+        <input type="number" min={0} step={0.5} value={values.remaining_duration_days} onChange={e => set('remaining_duration_days', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
       </div>
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>
@@ -189,9 +216,9 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
         </select>
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Date</label>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Date/Time</label>
         <input
-          type="date"
+          type="datetime-local"
           value={isAsap ? '' : values.constraint_date}
           disabled={isAsap}
           onChange={e => set('constraint_date', e.target.value)}
@@ -210,10 +237,6 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit }: Props)
             <option key={c.id} value={c.id}>{c.name}{c.is_project_default ? ' (default)' : ''}</option>
           ))}
         </select>
-      </div>
-      <div className="col-span-2">
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Commentary</label>
-        <textarea value={values.commentary} onChange={e => set('commentary', e.target.value)} rows={2} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm resize-y" />
       </div>
       {hasTriggerChanges && (
         <div className="col-span-2 p-3 bg-blue-50 border border-blue-200 rounded-md">

@@ -20,6 +20,14 @@ from app.services.scheduling_cpm import _cpm_participants
 # checks 1-4, 6-9 match the prototype's own 8 example rows exactly; 5, 10, 11, 12 fill
 # the gaps the prototype didn't demo, using the standard DCMA numbering — flagged for
 # Maro to correct if his own practice numbers these differently.
+#
+# Phase 10 (hour-level CPM) made float/duration genuinely hour-precision fields. These
+# thresholds stay in "working days" (the unit DCMA itself publishes them in) — checks
+# 6/9 convert each activity's float/duration to days using a nominal 8h/day, rather
+# than that activity's own resolved calendar's real hours/day, to avoid this module
+# needing a full calendar lookup just for a threshold that's already a documented
+# approximation, not a precise figure.
+_NOMINAL_HOURS_PER_DAY = 8
 HIGH_FLOAT_DAYS = 44
 HIGH_DURATION_DAYS = 44
 
@@ -65,17 +73,23 @@ async def compute_quality(db: AsyncSession, period_id: uuid.UUID) -> dict:
     missing_pred = sum(1 for a in participants if a.id not in has_predecessor)
     missing_succ = sum(1 for a in participants if a.id not in has_successor)
     non_fs = sum(1 for r in relationships if r.relationship_type != "FS")
-    negative_lag = sum(1 for r in relationships if r.lag_days < 0)
-    positive_lag = sum(1 for r in relationships if r.lag_days > 0)
+    negative_lag = sum(1 for r in relationships if r.lag_hours < 0)
+    positive_lag = sum(1 for r in relationships if r.lag_hours > 0)
     hard_constraints = sum(1 for a in participants if a.constraint_type == "ms")
-    high_float = sum(1 for a in participants if a.total_float is not None and a.total_float > HIGH_FLOAT_DAYS)
-    negative_float = sum(1 for a in participants if a.total_float is not None and a.total_float < 0)
-    high_duration = sum(1 for a in participants if (a.duration_days or 0) > HIGH_DURATION_DAYS)
+    high_float = sum(
+        1 for a in participants
+        if a.total_float_hours is not None and a.total_float_hours / _NOMINAL_HOURS_PER_DAY > HIGH_FLOAT_DAYS
+    )
+    negative_float = sum(1 for a in participants if a.total_float_hours is not None and a.total_float_hours < 0)
+    high_duration = sum(
+        1 for a in participants
+        if (a.duration_hours or 0) / _NOMINAL_HOURS_PER_DAY > HIGH_DURATION_DAYS
+    )
 
     today = date.today()
     invalid_dates = sum(
         1 for a in participants
-        if a.actual_finish is None and a.finish is not None and a.finish < today
+        if a.actual_finish is None and a.finish is not None and a.finish.date() < today
     )
     missed_tasks = sum(
         1 for a in participants

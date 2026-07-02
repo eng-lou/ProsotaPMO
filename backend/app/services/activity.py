@@ -13,7 +13,7 @@ from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
 from app.models.period import Period
 from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
-from app.services import scheduling_cpm
+from app.services import cost_sync, scheduling_cpm
 from app.services.reference_codes import next_code
 
 
@@ -85,8 +85,8 @@ def _apply_computed_fields(activity: Activity) -> None:
 
     Per PMBOK7 / Rita Mulcahy Ch. 8 ("Schedule"): variance is finish vs. the
     captured baseline finish — meaningless (and left null) until a baseline
-    actually exists (Phase 6). total_float/free_float/is_critical are outputs of
-    the Critical Path Method's forward/backward pass
+    actually exists (Phase 6). total_float_hours/free_float_hours/is_critical are
+    outputs of the Critical Path Method's forward/backward pass
     (app/services/scheduling_cpm.py), not opinions a user types in — same class
     of bug already fixed for Risk's EMV and Cost's CPI/SPI. Set to null here as
     this activity's starting state; scheduling_cpm.recompute_schedule (called
@@ -99,8 +99,8 @@ def _apply_computed_fields(activity: Activity) -> None:
         if activity.finish is not None and activity.bl_finish is not None
         else None
     )
-    activity.total_float = None
-    activity.free_float = None
+    activity.total_float_hours = None
+    activity.free_float_hours = None
     activity.is_critical = None
 
 
@@ -164,8 +164,10 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
         finishes = [k.finish for k in kids if k.finish is not None]
         node.start = min(starts) if starts else None
         node.finish = max(finishes) if finishes else None
-        node.duration_days = (node.finish - node.start).days if node.start and node.finish else None
-        weighted = [(k.pct_complete, k.duration_days or 0) for k in kids if k.pct_complete is not None]
+        node.duration_days = (
+            Decimal((node.finish - node.start).days) if node.start and node.finish else None
+        )
+        weighted = [(k.pct_complete, k.duration_hours or 0) for k in kids if k.pct_complete is not None]
         total_weight = sum(w for _, w in weighted)
         if weighted and total_weight > 0:
             node.pct_complete = sum(Decimal(str(p)) * w for p, w in weighted) / Decimal(total_weight)
@@ -233,6 +235,26 @@ async def update_activity(
     await _require_live_period(db, activity.period_id)
 
     updates = data.model_dump(exclude_unset=True)
+
+    if "code" in updates and updates["code"] is not None:
+        new_code = updates["code"]
+        existing = await db.execute(
+            select(Activity).where(
+                Activity.project_id == activity.project_id,
+                Activity.code == new_code,
+                Activity.id != activity.id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=422, detail=f"Code '{new_code}' is already in use — enter a unique code instead."
+            )
+
+    if "finish" in updates:
+        target_finish = updates.pop("finish")
+        if target_finish is not None:
+            updates["duration_hours"] = await scheduling_cpm.compute_duration_for_finish(db, activity, target_finish)
+
     if "parent_id" in updates and updates["parent_id"] is not None:
         result = await db.execute(select(Activity).where(Activity.period_id == activity.period_id))
         by_id = {a.id: a for a in result.scalars().all()}
@@ -310,6 +332,13 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     for rel in rel_result.scalars().all():
         await db.delete(rel)
     await db.commit()
+
+    # A schedule-managed cost element (Resources module) has no meaning once its
+    # activity is gone — clean it up explicitly rather than leaving an orphaned,
+    # still-budgeted line behind. Manually-unlinked elements are left alone, same
+    # rule as everywhere else in app/services/cost_sync.py.
+    for doomed_id in doomed_ids:
+        await cost_sync.delete_linked_cost_element(db, doomed_id)
 
     if not cascade:
         result = await db.execute(select(Activity).where(Activity.parent_id == activity_id))

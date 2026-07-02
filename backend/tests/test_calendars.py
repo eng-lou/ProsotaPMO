@@ -22,13 +22,25 @@ async def test_create_calendar(client: AsyncClient, project: Project):
         "project_id": str(project.id),
         "name": "Saturday Working",
         "works_saturday": True,
-        "hours_per_day": "10",
+        "day_start_time": "07:00:00",
+        "day_end_time": "17:00:00",
     })
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Saturday Working"
     assert data["works_saturday"] is True
     assert data["is_project_default"] is False
+    # No breaks on a freshly-created calendar (only the lazily-seeded default gets
+    # one) -> hours_per_day is the full 07:00-17:00 envelope.
+    assert float(data["hours_per_day"]) == 10.0
+
+
+async def test_create_calendar_rejects_end_before_start(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/calendars/", json={
+        "project_id": str(project.id), "name": "Bad Calendar",
+        "day_start_time": "17:00:00", "day_end_time": "08:00:00",
+    })
+    assert resp.status_code == 422
 
 
 async def test_creating_new_default_clears_previous(client: AsyncClient, project: Project):
@@ -183,3 +195,77 @@ async def test_delete_exception(client: AsyncClient, project: Project):
 
     resp = await client.delete(f"/api/v1/calendar-exceptions/{exception_id}")
     assert resp.status_code == 204
+
+
+async def test_partial_day_exception_requires_both_times(client: AsyncClient, project: Project):
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    resp = await client.post("/api/v1/calendar-exceptions/", json={
+        "calendar_id": calendar_id, "label": "Late delivery",
+        "start_date": "2025-06-02", "end_date": "2025-06-02", "is_working": False,
+        "start_time": "08:00:00",  # end_time missing
+    })
+    assert resp.status_code == 422
+
+
+async def test_partial_day_exception_accepted(client: AsyncClient, project: Project):
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    resp = await client.post("/api/v1/calendar-exceptions/", json={
+        "calendar_id": calendar_id, "label": "Late delivery",
+        "start_date": "2025-06-02", "end_date": "2025-06-02", "is_working": False,
+        "start_time": "08:00:00", "end_time": "09:00:00",
+    })
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["start_time"] == "08:00:00"
+    assert data["end_time"] == "09:00:00"
+
+
+# --- Calendar breaks (Phase 10) -----------------------------------------------
+
+async def test_create_calendar_break(client: AsyncClient, project: Project):
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    resp = await client.post("/api/v1/calendar-breaks/", json={
+        "calendar_id": calendar_id, "label": "Afternoon tea", "start_time": "15:00:00", "end_time": "15:15:00",
+    })
+    assert resp.status_code == 201
+    assert resp.json()["label"] == "Afternoon tea"
+
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    # Default calendar already has a 12:00-13:00 lunch break seeded (8h/day) -> adding
+    # a second 15-minute break reduces net hours/day further.
+    assert float(calendars.json()[0]["hours_per_day"]) == 7.75
+
+
+async def test_calendar_break_rejects_end_before_start(client: AsyncClient, project: Project):
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    resp = await client.post("/api/v1/calendar-breaks/", json={
+        "calendar_id": calendar_id, "label": "Bad break", "start_time": "13:00:00", "end_time": "12:00:00",
+    })
+    assert resp.status_code == 422
+
+
+async def test_list_and_delete_calendar_break(client: AsyncClient, project: Project):
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+    create = await client.post("/api/v1/calendar-breaks/", json={
+        "calendar_id": calendar_id, "label": "Afternoon tea", "start_time": "15:00:00", "end_time": "15:15:00",
+    })
+    break_id = create.json()["id"]
+
+    resp = await client.get("/api/v1/calendar-breaks/", params={"calendar_id": calendar_id})
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2  # the seeded lunch break + the new one
+
+    resp = await client.delete(f"/api/v1/calendar-breaks/{break_id}")
+    assert resp.status_code == 204
+
+    resp = await client.get("/api/v1/calendar-breaks/", params={"calendar_id": calendar_id})
+    assert len(resp.json()) == 1

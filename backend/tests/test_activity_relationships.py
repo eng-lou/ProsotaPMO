@@ -25,12 +25,12 @@ async def test_create_relationship(client: AsyncClient, project: Project, live_p
         "predecessor_id": a["id"],
         "successor_id": b["id"],
         "relationship_type": "FS",
-        "lag_days": 2,
+        "lag_hours": 2,
     })
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert data["relationship_type"] == "FS"
-    assert data["lag_days"] == 2
+    assert float(data["lag_hours"]) == 2.0
 
 
 async def test_relationship_defaults_to_fs_zero_lag(
@@ -45,7 +45,7 @@ async def test_relationship_defaults_to_fs_zero_lag(
     assert resp.status_code == 201
     data = resp.json()
     assert data["relationship_type"] == "FS"
-    assert data["lag_days"] == 0
+    assert float(data["lag_hours"]) == 0.0
 
 
 async def test_self_relationship_rejected(client: AsyncClient, project: Project, live_period: Period):
@@ -128,12 +128,12 @@ async def test_update_relationship_type_and_lag(client: AsyncClient, project: Pr
     rel_id = create.json()["id"]
 
     resp = await client.patch(f"/api/v1/activity-relationships/{rel_id}", json={
-        "relationship_type": "SS", "lag_days": -3,
+        "relationship_type": "SS", "lag_hours": -3,
     })
     assert resp.status_code == 200
     data = resp.json()
     assert data["relationship_type"] == "SS"
-    assert data["lag_days"] == -3
+    assert float(data["lag_hours"]) == -3.0
 
 
 async def test_delete_relationship(client: AsyncClient, project: Project, live_period: Period):

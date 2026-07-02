@@ -28,9 +28,9 @@ async def test_reschedule_shifts_unconstrained_activities(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
     await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "Excavation", duration_days=5)
-    assert a["start"] == "2025-06-02"
-    assert a["finish"] == "2025-06-06"
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
+    assert a["start"] == "2025-06-02T08:00:00"
+    assert a["finish"] == "2025-06-06T17:00:00"
 
     resp = await client.post("/api/v1/activities/reschedule", params={
         "period_id": str(live_period.id), "shift_days": 7,
@@ -38,18 +38,18 @@ async def test_reschedule_shifts_unconstrained_activities(
     assert resp.status_code == 200
     data = resp.json()
     assert data["shift_days"] == 7
-    assert data["old_project_finish"] == "2025-06-06"
-    assert data["new_project_finish"] == "2025-06-13"  # +7 calendar days
+    assert data["old_project_finish"] == "2025-06-06T17:00:00"
+    assert data["new_project_finish"] == "2025-06-13T17:00:00"  # +7 calendar days
 
     refreshed = await client.get(f"/api/v1/activities/{a['id']}")
-    assert refreshed.json()["start"] == "2025-06-09"  # anchor moved a week later
+    assert refreshed.json()["start"] == "2025-06-09T08:00:00"  # anchor moved a week later
 
 
 async def test_reschedule_can_pull_earlier(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
     await _anchor(db, live_period)
-    await _create_activity(client, project, live_period, "Excavation", duration_days=5)
+    await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
 
     resp = await client.post("/api/v1/activities/reschedule", params={
         "period_id": str(live_period.id), "shift_days": -2,
@@ -64,9 +64,9 @@ async def test_reschedule_respects_hard_constraint(
     await _anchor(db, live_period)
     a = await _create_activity(
         client, project, live_period, "Design freeze", activity_type="milestone",
-        constraint_type="ms", constraint_date="2025-06-20",
+        constraint_type="ms", constraint_date="2025-06-20T08:00:00",
     )
-    assert a["start"] == "2025-06-20"
+    assert a["start"] == "2025-06-20T08:00:00"
 
     await client.post("/api/v1/activities/reschedule", params={
         "period_id": str(live_period.id), "shift_days": 10,
@@ -75,7 +75,7 @@ async def test_reschedule_respects_hard_constraint(
     refreshed = await client.get(f"/api/v1/activities/{a['id']}")
     # A hard Mandatory Start constraint deliberately doesn't move when the anchor
     # shifts — the whole point of a hard constraint per PMBOK7 Ch.8.
-    assert refreshed.json()["start"] == "2025-06-20"
+    assert refreshed.json()["start"] == "2025-06-20T08:00:00"
 
 
 async def test_reschedule_rejects_frozen_period(
