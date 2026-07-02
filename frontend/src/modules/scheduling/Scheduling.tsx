@@ -6,6 +6,7 @@ import { ActivityForm, toActivityPayload, type ActivityFormValues } from './Acti
 import { ActivityLogic } from './ActivityLogic'
 import { CalendarWidget } from './CalendarWidget'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
+import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import type { Activity, ActivityRelationship, Calendar } from './types'
 
 const PANE_MAX_HEIGHT = 600
@@ -22,6 +23,7 @@ export function Scheduling() {
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
+  const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
@@ -182,7 +184,7 @@ export function Scheduling() {
       </div>
       <p className="text-gray-500 text-sm mb-6">
         Activities for {selectedProject.name}. Start/finish dates, float, and the critical path are computed from
-        duration + logic + calendars — set duration and link activities to see them. Baselines are still pending.
+        duration + logic + calendars — set duration and link activities to see them.
         See <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
       </p>
 
@@ -197,6 +199,10 @@ export function Scheduling() {
           onChange={refresh}
           onClose={() => setCalendarWidgetOpen(false)}
         />
+      )}
+
+      {qualityWidgetOpen && period && (
+        <SchedulingQualityWidget periodId={period.id} onClose={() => setQualityWidgetOpen(false)} />
       )}
 
       {formOpen && (
@@ -226,6 +232,14 @@ export function Scheduling() {
             className="text-xs px-3 py-1.5 rounded-md font-medium border bg-white text-gray-600 border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             🎯 Set Baseline
+          </button>
+          <button
+            onClick={() => setQualityWidgetOpen(o => !o)}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+              qualityWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            🔬 Quality Check
           </button>
         </div>
       )}

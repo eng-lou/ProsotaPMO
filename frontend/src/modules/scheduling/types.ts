@@ -105,3 +105,21 @@ export interface CalendarException {
   created_at: string
   updated_at: string
 }
+
+export type QualityCheckStatus = 'pass' | 'warn' | 'fail' | 'na'
+
+export interface QualityCheck {
+  number: number
+  name: string
+  standard: string
+  threshold_label: string
+  actual: number | string | null
+  status: QualityCheckStatus
+}
+
+export interface QualityReport {
+  period_id: string
+  activity_count: number
+  logic_score: number
+  checks: QualityCheck[]
+}
