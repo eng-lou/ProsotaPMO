@@ -7,51 +7,45 @@ import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
 import { CalendarWidget } from './CalendarWidget'
-import { formatDateTime, toDatetimeLocalValue } from './dateTime'
+import { toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
-import { GANTT_ROW_HEIGHT } from './GanttChart'
-import { SyncfusionGanttChart } from './SyncfusionGanttChart'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
 import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingPrintView } from './SchedulingPrintView'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
+import { SyncfusionGanttChart, type ColumnKey, type EditableField } from './SyncfusionGanttChart'
 import {
-  ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type Resource, type ResourceAssignment,
+  type Activity, type ActivityRelationship, type Calendar, type Resource, type ResourceAssignment,
 } from './types'
 
 const PANE_MAX_HEIGHT = 600
 
-type ColumnKey =
-  | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
-  | 'variance' | 'float' | 'free_float' | 'pct_complete' | 'resources'
-  | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
-
-const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
-  { key: 'code', label: 'Code', width: 'w-24' },
-  { key: 'wbs', label: 'WBS', width: 'w-16' },
-  { key: 'type', label: 'Type', width: 'w-24' },
-  { key: 'duration', label: 'Dur (d)', width: 'w-16' },
-  { key: 'start', label: 'Start', width: 'w-24' },
-  { key: 'bl_start', label: 'BL Start', width: 'w-24', title: 'Baseline start — captured by "Set Baseline", the plan this activity is measured against' },
-  { key: 'finish', label: 'Finish', width: 'w-24' },
-  { key: 'bl_finish', label: 'BL Finish', width: 'w-24', title: 'Baseline finish — captured by "Set Baseline", the plan this activity is measured against' },
-  { key: 'variance', label: 'Fin. Var (d)', width: 'w-16', title: 'Current Finish vs Baseline Finish, in days. Positive = running later than the baseline plan. Blank until a baseline exists.' },
-  { key: 'float', label: 'Total Float', width: 'w-20', title: 'How much this activity could slip without delaying the whole project (hours)' },
-  { key: 'free_float', label: 'Free Float', width: 'w-20', title: 'How much this activity could slip without delaying its own successors (hours) — always ≤ Total Float' },
-  { key: 'pct_complete', label: '% Comp', width: 'w-20' },
-  { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
-  { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
-  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Not affected by Set Baseline.' },
-  { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
-  { key: 'ac', label: 'AC', width: 'w-24', title: 'Actual Cost — actuals recorded against this activity\'s linked Cost Plan line.' },
-  { key: 'cv', label: 'CV', width: 'w-24', title: 'Cost Variance — EV minus AC. Negative = over budget for the work done.' },
-  { key: 'sv', label: 'SV', width: 'w-24', title: 'Schedule Variance — EV minus PV. Negative = behind schedule.' },
-  { key: 'cpi', label: 'CPI', width: 'w-20', title: 'Cost Performance Index — EV ÷ AC. Below 1.0 = over budget.' },
-  { key: 'spi', label: 'SPI', width: 'w-20', title: 'Schedule Performance Index — EV ÷ PV. Below 1.0 = behind schedule.' },
-  { key: 'eac', label: 'EAC', width: 'w-24', title: 'Estimate At Completion — BAC ÷ CPI, the forecast final cost at current performance.' },
-  { key: 'etc', label: 'ETC', width: 'w-24', title: 'Estimate To Complete — EAC minus AC, the forecast remaining cost.' },
+const ALL_COLUMNS: { key: ColumnKey; label: string; title?: string }[] = [
+  { key: 'code', label: 'Code' },
+  { key: 'wbs', label: 'WBS' },
+  { key: 'type', label: 'Type' },
+  { key: 'duration', label: 'Dur (d)' },
+  { key: 'start', label: 'Start' },
+  { key: 'bl_start', label: 'BL Start', title: 'Baseline start — captured by "Set Baseline", the plan this activity is measured against' },
+  { key: 'finish', label: 'Finish' },
+  { key: 'bl_finish', label: 'BL Finish', title: 'Baseline finish — captured by "Set Baseline", the plan this activity is measured against' },
+  { key: 'variance', label: 'Fin. Var (d)', title: 'Current Finish vs Baseline Finish, in days. Positive = running later than the baseline plan. Blank until a baseline exists.' },
+  { key: 'float', label: 'Total Float', title: 'How much this activity could slip without delaying the whole project (hours)' },
+  { key: 'free_float', label: 'Free Float', title: 'How much this activity could slip without delaying its own successors (hours) — always ≤ Total Float' },
+  { key: 'pct_complete', label: '% Comp' },
+  { key: 'resources', label: 'Resources', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
+  { key: 'bac', label: 'BAC', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
+  { key: 'pv', label: 'PV', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Not affected by Set Baseline.' },
+  { key: 'ev', label: 'EV', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
+  { key: 'ac', label: 'AC', title: 'Actual Cost — actuals recorded against this activity\'s linked Cost Plan line.' },
+  { key: 'cv', label: 'CV', title: 'Cost Variance — EV minus AC. Negative = over budget for the work done.' },
+  { key: 'sv', label: 'SV', title: 'Schedule Variance — EV minus PV. Negative = behind schedule.' },
+  { key: 'cpi', label: 'CPI', title: 'Cost Performance Index — EV ÷ AC. Below 1.0 = over budget.' },
+  { key: 'spi', label: 'SPI', title: 'Schedule Performance Index — EV ÷ PV. Below 1.0 = behind schedule.' },
+  { key: 'eac', label: 'EAC', title: 'Estimate At Completion — BAC ÷ CPI, the forecast final cost at current performance.' },
+  { key: 'etc', label: 'ETC', title: 'Estimate To Complete — EAC minus AC, the forecast remaining cost.' },
 ]
 
 const VISIBLE_COLUMNS_STORAGE_KEY = 'prosota_scheduling_visible_columns'
@@ -66,9 +60,9 @@ function loadVisibleColumns(): Set<ColumnKey> {
   return new Set(ALL_COLUMNS.map(c => c.key))
 }
 
-// Resizable columns — 'activity' (always visible) and 'actions' (the trailing
-// icon column) aren't in ALL_COLUMNS (that's only the toggleable ones) but are
-// still user-resizable, so they get entries here too.
+// 'activity' (the tree/name column) and 'actions' (trailing icon column) aren't
+// in ALL_COLUMNS (that's only the toggleable ones) but are still resizable, so
+// they get entries here too.
 type ResizableColumnKey = ColumnKey | 'activity' | 'actions'
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
@@ -90,51 +84,6 @@ function loadColumnWidths(): Record<ResizableColumnKey, number> {
   return DEFAULT_COLUMN_WIDTHS
 }
 
-// A <th> with a drag handle on its right edge. Requires the parent <table> to use
-// table-layout:fixed (Tailwind's table-fixed) — otherwise the browser can ignore
-// an explicit header width once cell content forces the column wider.
-function ResizableTh({
-  width, onResizeStart, children, className = '', title,
-}: {
-  width: number
-  onResizeStart: (e: React.MouseEvent) => void
-  children?: React.ReactNode
-  className?: string
-  title?: string
-}) {
-  return (
-    <th className={`relative px-3 py-2.5 ${className}`} style={{ width }} title={title}>
-      <div className="truncate pr-2">{children}</div>
-      <span
-        onMouseDown={onResizeStart}
-        onClick={e => e.stopPropagation()}
-        className="absolute top-0 right-0 h-full w-2 cursor-col-resize hover:bg-blue-300 active:bg-blue-400"
-      />
-    </th>
-  )
-}
-
-// Same formatting convention as Cost Plan (frontend/src/modules/costs/CostPlan.tsx)
-// so a figure reads identically whether seen here or on its linked Cost Plan line.
-function formatMoney(value: string | null) {
-  if (value === null) return '—'
-  const n = Number(value)
-  return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
-}
-
-function formatRatio(value: string | null) {
-  if (value === null) return '—'
-  return Number(value).toFixed(3)
-}
-
-// Inline-editable fields (double-click a cell) — the value types PATCH accepts.
-// start/finish aren't plain passthrough fields: editing Start applies a soft "Start
-// On or After" constraint (P6/MS Project convention — the activity's normal logic
-// can still push it later, it just can't start earlier); editing Finish is
-// translated server-side into the duration that produces it, Start unchanged — see
-// commitEdit below and backend app/services/scheduling_cpm.py:compute_duration_for_finish.
-type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish'
-
 // Fields copyable row-to-row via the clipboard buttons — everything a planner would
 // want to templatize across similar activities (task_name and computed fields
 // deliberately excluded — copying a name or a CPM-derived date makes no sense).
@@ -153,7 +102,7 @@ export function Scheduling() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
-  // expandedId now drives one unified activity-detail panel (fields + Logic +
+  // expandedId drives one unified activity-detail panel (fields + Logic +
   // Resources + Reassessment) — single click on an activity's name opens it;
   // there's no separate floating edit form anymore (only "+ Add Activity" still
   // uses a standalone ActivityForm, since there's no existing row to expand into).
@@ -165,11 +114,7 @@ export function Scheduling() {
   const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
 
   // Search / Filters — client-side, matching the prototype's toolbar row. No separate
-  // Group-by control: unlike Risk/ICD/Cost (flat lists needing an artificial grouping
-  // mechanism), activities are already organised by the WBS outline hierarchy
-  // (Phase 2) — a second grouping layer would duplicate it, and would also break the
-  // Gantt's fixed per-row index alignment the same way an inline-expanding row did
-  // (see the Logic panel's history in this file).
+  // Group-by control: activities are already organised by the WBS outline hierarchy.
   const [searchQuery, setSearchQuery] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filterCritical, setFilterCritical] = useState(false)
@@ -177,7 +122,7 @@ export function Scheduling() {
   const [filterAtRisk, setFilterAtRisk] = useState(false)
 
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
-  // a reload. Activity name + actions columns are always shown (not toggleable).
+  // a reload. Drives Syncfusion's own columns[].visible now, same state as before.
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(loadVisibleColumns)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const isColumnVisible = (key: ColumnKey) => visibleColumns.has(key)
@@ -191,54 +136,16 @@ export function Scheduling() {
     })
   }
 
-  // Resizable columns + the pane divider — both drag-to-resize with the same
-  // "attach document listeners on mousedown, detach on mouseup, persist on
-  // release" pattern, since neither is a fixed set of DOM nodes React can bind
-  // cleanup to. Text selection is suppressed for the drag's duration — without
-  // it, a fast drag also selects the table's text, which visually fights the
-  // resize and can make it look like dragging isn't doing anything.
-  const beginDrag = (onMove: (deltaX: number) => void, onEnd: () => void) => (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const startX = e.clientX
-    const previousUserSelect = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-    const onMouseMove = (moveEvent: MouseEvent) => onMove(moveEvent.clientX - startX)
-    const onMouseUp = () => {
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-      document.body.style.userSelect = previousUserSelect
-      onEnd()
-    }
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }
-
+  // Column widths seed Syncfusion's columns[].width and get updated from its
+  // native resizeStop event (SyncfusionGanttChart.tsx) — same persisted state,
+  // just fed by Syncfusion's own resize handles instead of a hand-rolled one.
   const [columnWidths, setColumnWidths] = useState<Record<ResizableColumnKey, number>>(loadColumnWidths)
-  const startColumnResize = (key: ResizableColumnKey) => {
-    const startWidth = columnWidths[key]
-    return beginDrag(
-      deltaX => setColumnWidths(w => ({ ...w, [key]: Math.max(40, startWidth + deltaX) })),
-      () => setColumnWidths(w => {
-        localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(w))
-        return w
-      }),
-    )
-  }
-
-  const [leftPaneWidth, setLeftPaneWidth] = useState<number | null>(() => {
-    const saved = localStorage.getItem('prosota_scheduling_left_pane_width')
-    return saved ? Number(saved) : null
-  })
-  const startPaneResize = (e: React.MouseEvent) => {
-    const startWidth = leftPaneRef.current?.getBoundingClientRect().width ?? 700
-    beginDrag(
-      deltaX => setLeftPaneWidth(Math.max(320, startWidth + deltaX)),
-      () => setLeftPaneWidth(w => {
-        if (w !== null) localStorage.setItem('prosota_scheduling_left_pane_width', String(w))
-        return w
-      }),
-    )(e)
+  const handleColumnResize = (key: string, width: number) => {
+    setColumnWidths(w => {
+      const next = { ...w, [key as ResizableColumnKey]: Math.round(width) }
+      localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
   }
 
   // Inline editing — double-click a cell to edit it in place instead of opening the
@@ -275,18 +182,6 @@ export function Scheduling() {
   // browser clipboard once a cell becomes a text <input> (see editingCell above); this
   // covers the "seed several similar activities from one configured row" workflow.
   const [rowClipboard, setRowClipboard] = useState<Partial<Activity> | null>(null)
-
-  // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
-  // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
-  // SyncfusionGanttChart wires the actual left/right scroll sync itself (it reaches
-  // into the Gantt's own internal chart-scroll element), so this ref is just the
-  // handle it needs into the left pane — no local sync logic lives here anymore.
-  const leftPaneRef = useRef<HTMLDivElement>(null)
-
-  // Matches this table's <thead> height to the Gantt's actual rendered timeline
-  // header (1-3 tiers depending on zoom) so row 1 here lines up with row 1's bar
-  // in the Gantt — see SyncfusionGanttChart's onHeaderHeightChange.
-  const [ganttHeaderHeight, setGanttHeaderHeight] = useState(36)
 
   useEffect(() => {
     if (!selectedProject || !period) return
@@ -540,21 +435,7 @@ export function Scheduling() {
     await refresh()
   }
 
-  const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
   const expandedActivity = activities.find(a => a.id === expandedId) ?? null
-
-  // True siblings (same parent_id), not the filtered/searched visibleActivities —
-  // move up/down talks to the backend's real sibling group regardless of what a
-  // search/filter is currently hiding, so the button's disabled state must match.
-  const sortedSiblingsOf = (a: Activity) =>
-    activities
-      .filter(x => x.parent_id === a.parent_id)
-      .sort((x, y) => (x.sort_order ?? 0) - (y.sort_order ?? 0))
-  const isFirstSibling = (a: Activity) => sortedSiblingsOf(a)[0]?.id === a.id
-  const isLastSibling = (a: Activity) => {
-    const siblings = sortedSiblingsOf(a)
-    return siblings[siblings.length - 1]?.id === a.id
-  }
 
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400">Loading schedule…</div>
@@ -760,338 +641,33 @@ export function Scheduling() {
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
-        <div
-          ref={leftPaneRef}
-          className="overflow-y-auto overflow-x-hidden shrink-0"
-          style={{ maxHeight: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
-        >
-          <table className="text-sm border-collapse table-fixed">
-            <colgroup>
-              {isColumnVisible('code') && <col style={{ width: columnWidths.code }} />}
-              {isColumnVisible('wbs') && <col style={{ width: columnWidths.wbs }} />}
-              <col style={{ width: columnWidths.activity }} />
-              {isColumnVisible('type') && <col style={{ width: columnWidths.type }} />}
-              {isColumnVisible('duration') && <col style={{ width: columnWidths.duration }} />}
-              {isColumnVisible('start') && <col style={{ width: columnWidths.start }} />}
-              {isColumnVisible('bl_start') && <col style={{ width: columnWidths.bl_start }} />}
-              {isColumnVisible('finish') && <col style={{ width: columnWidths.finish }} />}
-              {isColumnVisible('bl_finish') && <col style={{ width: columnWidths.bl_finish }} />}
-              {isColumnVisible('variance') && <col style={{ width: columnWidths.variance }} />}
-              {isColumnVisible('float') && <col style={{ width: columnWidths.float }} />}
-              {isColumnVisible('free_float') && <col style={{ width: columnWidths.free_float }} />}
-              {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
-              {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
-              {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
-              {isColumnVisible('pv') && <col style={{ width: columnWidths.pv }} />}
-              {isColumnVisible('ev') && <col style={{ width: columnWidths.ev }} />}
-              {isColumnVisible('ac') && <col style={{ width: columnWidths.ac }} />}
-              {isColumnVisible('cv') && <col style={{ width: columnWidths.cv }} />}
-              {isColumnVisible('sv') && <col style={{ width: columnWidths.sv }} />}
-              {isColumnVisible('cpi') && <col style={{ width: columnWidths.cpi }} />}
-              {isColumnVisible('spi') && <col style={{ width: columnWidths.spi }} />}
-              {isColumnVisible('eac') && <col style={{ width: columnWidths.eac }} />}
-              {isColumnVisible('etc') && <col style={{ width: columnWidths.etc }} />}
-              <col style={{ width: columnWidths.actions }} />
-            </colgroup>
-            <thead>
-              <tr
-                style={{ height: ganttHeaderHeight }}
-                className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide sticky top-0"
-              >
-                {isColumnVisible('code') && <ResizableTh width={columnWidths.code} onResizeStart={startColumnResize('code')}>Code</ResizableTh>}
-                {isColumnVisible('wbs') && <ResizableTh width={columnWidths.wbs} onResizeStart={startColumnResize('wbs')}>WBS</ResizableTh>}
-                <ResizableTh width={columnWidths.activity} onResizeStart={startColumnResize('activity')}>Activity</ResizableTh>
-                {isColumnVisible('type') && <ResizableTh width={columnWidths.type} onResizeStart={startColumnResize('type')}>Type</ResizableTh>}
-                {isColumnVisible('duration') && <ResizableTh width={columnWidths.duration} onResizeStart={startColumnResize('duration')}>Dur (d)</ResizableTh>}
-                {isColumnVisible('start') && <ResizableTh width={columnWidths.start} onResizeStart={startColumnResize('start')}>Start</ResizableTh>}
-                {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} title="Baseline start — captured by Set Baseline">BL Start</ResizableTh>}
-                {isColumnVisible('finish') && <ResizableTh width={columnWidths.finish} onResizeStart={startColumnResize('finish')}>Finish</ResizableTh>}
-                {isColumnVisible('bl_finish') && <ResizableTh width={columnWidths.bl_finish} onResizeStart={startColumnResize('bl_finish')} title="Baseline finish — captured by Set Baseline">BL Finish</ResizableTh>}
-                {isColumnVisible('variance') && (
-                  <ResizableTh
-                    width={columnWidths.variance} onResizeStart={startColumnResize('variance')}
-                    title="Current Finish vs Baseline Finish, in days. Positive = later than the baseline plan."
-                  >
-                    Fin. Var (d)
-                  </ResizableTh>
-                )}
-                {isColumnVisible('float') && <ResizableTh width={columnWidths.float} onResizeStart={startColumnResize('float')} title="Slip this activity can absorb without delaying the whole project (hours)">Total Float</ResizableTh>}
-                {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} title="Slip this activity can absorb without delaying its own successors (hours)">Free Float</ResizableTh>}
-                {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')}>% Comp</ResizableTh>}
-                {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')}>Resources</ResizableTh>}
-                {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
-                {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
-                {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
-                {isColumnVisible('ac') && <ResizableTh width={columnWidths.ac} onResizeStart={startColumnResize('ac')} title="Actual Cost — actuals recorded against this activity's linked Cost Plan line">AC</ResizableTh>}
-                {isColumnVisible('cv') && <ResizableTh width={columnWidths.cv} onResizeStart={startColumnResize('cv')} title="Cost Variance — EV minus AC">CV</ResizableTh>}
-                {isColumnVisible('sv') && <ResizableTh width={columnWidths.sv} onResizeStart={startColumnResize('sv')} title="Schedule Variance — EV minus PV">SV</ResizableTh>}
-                {isColumnVisible('cpi') && <ResizableTh width={columnWidths.cpi} onResizeStart={startColumnResize('cpi')} title="Cost Performance Index — EV ÷ AC">CPI</ResizableTh>}
-                {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
-                {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
-                {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
-                <ResizableTh width={columnWidths.actions} onResizeStart={startColumnResize('actions')} className="no-print" />
-              </tr>
-            </thead>
-            <tbody>
-              {visibleActivities.map((a, index) => {
-                const editingField = editingCell?.id === a.id ? editingCell.field : null
-                return (
-                <tr
-                  key={a.id}
-                  style={{ height: GANTT_ROW_HEIGHT }}
-                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
-                    expandedId === a.id ? 'bg-blue-50/50' : a.is_critical ? 'bg-red-50/40' : ''
-                  }`}
-                >
-                  {isColumnVisible('code') && (
-                    <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
-                      {editingField === 'code' ? (
-                        <input
-                          autoFocus
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs font-mono"
-                        />
-                      ) : a.code}
-                    </td>
-                  )}
-                  {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 font-mono text-xs whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
-                  <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
-                    {editingField === 'task_name' ? (
-                      <input
-                        autoFocus
-                        value={editingValue}
-                        onChange={e => setEditingValue(e.target.value)}
-                        onBlur={commitEdit}
-                        onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                        className="w-full max-w-[13rem] border border-blue-400 rounded px-1 py-0.5 text-sm"
-                      />
-                    ) : (
-                      <button
-                        onClick={() => handleNameClick(a)}
-                        onDoubleClick={() => handleNameDoubleClick(a)}
-                        className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]"
-                        title="Click to open, double-click to rename in place"
-                      >
-                        {a.activity_type === 'wbs_summary' && '📦 '}
-                        {a.task_name}
-                      </button>
-                    )}
-                  </td>
-                  {isColumnVisible('type') && (
-                    <td className="px-3 py-1 text-gray-600 text-xs capitalize" onDoubleClick={() => startEdit(a, 'activity_type')}>
-                      {editingField === 'activity_type' ? (
-                        <select
-                          autoFocus
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
-                        >
-                          {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
-                        </select>
-                      ) : a.activity_type.replace('_', ' ')}
-                    </td>
-                  )}
-                  {isColumnVisible('duration') && (
-                    <td className="px-3 py-1 text-gray-600" onDoubleClick={() => startEdit(a, 'duration_hours')} title={a.duration_hours !== null ? `${a.duration_hours}h` : undefined}>
-                      {editingField === 'duration_hours' ? (
-                        <input
-                          autoFocus
-                          type="number"
-                          min={0}
-                          step={0.5}
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
-                        />
-                      ) : (a.duration_days ?? '—')}
-                    </td>
-                  )}
-                  {isColumnVisible('start') && (
-                    <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap"
-                      onDoubleClick={() => startEdit(a, 'start')}
-                      title={a.constraint_type === 'snet' ? 'Start On or After constraint applied' : 'Double-click to set a Start On or After constraint'}
-                    >
-                      {editingField === 'start' ? (
-                        <input
-                          autoFocus
-                          type="datetime-local"
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
-                        />
-                      ) : formatDateTime(a.start)}
-                    </td>
-                  )}
-                  {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_start)}</td>}
-                  {isColumnVisible('finish') && (
-                    <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap"
-                      onDoubleClick={() => startEdit(a, 'finish')}
-                      title="Double-click to change duration by setting a new finish"
-                    >
-                      {editingField === 'finish' ? (
-                        <input
-                          autoFocus
-                          type="datetime-local"
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
-                        />
-                      ) : formatDateTime(a.finish)}
-                    </td>
-                  )}
-                  {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_finish)}</td>}
-                  {isColumnVisible('variance') && (
-                    <td className={`px-3 py-1 ${(a.variance_days ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-                      {a.variance_days ?? '—'}
-                    </td>
-                  )}
-                  {isColumnVisible('float') && (
-                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-                      {a.total_float_hours ?? '—'}{a.total_float_hours !== null ? 'h' : ''}
-                    </td>
-                  )}
-                  {isColumnVisible('free_float') && (
-                    <td className="px-3 py-1 text-gray-600">
-                      {a.free_float_hours ?? '—'}{a.free_float_hours !== null ? 'h' : ''}
-                    </td>
-                  )}
-                  {isColumnVisible('pct_complete') && (
-                    <td className="px-3 py-1 text-gray-600" onDoubleClick={() => startEdit(a, 'pct_complete')}>
-                      {editingField === 'pct_complete' ? (
-                        <input
-                          autoFocus
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
-                        />
-                      ) : `${a.pct_complete ?? 0}%`}
-                    </td>
-                  )}
-                  {isColumnVisible('resources') && (() => {
-                    const assigned = resourceAssignments.filter(ra => ra.activity_id === a.id)
-                    const names = assigned.map(ra => ra.resource_name).join(', ')
-                    return (
-                      <td
-                        className="px-3 py-1 text-gray-600 cursor-pointer"
-                        onClick={() => setExpandedId(id => id === a.id ? null : a.id)}
-                        title={assigned.length > 0 ? `${names} — click to view/edit` : 'Click to assign resources'}
-                      >
-                        {assigned.length === 0 ? <span className="text-gray-300">—</span> : (
-                          <span className="truncate block max-w-[8rem]">{names}</span>
-                        )}
-                      </td>
-                    )
-                  })()}
-                  {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.bac)}</td>}
-                  {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.pv)}</td>}
-                  {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ev)}</td>}
-                  {isColumnVisible('ac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ac)}</td>}
-                  {isColumnVisible('cv') && <td className={`px-3 py-1 whitespace-nowrap ${a.cv !== null && Number(a.cv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.cv)}</td>}
-                  {isColumnVisible('sv') && <td className={`px-3 py-1 whitespace-nowrap ${a.sv !== null && Number(a.sv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.sv)}</td>}
-                  {isColumnVisible('cpi') && <td className={`px-3 py-1 ${a.cpi !== null && Number(a.cpi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.cpi)}</td>}
-                  {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.spi)}</td>}
-                  {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.eac)}</td>}
-                  {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.etc)}</td>}
-                  <td className="px-3 py-1 text-right whitespace-nowrap no-print">
-                    <button
-                      onClick={() => handleCopyRow(a)}
-                      title="Copy row settings (type, duration, % complete, constraint, calendar, commentary)"
-                      className="text-xs text-gray-400 hover:text-blue-600 mr-1.5"
-                    >
-                      ⧉
-                    </button>
-                    <button
-                      onClick={() => handlePasteRow(a)}
-                      disabled={!rowClipboard}
-                      title="Paste copied row settings onto this activity"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      📋
-                    </button>
-                    <button
-                      onClick={() => handleMoveUp(a)}
-                      disabled={isFirstSibling(a)}
-                      title="Move up (reorder among siblings — doesn't change hierarchy level)"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      onClick={() => handleMoveDown(a)}
-                      disabled={isLastSibling(a)}
-                      title="Move down (reorder among siblings — doesn't change hierarchy level)"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      ▼
-                    </button>
-                    <button
-                      onClick={() => handleOutdent(a)}
-                      disabled={!a.parent_id}
-                      title="Outdent"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
-                    >
-                      ⇤
-                    </button>
-                    <button
-                      onClick={() => handleIndent(a)}
-                      disabled={index === 0}
-                      title="Indent"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      ⇥
-                    </button>
-                    <button onClick={() => handleDelete(a)} className="text-xs text-gray-400 hover:text-red-600">
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-                )
-              })}
-              {visibleActivities.length === 0 && (
-                <tr>
-                  <td colSpan={visibleColumns.size + 2} className="px-4 py-10 text-center text-gray-400 text-sm">
-                    {activities.length === 0
-                      ? 'No activities yet for this period. Add the first one above.'
-                      : 'No activities match your search/filters.'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div
-          onMouseDown={startPaneResize}
-          title="Drag to resize"
-          className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 no-print"
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden no-print" style={{ height: PANE_MAX_HEIGHT }}>
+        <SyncfusionGanttChart
+          activities={visibleActivities}
+          allActivities={activities}
+          relationships={relationships}
+          resourceAssignments={resourceAssignments}
+          height={PANE_MAX_HEIGHT}
+          visibleColumns={visibleColumns}
+          columnWidths={columnWidths}
+          onColumnResize={handleColumnResize}
+          rowClipboard={rowClipboard}
+          editingCell={editingCell}
+          editingValue={editingValue}
+          onEditingValueChange={setEditingValue}
+          onStartEdit={startEdit}
+          onCommitEdit={commitEdit}
+          onCancelEdit={cancelEdit}
+          onActivityClick={handleNameClick}
+          onActivityDoubleClick={handleNameDoubleClick}
+          onCopyRow={handleCopyRow}
+          onPasteRow={handlePasteRow}
+          onMoveUp={handleMoveUp}
+          onMoveDown={handleMoveDown}
+          onIndent={handleIndent}
+          onOutdent={handleOutdent}
+          onDelete={handleDelete}
         />
-        <div className="flex-1 overflow-hidden no-print" style={{ maxHeight: PANE_MAX_HEIGHT }}>
-          <SyncfusionGanttChart
-            activities={visibleActivities}
-            relationships={relationships}
-            leftPaneRef={leftPaneRef}
-            height={PANE_MAX_HEIGHT}
-            onHeaderHeightChange={setGanttHeaderHeight}
-          />
-        </div>
       </div>
 
       {expandedActivity && (
