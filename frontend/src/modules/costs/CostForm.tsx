@@ -234,6 +234,9 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
               onChange={e => set('actuals', e.target.value)}
               className={inputClass}
             />
+            {isScheduleLinked && (
+              <p className="text-xs text-gray-400 mt-1">Can also be entered from the activity's Resources tab in Scheduling — same figure, either place.</p>
+            )}
           </div>
         </div>
       )}
@@ -251,10 +254,15 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
             type="number" min={0} max={100} step={1}
             value={values.pct_complete}
             onChange={e => set('pct_complete', e.target.value)}
-            className={inputClass}
+            disabled={isScheduleLinked}
+            className={`${inputClass} disabled:bg-gray-50 disabled:text-gray-400`}
             placeholder="e.g. 70"
           />
-          <p className="text-xs text-gray-400 mt-1">Physical progress — drives Earned Value (CV/CPI/EAC/ETC/VAC/TCPI), shown read-only once saved.</p>
+          <p className="text-xs text-gray-400 mt-1">
+            {isScheduleLinked
+              ? 'Synced automatically from the linked activity\'s % Complete in Scheduling — edit it there, not here, so this line\'s EVM always matches Scheduling\'s.'
+              : 'Physical progress — drives Earned Value (CV/CPI/EAC/ETC/VAC/TCPI), shown read-only once saved.'}
+          </p>
         </div>
       )}
 

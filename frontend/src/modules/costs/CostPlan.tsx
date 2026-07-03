@@ -299,9 +299,19 @@ export function CostPlan() {
                   <span>Last reviewed: <span className="text-gray-700">{el.last_reviewed_date}</span></span>
                 </div>
               )}
-              {el.pct_complete !== null && (
+              {(el.pct_complete !== null || el.pv !== null) && (
                 <div className="px-4 py-3 bg-blue-50 border-t border-blue-100">
                   <div className="text-xs font-semibold text-blue-700 mb-2">Earned Value</div>
+                  {el.pv !== null && (
+                    <div className="grid grid-cols-4 gap-3 text-xs mb-3 pb-3 border-b border-blue-100">
+                      <div title="Planned Value — how much of BAC should be earned by today, per this line's linked activity's own schedule position. Set in Scheduling, not here.">
+                        <div className="text-gray-500">PV</div><div className="font-semibold text-gray-800">{formatCurrency(el.pv)}</div>
+                      </div>
+                      <div><div className="text-gray-500">EV</div><div className="font-semibold text-gray-800">{formatCurrency(el.ev)}</div></div>
+                      <div title="Schedule Variance — EV minus PV"><div className="text-gray-500">SV</div><div className="font-semibold text-gray-800">{formatCurrency(el.sv)}</div></div>
+                      <div title="Schedule Performance Index — EV ÷ PV"><div className="text-gray-500">SPI</div><div className="font-semibold text-gray-800">{formatRatio(el.spi)}</div></div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-4 gap-3 text-xs">
                     <div><div className="text-gray-500">CV</div><div className="font-semibold text-gray-800">{formatCurrency(el.cv)}</div></div>
                     <div><div className="text-gray-500">EAC</div><div className="font-semibold text-gray-800">{formatCurrency(el.eac)}</div></div>

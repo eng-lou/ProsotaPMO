@@ -81,17 +81,27 @@ export function CostPrintView({ mode, elements, projectName }: CostPrintViewProp
                 {el.scope_note && <p className="text-xs mb-2"><span className="font-semibold">Scope note: </span>{el.scope_note}</p>}
                 {el.variance_commentary && <p className="text-xs mb-2"><span className="font-semibold">Variance commentary: </span>{el.variance_commentary}</p>}
 
-                {el.pct_complete !== null && (
+                {(el.pct_complete !== null || el.pv !== null) && (
                   <table className="text-xs mb-3">
                     <thead>
                       <tr className="text-left text-gray-500">
-                        <th className="pr-4">% Complete</th><th className="pr-4">CV</th>
+                        <th className="pr-4">% Complete</th>
+                        {el.pv !== null && (<><th className="pr-4">PV</th><th className="pr-4">EV</th><th className="pr-4">SV</th><th className="pr-4">SPI</th></>)}
+                        <th className="pr-4">CV</th>
                         <th className="pr-4">CPI</th><th className="pr-4">EAC</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
-                        <td className="pr-4">{el.pct_complete}%</td>
+                        <td className="pr-4">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>
+                        {el.pv !== null && (
+                          <>
+                            <td className="pr-4">{formatCurrency(el.pv)}</td>
+                            <td className="pr-4">{formatCurrency(el.ev)}</td>
+                            <td className="pr-4">{formatCurrency(el.sv)}</td>
+                            <td className="pr-4">{el.spi ?? '—'}</td>
+                          </>
+                        )}
                         <td className="pr-4">{formatCurrency(el.cv)}</td>
                         <td className="pr-4">{el.cpi ?? '—'}</td>
                         <td className="pr-4">{formatCurrency(el.eac)}</td>

@@ -50,9 +50,10 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
   const gfa = gfaM2 !== null ? Number(gfaM2) : null
 
   // Schedule Performance (SPI) — only elements with a real time-phased PV exist
-  // (schedule-linked, baselined) contribute; summed the same way Budget vs
-  // Forecast is, not a separate endpoint. See app/services/cost_element.py's
-  // _schedule_evm (Resources module, Phase 3).
+  // (schedule-linked, scheduled — i.e. their linked activity has live
+  // start/finish) contribute; summed the same way Budget vs Forecast is, not a
+  // separate endpoint. See app/services/cost_element.py's _schedule_evm
+  // (Resources module, Phase 3).
   const scheduleLinked = elements.filter(el => el.pv !== null && el.ev !== null)
   const totalPv = scheduleLinked.reduce((sum, el) => sum + Number(el.pv), 0)
   const totalEv = scheduleLinked.reduce((sum, el) => sum + Number(el.ev), 0)
@@ -113,7 +114,7 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
         <>
           <div
             className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 pt-2 border-t border-gray-100"
-            title="Only resource-loaded activities with a captured baseline contribute — see the Resources tab on an activity, and Set Baseline in Scheduling."
+            title="Only resource-loaded, scheduled activities contribute — see the Resources tab on an activity in Scheduling."
           >
             Schedule Performance (SPI)
           </div>

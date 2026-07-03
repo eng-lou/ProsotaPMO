@@ -36,9 +36,11 @@ export interface CostElement {
   vac: string | null
   tcpi: string | null
   // Schedule-side EVM (Resources module, Phase 3) — only populated for a
-  // "schedule"-sourced element (source below) whose linked activity has captured
-  // baseline dates; null otherwise, same "leave it blank" discipline as everything
-  // else here.
+  // "schedule"-sourced element (source below) whose linked activity is scheduled
+  // (has live start/finish); null otherwise, same "leave it blank" discipline as
+  // everything else here. PV is prorated against the activity's own current
+  // start/finish, not a captured baseline — Set Baseline drives schedule
+  // variance in Scheduling instead.
   pv: string | null
   ev: string | null
   sv: string | null
