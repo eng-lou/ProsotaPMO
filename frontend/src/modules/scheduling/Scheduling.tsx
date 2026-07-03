@@ -10,7 +10,8 @@ import { CalendarWidget } from './CalendarWidget'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
-import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
+import { GANTT_ROW_HEIGHT } from './GanttChart'
+import { SyncfusionGanttChart } from './SyncfusionGanttChart'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
 import { RescheduleWidget } from './RescheduleWidget'
@@ -277,21 +278,10 @@ export function Scheduling() {
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
+  // SyncfusionGanttChart wires the actual left/right scroll sync itself (it reaches
+  // into the Gantt's own internal chart-scroll element), so this ref is just the
+  // handle it needs into the left pane — no local sync logic lives here anymore.
   const leftPaneRef = useRef<HTMLDivElement>(null)
-  const rightPaneRef = useRef<HTMLDivElement>(null)
-  const syncingScroll = useRef(false)
-
-  const syncScroll = (source: 'left' | 'right') => {
-    if (syncingScroll.current) {
-      syncingScroll.current = false
-      return
-    }
-    const from = source === 'left' ? leftPaneRef.current : rightPaneRef.current
-    const to = source === 'left' ? rightPaneRef.current : leftPaneRef.current
-    if (!from || !to) return
-    syncingScroll.current = true
-    to.scrollTop = from.scrollTop
-  }
 
   useEffect(() => {
     if (!selectedProject || !period) return
@@ -740,7 +730,6 @@ export function Scheduling() {
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
-          onScroll={() => syncScroll('left')}
           className="overflow-y-auto overflow-x-hidden shrink-0"
           style={{ maxHeight: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
         >
@@ -1045,13 +1034,13 @@ export function Scheduling() {
           title="Drag to resize"
           className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 no-print"
         />
-        <div
-          ref={rightPaneRef}
-          onScroll={() => syncScroll('right')}
-          className="flex-1 overflow-auto no-print"
-          style={{ maxHeight: PANE_MAX_HEIGHT }}
-        >
-          <GanttChart activities={visibleActivities} relationships={relationships} />
+        <div className="flex-1 overflow-hidden no-print" style={{ maxHeight: PANE_MAX_HEIGHT }}>
+          <SyncfusionGanttChart
+            activities={visibleActivities}
+            relationships={relationships}
+            leftPaneRef={leftPaneRef}
+            height={PANE_MAX_HEIGHT}
+          />
         </div>
       </div>
 

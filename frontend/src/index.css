@@ -33,3 +33,43 @@
     size: landscape;
   }
 }
+
+/* Scheduling's interactive Gantt (SyncfusionGanttChart.tsx) — our own left-hand
+   data grid is the authoritative table, so Syncfusion's built-in tree-grid pane
+   is hidden and only its chart pane is shown. splitterSettings={{position:'0%'}}
+   already collapses the tree-grid pane to ~0 width; this is the CSS backstop that
+   removes the leftover splitter handle and any sub-pixel sliver. */
+.prosota-gantt .e-gantt-tree-grid-pane {
+  display: none !important;
+}
+.prosota-gantt .e-split-bar {
+  display: none !important;
+}
+
+/* ProsotaPMO navy/teal taskbar theme, applied via the per-row cssClass built in
+   SyncfusionGanttChart.tsx (gantt-critical/gantt-normal/gantt-milestone) rather
+   than Syncfusion's queryTaskbarInfo event. Critical-path red matches the
+   retired custom GanttChart's #ef4444 exactly, so the colour convention doesn't
+   shift for anyone used to the old chart. */
+.prosota-gantt .gantt-normal .e-gantt-child-taskbar-inner-div {
+  background-color: #dbeafe;
+  border-color: #1a2e6b;
+}
+.prosota-gantt .gantt-normal .e-gantt-child-progressbar-inner-div {
+  background-color: #0ea5b7;
+}
+.prosota-gantt .gantt-critical .e-gantt-child-taskbar-inner-div {
+  background-color: #fee2e2;
+  border-color: #ef4444;
+}
+.prosota-gantt .gantt-critical .e-gantt-child-progressbar-inner-div {
+  background-color: #ef4444;
+}
+.prosota-gantt .gantt-milestone .e-gantt-milestone {
+  background-color: #0ea5b7;
+  border-color: #1a2e6b;
+}
+.prosota-gantt .gantt-milestone.gantt-critical .e-gantt-milestone {
+  background-color: #ef4444;
+  border-color: #b91c1c;
+}
