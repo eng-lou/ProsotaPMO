@@ -41,6 +41,23 @@ function daysBetween(start: Date | null, end: Date | null): number {
   return Math.max(0, (end.getTime() - start.getTime()) / 86_400_000)
 }
 
+// ej2-gantt's getChildTaskbarNode only builds the full styled taskbar when
+// `duration` is truthy — and in JS, 0 is falsy, so a genuinely zero-duration
+// row (start === finish: a task collapsed to a point, e.g. a 100%-complete
+// activity whose remaining duration hit 0 — see Activity.duration_pct_complete
+// in types.ts) silently falls back to the same bare "unscheduled" template the
+// missing-duration bug produced earlier, and disappears. Milestones render via
+// a separate code path keyed off isMilestone, not this gate, so they're
+// unaffected and genuinely should stay at 0. For everything else, floor to a
+// visually-negligible but truthy sliver so the real bar (and our cssClass
+// coloring) always renders — this never changes what's shown in our own left-
+// hand data grid, only how Syncfusion draws the bar.
+const MIN_VISUAL_DURATION_DAYS = 0.25
+
+function visualDuration(days: number, isMilestone: boolean): number {
+  return isMilestone ? days : Math.max(days, MIN_VISUAL_DURATION_DAYS)
+}
+
 // ProsotaPMO navy/teal applied via per-row cssClass (see .prosota-gantt rules in
 // index.css) rather than Syncfusion's queryTaskbarInfo event — declarative and
 // keeps the colour decision (is_critical, computed by our own CPM engine) as
@@ -74,6 +91,7 @@ function buildRows(activities: Activity[], relationships: ActivityRelationship[]
   return activities.map(a => {
     const startDate = toGanttDate(a.start)
     const endDate = toGanttDate(a.finish)
+    const isMilestone = a.activity_type === 'milestone'
     return {
       ganttId: ganttIdByActivityId.get(a.id)!,
       parentGanttId: a.parent_id ? ganttIdByActivityId.get(a.parent_id) ?? null : null,
@@ -83,14 +101,15 @@ function buildRows(activities: Activity[], relationships: ActivityRelationship[]
       baselineStartDate: toGanttDate(a.bl_start),
       baselineEndDate: toGanttDate(a.bl_finish),
       progress: a.pct_complete ? Math.min(Number(a.pct_complete), 100) : 0,
-      isMilestone: a.activity_type === 'milestone',
+      isMilestone,
       predecessor: (predecessorsByActivityId.get(a.id) ?? []).join(','),
       cssClass: rowCssClass(a),
       // Calendar-day span between our own already-computed start/finish — not
       // duration_days (net working hours/calendar), since this only needs to
       // agree with the same startDate/endDate pair given above, whatever
-      // Syncfusion uses it for internally.
-      duration: daysBetween(startDate, endDate),
+      // Syncfusion uses it for internally. Floored via visualDuration so a
+      // collapsed (start === finish) task still renders as a real bar.
+      duration: visualDuration(daysBetween(startDate, endDate), isMilestone),
       durationUnit: 'day' as const,
     }
   })

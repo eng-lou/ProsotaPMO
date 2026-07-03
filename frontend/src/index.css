@@ -84,6 +84,34 @@
   border: 2px solid #b91c1c;
 }
 
+/* WBS summary rows (rows Syncfusion detects as having children via parentID)
+   render through a completely different set of classes than ordinary task
+   bars — e-gantt-parent-taskbar-inner-div, not e-gantt-child-taskbar-inner-div
+   — so none of the rules above ever applied to them; that's why they looked
+   entirely absent rather than just uncoloured. Solid (not pale) fill, matching
+   the usual Gantt convention that a summary bar reads as a distinct, denser
+   bracket rather than an ordinary task. */
+.prosota-gantt .gantt-normal .e-gantt-parent-taskbar-inner-div {
+  background-color: #1a2e6b;
+  border: 2px solid #1a2e6b;
+  border-radius: 3px;
+}
+.prosota-gantt .gantt-normal .e-gantt-parent-progressbar-inner-div {
+  background-color: #0ea5b7;
+}
+.prosota-gantt .gantt-critical .e-gantt-parent-taskbar-inner-div {
+  background-color: #ef4444;
+  border: 2px solid #b91c1c;
+  border-radius: 3px;
+}
+.prosota-gantt .gantt-critical .e-gantt-parent-progressbar-inner-div {
+  background-color: #b91c1c;
+}
+.prosota-gantt .e-gantt-parent-milestone {
+  background-color: #1a2e6b;
+  border: 2px solid #1a2e6b;
+}
+
 /* Dependency connector lines and their arrowheads — same Preflight border-reset
    issue can leave SVG-adjacent connector elements looking too faint to read
    against the grid; force a visible stroke colour matching the retired custom
