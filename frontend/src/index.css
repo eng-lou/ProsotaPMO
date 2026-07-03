@@ -100,6 +100,22 @@
   border: 2px solid #1a2e6b;
 }
 
+/* Gantt's own internal Splitter module hardcodes orientation:'Horizontal'
+   (ej2-gantt base/splitter.js) — the grid and chart panes should always sit
+   side by side with the divider between them (Syncfusion's Default view has
+   no other layout — confirmed no orientation option exists in
+   SplitterSettingsModel). In practice the .e-splitter-horizontal modifier
+   class (which supplies flex-direction:row — see ej2-layouts' Splitter theme
+   CSS, shared with .e-splitter-vertical's flex-direction:column) wasn't
+   reliably present at render time inside our React tree, rendering as
+   stacked grid-above-chart instead. Forced directly rather than chasing
+   the exact React/Syncfusion DOM-reconciliation timing further. */
+.prosota-gantt .e-splitter {
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+}
+
 /* Dependency connector lines and their arrowheads — same Preflight border-reset
    issue can leave SVG-adjacent connector elements looking too faint to read
    against the grid; force a visible stroke colour matching the retired custom
