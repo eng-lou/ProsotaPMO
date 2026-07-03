@@ -117,7 +117,10 @@ async def test_critical_path_test_passes_for_single_chain(
 async def test_missed_task_detected(client: AsyncClient, db: AsyncSession, project: Project, live_period: Period):
     await _anchor(db, live_period)
     a = await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
-    await client.post("/api/v1/activities/set-baseline", params={"period_id": str(live_period.id)})
+    baseline = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-01-01",
+    })).json()
+    await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/assign")
 
     resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"actual_finish": "2025-06-20"})
     assert resp.status_code == 200

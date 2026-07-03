@@ -6,6 +6,7 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
+import { BaselineWidget } from './BaselineWidget'
 import { CalendarWidget } from './CalendarWidget'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
@@ -33,16 +34,16 @@ const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: strin
   { key: 'type', label: 'Type', width: 'w-24' },
   { key: 'duration', label: 'Dur (d)', width: 'w-16' },
   { key: 'start', label: 'Start', width: 'w-24' },
-  { key: 'bl_start', label: 'BL Start', width: 'w-24', title: 'Baseline start — captured by "Set Baseline", the plan this activity is measured against' },
+  { key: 'bl_start', label: 'BL Start', width: 'w-24', title: 'Baseline start — captured by whichever baseline is assigned, the plan this activity is measured against' },
   { key: 'finish', label: 'Finish', width: 'w-24' },
-  { key: 'bl_finish', label: 'BL Finish', width: 'w-24', title: 'Baseline finish — captured by "Set Baseline", the plan this activity is measured against' },
+  { key: 'bl_finish', label: 'BL Finish', width: 'w-24', title: 'Baseline finish — captured by whichever baseline is assigned, the plan this activity is measured against' },
   { key: 'variance', label: 'Fin. Var (d)', width: 'w-16', title: 'Current Finish vs Baseline Finish, in days. Positive = running later than the baseline plan. Blank until a baseline exists.' },
   { key: 'float', label: 'Total Float', width: 'w-20', title: 'How much this activity could slip without delaying the whole project (hours)' },
   { key: 'free_float', label: 'Free Float', width: 'w-20', title: 'How much this activity could slip without delaying its own successors (hours) — always ≤ Total Float' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
-  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Not affected by Set Baseline.' },
+  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Uses this activity\'s own live dates, not the assigned baseline.' },
   { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
   { key: 'ac', label: 'AC', width: 'w-24', title: 'Actual Cost — actuals recorded against this activity\'s linked Cost Plan line.' },
   { key: 'cv', label: 'CV', width: 'w-24', title: 'Cost Variance — EV minus AC. Negative = over budget for the work done.' },
@@ -159,6 +160,7 @@ export function Scheduling() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [resourcePoolWidgetOpen, setResourcePoolWidgetOpen] = useState(false)
+  const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
   const [rescheduleWidgetOpen, setRescheduleWidgetOpen] = useState(false)
   const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
@@ -458,17 +460,6 @@ export function Scheduling() {
     await refresh()
   }
 
-  const handleSetBaseline = async () => {
-    if (!period) return
-    const already = activities.some(a => a.bl_start !== null)
-    const message = already
-      ? 'Re-set the baseline? This overwrites the current baseline dates with today\'s planned dates for every activity in this period.'
-      : 'Set the baseline? This captures today\'s planned dates as the reference point variance is measured against.'
-    if (!window.confirm(message)) return
-    await api.post('/api/v1/activities/set-baseline', null, { params: { period_id: period.id } })
-    await refresh()
-  }
-
   const startEdit = (a: Activity, field: EditableField) => {
     setEditingCell({ id: a.id, field })
     setEditingValue(
@@ -608,6 +599,16 @@ export function Scheduling() {
         </div>
       )}
 
+      {baselineWidgetOpen && period && (
+        <div className="no-print">
+          <BaselineWidget
+            periodId={period.id}
+            onChange={refresh}
+            onClose={() => setBaselineWidgetOpen(false)}
+          />
+        </div>
+      )}
+
       {qualityWidgetOpen && period && (
         <div className="no-print">
           <SchedulingQualityWidget periodId={period.id} onClose={() => setQualityWidgetOpen(false)} />
@@ -655,12 +656,14 @@ export function Scheduling() {
             👷 Resources
           </button>
           <button
-            onClick={handleSetBaseline}
+            onClick={() => setBaselineWidgetOpen(o => !o)}
             disabled={activities.length === 0}
-            title="Capture today's planned dates as the reference point variance is measured against"
-            className="text-xs px-3 py-1.5 rounded-md font-medium border bg-white text-gray-600 border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Capture a named, dated baseline snapshot, or assign a previously saved one"
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
+              baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
           >
-            🎯 Set Baseline
+            🎯 Baseline
           </button>
           <button
             onClick={() => setQualityWidgetOpen(o => !o)}
@@ -811,9 +814,9 @@ export function Scheduling() {
                 {isColumnVisible('type') && <ResizableTh width={columnWidths.type} onResizeStart={startColumnResize('type')}>Type</ResizableTh>}
                 {isColumnVisible('duration') && <ResizableTh width={columnWidths.duration} onResizeStart={startColumnResize('duration')}>Dur (d)</ResizableTh>}
                 {isColumnVisible('start') && <ResizableTh width={columnWidths.start} onResizeStart={startColumnResize('start')}>Start</ResizableTh>}
-                {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} title="Baseline start — captured by Set Baseline">BL Start</ResizableTh>}
+                {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} title="Baseline start — assigned via the Baseline widget">BL Start</ResizableTh>}
                 {isColumnVisible('finish') && <ResizableTh width={columnWidths.finish} onResizeStart={startColumnResize('finish')}>Finish</ResizableTh>}
-                {isColumnVisible('bl_finish') && <ResizableTh width={columnWidths.bl_finish} onResizeStart={startColumnResize('bl_finish')} title="Baseline finish — captured by Set Baseline">BL Finish</ResizableTh>}
+                {isColumnVisible('bl_finish') && <ResizableTh width={columnWidths.bl_finish} onResizeStart={startColumnResize('bl_finish')} title="Baseline finish — assigned via the Baseline widget">BL Finish</ResizableTh>}
                 {isColumnVisible('variance') && (
                   <ResizableTh
                     width={columnWidths.variance} onResizeStart={startColumnResize('variance')}

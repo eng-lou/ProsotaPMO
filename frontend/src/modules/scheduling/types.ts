@@ -235,3 +235,22 @@ export interface ResourceAssignment {
   created_at: string
   updated_at: string
 }
+
+// A named, saved schedule baseline (2026-07-03) — replaces the old one-shot
+// "Set Baseline" overwriteable slot. "Set a baseline" (create) captures a
+// snapshot without applying it; "Assign a baseline" (assign) is the separate,
+// deliberate action that copies a chosen saved snapshot into every
+// activity's bl_start/bl_finish/bl_duration_hours. is_active marks whichever
+// baseline last had that happen — at most one per period.
+export interface ScheduleBaseline {
+  id: string
+  period_id: string
+  name: string
+  baseline_date: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  // Server-computed, never sent as input — how many activities this
+  // snapshot actually covers.
+  activity_count: number
+}

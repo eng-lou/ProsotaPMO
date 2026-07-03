@@ -23,6 +23,7 @@ from app.api.resources import router as resources_router
 from app.api.risk_criteria import router as risk_criteria_router
 from app.api.risk_mitigation_actions import router as risk_mitigation_actions_router
 from app.api.risks import router as risks_router
+from app.api.schedule_baselines import router as schedule_baselines_router
 from app.api.scheduling_quality import router as scheduling_quality_router
 from app.api.users import router as users_router
 from app.core.auth import get_current_user
@@ -63,6 +64,7 @@ app.include_router(icd_criteria_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(icd_action_items_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(icd_comments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(reassessments_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(schedule_baselines_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

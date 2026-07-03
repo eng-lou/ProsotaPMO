@@ -14,7 +14,6 @@ from app.schemas.activity import (
     ActivityUpdate,
 )
 from app.services import activity as svc
-from app.services import scheduling_baseline
 from app.services import scheduling_reschedule
 
 router = APIRouter(prefix="/activities", tags=["activities"])
@@ -37,16 +36,10 @@ async def create_activity(
     return await svc.create_activity(db, data)
 
 
-# Registered before /{activity_id} — "set-baseline"/"reschedule" would otherwise be
-# attempted as a UUID path param by that route first.
-@router.post("/set-baseline", response_model=list[ActivityResponse])
-async def set_baseline(
-    period_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-) -> list:
-    return await scheduling_baseline.set_baseline(db, period_id)
-
-
+# Registered before /{activity_id} — "reschedule" would otherwise be attempted as a
+# UUID path param by that route first. The old one-shot "set-baseline" action lives
+# at /schedule-baselines now (app/api/schedule_baselines.py) — create + assign,
+# not a single overwriteable slot.
 @router.post("/reschedule")
 async def reschedule(
     period_id: uuid.UUID,

@@ -19,6 +19,7 @@ from app.models.icd_action_item import IcdActionItem
 from app.models.icd_comment import IcdComment
 from app.models.reassessment import Reassessment
 from app.models.record_link import RecordLink
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 
 __all__ = [
     "Base",
@@ -44,4 +45,6 @@ __all__ = [
     "IcdComment",
     "Reassessment",
     "RecordLink",
+    "ScheduleBaseline",
+    "ScheduleBaselineActivity",
 ]
