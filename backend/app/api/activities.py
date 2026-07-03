@@ -12,6 +12,7 @@ from app.schemas.activity import (
     ActivityMoveRequest,
     ActivityResponse,
     ActivityUpdate,
+    SetDataDateRequest,
 )
 from app.services import activity as svc
 from app.services import scheduling_reschedule
@@ -47,6 +48,15 @@ async def reschedule(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await scheduling_reschedule.reschedule(db, period_id, shift_days)
+
+
+@router.post("/set-data-date")
+async def set_data_date(
+    period_id: uuid.UUID,
+    data: SetDataDateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await scheduling_reschedule.set_data_date(db, period_id, data.date, data.time)
 
 
 @router.get("/{activity_id}", response_model=ActivityResponse)

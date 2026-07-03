@@ -33,7 +33,35 @@ def data_date_for_period(period: Period) -> date:
     return period.start_date or date.today()
 
 
-def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, data_date: date) -> Decimal | None:
+def data_date_time_for_period(period: Period, default_day_start: time) -> datetime:
+    """Full datetime version of data_date_for_period, for the (now
+    hour-precision — see elapsed_duration_fraction) Duration % Complete / PV
+    proration callers. period.start_time is the exact instant Reschedule's
+    "set data date directly" mode may have pinned (app/services/
+    scheduling_reschedule.py:set_data_date); default_day_start is the
+    caller's already-resolved fallback (each read path picks its own — e.g.
+    the project's default calendar's day_start_time) for when it's null."""
+    return datetime.combine(data_date_for_period(period), period.start_time or default_day_start)
+
+
+async def default_day_start_times(db: AsyncSession, project_ids: set[uuid.UUID]) -> dict[uuid.UUID, time]:
+    """Batched {project_id: day_start_time} for whichever calendar is that
+    project's default — the fallback data_date_time_for_period needs when a
+    period has no explicit start_time. A project with no calendar rows yet
+    (never touched the Calendar widget) falls back to time(8, 0), matching
+    Calendar's own column default (app/models/calendar.py) rather than
+    triggering that widget's lazy-seed side effect from this read path."""
+    if not project_ids:
+        return {}
+    result = await db.execute(
+        select(Calendar.project_id, Calendar.day_start_time).where(
+            Calendar.project_id.in_(project_ids), Calendar.is_project_default.is_(True)
+        )
+    )
+    return {row.project_id: row.day_start_time for row in result.all()}
+
+
+def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, data_date: datetime) -> Decimal | None:
     """What fraction (0-1) of an activity's own start-finish span has elapsed
     as of the data date — "Duration % Complete" in P6 terms, distinct from the
     manually-assessed Physical % Complete (Activity.pct_complete) that drives
@@ -41,17 +69,27 @@ def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, d
     app/services/cost_element.py:_schedule_evm) — extracted here so both PV and
     the "Duration % Complete" figure shown directly on the activity (a
     transparency aid, per Maro) can never drift apart. None if the activity
-    isn't scheduled yet (no live start/finish)."""
+    isn't scheduled yet (no live start/finish).
+
+    Compares full datetimes, not just calendar dates (2026-07-03 fix, per
+    Maro) — the previous date-only comparison made any activity whose start
+    and finish fall on the *same calendar day* (an extremely common case —
+    any task of a few hours or one working day) read as 100% the instant it
+    was created, since "finish_date <= start_date" was true from the start
+    and data_date (today) already satisfied ">= finish_date" at hour zero.
+    Phase 10 made start/finish genuinely hour-precision; this was the one
+    place still silently comparing at day granularity."""
     if start is None or finish is None:
         return None
-    start_d, finish_d = start.date(), finish.date()
-    if finish_d <= start_d:
-        return Decimal(1) if data_date >= finish_d else Decimal(0)
-    if data_date <= start_d:
+    if finish <= start:
+        return Decimal(1) if data_date >= finish else Decimal(0)
+    if data_date <= start:
         return Decimal(0)
-    if data_date >= finish_d:
+    if data_date >= finish:
         return Decimal(1)
-    return Decimal((data_date - start_d).days) / Decimal((finish_d - start_d).days)
+    total_seconds = (finish - start).total_seconds()
+    elapsed_seconds = (data_date - start).total_seconds()
+    return Decimal(elapsed_seconds) / Decimal(total_seconds)
 
 
 class _CalendarLookup:
@@ -412,7 +450,10 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
 
     anchor_date = data_date_for_period(period)
     default_calendar = lookup.resolve(participants[0])
-    anchor = datetime.combine(anchor_date, default_calendar.day_start_time)
+    # period.start_time lets Reschedule's "set data date directly" mode pin an
+    # exact time-of-day (2026-07-03, per Maro); null (the common case) falls
+    # back to the calendar's own day start, as before.
+    anchor = datetime.combine(anchor_date, period.start_time or default_calendar.day_start_time)
     es: dict[uuid.UUID, datetime] = {}
     ef: dict[uuid.UUID, datetime] = {}
 

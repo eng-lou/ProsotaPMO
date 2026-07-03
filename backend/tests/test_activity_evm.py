@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from httpx import AsyncClient
 
@@ -76,12 +76,16 @@ async def test_activity_evm_mirrors_linked_cost_element(
     assert element["pct_complete"] == 60
 
     # Deterministic 50% elapsed fraction: live start/finish span 10 days either
-    # side of today. Set directly (bypassing the CPM engine) after the pct_complete
-    # update above so nothing recomputes them again afterwards.
+    # side of today, set at the default calendar's day start (08:00) to match
+    # the actual instant "today" resolves to as a data date (2026-07-03 fix —
+    # data date now compares at full datetime precision, not just calendar
+    # date, so a midnight-anchored start would no longer land on a clean 50%).
+    # Set directly (bypassing the CPM engine) after the pct_complete update
+    # above so nothing recomputes them again afterwards.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     today = date.today()
-    db_activity.start = datetime.combine(today - timedelta(days=10), datetime.min.time())
-    db_activity.finish = datetime.combine(today + timedelta(days=10), datetime.min.time())
+    db_activity.start = datetime.combine(today - timedelta(days=10), time(8, 0))
+    db_activity.finish = datetime.combine(today + timedelta(days=10), time(8, 0))
     await db.commit()
     # Same session as the test client (see conftest.py) — without this refresh, the
     # identity-mapped Activity's other attributes (e.g. updated_at) stay expired
@@ -126,10 +130,15 @@ async def test_pv_tracks_period_data_date_not_wall_clock(
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
     })  # BAC = 10 days * 100% * 1000 = 10000
 
+    # Start/finish set at the default calendar's day start (08:00), matching
+    # the actual instant "today" resolves to as a data date (2026-07-03 fix —
+    # data date now compares at full datetime precision, not just calendar
+    # date, so a midnight-anchored start here would no longer land exactly on
+    # the data date and this test would stop isolating what it's meant to).
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     today = date.today()
-    db_activity.start = datetime.combine(today, datetime.min.time())
-    db_activity.finish = datetime.combine(today + timedelta(days=10), datetime.min.time())
+    db_activity.start = datetime.combine(today, time(8, 0))
+    db_activity.finish = datetime.combine(today + timedelta(days=10), time(8, 0))
     await db.commit()
     await db.refresh(db_activity)
 
@@ -154,10 +163,13 @@ async def test_duration_pct_complete_is_independent_of_resources(
     distinct from the resource-gated EVM fields. Requested by Maro as a
     transparency aid showing exactly what PV is prorated from."""
     activity = await _create_activity(client, project, live_period, "Piling", duration_hours=80)  # 10 days
+    # Set at the default calendar's day start (08:00), matching the actual
+    # instant "today" resolves to as a data date (2026-07-03 fix — see
+    # test_pv_tracks_period_data_date_not_wall_clock's own comment).
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     today = date.today()
-    db_activity.start = datetime.combine(today - timedelta(days=3), datetime.min.time())
-    db_activity.finish = datetime.combine(today + timedelta(days=7), datetime.min.time())
+    db_activity.start = datetime.combine(today - timedelta(days=3), time(8, 0))
+    db_activity.finish = datetime.combine(today + timedelta(days=7), time(8, 0))
     await db.commit()
     await db.refresh(db_activity)
 
@@ -166,6 +178,21 @@ async def test_duration_pct_complete_is_independent_of_resources(
     data = resp.json()
     assert data["bac"] is None  # no resources — EVM fields stay null
     assert float(data["duration_pct_complete"]) == 30.0  # 3 of 10 days elapsed
+
+
+async def test_duration_pct_complete_is_zero_for_brand_new_same_day_activity(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """Regression (Maro, 2026-07-03): a freshly-created 1-day activity
+    starting "now" read as 100% Duration % Complete the instant it was
+    created, since its start and finish both fell on the same calendar date
+    and the old date-only comparison treated "data_date >= finish_date" as
+    true from hour zero. A brand-new activity anchored to today should read
+    0% — it's just starting, not finished — matching the fix in
+    app/services/scheduling_cpm.py:elapsed_duration_fraction."""
+    activity = await _create_activity(client, project, live_period, "New Activity", duration_hours=8)  # 1 day
+    assert activity["start"][:10] == activity["finish"][:10]  # same calendar day, the exact case that broke
+    assert float(activity["duration_pct_complete"]) == 0.0
 
 
 async def test_activity_list_includes_evm(client: AsyncClient, project: Project, live_period: Period):

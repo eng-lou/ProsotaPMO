@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from datetime import time as time_of_day
 from decimal import Decimal
 from typing import Literal
 
@@ -95,6 +96,14 @@ class ActivityMoveRequest(BaseModel):
     app/services/activity.py:move_activity. Display order/WBS numbering only,
     not hierarchy level (that's parent_id, via indent/outdent)."""
     direction: Literal["up", "down"]
+
+
+class SetDataDateRequest(BaseModel):
+    """Reschedule's "set data date directly" mode — see
+    app/services/scheduling_reschedule.py:set_data_date. time=None reverts to
+    the default calendar's day start."""
+    date: date
+    time: time_of_day | None = None
 
 
 class ActivityResponse(ActivityBase):

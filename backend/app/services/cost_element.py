@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -14,7 +14,7 @@ from app.models.period import Period
 from app.models.project import Project
 from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate
 from app.services.reference_codes import next_code
-from app.services.scheduling_cpm import data_date_for_period, elapsed_duration_fraction
+from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
 _MONEY = Decimal("0.01")
 _RATIO = Decimal("0.0001")
@@ -103,14 +103,18 @@ async def _linked_activity_dates(
     return {row.id: (row.start, row.finish) for row in result.all()}
 
 
-async def _period_data_dates(db: AsyncSession, period_ids: set[uuid.UUID]) -> dict[uuid.UUID, date]:
-    """Each period's data date, batched — see
-    app/services/scheduling_cpm.py:data_date_for_period, the same anchor the CPM
-    engine schedules from."""
+async def _period_data_dates(db: AsyncSession, period_ids: set[uuid.UUID]) -> dict[uuid.UUID, datetime]:
+    """Each period's full data date+time, batched — see
+    app/services/scheduling_cpm.py:data_date_time_for_period, the same anchor
+    the CPM engine schedules from."""
     if not period_ids:
         return {}
-    result = await db.execute(select(Period).where(Period.id.in_(period_ids)))
-    return {p.id: data_date_for_period(p) for p in result.scalars().all()}
+    periods = list((await db.execute(select(Period).where(Period.id.in_(period_ids)))).scalars().all())
+    default_starts = await default_day_start_times(db, {p.project_id for p in periods})
+    return {
+        p.id: data_date_time_for_period(p, default_starts.get(p.project_id, time(8, 0)))
+        for p in periods
+    }
 
 
 def _schedule_evm(
@@ -118,7 +122,7 @@ def _schedule_evm(
     pct_complete: int | None,
     start: datetime | None,
     finish: datetime | None,
-    data_date: date,
+    data_date: datetime,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """Planned Value (Rita Mulcahy Ch.9: "as of today, the estimated value of work
     planned to be done") via linear proration across the activity's own current
@@ -157,7 +161,7 @@ def _cost_side_evm(
 
 
 def compute_schedule_linked_evm(
-    element: CostElement, start: datetime | None, finish: datetime | None, data_date: date
+    element: CostElement, start: datetime | None, finish: datetime | None, data_date: datetime
 ) -> dict[str, Decimal | None]:
     """AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC for a single schedule-linked cost
     element — used by app/services/activity.py to surface these as Scheduling
@@ -186,13 +190,13 @@ def _apply_computed(
     sub_actuals: Decimal,
     gfa_m2: Decimal | None,
     activity_dates: tuple[datetime | None, datetime | None] | None = None,
-    data_date: date | None = None,
+    data_date: datetime | None = None,
 ) -> CostElementResponse:
     data = CostElementResponse.model_validate(element)
 
     if activity_dates is not None:
         data.pv, data.ev, data.sv, data.spi = _schedule_evm(
-            element.budget, element.pct_complete, activity_dates[0], activity_dates[1], data_date or date.today()
+            element.budget, element.pct_complete, activity_dates[0], activity_dates[1], data_date or datetime.now()
         )
 
     if element.element_type == "percentage" and element.rate is not None:

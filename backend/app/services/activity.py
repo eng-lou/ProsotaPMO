@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import time
 from decimal import Decimal
 from typing import Literal
 
@@ -18,7 +19,7 @@ from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_const
 from app.services import cost_sync, scheduling_cpm
 from app.services.cost_element import compute_schedule_linked_evm
 from app.services.reference_codes import next_code
-from app.services.scheduling_cpm import data_date_for_period, elapsed_duration_fraction
+from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
 _EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc")
 
@@ -53,8 +54,12 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
     )
     elements_by_activity = {el.linked_activity_id: el for el in result.scalars().all()}
     period_ids = {a.period_id for a in activities}
-    periods_result = await db.execute(select(Period).where(Period.id.in_(period_ids)))
-    data_dates = {p.id: data_date_for_period(p) for p in periods_result.scalars().all()}
+    periods = list((await db.execute(select(Period).where(Period.id.in_(period_ids)))).scalars().all())
+    default_starts = await default_day_start_times(db, {p.project_id for p in periods})
+    data_dates = {
+        p.id: data_date_time_for_period(p, default_starts.get(p.project_id, time(8, 0)))
+        for p in periods
+    }
     for a in activities:
         data_date = data_dates[a.period_id]
         fraction = elapsed_duration_fraction(a.start, a.finish, data_date)

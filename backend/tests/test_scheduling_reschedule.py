@@ -116,3 +116,40 @@ async def test_reschedule_rejects_frozen_period(
         "period_id": str(frozen_period.id), "shift_days": 5,
     })
     assert resp.status_code == 422
+
+
+async def test_set_data_date_with_explicit_time_anchors_new_activities(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    resp = await client.post(
+        "/api/v1/activities/set-data-date",
+        json={"date": "2025-06-02", "time": "10:30:00"},
+        params={"period_id": str(live_period.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["new_anchor_date"] == "2025-06-02"
+    assert data["new_anchor_time"] == "10:30:00"
+
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=8)
+    assert a["start"] == "2025-06-02T10:30:00"
+
+
+async def test_set_data_date_null_time_reverts_to_calendar_default(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    await client.post(
+        "/api/v1/activities/set-data-date",
+        json={"date": "2025-06-02", "time": "10:30:00"},
+        params={"period_id": str(live_period.id)},
+    )
+    resp = await client.post(
+        "/api/v1/activities/set-data-date",
+        json={"date": "2025-06-02", "time": None},
+        params={"period_id": str(live_period.id)},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["new_anchor_time"] is None
+
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=8)
+    assert a["start"] == "2025-06-02T08:00:00"  # back to the default calendar's day start

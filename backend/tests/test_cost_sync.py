@@ -179,7 +179,7 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
     captured baseline — available as soon as the activity is scheduled, per
     Maro's confirmed P6 domain correction (Session 16): "Set Baseline" drives
     schedule variance, not Planned Value."""
-    from datetime import date, datetime, timedelta
+    from datetime import date, datetime, time, timedelta
     import uuid as uuid_mod
 
     from app.models.activity import Activity
@@ -195,11 +195,15 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
     assert element["pv"] is not None  # live start/finish already exist from CPM -> no baseline needed
 
     # Directly set live start/finish spanning today (10 days either side) for a
-    # deterministic 50% elapsed fraction.
+    # deterministic 50% elapsed fraction — set at the default calendar's day
+    # start (08:00), matching the actual instant "today" resolves to as a
+    # data date (2026-07-03 fix: data date now compares at full datetime
+    # precision, not just calendar date, so a midnight-anchored start would
+    # no longer land on a clean 50%).
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     today = date.today()
-    db_activity.start = datetime.combine(today - timedelta(days=10), datetime.min.time())
-    db_activity.finish = datetime.combine(today + timedelta(days=10), datetime.min.time())
+    db_activity.start = datetime.combine(today - timedelta(days=10), time(8, 0))
+    db_activity.finish = datetime.combine(today + timedelta(days=10), time(8, 0))
     await db.commit()
     await db.refresh(db_activity)
 
