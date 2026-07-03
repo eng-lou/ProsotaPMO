@@ -21,12 +21,24 @@ interface GanttRow {
   isMilestone: boolean
   predecessor: string
   cssClass: string
+  // See buildRows: Syncfusion only renders the full taskbar (fill + progress
+  // split + our cssClass) when startDate, endDate AND duration are all present
+  // (ej2-gantt's chart-rows.js getChildTaskbarNode gates on all three) — without
+  // it, rows fall back to a bare, unstyled "unscheduled" bar. Since
+  // autoCalculateDateScheduling is off, Syncfusion won't derive this itself.
+  duration: number
+  durationUnit: 'day'
 }
 
 function toGanttDate(value: string | null): Date | null {
   if (!value) return null
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? null : d
+}
+
+function daysBetween(start: Date | null, end: Date | null): number {
+  if (!start || !end) return 0
+  return Math.max(0, (end.getTime() - start.getTime()) / 86_400_000)
 }
 
 // ProsotaPMO navy/teal applied via per-row cssClass (see .prosota-gantt rules in
@@ -59,19 +71,29 @@ function buildRows(activities: Activity[], relationships: ActivityRelationship[]
     predecessorsByActivityId.set(r.successor_id, list)
   })
 
-  return activities.map(a => ({
-    ganttId: ganttIdByActivityId.get(a.id)!,
-    parentGanttId: a.parent_id ? ganttIdByActivityId.get(a.parent_id) ?? null : null,
-    taskName: a.task_name,
-    startDate: toGanttDate(a.start),
-    endDate: toGanttDate(a.finish),
-    baselineStartDate: toGanttDate(a.bl_start),
-    baselineEndDate: toGanttDate(a.bl_finish),
-    progress: a.pct_complete ? Math.min(Number(a.pct_complete), 100) : 0,
-    isMilestone: a.activity_type === 'milestone',
-    predecessor: (predecessorsByActivityId.get(a.id) ?? []).join(','),
-    cssClass: rowCssClass(a),
-  }))
+  return activities.map(a => {
+    const startDate = toGanttDate(a.start)
+    const endDate = toGanttDate(a.finish)
+    return {
+      ganttId: ganttIdByActivityId.get(a.id)!,
+      parentGanttId: a.parent_id ? ganttIdByActivityId.get(a.parent_id) ?? null : null,
+      taskName: a.task_name,
+      startDate,
+      endDate,
+      baselineStartDate: toGanttDate(a.bl_start),
+      baselineEndDate: toGanttDate(a.bl_finish),
+      progress: a.pct_complete ? Math.min(Number(a.pct_complete), 100) : 0,
+      isMilestone: a.activity_type === 'milestone',
+      predecessor: (predecessorsByActivityId.get(a.id) ?? []).join(','),
+      cssClass: rowCssClass(a),
+      // Calendar-day span between our own already-computed start/finish — not
+      // duration_days (net working hours/calendar), since this only needs to
+      // agree with the same startDate/endDate pair given above, whatever
+      // Syncfusion uses it for internally.
+      duration: daysBetween(startDate, endDate),
+      durationUnit: 'day' as const,
+    }
+  })
 }
 
 const taskFields: GanttModel['taskFields'] = {
@@ -82,6 +104,8 @@ const taskFields: GanttModel['taskFields'] = {
   endDate: 'endDate',
   baselineStartDate: 'baselineStartDate',
   baselineEndDate: 'baselineEndDate',
+  duration: 'duration',
+  durationUnit: 'durationUnit',
   progress: 'progress',
   milestone: 'isMilestone',
   dependency: 'predecessor',

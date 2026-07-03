@@ -1,6 +1,7 @@
-/* Syncfusion Tailwind3 theme — matches this project's existing Tailwind setup.
-   Must precede the @tailwind directives so plain CSS import ordering rules are
-   respected and Tailwind utilities can still win the cascade when needed.
+/* Syncfusion Tailwind3 theme. Vite's CSS pipeline enforces the plain-CSS rule
+   that @import must be the first statement(s) in the file — an @tailwind base
+   placed before these silently drops every import (confirmed: output CSS fell
+   from ~1.26MB to ~25KB when tried), so this has to stay ahead of @tailwind.
    ej2-react-charts has no CSS theme file (SVG/canvas rendering, themed via JS). */
 @import '@syncfusion/ej2-react-gantt/styles/tailwind3.css';
 @import '@syncfusion/ej2-react-grids/styles/tailwind3.css';
