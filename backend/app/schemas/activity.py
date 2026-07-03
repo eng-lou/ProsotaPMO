@@ -90,6 +90,13 @@ class ActivityActualsUpdate(BaseModel):
     actuals: Decimal | None = Field(default=None, ge=0)
 
 
+class ActivityMoveRequest(BaseModel):
+    """Reorders an activity among its current siblings — see
+    app/services/activity.py:move_activity. Display order/WBS numbering only,
+    not hierarchy level (that's parent_id, via indent/outdent)."""
+    direction: Literal["up", "down"]
+
+
 class ActivityResponse(ActivityBase):
     model_config = ConfigDict(from_attributes=True)
 

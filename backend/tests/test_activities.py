@@ -314,6 +314,89 @@ async def test_wbs_path_assigned_from_outline_position(
     assert child["wbs_path"] == "1.1"
 
 
+# --- Move up/down (reorder among siblings, independent of hierarchy level) --
+
+async def test_move_down_swaps_with_next_sibling(client: AsyncClient, project: Project, live_period: Period):
+    a = await _create(client, project, live_period, task_name="Phase 1")
+    b = await _create(client, project, live_period, task_name="Phase 2")
+
+    resp = await client.post(f"/api/v1/activities/{a['id']}/move", json={"direction": "down"})
+    assert resp.status_code == 200
+
+    listing = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    names = [x["task_name"] for x in listing]
+    assert names == ["Phase 2", "Phase 1"]
+    by_name = {x["task_name"]: x for x in listing}
+    assert by_name["Phase 2"]["wbs_path"] == "1"
+    assert by_name["Phase 1"]["wbs_path"] == "2"
+
+
+async def test_move_up_swaps_with_previous_sibling(client: AsyncClient, project: Project, live_period: Period):
+    a = await _create(client, project, live_period, task_name="Phase 1")
+    await _create(client, project, live_period, task_name="Phase 2")
+    c = await _create(client, project, live_period, task_name="Phase 3")
+
+    resp = await client.post(f"/api/v1/activities/{c['id']}/move", json={"direction": "up"})
+    assert resp.status_code == 200
+
+    listing = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    assert [x["task_name"] for x in listing] == ["Phase 1", "Phase 3", "Phase 2"]
+    _ = a
+
+
+async def test_move_up_at_top_is_a_noop(client: AsyncClient, project: Project, live_period: Period):
+    a = await _create(client, project, live_period, task_name="Phase 1")
+    await _create(client, project, live_period, task_name="Phase 2")
+
+    resp = await client.post(f"/api/v1/activities/{a['id']}/move", json={"direction": "up"})
+    assert resp.status_code == 200
+
+    listing = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    assert [x["task_name"] for x in listing] == ["Phase 1", "Phase 2"]
+
+
+async def test_move_down_at_bottom_is_a_noop(client: AsyncClient, project: Project, live_period: Period):
+    await _create(client, project, live_period, task_name="Phase 1")
+    b = await _create(client, project, live_period, task_name="Phase 2")
+
+    resp = await client.post(f"/api/v1/activities/{b['id']}/move", json={"direction": "down"})
+    assert resp.status_code == 200
+
+    listing = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    assert [x["task_name"] for x in listing] == ["Phase 1", "Phase 2"]
+
+
+async def test_move_only_reorders_within_same_parent(client: AsyncClient, project: Project, live_period: Period):
+    parent1 = await _create(client, project, live_period, task_name="Phase 1")
+    parent2 = await _create(client, project, live_period, task_name="Phase 2")
+    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent1["id"])
+
+    # Only one child under Phase 1 — moving it down (no sibling to swap with under
+    # the same parent) must not reach across into Phase 2's children.
+    resp = await client.post(f"/api/v1/activities/{child['id']}/move", json={"direction": "down"})
+    assert resp.status_code == 200
+
+    listing = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    by_name = {x["task_name"]: x for x in listing}
+    assert by_name["Piling"]["parent_id"] == parent1["id"]
+    assert by_name["Piling"]["wbs_path"] == "1.1"
+    _ = parent2
+
+
+async def test_move_rejects_frozen_period(
+    client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
+):
+    activity = Activity(
+        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9003"
+    )
+    db.add(activity)
+    await db.commit()
+    await db.refresh(activity)
+
+    resp = await client.post(f"/api/v1/activities/{activity.id}/move", json={"direction": "up"})
+    assert resp.status_code == 422
+
+
 async def test_indent_promotes_parent_to_wbs_summary(
     client: AsyncClient, project: Project, live_period: Period
 ):

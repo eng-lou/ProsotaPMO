@@ -74,7 +74,7 @@ type ResizableColumnKey = ColumnKey | 'activity' | 'actions'
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, free_float: 80, pct_complete: 80,
-  resources: 96, actions: 128,
+  resources: 96, actions: 176,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
 }
 
@@ -433,6 +433,21 @@ export function Scheduling() {
     await refresh()
   }
 
+  // Move up/down = reorder among current siblings (display order/WBS numbering
+  // only — a separate lever from indent/outdent's hierarchy level). Added per
+  // Maro: indenting only lets an activity become a child of whatever row is
+  // immediately above it, so repositioning it under a different summary first
+  // meant deleting and recreating activities in the right order.
+  const handleMoveUp = async (activity: Activity) => {
+    await api.post(`/api/v1/activities/${activity.id}/move`, { direction: 'up' })
+    await refresh()
+  }
+
+  const handleMoveDown = async (activity: Activity) => {
+    await api.post(`/api/v1/activities/${activity.id}/move`, { direction: 'down' })
+    await refresh()
+  }
+
   const handleSetBaseline = async () => {
     if (!period) return
     const already = activities.some(a => a.bl_start !== null)
@@ -522,6 +537,19 @@ export function Scheduling() {
 
   const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
   const expandedActivity = activities.find(a => a.id === expandedId) ?? null
+
+  // True siblings (same parent_id), not the filtered/searched visibleActivities —
+  // move up/down talks to the backend's real sibling group regardless of what a
+  // search/filter is currently hiding, so the button's disabled state must match.
+  const sortedSiblingsOf = (a: Activity) =>
+    activities
+      .filter(x => x.parent_id === a.parent_id)
+      .sort((x, y) => (x.sort_order ?? 0) - (y.sort_order ?? 0))
+  const isFirstSibling = (a: Activity) => sortedSiblingsOf(a)[0]?.id === a.id
+  const isLastSibling = (a: Activity) => {
+    const siblings = sortedSiblingsOf(a)
+    return siblings[siblings.length - 1]?.id === a.id
+  }
 
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400">Loading schedule…</div>
@@ -993,6 +1021,22 @@ export function Scheduling() {
                       className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
                     >
                       📋
+                    </button>
+                    <button
+                      onClick={() => handleMoveUp(a)}
+                      disabled={isFirstSibling(a)}
+                      title="Move up (reorder among siblings — doesn't change hierarchy level)"
+                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      onClick={() => handleMoveDown(a)}
+                      disabled={isLastSibling(a)}
+                      title="Move down (reorder among siblings — doesn't change hierarchy level)"
+                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
+                    >
+                      ▼
                     </button>
                     <button
                       onClick={() => handleOutdent(a)}

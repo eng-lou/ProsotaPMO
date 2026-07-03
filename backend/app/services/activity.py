@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
@@ -307,6 +308,47 @@ async def _next_sibling_sort_order(
         q = q.where(Activity.id != exclude_id)
     siblings = list((await db.execute(q)).scalars().all())
     return max((s.sort_order or 0) for s in siblings) + 1 if siblings else 0
+
+
+async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down"]) -> Activity:
+    """Reorder an activity among its current siblings — display order and WBS
+    numbering only, never hierarchy level (that's indent/outdent, a parent_id
+    change) and never CPM dates/float (sort_order doesn't feed the CPM engine
+    at all). Per Maro: indent/outdent alone left him "stuck depending on the
+    sequence of activity creation" — a newly-created activity always lands
+    last among its siblings (_next_sibling_sort_order), with no way to
+    reposition it afterward without deleting and recreating in the right
+    order. A no-op (not an error) at either end of the sibling list — same
+    "boundary just does nothing" convention as indent (index 0) and outdent
+    (no parent) in the frontend.
+
+    Normalises every sibling's sort_order to sequential 0..n-1 positions on
+    every call, self-healing any legacy null/duplicate values (the
+    tie-break-by-created_at fallback elsewhere in this file) rather than
+    needing a one-off backfill migration."""
+    activity = await get_activity(db, activity_id)
+    await _require_live_period(db, activity.period_id)
+
+    result = await db.execute(
+        select(Activity).where(Activity.period_id == activity.period_id, _parent_filter(activity.parent_id))
+    )
+    siblings = list(result.scalars().all())
+    siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
+    for index, sibling in enumerate(siblings):
+        sibling.sort_order = index
+
+    current_index = next(i for i, s in enumerate(siblings) if s.id == activity.id)
+    target_index = current_index - 1 if direction == "up" else current_index + 1
+    if 0 <= target_index < len(siblings):
+        siblings[current_index].sort_order, siblings[target_index].sort_order = (
+            siblings[target_index].sort_order,
+            siblings[current_index].sort_order,
+        )
+
+    await db.commit()
+    await _recompute_hierarchy(db, activity.period_id)
+    await _attach_evm_fields(db, [activity])
+    return activity
 
 
 async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:

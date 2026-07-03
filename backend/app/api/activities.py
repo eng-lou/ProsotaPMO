@@ -6,7 +6,13 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.activity import ActivityActualsUpdate, ActivityCreate, ActivityResponse, ActivityUpdate
+from app.schemas.activity import (
+    ActivityActualsUpdate,
+    ActivityCreate,
+    ActivityMoveRequest,
+    ActivityResponse,
+    ActivityUpdate,
+)
 from app.services import activity as svc
 from app.services import scheduling_baseline
 from app.services import scheduling_reschedule
@@ -65,6 +71,18 @@ async def update_activity(
     db: AsyncSession = Depends(get_db),
 ):
     return await svc.update_activity(db, activity_id, data)
+
+
+@router.post("/{activity_id}/move", response_model=ActivityResponse)
+async def move_activity(
+    activity_id: uuid.UUID,
+    data: ActivityMoveRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Moves an activity up or down among its current siblings (display order/
+    WBS numbering only — indent/outdent, a parent_id change, is the separate
+    lever for hierarchy level)."""
+    return await svc.move_activity(db, activity_id, data.direction)
 
 
 @router.patch("/{activity_id}/actuals", response_model=ActivityResponse)
