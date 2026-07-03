@@ -576,7 +576,7 @@ export function SyncfusionGanttChart({
   }
 
   return (
-    <div className="prosota-gantt h-full">
+    <div className="prosota-gantt h-full w-full">
       <GanttComponent
         ref={ganttRef}
         dataSource={rows}
@@ -586,6 +586,13 @@ export function SyncfusionGanttChart({
         timelineSettings={timelineSettings}
         rowHeight={GANTT_ROW_HEIGHT}
         height={height}
+        // width defaults to 'auto', which left the internal grid/chart
+        // splitter without a reliable basis to compute its side-by-side
+        // percentages from inside a plain (non-flex) wrapper div — it
+        // rendered grid and chart stacked instead of side-by-side. Explicit
+        // 100% (matching every official Syncfusion Gantt sample, which always
+        // sets both height and width) fixes that.
+        width="100%"
         // Grid pane no longer hidden (Scheduling now uses Syncfusion's own grid,
         // not a separate custom table) — give it the lion's share of the width
         // by default since it carries 20+ EVM/WBS columns; still user-draggable.
