@@ -147,11 +147,19 @@ export function SyncfusionGanttChart({
   relationships = [],
   leftPaneRef,
   height,
+  onHeaderHeightChange,
 }: {
   activities: Activity[]
   relationships?: ActivityRelationship[]
   leftPaneRef: React.RefObject<HTMLDivElement>
   height: number
+  // The left-hand data grid's <thead> is a fixed single row (36px); Syncfusion's
+  // own timeline header is 1-3 tiers depending on timelineViewMode/zoom, so its
+  // real rendered height varies and isn't documented as a fixed pixel value —
+  // measuring it after render and reporting it up is what keeps row 1 in our
+  // table aligned with row 1's bar in the Gantt (a fixed header-height mismatch
+  // otherwise pushes every row below it out of alignment).
+  onHeaderHeightChange?: (heightPx: number) => void
 }) {
   const rows = useMemo(() => buildRows(activities, relationships), [activities, relationships])
   // GanttComponent extends the core ej2-gantt Gantt class, so the ref instance
@@ -192,6 +200,14 @@ export function SyncfusionGanttChart({
     }
   }, [leftPaneRef, rows])
 
+  // Fires once the timeline/rows have actually painted (unlike `created`, which
+  // can fire before layout is final) — measures the real rendered header height
+  // so Scheduling.tsx can match its own <thead> to it exactly.
+  const reportHeaderHeight = () => {
+    const headerEl = ganttRef.current?.element?.querySelector<HTMLElement>('.e-timeline-header-container')
+    if (headerEl) onHeaderHeightChange?.(headerEl.getBoundingClientRect().height)
+  }
+
   return (
     <div className="prosota-gantt h-full">
       <GanttComponent
@@ -207,6 +223,7 @@ export function SyncfusionGanttChart({
         readOnly
         allowSelection={false}
         highlightWeekends
+        dataBound={reportHeaderHeight}
         // Our own CPM engine (app/services/scheduling_cpm.py) is the sole source
         // of truth for start/finish/float — Syncfusion must render those dates
         // exactly as given, never recompute or "correct" them against its own

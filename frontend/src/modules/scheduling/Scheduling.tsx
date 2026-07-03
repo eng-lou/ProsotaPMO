@@ -283,6 +283,11 @@ export function Scheduling() {
   // handle it needs into the left pane — no local sync logic lives here anymore.
   const leftPaneRef = useRef<HTMLDivElement>(null)
 
+  // Matches this table's <thead> height to the Gantt's actual rendered timeline
+  // header (1-3 tiers depending on zoom) so row 1 here lines up with row 1's bar
+  // in the Gantt — see SyncfusionGanttChart's onHeaderHeightChange.
+  const [ganttHeaderHeight, setGanttHeaderHeight] = useState(36)
+
   useEffect(() => {
     if (!selectedProject || !period) return
     let cancelled = false
@@ -791,7 +796,7 @@ export function Scheduling() {
             </colgroup>
             <thead>
               <tr
-                style={{ height: 36 }}
+                style={{ height: ganttHeaderHeight }}
                 className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide sticky top-0"
               >
                 {isColumnVisible('code') && <ResizableTh width={columnWidths.code} onResizeStart={startColumnResize('code')}>Code</ResizableTh>}
@@ -1084,6 +1089,7 @@ export function Scheduling() {
             relationships={relationships}
             leftPaneRef={leftPaneRef}
             height={PANE_MAX_HEIGHT}
+            onHeaderHeightChange={setGanttHeaderHeight}
           />
         </div>
       </div>

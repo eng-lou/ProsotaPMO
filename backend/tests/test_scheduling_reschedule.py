@@ -83,8 +83,12 @@ async def test_reschedule_pins_start_of_in_progress_activity(
 ):
     """Per Maro's confirmed correction: once an activity has progress
     (% Complete > 0), its Start is a recorded fact, not a forecast — Reschedule
-    must not move it. Only Finish stays live, now driven by remaining_duration_hours
-    (what's actually left) rather than the original full duration."""
+    must not move it. Finish also stays pinned to the full planned duration —
+    a later correction from Maro overrode this test's original design (Finish
+    driven by remaining_duration_hours), which made Finish silently shrink the
+    moment any progress was logged; remaining_duration_hours is now purely an
+    informational display figure (app/services/activity.py), never a
+    scheduling input."""
     await _anchor(db, live_period)
     a = await _create_activity(client, project, live_period, "Excavation", duration_hours=80)  # 10 days
     assert a["start"] == "2025-06-02T08:00:00"
@@ -92,7 +96,8 @@ async def test_reschedule_pins_start_of_in_progress_activity(
 
     resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"pct_complete": "50"})
     assert resp.status_code == 200
-    assert float(resp.json()["remaining_duration_hours"]) == 40.0  # 80h * (1 - 50%)
+    assert float(resp.json()["remaining_duration_hours"]) == 40.0  # 80h * (1 - 50%) — display only
+    assert resp.json()["finish"] == "2025-06-13T17:00:00"  # unchanged by progress
 
     await client.post("/api/v1/activities/reschedule", params={
         "period_id": str(live_period.id), "shift_days": 7,
@@ -101,7 +106,7 @@ async def test_reschedule_pins_start_of_in_progress_activity(
     refreshed = await client.get(f"/api/v1/activities/{a['id']}")
     data = refreshed.json()
     assert data["start"] == "2025-06-02T08:00:00"  # unchanged — already started
-    assert data["finish"] == "2025-06-06T17:00:00"  # 5 remaining working days from the same start
+    assert data["finish"] == "2025-06-13T17:00:00"  # unchanged — full planned duration, not remaining
 
 
 async def test_reschedule_rejects_frozen_period(

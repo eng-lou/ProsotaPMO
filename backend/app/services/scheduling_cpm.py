@@ -423,21 +423,26 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
         # Per Maro's confirmed correction (P6 domain expertise): once an activity has
         # progress (% Complete > 0), its Start is a recorded fact — "it actually
         # started on that planned date" — not a forecast Reschedule/logic can move.
-        # Only its Finish is still live, driven by what's actually left to do
-        # (remaining_duration_hours, computed in app/services/activity.py from
-        # duration x (1 - %complete)) rather than the original full duration.
-        # actual_start is deliberately not a separate signal here — redundant once
-        # % Complete > 0 exists, since the currently-stored start already IS the
-        # date it started. actual_finish, if recorded, is a harder fact still (the
-        # real finish), overriding the remaining-duration estimate entirely.
+        # Finish stays anchored to the full planned duration regardless of progress
+        # (a second, later correction from Maro overriding this block's original
+        # design, which drove Finish off remaining_duration_hours instead — that
+        # made Finish silently shrink the moment any progress was logged, collapsing
+        # to literally equal Start at 100% complete, "disregarding the duration"
+        # entirely). remaining_duration_hours (app/services/activity.py) stays a
+        # purely informational display figure, never a scheduling input — logging
+        # progress isn't evidence of finishing early, only an explicit Actual Finish
+        # (a harder fact, handled below) or reaching the full planned span is.
+        # actual_start is deliberately not a separate CPM signal here — redundant
+        # once % Complete > 0 exists, since the currently-stored start already IS
+        # the date it started (app/services/activity.py auto-records the field
+        # itself for display, but the CPM engine only ever needs a.start).
         has_progress = a.pct_complete is not None and a.pct_complete > 0
         if has_progress and a.start is not None:
             activity_es = a.start
             if a.actual_finish is not None:
                 activity_ef = a.actual_finish
             else:
-                remaining = a.remaining_duration_hours if a.remaining_duration_hours is not None else duration
-                activity_ef = lookup.add_duration(calendar, activity_es, remaining)
+                activity_ef = lookup.add_duration(calendar, activity_es, duration)
         else:
             preds = predecessors_of.get(a.id, [])
             if preds:

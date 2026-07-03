@@ -18,8 +18,6 @@ export interface ActivityFormValues {
   // in toActivityPayload below — the backend's hour-precision CPM engine (Phase
   // 10) is unaffected, this is purely a display/input convenience.
   duration_days: string
-  actual_start: string
-  actual_finish: string
   pct_complete: string
   constraint_type: ConstraintType | ''
   constraint_date: string
@@ -31,8 +29,6 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
     duration_days: activity?.duration_days?.toString() ?? '',
-    actual_start: toDatetimeLocalValue(activity?.actual_start),
-    actual_finish: toDatetimeLocalValue(activity?.actual_finish),
     pct_complete: activity?.pct_complete ?? '',
     constraint_type: activity?.constraint_type ?? '',
     constraint_date: toDatetimeLocalValue(activity?.constraint_date),
@@ -48,8 +44,6 @@ export function toActivityPayload(values: ActivityFormValues, calendars: Calenda
     task_name: values.task_name,
     activity_type: values.activity_type,
     duration_hours: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) * hoursPerDay : null,
-    actual_start: values.actual_start || null,
-    actual_finish: values.actual_finish || null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
     constraint_type: isAsap ? null : values.constraint_type,
     constraint_date: isAsap ? null : values.constraint_date || null,
@@ -194,14 +188,6 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           </div>
         </div>
       )}
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Start</label>
-        <input type="datetime-local" value={values.actual_start} onChange={e => set('actual_start', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
-      </div>
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Finish</label>
-        <input type="datetime-local" value={values.actual_finish} onChange={e => set('actual_finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
-      </div>
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>
         <input type="number" min={0} max={100} value={values.pct_complete} onChange={e => set('pct_complete', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
