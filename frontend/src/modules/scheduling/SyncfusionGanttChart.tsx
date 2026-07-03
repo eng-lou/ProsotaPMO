@@ -70,6 +70,19 @@ interface GanttRow {
   actionsPlaceholder: ''
 }
 
+// Grid column `template` functions don't receive our flat dataSource row
+// directly — ej2-gantt wraps every row into its own internal IGanttData record
+// (taskData holds "the original data provided in the data source", per
+// interface.d.ts; ganttProperties carries its own CPM-computed fields
+// alongside) for its dual use as both the grid row and the chart's taskbar
+// data. Confirmed via a live crash (Cannot read properties of undefined
+// (reading 'id')) — every template needs to unwrap through .taskData first.
+// TS still types templates as receiving GanttRow directly for readability;
+// this defensively unwraps regardless of which shape actually arrives.
+function unwrap(row: GanttRow | { taskData: GanttRow }): GanttRow {
+  return 'taskData' in row ? row.taskData : row
+}
+
 function toGanttDate(value: string | null): Date | null {
   if (!value) return null
   const d = new Date(value)
@@ -278,7 +291,7 @@ export function SyncfusionGanttChart({
   })
 
   const columns: NonNullable<GanttModel['columns']> = useMemo(() => {
-    const isEditing = (row: GanttRow, field: EditableField) => editingCell?.id === row.activity.id && editingCell.field === field
+    const isEditing = (row: GanttRow, field: EditableField) => editingCell?.id === unwrap(row).activity.id && editingCell.field === field
 
     const cols: NonNullable<GanttModel['columns']> = [
       {
@@ -288,15 +301,15 @@ export function SyncfusionGanttChart({
         ) : (
           <span
             className="font-mono text-xs text-gray-500 cursor-text"
-            onDoubleClick={() => onStartEdit(row.activity, 'code')}
+            onDoubleClick={() => onStartEdit(unwrap(row).activity, 'code')}
           >
-            {row.activity.code}
+            {unwrap(row).activity.code}
           </span>
         ),
       },
       {
         field: 'wbsPath', headerText: 'WBS', width: columnWidths.wbs, visible: visibleColumns.has('wbs'),
-        template: (row: GanttRow) => <span className="font-mono text-xs text-gray-400">{row.activity.wbs_path ?? '—'}</span>,
+        template: (row: GanttRow) => <span className="font-mono text-xs text-gray-400">{unwrap(row).activity.wbs_path ?? '—'}</span>,
       },
       {
         field: 'taskName', headerText: 'Activity', width: columnWidths.activity,
@@ -304,13 +317,13 @@ export function SyncfusionGanttChart({
           <input {...inputProps('w-full border border-blue-400 rounded px-1 py-0.5 text-sm')} />
         ) : (
           <button
-            onClick={() => onActivityClick(row.activity)}
-            onDoubleClick={() => onActivityDoubleClick(row.activity)}
+            onClick={() => onActivityClick(unwrap(row).activity)}
+            onDoubleClick={() => onActivityDoubleClick(unwrap(row).activity)}
             className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block w-full"
             title="Click to open, double-click to rename in place"
           >
-            {row.activity.activity_type === 'wbs_summary' && '📦 '}
-            {row.activity.task_name}
+            {unwrap(row).activity.activity_type === 'wbs_summary' && '📦 '}
+            {unwrap(row).activity.task_name}
           </button>
         ),
       },
@@ -328,8 +341,8 @@ export function SyncfusionGanttChart({
             {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
           </select>
         ) : (
-          <span className="text-xs text-gray-600 capitalize" onDoubleClick={() => onStartEdit(row.activity, 'activity_type')}>
-            {row.activity.activity_type.replace('_', ' ')}
+          <span className="text-xs text-gray-600 capitalize" onDoubleClick={() => onStartEdit(unwrap(row).activity, 'activity_type')}>
+            {unwrap(row).activity.activity_type.replace('_', ' ')}
           </span>
         ),
       },
@@ -340,10 +353,10 @@ export function SyncfusionGanttChart({
         ) : (
           <span
             className="text-gray-600 cursor-text"
-            title={row.activity.duration_hours !== null ? `${row.activity.duration_hours}h` : undefined}
-            onDoubleClick={() => onStartEdit(row.activity, 'duration_hours')}
+            title={unwrap(row).activity.duration_hours !== null ? `${unwrap(row).activity.duration_hours}h` : undefined}
+            onDoubleClick={() => onStartEdit(unwrap(row).activity, 'duration_hours')}
           >
-            {row.activity.duration_days ?? '—'}
+            {unwrap(row).activity.duration_days ?? '—'}
           </span>
         ),
       },
@@ -354,16 +367,16 @@ export function SyncfusionGanttChart({
         ) : (
           <span
             className="text-gray-600 whitespace-nowrap cursor-text"
-            title={row.activity.constraint_type === 'snet' ? 'Start On or After constraint applied' : 'Double-click to set a Start On or After constraint'}
-            onDoubleClick={() => onStartEdit(row.activity, 'start')}
+            title={unwrap(row).activity.constraint_type === 'snet' ? 'Start On or After constraint applied' : 'Double-click to set a Start On or After constraint'}
+            onDoubleClick={() => onStartEdit(unwrap(row).activity, 'start')}
           >
-            {formatDateTime(row.activity.start)}
+            {formatDateTime(unwrap(row).activity.start)}
           </span>
         ),
       },
       {
         field: 'baselineStartDate', headerText: 'BL Start', width: columnWidths.bl_start, visible: visibleColumns.has('bl_start'),
-        template: (row: GanttRow) => <span className="text-gray-400 whitespace-nowrap">{formatDateTime(row.activity.bl_start)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-400 whitespace-nowrap">{formatDateTime(unwrap(row).activity.bl_start)}</span>,
       },
       {
         field: 'endDate', headerText: 'Finish', width: columnWidths.finish, visible: visibleColumns.has('finish'),
@@ -373,29 +386,29 @@ export function SyncfusionGanttChart({
           <span
             className="text-gray-600 whitespace-nowrap cursor-text"
             title="Double-click to change duration by setting a new finish"
-            onDoubleClick={() => onStartEdit(row.activity, 'finish')}
+            onDoubleClick={() => onStartEdit(unwrap(row).activity, 'finish')}
           >
-            {formatDateTime(row.activity.finish)}
+            {formatDateTime(unwrap(row).activity.finish)}
           </span>
         ),
       },
       {
         field: 'baselineEndDate', headerText: 'BL Finish', width: columnWidths.bl_finish, visible: visibleColumns.has('bl_finish'),
-        template: (row: GanttRow) => <span className="text-gray-400 whitespace-nowrap">{formatDateTime(row.activity.bl_finish)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-400 whitespace-nowrap">{formatDateTime(unwrap(row).activity.bl_finish)}</span>,
       },
       {
         field: 'varianceDays', headerText: 'Fin. Var (d)', width: columnWidths.variance, visible: visibleColumns.has('variance'),
         template: (row: GanttRow) => (
-          <span className={(row.activity.variance_days ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
-            {row.activity.variance_days ?? '—'}
+          <span className={(unwrap(row).activity.variance_days ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
+            {unwrap(row).activity.variance_days ?? '—'}
           </span>
         ),
       },
       {
         field: 'totalFloatHours', headerText: 'Total Float', width: columnWidths.float, visible: visibleColumns.has('float'),
         template: (row: GanttRow) => (
-          <span className={row.activity.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}>
-            {row.activity.total_float_hours ?? '—'}{row.activity.total_float_hours !== null ? 'h' : ''}
+          <span className={unwrap(row).activity.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}>
+            {unwrap(row).activity.total_float_hours ?? '—'}{unwrap(row).activity.total_float_hours !== null ? 'h' : ''}
           </span>
         ),
       },
@@ -403,7 +416,7 @@ export function SyncfusionGanttChart({
         field: 'freeFloatHours', headerText: 'Free Float', width: columnWidths.free_float, visible: visibleColumns.has('free_float'),
         template: (row: GanttRow) => (
           <span className="text-gray-600">
-            {row.activity.free_float_hours ?? '—'}{row.activity.free_float_hours !== null ? 'h' : ''}
+            {unwrap(row).activity.free_float_hours ?? '—'}{unwrap(row).activity.free_float_hours !== null ? 'h' : ''}
           </span>
         ),
       },
@@ -412,8 +425,8 @@ export function SyncfusionGanttChart({
         template: (row: GanttRow) => isEditing(row, 'pct_complete') ? (
           <input type="number" min={0} max={100} {...inputProps('w-16 border border-blue-400 rounded px-1 py-0.5 text-sm')} />
         ) : (
-          <span className="text-gray-600 cursor-text" onDoubleClick={() => onStartEdit(row.activity, 'pct_complete')}>
-            {row.activity.pct_complete ?? 0}%
+          <span className="text-gray-600 cursor-text" onDoubleClick={() => onStartEdit(unwrap(row).activity, 'pct_complete')}>
+            {unwrap(row).activity.pct_complete ?? 0}%
           </span>
         ),
       },
@@ -422,104 +435,104 @@ export function SyncfusionGanttChart({
         template: (row: GanttRow) => (
           <span
             className="text-gray-600 cursor-pointer truncate block"
-            onClick={() => onActivityClick(row.activity)}
-            title={row.resourcesLabel ? `${row.resourcesLabel} — click to view/edit` : 'Click to assign resources'}
+            onClick={() => onActivityClick(unwrap(row).activity)}
+            title={unwrap(row).resourcesLabel ? `${unwrap(row).resourcesLabel} — click to view/edit` : 'Click to assign resources'}
           >
-            {row.resourcesLabel || <span className="text-gray-300">—</span>}
+            {unwrap(row).resourcesLabel || <span className="text-gray-300">—</span>}
           </span>
         ),
       },
       {
         field: 'bac', headerText: 'BAC', width: columnWidths.bac, visible: visibleColumns.has('bac'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.bac)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.bac)}</span>,
       },
       {
         field: 'pv', headerText: 'PV', width: columnWidths.pv, visible: visibleColumns.has('pv'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.pv)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.pv)}</span>,
       },
       {
         field: 'ev', headerText: 'EV', width: columnWidths.ev, visible: visibleColumns.has('ev'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.ev)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.ev)}</span>,
       },
       {
         field: 'ac', headerText: 'AC', width: columnWidths.ac, visible: visibleColumns.has('ac'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.ac)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.ac)}</span>,
       },
       {
         field: 'cv', headerText: 'CV', width: columnWidths.cv, visible: visibleColumns.has('cv'),
         template: (row: GanttRow) => (
-          <span className={`whitespace-nowrap ${row.activity.cv !== null && Number(row.activity.cv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-            {formatMoney(row.activity.cv)}
+          <span className={`whitespace-nowrap ${unwrap(row).activity.cv !== null && Number(unwrap(row).activity.cv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+            {formatMoney(unwrap(row).activity.cv)}
           </span>
         ),
       },
       {
         field: 'sv', headerText: 'SV', width: columnWidths.sv, visible: visibleColumns.has('sv'),
         template: (row: GanttRow) => (
-          <span className={`whitespace-nowrap ${row.activity.sv !== null && Number(row.activity.sv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-            {formatMoney(row.activity.sv)}
+          <span className={`whitespace-nowrap ${unwrap(row).activity.sv !== null && Number(unwrap(row).activity.sv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+            {formatMoney(unwrap(row).activity.sv)}
           </span>
         ),
       },
       {
         field: 'cpi', headerText: 'CPI', width: columnWidths.cpi, visible: visibleColumns.has('cpi'),
         template: (row: GanttRow) => (
-          <span className={row.activity.cpi !== null && Number(row.activity.cpi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
-            {formatRatio(row.activity.cpi)}
+          <span className={unwrap(row).activity.cpi !== null && Number(unwrap(row).activity.cpi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
+            {formatRatio(unwrap(row).activity.cpi)}
           </span>
         ),
       },
       {
         field: 'spi', headerText: 'SPI', width: columnWidths.spi, visible: visibleColumns.has('spi'),
         template: (row: GanttRow) => (
-          <span className={row.activity.spi !== null && Number(row.activity.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
-            {formatRatio(row.activity.spi)}
+          <span className={unwrap(row).activity.spi !== null && Number(unwrap(row).activity.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}>
+            {formatRatio(unwrap(row).activity.spi)}
           </span>
         ),
       },
       {
         field: 'eac', headerText: 'EAC', width: columnWidths.eac, visible: visibleColumns.has('eac'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.eac)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.eac)}</span>,
       },
       {
         field: 'etc', headerText: 'ETC', width: columnWidths.etc, visible: visibleColumns.has('etc'),
-        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(row.activity.etc)}</span>,
+        template: (row: GanttRow) => <span className="text-gray-600 whitespace-nowrap">{formatMoney(unwrap(row).activity.etc)}</span>,
       },
       {
         field: 'actionsPlaceholder', headerText: '', width: columnWidths.actions, allowResizing: true, textAlign: 'Right' as const,
         template: (row: GanttRow) => (
           <div className="text-right whitespace-nowrap no-print">
-            <button onClick={() => onCopyRow(row.activity)} title="Copy row settings" className="text-xs text-gray-400 hover:text-blue-600 mr-1.5">⧉</button>
+            <button onClick={() => onCopyRow(unwrap(row).activity)} title="Copy row settings" className="text-xs text-gray-400 hover:text-blue-600 mr-1.5">⧉</button>
             <button
-              onClick={() => onPasteRow(row.activity)}
+              onClick={() => onPasteRow(unwrap(row).activity)}
               disabled={!rowClipboard}
               title="Paste copied row settings onto this activity"
               className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
             >📋</button>
             <button
-              onClick={() => onMoveUp(row.activity)}
-              disabled={row.isFirstSibling}
+              onClick={() => onMoveUp(unwrap(row).activity)}
+              disabled={unwrap(row).isFirstSibling}
               title="Move up (reorder among siblings)"
               className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
             >▲</button>
             <button
-              onClick={() => onMoveDown(row.activity)}
-              disabled={row.isLastSibling}
+              onClick={() => onMoveDown(unwrap(row).activity)}
+              disabled={unwrap(row).isLastSibling}
               title="Move down (reorder among siblings)"
               className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
             >▼</button>
             <button
-              onClick={() => onOutdent(row.activity)}
-              disabled={!row.activity.parent_id}
+              onClick={() => onOutdent(unwrap(row).activity)}
+              disabled={!unwrap(row).activity.parent_id}
               title="Outdent"
               className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
             >⇤</button>
             <button
-              onClick={() => onIndent(row.activity)}
+              onClick={() => onIndent(unwrap(row).activity)}
               title="Indent"
               className="text-xs text-gray-400 hover:text-blue-600 mr-2.5"
             >⇥</button>
-            <button onClick={() => onDelete(row.activity)} className="text-xs text-gray-400 hover:text-red-600">Delete</button>
+            <button onClick={() => onDelete(unwrap(row).activity)} className="text-xs text-gray-400 hover:text-red-600">Delete</button>
           </div>
         ),
       },
