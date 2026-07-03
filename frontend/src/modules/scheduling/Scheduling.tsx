@@ -154,27 +154,26 @@ export function Scheduling() {
   const [editingCell, setEditingCell] = useState<{ id: string; field: EditableField } | null>(null)
   const [editingValue, setEditingValue] = useState('')
 
-  // The task_name cell needs both a single-click (open the unified activity-detail
-  // panel below the grid) and a double-click (inline rename) behaviour on the same
-  // element. The DOM fires two ordinary `click` events before `dblclick` — so
-  // naively wiring onClick straight to "expand" means every double-click expands
-  // (twice, toggling back off) before inline-editing a moment later. Delaying the
-  // single-click action lets a following dblclick cancel it — the standard fix for
-  // this browser quirk.
-  const nameClickTimer = useRef<number | null>(null)
-  const handleNameClick = (a: Activity) => {
-    if (nameClickTimer.current !== null) return
-    nameClickTimer.current = window.setTimeout(() => {
-      nameClickTimer.current = null
+  // Clicking a row (rowSelected, from SyncfusionGanttChart) opens the unified
+  // activity-detail panel below the grid. The DOM fires ordinary `click`
+  // events before `dblclick` — so naively wiring straight to "expand" means
+  // every double-click (anywhere in the row, e.g. double-clicking a cell to
+  // edit it) also expands the panel a moment later. Delaying the open lets a
+  // following double-click cancel it via cancelPendingRowClick — the standard
+  // fix for this browser quirk.
+  const rowClickTimer = useRef<number | null>(null)
+  const handleRowClick = (a: Activity) => {
+    if (rowClickTimer.current !== null) return
+    rowClickTimer.current = window.setTimeout(() => {
+      rowClickTimer.current = null
       setExpandedId(id => id === a.id ? null : a.id)
     }, 220)
   }
-  const handleNameDoubleClick = (a: Activity) => {
-    if (nameClickTimer.current !== null) {
-      window.clearTimeout(nameClickTimer.current)
-      nameClickTimer.current = null
+  const cancelPendingRowClick = () => {
+    if (rowClickTimer.current !== null) {
+      window.clearTimeout(rowClickTimer.current)
+      rowClickTimer.current = null
     }
-    startEdit(a, 'task_name')
   }
 
   // Row clipboard — "copy" snapshots one activity's editable settings; "paste" applies
@@ -658,8 +657,8 @@ export function Scheduling() {
           onStartEdit={startEdit}
           onCommitEdit={commitEdit}
           onCancelEdit={cancelEdit}
-          onActivityClick={handleNameClick}
-          onActivityDoubleClick={handleNameDoubleClick}
+          onActivityClick={handleRowClick}
+          onCancelPendingClick={cancelPendingRowClick}
           onCopyRow={handleCopyRow}
           onPasteRow={handlePasteRow}
           onMoveUp={handleMoveUp}

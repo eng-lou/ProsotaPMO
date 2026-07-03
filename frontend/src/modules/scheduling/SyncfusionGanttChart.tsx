@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react'
-import { GanttComponent, Inject, Resize } from '@syncfusion/ej2-react-gantt'
+import { GanttComponent, Inject, Resize, Selection } from '@syncfusion/ej2-react-gantt'
 import type { GanttModel } from '@syncfusion/ej2-gantt'
 import { formatDateTime } from './dateTime'
 import { GANTT_ROW_HEIGHT } from './GanttChart'
@@ -156,7 +156,13 @@ function buildRows(
     return {
       ganttId: ganttIdByActivityId.get(a.id)!,
       parentGanttId: a.parent_id ? ganttIdByActivityId.get(a.parent_id) ?? null : null,
-      taskName: a.task_name,
+      // The 📦 prefix is baked into the value itself rather than a template —
+      // the tree/name column (treeColumnIndex) goes through ej2-treegrid's own
+      // indent-cell renderer, which wraps template output differently from an
+      // ordinary column and left it blank when tried (confirmed by testing:
+      // every other column's template rendered fine, only this one didn't).
+      // Plain field rendering here is the standard, most-tested Gantt pattern.
+      taskName: (a.activity_type === 'wbs_summary' ? '📦 ' : '') + a.task_name,
       startDate,
       endDate,
       baselineStartDate: toGanttDate(a.bl_start),
@@ -230,7 +236,7 @@ export function SyncfusionGanttChart({
   onCommitEdit,
   onCancelEdit,
   onActivityClick,
-  onActivityDoubleClick,
+  onCancelPendingClick,
   onCopyRow,
   onPasteRow,
   onMoveUp,
@@ -255,7 +261,11 @@ export function SyncfusionGanttChart({
   onCommitEdit: () => void
   onCancelEdit: () => void
   onActivityClick: (a: Activity) => void
-  onActivityDoubleClick: (a: Activity) => void
+  // Any double-click, on any column, must cancel a pending debounced row-open
+  // (rowSelected below) from the click(s) that necessarily preceded it — the
+  // DOM fires click before dblclick — so double-clicking a cell to edit it
+  // doesn't also pop the detail panel open a moment later.
+  onCancelPendingClick: () => void
   onCopyRow: (a: Activity) => void
   onPasteRow: (a: Activity) => void
   onMoveUp: (a: Activity) => void
@@ -312,20 +322,12 @@ export function SyncfusionGanttChart({
         template: (row: GanttRow) => <span className="font-mono text-xs text-gray-400">{unwrap(row).activity.wbs_path ?? '—'}</span>,
       },
       {
+        // No custom template (see buildRows) — plain field rendering through
+        // Syncfusion's own tree-cell renderer. Click-to-open and
+        // double-click-to-rename are handled centrally via the Gantt's
+        // rowSelected/recordDoubleClick events below instead of a per-cell
+        // handler, since this column's template didn't render at all when tried.
         field: 'taskName', headerText: 'Activity', width: columnWidths.activity,
-        template: (row: GanttRow) => isEditing(row, 'task_name') ? (
-          <input {...inputProps('w-full border border-blue-400 rounded px-1 py-0.5 text-sm')} />
-        ) : (
-          <button
-            onClick={() => onActivityClick(unwrap(row).activity)}
-            onDoubleClick={() => onActivityDoubleClick(unwrap(row).activity)}
-            className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block w-full"
-            title="Click to open, double-click to rename in place"
-          >
-            {unwrap(row).activity.activity_type === 'wbs_summary' && '📦 '}
-            {unwrap(row).activity.task_name}
-          </button>
-        ),
       },
       {
         field: 'typeLabel', headerText: 'Type', width: columnWidths.type, visible: visibleColumns.has('type'),
@@ -431,12 +433,13 @@ export function SyncfusionGanttChart({
         ),
       },
       {
+        // No onClick needed — clicking anywhere on a row opens the detail panel
+        // (rowSelected, below), including this cell.
         field: 'resourcesLabel', headerText: 'Resources', width: columnWidths.resources, visible: visibleColumns.has('resources'),
         template: (row: GanttRow) => (
           <span
-            className="text-gray-600 cursor-pointer truncate block"
-            onClick={() => onActivityClick(unwrap(row).activity)}
-            title={unwrap(row).resourcesLabel ? `${unwrap(row).resourcesLabel} — click to view/edit` : 'Click to assign resources'}
+            className="text-gray-600 truncate block"
+            title={unwrap(row).resourcesLabel ? unwrap(row).resourcesLabel : 'Click to assign resources'}
           >
             {unwrap(row).resourcesLabel || <span className="text-gray-300">—</span>}
           </span>
@@ -557,6 +560,21 @@ export function SyncfusionGanttChart({
     onColumnResize(key, typeof width === 'string' ? parseFloat(width) : width)
   }
 
+  // Click-to-open-detail-panel lives at the row level (not a per-cell handler
+  // on the name column) since the tree column's own template didn't render at
+  // all — see buildRows/the taskName column above. args.data can be an array
+  // in multi-select scenarios; this Gantt is single-select only.
+  const handleRowSelected = (args: unknown) => {
+    const data = (args as { data?: unknown }).data
+    const wrapped = Array.isArray(data) ? data[0] : data
+    if (!wrapped) return
+    onActivityClick(unwrap(wrapped as GanttRow | { taskData: GanttRow }).activity)
+  }
+
+  const handleRecordDoubleClick = () => {
+    onCancelPendingClick()
+  }
+
   return (
     <div className="prosota-gantt h-full">
       <GanttComponent
@@ -576,10 +594,13 @@ export function SyncfusionGanttChart({
         renderBaseline
         readOnly
         allowResizing
-        allowSelection={false}
+        // Selection stays on (default) — rowSelected below is what opens the
+        // detail panel now, replacing the taskName column's old onClick.
         highlightWeekends
         dataBound={handleDataBound}
         resizeStop={handleResizeStop}
+        rowSelected={handleRowSelected}
+        recordDoubleClick={handleRecordDoubleClick}
         // Our own CPM engine (app/services/scheduling_cpm.py) is the sole source
         // of truth for start/finish/float — Syncfusion must render those dates
         // exactly as given, never recompute or "correct" them against its own
@@ -589,7 +610,7 @@ export function SyncfusionGanttChart({
         autoCalculateDateScheduling={false}
         enablePredecessorValidation={false}
       >
-        <Inject services={[Resize]} />
+        <Inject services={[Resize, Selection]} />
       </GanttComponent>
     </div>
   )
