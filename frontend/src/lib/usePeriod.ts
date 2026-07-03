@@ -10,37 +10,40 @@ export function useActivePeriod(projectId: string | undefined) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const bootstrap = async () => {
     if (!projectId) return
-    let cancelled = false
+    try {
+      setLoading(true)
+      const { data: periods } = await api.get<Period[]>('/api/v1/periods/', {
+        params: { project_id: projectId },
+      })
+      let active = periods.find(p => p.freeze_status === 'live') ?? periods[0] ?? null
 
-    async function bootstrap() {
-      try {
-        setLoading(true)
-        const { data: periods } = await api.get<Period[]>('/api/v1/periods/', {
-          params: { project_id: projectId },
+      if (!active) {
+        const { data: created } = await api.post<Period>('/api/v1/periods/', {
+          project_id: projectId,
+          period_label: 'Period 1',
+          freeze_status: 'live',
         })
-        let active = periods.find(p => p.freeze_status === 'live') ?? periods[0] ?? null
-
-        if (!active) {
-          const { data: created } = await api.post<Period>('/api/v1/periods/', {
-            project_id: projectId,
-            period_label: 'Period 1',
-            freeze_status: 'live',
-          })
-          active = created
-        }
-        if (!cancelled) setPeriod(active)
-      } catch {
-        if (!cancelled) setError('Failed to load period')
-      } finally {
-        if (!cancelled) setLoading(false)
+        active = created
       }
+      setPeriod(active)
+    } catch {
+      setError('Failed to load period')
+    } finally {
+      setLoading(false)
     }
+  }
 
+  useEffect(() => {
     bootstrap()
-    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  return { period, loading, error }
+  // Reschedule (and anything else that writes period.start_date server-side)
+  // needs a way to pull the fresh value back in — this hook previously only
+  // ever fetched once on mount, so the Reschedule panel's "Data Date" reverted
+  // to showing the original value the next time it was reopened, even though
+  // the backend (and everything derived from it, like PV) had genuinely moved.
+  return { period, loading, error, refetch: bootstrap }
 }

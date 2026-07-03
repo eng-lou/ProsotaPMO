@@ -20,27 +20,19 @@ export interface ActivityFormValues {
   duration_days: string
   actual_start: string
   actual_finish: string
-  remaining_duration_days: string
   pct_complete: string
   constraint_type: ConstraintType | ''
   constraint_date: string
   calendar_id: string
 }
 
-function toFormValues(activity: Activity | null, calendars: Calendar[]): ActivityFormValues {
+function toFormValues(activity: Activity | null): ActivityFormValues {
   return {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
     duration_days: activity?.duration_days?.toString() ?? '',
     actual_start: toDatetimeLocalValue(activity?.actual_start),
     actual_finish: toDatetimeLocalValue(activity?.actual_finish),
-    // remaining_duration_hours has no computed "days" counterpart from the
-    // backend (unlike duration_hours/duration_days) — approximated here using
-    // the activity's own resolved calendar, same conversion toActivityPayload
-    // uses on the way back out.
-    remaining_duration_days: activity?.remaining_duration_hours != null
-      ? String(Number(activity.remaining_duration_hours) / resolveHoursPerDay(activity, calendars))
-      : '',
     pct_complete: activity?.pct_complete ?? '',
     constraint_type: activity?.constraint_type ?? '',
     constraint_date: toDatetimeLocalValue(activity?.constraint_date),
@@ -58,7 +50,6 @@ export function toActivityPayload(values: ActivityFormValues, calendars: Calenda
     duration_hours: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) * hoursPerDay : null,
     actual_start: values.actual_start || null,
     actual_finish: values.actual_finish || null,
-    remaining_duration_hours: values.remaining_duration_days ? Number(values.remaining_duration_days) * hoursPerDay : null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
     constraint_type: isAsap ? null : values.constraint_type,
     constraint_date: isAsap ? null : values.constraint_date || null,
@@ -84,7 +75,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
 }
 
 export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded = false }: Props) {
-  const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity, calendars))
+  const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity))
   const [values, setValues] = useState<ActivityFormValues>(initialValues)
   const [submitting, setSubmitting] = useState(false)
   const [reassessmentNote, setReassessmentNote] = useState('')
@@ -187,6 +178,20 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
             <div className="text-gray-400 mb-0.5">Duration (hours)</div>
             <div className="font-medium text-gray-700">{activity.duration_hours ?? '—'}</div>
           </div>
+          <div>
+            <div className="text-gray-400 mb-0.5" title="Computed: Duration x (1 - % Complete) — not directly editable">Remaining Duration (d)</div>
+            <div className="font-medium text-gray-700">
+              {activity.remaining_duration_hours != null
+                ? (Number(activity.remaining_duration_hours) / resolveHoursPerDay(activity, calendars)).toFixed(1)
+                : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-0.5" title="How far along its own current Start/Finish this activity should be by the data date — the input Planned Value (PV) is prorated from. Distinct from % Complete below, which is manually assessed physical progress.">Duration % Complete</div>
+            <div className="font-medium text-gray-700">
+              {activity.duration_pct_complete != null ? `${Number(activity.duration_pct_complete).toFixed(1)}%` : '—'}
+            </div>
+          </div>
         </div>
       )}
       <div>
@@ -196,10 +201,6 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">Actual Finish</label>
         <input type="datetime-local" value={values.actual_finish} onChange={e => set('actual_finish', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
-      </div>
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Remaining Duration (days)</label>
-        <input type="number" min={0} step={0.5} value={values.remaining_duration_days} onChange={e => set('remaining_duration_days', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
       </div>
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>

@@ -22,6 +22,38 @@ from app.services.calendar_time import compute_hours_per_day, day_windows, minut
 _MAX_DAY_STEPS = 3650
 
 
+def data_date_for_period(period: Period) -> date:
+    """The schedule's "data date" — the anchor the forward pass schedules from
+    (below), and the same reference point Planned Value prorates against (see
+    app/services/cost_element.py:_schedule_evm). Reschedule
+    (app/services/scheduling_reschedule.py) moves period.start_date; PV must
+    track that, not the real wall-clock date, or "data date" stops meaning
+    anything the moment it's moved. Falls back to today only when a period has
+    never been anchored (start_date still null)."""
+    return period.start_date or date.today()
+
+
+def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, data_date: date) -> Decimal | None:
+    """What fraction (0-1) of an activity's own start-finish span has elapsed
+    as of the data date — "Duration % Complete" in P6 terms, distinct from the
+    manually-assessed Physical % Complete (Activity.pct_complete) that drives
+    Earned Value. This is the exact input Planned Value prorates against (see
+    app/services/cost_element.py:_schedule_evm) — extracted here so both PV and
+    the "Duration % Complete" figure shown directly on the activity (a
+    transparency aid, per Maro) can never drift apart. None if the activity
+    isn't scheduled yet (no live start/finish)."""
+    if start is None or finish is None:
+        return None
+    start_d, finish_d = start.date(), finish.date()
+    if finish_d <= start_d:
+        return Decimal(1) if data_date >= finish_d else Decimal(0)
+    if data_date <= start_d:
+        return Decimal(0)
+    if data_date >= finish_d:
+        return Decimal(1)
+    return Decimal((data_date - start_d).days) / Decimal((finish_d - start_d).days)
+
+
 class _CalendarLookup:
     """Resolves an activity's effective calendar (its own override, or the project's
     default) and answers hour-precision working-time questions against it — Phase 10
@@ -378,7 +410,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
     order = _topological_order(participants, edges)
     by_id = {a.id: a for a in participants}
 
-    anchor_date = period.start_date or date.today()
+    anchor_date = data_date_for_period(period)
     default_calendar = lookup.resolve(participants[0])
     anchor = datetime.combine(anchor_date, default_calendar.day_start_time)
     es: dict[uuid.UUID, datetime] = {}
@@ -388,27 +420,53 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
         calendar = lookup.resolve(a)
         duration = a.duration_hours or Decimal(0)
 
-        preds = predecessors_of.get(a.id, [])
-        if preds:
-            candidate = max(
-                _relationship_es_candidate(
-                    lookup, calendar, r.relationship_type, r.lag_hours,
-                    es[r.predecessor_id], ef[r.predecessor_id], duration,
+        # Per Maro's confirmed correction (P6 domain expertise): once an activity has
+        # progress (% Complete > 0), its Start is a recorded fact — "it actually
+        # started on that planned date" — not a forecast Reschedule/logic can move.
+        # Only its Finish is still live, driven by what's actually left to do
+        # (remaining_duration_hours, computed in app/services/activity.py from
+        # duration x (1 - %complete)) rather than the original full duration.
+        # actual_start is deliberately not a separate signal here — redundant once
+        # % Complete > 0 exists, since the currently-stored start already IS the
+        # date it started. actual_finish, if recorded, is a harder fact still (the
+        # real finish), overriding the remaining-duration estimate entirely.
+        has_progress = a.pct_complete is not None and a.pct_complete > 0
+        if has_progress and a.start is not None:
+            activity_es = a.start
+            if a.actual_finish is not None:
+                activity_ef = a.actual_finish
+            else:
+                remaining = a.remaining_duration_hours if a.remaining_duration_hours is not None else duration
+                activity_ef = lookup.add_duration(calendar, activity_es, remaining)
+        else:
+            preds = predecessors_of.get(a.id, [])
+            if preds:
+                candidate = max(
+                    _relationship_es_candidate(
+                        lookup, calendar, r.relationship_type, r.lag_hours,
+                        es[r.predecessor_id], ef[r.predecessor_id], duration,
+                    )
+                    for r in preds
                 )
-                for r in preds
-            )
-        else:
-            candidate = lookup.snap_forward(calendar, anchor)
+            else:
+                candidate = lookup.snap_forward(calendar, anchor)
 
-        if a.constraint_type == "ms" and a.constraint_date is not None:
-            activity_es = a.constraint_date
-        elif a.constraint_type == "snet" and a.constraint_date is not None:
-            activity_es = max(candidate, a.constraint_date)
-        else:
-            activity_es = candidate
+            # Not-yet-started work can't be planned to start in the past relative to
+            # the data date — Reschedule pulls it forward to the data date, same as
+            # P6's "Apply Actuals/Reschedule," rather than silently leaving it
+            # scheduled behind where the project has actually reached.
+            candidate = max(candidate, lookup.snap_forward(calendar, anchor))
+
+            if a.constraint_type == "ms" and a.constraint_date is not None:
+                activity_es = a.constraint_date
+            elif a.constraint_type == "snet" and a.constraint_date is not None:
+                activity_es = max(candidate, a.constraint_date)
+            else:
+                activity_es = candidate
+            activity_ef = lookup.add_duration(calendar, activity_es, duration)
 
         es[a.id] = activity_es
-        ef[a.id] = lookup.add_duration(calendar, activity_es, duration)
+        ef[a.id] = activity_ef
 
     project_finish = max(ef.values())
 

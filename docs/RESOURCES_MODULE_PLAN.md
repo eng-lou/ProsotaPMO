@@ -102,14 +102,23 @@ finally makes that possible, not a separate concern.
 
 ## E. Planned Value / SPI
 
-Once activities carry a resource-derived budget and a captured baseline, a
-period's Planned Value as of a given date is the standard prorated technique:
-for each CPM-participant activity with a budget and `bl_start`/`bl_finish`, the
-fraction of `[bl_start, bl_finish]` elapsed by that date (0 before `bl_start`, 1
-at/after `bl_finish`, linear between) × that activity's budget, summed across all
-resourced activities. `EV = Σ budget × pct_complete`. `SPI = EV / PV`, `SV = EV −
-PV` — reinstated in Cost Plan's summary once this exists, replacing the "removed,
-was a fake number" state from Session 11.
+**Corrected post-Session-16, per Maro's confirmed P6 domain expertise:** PV is
+prorated against the activity's own **live** `start`/`finish` (CPM-computed,
+always available once scheduled), **not** `bl_start`/`bl_finish`. "Set Baseline"
+drives schedule variance (`variance_days`/Fin. Var (d) — current Finish vs
+baseline Finish) — a separate concern from Planned Value. Gating PV on a
+captured baseline was the original (wrong) implementation; P6 itself doesn't
+require a saved baseline for BCWS, only that the schedule is cost-loaded, since
+PV asks "how far along its own current duration should this activity be by the
+data date" — a live-schedule question, not a frozen-plan one.
+
+For each CPM-participant activity with a budget and a live `start`/`finish`, the
+fraction of `[start, finish]` elapsed by the data date (0 before `start`, 1
+at/after `finish`, linear between) × that activity's budget gives PV. `EV =
+budget × pct_complete` (physical % complete, distinct from this duration-elapsed
+"Activity % Complete"). `SPI = EV / PV`, `SV = EV − PV` — reinstated in Cost
+Plan's summary once this exists, replacing the "removed, was a fake number"
+state from Session 11. See `app/services/cost_element.py:_schedule_evm`.
 
 Weighted-milestone or other more sophisticated PV distribution techniques exist,
 but linear-over-duration is the standard simple technique and is what's

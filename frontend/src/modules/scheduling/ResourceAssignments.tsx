@@ -32,6 +32,22 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
   const [utilisationPct, setUtilisationPct] = useState('100')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<EditValues>({ role: '', quantity: '', utilisationPct: '100' })
+  const [actualsInput, setActualsInput] = useState(activity.ac ?? '')
+  const [savingActuals, setSavingActuals] = useState(false)
+
+  useEffect(() => { setActualsInput(activity.ac ?? '') }, [activity.ac])
+
+  const handleSaveActuals = async () => {
+    setSavingActuals(true)
+    try {
+      await api.patch(`/api/v1/activities/${activity.id}/actuals`, {
+        actuals: actualsInput.trim() === '' ? null : actualsInput,
+      })
+      await onChange()
+    } finally {
+      setSavingActuals(false)
+    }
+  }
 
   const load = () => {
     setLoading(true)
@@ -178,9 +194,29 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
               </tr>
             ))}
             <tr className="border-t border-gray-200 font-semibold bg-white">
-              <td className="py-1 px-1" colSpan={3}>Total</td>
+              <td className="py-1 px-1" colSpan={3}>Total (Planned / Budget)</td>
               <td className="py-1 px-1 text-right">{formatCurrency(totalBudget.toString())}</td>
               <td></td>
+            </tr>
+            <tr className="bg-white">
+              <td className="py-1 px-1 text-gray-500" colSpan={3}>
+                Actual Cost
+                <span className="text-gray-400"> — synced to the linked Cost Plan line</span>
+              </td>
+              <td className="py-1 px-1 text-right" colSpan={2}>
+                <span className="inline-flex items-center gap-1 justify-end w-full">
+                  £<input
+                    type="number" min={0} step={0.01}
+                    value={actualsInput}
+                    onChange={e => setActualsInput(e.target.value)}
+                    onBlur={handleSaveActuals}
+                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                    disabled={savingActuals}
+                    placeholder="0.00"
+                    className="w-24 border border-gray-300 rounded px-1 py-0.5 text-xs text-right disabled:opacity-50"
+                  />
+                </span>
+              </td>
             </tr>
           </tbody>
         </table>

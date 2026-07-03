@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.period import Period
-from app.services.activity import _require_live_period
+from app.services.activity import _attach_evm_fields, _require_live_period
 
 
 async def set_baseline(db: AsyncSession, period_id: uuid.UUID) -> list[Activity]:
@@ -42,4 +42,5 @@ async def set_baseline(db: AsyncSession, period_id: uuid.UUID) -> list[Activity]
     await db.commit()
     for a in activities:
         await db.refresh(a)
+    await _attach_evm_fields(db, activities)
     return activities

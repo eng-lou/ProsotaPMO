@@ -78,6 +78,32 @@ async def test_reschedule_respects_hard_constraint(
     assert refreshed.json()["start"] == "2025-06-20T08:00:00"
 
 
+async def test_reschedule_pins_start_of_in_progress_activity(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    """Per Maro's confirmed correction: once an activity has progress
+    (% Complete > 0), its Start is a recorded fact, not a forecast — Reschedule
+    must not move it. Only Finish stays live, now driven by remaining_duration_hours
+    (what's actually left) rather than the original full duration."""
+    await _anchor(db, live_period)
+    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=80)  # 10 days
+    assert a["start"] == "2025-06-02T08:00:00"
+    assert a["finish"] == "2025-06-13T17:00:00"  # 10 working days from Monday
+
+    resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"pct_complete": "50"})
+    assert resp.status_code == 200
+    assert float(resp.json()["remaining_duration_hours"]) == 40.0  # 80h * (1 - 50%)
+
+    await client.post("/api/v1/activities/reschedule", params={
+        "period_id": str(live_period.id), "shift_days": 7,
+    })
+
+    refreshed = await client.get(f"/api/v1/activities/{a['id']}")
+    data = refreshed.json()
+    assert data["start"] == "2025-06-02T08:00:00"  # unchanged — already started
+    assert data["finish"] == "2025-06-06T17:00:00"  # 5 remaining working days from the same start
+
+
 async def test_reschedule_rejects_frozen_period(
     client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
 ):

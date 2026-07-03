@@ -25,6 +25,7 @@ const PANE_MAX_HEIGHT = 600
 type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'free_float' | 'pct_complete' | 'resources'
+  | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
 const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
   { key: 'code', label: 'Code', width: 'w-24' },
@@ -40,6 +41,16 @@ const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: strin
   { key: 'free_float', label: 'Free Float', width: 'w-20', title: 'How much this activity could slip without delaying its own successors (hours) — always ≤ Total Float' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
+  { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
+  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Not affected by Set Baseline.' },
+  { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
+  { key: 'ac', label: 'AC', width: 'w-24', title: 'Actual Cost — actuals recorded against this activity\'s linked Cost Plan line.' },
+  { key: 'cv', label: 'CV', width: 'w-24', title: 'Cost Variance — EV minus AC. Negative = over budget for the work done.' },
+  { key: 'sv', label: 'SV', width: 'w-24', title: 'Schedule Variance — EV minus PV. Negative = behind schedule.' },
+  { key: 'cpi', label: 'CPI', width: 'w-20', title: 'Cost Performance Index — EV ÷ AC. Below 1.0 = over budget.' },
+  { key: 'spi', label: 'SPI', width: 'w-20', title: 'Schedule Performance Index — EV ÷ PV. Below 1.0 = behind schedule.' },
+  { key: 'eac', label: 'EAC', width: 'w-24', title: 'Estimate At Completion — BAC ÷ CPI, the forecast final cost at current performance.' },
+  { key: 'etc', label: 'ETC', width: 'w-24', title: 'Estimate To Complete — EAC minus AC, the forecast remaining cost.' },
 ]
 
 const VISIBLE_COLUMNS_STORAGE_KEY = 'prosota_scheduling_visible_columns'
@@ -63,6 +74,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, free_float: 80, pct_complete: 80,
   resources: 96, actions: 128,
+  bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
 }
 
 const COLUMN_WIDTHS_STORAGE_KEY = 'prosota_scheduling_column_widths'
@@ -101,6 +113,19 @@ function ResizableTh({
   )
 }
 
+// Same formatting convention as Cost Plan (frontend/src/modules/costs/CostPlan.tsx)
+// so a figure reads identically whether seen here or on its linked Cost Plan line.
+function formatMoney(value: string | null) {
+  if (value === null) return '—'
+  const n = Number(value)
+  return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
+}
+
+function formatRatio(value: string | null) {
+  if (value === null) return '—'
+  return Number(value).toFixed(3)
+}
+
 // Inline-editable fields (double-click a cell) — the value types PATCH accepts.
 // start/finish aren't plain passthrough fields: editing Start applies a soft "Start
 // On or After" constraint (P6/MS Project convention — the activity's normal logic
@@ -118,7 +143,7 @@ const ROW_CLIPBOARD_FIELDS: (keyof Activity)[] = [
 
 export function Scheduling() {
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
   const [activities, setActivities] = useState<Activity[]>([])
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
   const [calendars, setCalendars] = useState<Calendar[]>([])
@@ -563,7 +588,11 @@ export function Scheduling() {
 
       {rescheduleWidgetOpen && period && (
         <div className="no-print">
-          <RescheduleWidget period={period} onApplied={refresh} onClose={() => setRescheduleWidgetOpen(false)} />
+          <RescheduleWidget
+            period={period}
+            onApplied={async () => { await Promise.all([refresh(), refetchPeriod()]) }}
+            onClose={() => setRescheduleWidgetOpen(false)}
+          />
         </div>
       )}
 
@@ -731,6 +760,16 @@ export function Scheduling() {
               {isColumnVisible('free_float') && <col style={{ width: columnWidths.free_float }} />}
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
+              {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
+              {isColumnVisible('pv') && <col style={{ width: columnWidths.pv }} />}
+              {isColumnVisible('ev') && <col style={{ width: columnWidths.ev }} />}
+              {isColumnVisible('ac') && <col style={{ width: columnWidths.ac }} />}
+              {isColumnVisible('cv') && <col style={{ width: columnWidths.cv }} />}
+              {isColumnVisible('sv') && <col style={{ width: columnWidths.sv }} />}
+              {isColumnVisible('cpi') && <col style={{ width: columnWidths.cpi }} />}
+              {isColumnVisible('spi') && <col style={{ width: columnWidths.spi }} />}
+              {isColumnVisible('eac') && <col style={{ width: columnWidths.eac }} />}
+              {isColumnVisible('etc') && <col style={{ width: columnWidths.etc }} />}
               <col style={{ width: columnWidths.actions }} />
             </colgroup>
             <thead>
@@ -759,6 +798,16 @@ export function Scheduling() {
                 {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} title="Slip this activity can absorb without delaying its own successors (hours)">Free Float</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')}>% Comp</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')}>Resources</ResizableTh>}
+                {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
+                {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
+                {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
+                {isColumnVisible('ac') && <ResizableTh width={columnWidths.ac} onResizeStart={startColumnResize('ac')} title="Actual Cost — actuals recorded against this activity's linked Cost Plan line">AC</ResizableTh>}
+                {isColumnVisible('cv') && <ResizableTh width={columnWidths.cv} onResizeStart={startColumnResize('cv')} title="Cost Variance — EV minus AC">CV</ResizableTh>}
+                {isColumnVisible('sv') && <ResizableTh width={columnWidths.sv} onResizeStart={startColumnResize('sv')} title="Schedule Variance — EV minus PV">SV</ResizableTh>}
+                {isColumnVisible('cpi') && <ResizableTh width={columnWidths.cpi} onResizeStart={startColumnResize('cpi')} title="Cost Performance Index — EV ÷ AC">CPI</ResizableTh>}
+                {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
+                {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
+                {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
                 <ResizableTh width={columnWidths.actions} onResizeStart={startColumnResize('actions')} className="no-print" />
               </tr>
             </thead>
@@ -930,6 +979,16 @@ export function Scheduling() {
                       </td>
                     )
                   })()}
+                  {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.bac)}</td>}
+                  {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.pv)}</td>}
+                  {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ev)}</td>}
+                  {isColumnVisible('ac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ac)}</td>}
+                  {isColumnVisible('cv') && <td className={`px-3 py-1 whitespace-nowrap ${a.cv !== null && Number(a.cv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.cv)}</td>}
+                  {isColumnVisible('sv') && <td className={`px-3 py-1 whitespace-nowrap ${a.sv !== null && Number(a.sv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.sv)}</td>}
+                  {isColumnVisible('cpi') && <td className={`px-3 py-1 ${a.cpi !== null && Number(a.cpi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.cpi)}</td>}
+                  {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.spi)}</td>}
+                  {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.eac)}</td>}
+                  {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.etc)}</td>}
                   <td className="px-3 py-1 text-right whitespace-nowrap no-print">
                     <button
                       onClick={() => handleCopyRow(a)}

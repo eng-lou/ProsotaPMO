@@ -36,6 +36,9 @@ export interface Activity {
   finish: string | null
   actual_start: string | null
   actual_finish: string | null
+  // Computed server-side (Session 16 fix, per Maro): duration_hours x (1 -
+  // pct_complete/100) — never sent as input. See
+  // app/services/activity.py:_apply_computed_fields.
   remaining_duration_hours: number | null
   // Computed server-side only (see backend app/services/activity.py). bl_start/
   // bl_finish/bl_duration_hours are set only by the "Set Baseline" action — null
@@ -56,6 +59,28 @@ export interface Activity {
   calendar_id: string | null
   created_at: string
   updated_at: string
+  // "Duration % Complete" (0-100) — how far along its own current start/finish
+  // this activity should be by the data date, distinct from pct_complete
+  // (Physical % Complete, manually assessed, drives EV). The direct input PV
+  // below is prorated from. Null until the activity is scheduled. See backend
+  // app/services/activity.py:_attach_evm_fields.
+  duration_pct_complete: string | null
+  // EVM — sourced from this activity's linked "schedule" Cost Element (Resources
+  // module); the same figures Cost Plan shows for that line. Null until the
+  // activity has a resourced cost line. PV is prorated against this activity's
+  // own live start/finish, not bl_start/bl_finish — Set Baseline drives
+  // schedule variance (variance_days), not Planned Value — see backend
+  // app/services/activity.py:_attach_evm_fields.
+  bac: string | null
+  ac: string | null
+  pv: string | null
+  ev: string | null
+  cv: string | null
+  sv: string | null
+  cpi: string | null
+  spi: string | null
+  eac: string | null
+  etc: string | null
 }
 
 export type ConstraintType = 'asap' | 'snet' | 'ms' | 'fnlt'

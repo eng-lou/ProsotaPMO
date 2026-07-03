@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,6 +75,11 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
             source="schedule",
             linked_activity_id=activity.id,
             budget=total_budget,
+            # Physical progress mirrors the activity's own — see
+            # sync_cost_element_pct_complete below for the ongoing one-way sync;
+            # this covers the case where the activity already had progress
+            # recorded before its first resource was ever assigned.
+            pct_complete=int(activity.pct_complete) if activity.pct_complete is not None else None,
             # Same "set once at creation, frozen thereafter" discipline as every
             # other cost element's rev_a_baseline — see app/models/cost_element.py.
             rev_a_baseline=total_budget,
@@ -93,6 +99,40 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
             cost_element_id=element.id, description=label, qty=qty, unit=resource.unit, rate=resource.rate,
         ))
 
+    await db.commit()
+
+
+async def sync_cost_element_pct_complete(db: AsyncSession, activity: Activity) -> None:
+    """Physical progress is a schedule fact, tracked once on the Activity
+    (Scheduling's own % Complete column) — a schedule-linked Cost Element must
+    mirror it exactly rather than carry a second, independently-editable
+    estimate of the same thing. Without this, Scheduling's EVM columns and Cost
+    Plan's EVM for the same line silently diverge depending on which screen was
+    last edited. Called after every activity update; a no-op for activities with
+    no linked element, or one a user has since unlinked (source='manual')."""
+    element = await _get_linked_element(db, activity.id)
+    if element is None or element.source != "schedule":
+        return
+    new_value = int(activity.pct_complete) if activity.pct_complete is not None else None
+    if element.pct_complete != new_value:
+        element.pct_complete = new_value
+        await db.commit()
+
+
+async def sync_activity_actuals(db: AsyncSession, activity_id: uuid.UUID, actuals: Decimal | None) -> None:
+    """Lets a user record Actual Cost directly against a resourced activity from
+    Scheduling's Resources tab — matching how P6 captures Actual Cost alongside
+    resource assignments, rather than needing to jump to Cost Plan to enter it.
+    Writes straight onto the linked Cost Element's own `actuals` field. Unlike
+    budget, `actuals` was already freely editable on a schedule-linked element
+    without triggering the unlink warning (see cost_element.py:update_cost_element
+    — only a budget edit unlinks), so this doesn't introduce a second, conflicting
+    owner of the figure, just a more convenient place to enter it. Raises if
+    there's no resourced cost line yet — there's nothing to attach actuals to."""
+    element = await _get_linked_element(db, activity_id)
+    if element is None or element.source != "schedule":
+        raise HTTPException(status_code=422, detail="Assign a resource to this activity before recording actuals")
+    element.actuals = actuals
     await db.commit()
 
 

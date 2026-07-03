@@ -44,6 +44,31 @@ async def test_first_assignment_creates_linked_cost_element(client: AsyncClient,
     assert activity["task_name"] in element["description"]
 
 
+async def test_pct_complete_syncs_from_activity_to_linked_element(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """% Complete is set once, on the activity — a schedule-linked Cost Element
+    must never carry its own separate, independently-editable progress figure,
+    else Scheduling's and Cost Plan's EVM for the same line silently diverge
+    (see app/services/cost_sync.py:sync_cost_element_pct_complete)."""
+    activity = await _create_activity(client, project, live_period, "Piling", pct_complete="30")
+    resource = await _create_resource(client, project, rate="45")
+
+    # First assignment (element created fresh): should pick up the activity's
+    # already-existing % complete immediately, not start blank.
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+    element = await _linked_element(client, project, live_period)
+    assert element["pct_complete"] == 30
+
+    # Later activity edits keep the linked element in step.
+    resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={"pct_complete": "75"})
+    assert resp.status_code == 200
+    element = await _linked_element(client, project, live_period)
+    assert element["pct_complete"] == 75
+
+
 async def test_second_assignment_updates_budget_and_rate_lines(
     client: AsyncClient, project: Project, live_period: Period
 ):
@@ -150,8 +175,10 @@ async def test_deleting_activity_removes_linked_cost_element(
 
 
 async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, db, project: Project, live_period: Period):
-    """Resources module Phase 3: a real time-phased Planned Value, replacing the
-    placeholder cost_element.py used to leave null pending a Scheduling module."""
+    """PV is prorated against the activity's own live start/finish, not a
+    captured baseline — available as soon as the activity is scheduled, per
+    Maro's confirmed P6 domain correction (Session 16): "Set Baseline" drives
+    schedule variance, not Planned Value."""
     from datetime import date, datetime, timedelta
     import uuid as uuid_mod
 
@@ -165,15 +192,16 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
 
     element = await _linked_element(client, project, live_period)
     assert float(element["budget"]) == 10000.0
-    assert element["pv"] is None  # no baseline captured yet -> deliberately left blank
+    assert element["pv"] is not None  # live start/finish already exist from CPM -> no baseline needed
 
-    # Directly set baseline dates spanning today (10 days either side) for a
+    # Directly set live start/finish spanning today (10 days either side) for a
     # deterministic 50% elapsed fraction.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     today = date.today()
-    db_activity.bl_start = datetime.combine(today - timedelta(days=10), datetime.min.time())
-    db_activity.bl_finish = datetime.combine(today + timedelta(days=10), datetime.min.time())
+    db_activity.start = datetime.combine(today - timedelta(days=10), datetime.min.time())
+    db_activity.finish = datetime.combine(today + timedelta(days=10), datetime.min.time())
     await db.commit()
+    await db.refresh(db_activity)
 
     resp = await client.patch(f"/api/v1/cost-elements/{element['id']}", json={"pct_complete": 60})
     assert resp.status_code == 200

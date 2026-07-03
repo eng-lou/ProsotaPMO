@@ -11,10 +11,66 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
+from app.models.cost_element import CostElement
 from app.models.period import Period
 from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
 from app.services import cost_sync, scheduling_cpm
+from app.services.cost_element import compute_schedule_linked_evm
 from app.services.reference_codes import next_code
+from app.services.scheduling_cpm import data_date_for_period, elapsed_duration_fraction
+
+_EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc")
+
+
+async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> None:
+    """duration_pct_complete, plus AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC sourced
+    from each activity's linked "schedule" Cost Element (if any) — see
+    app/services/cost_sync.py. An activity with no resources assigned (no
+    linked element yet) simply shows nulls for the cost-side fields, same
+    "leave it blank rather than fake a number" rule used everywhere else.
+    duration_pct_complete itself needs no resources — it's a pure schedule
+    figure. Batched (one query for the whole list) rather than per-activity,
+    matching the resource-assignment N+1 fix in
+    app/services/resource_assignment.py.
+
+    PV is prorated against the activity's own live start/finish (not
+    bl_start/bl_finish) — per Maro's confirmed correction (P6 domain expertise):
+    "Set Baseline" drives schedule variance (Fin. Var (d)), not Planned Value.
+    PV asks "how far along its own current duration should this activity be by
+    the data date," independent of whether a baseline has ever been captured —
+    see app/services/cost_element.py:_schedule_evm. The data date itself is
+    each activity's period's own data_date_for_period (moved by Reschedule),
+    not the real wall-clock date — otherwise rescheduling the data date
+    wouldn't move PV at all."""
+    if not activities:
+        return
+    result = await db.execute(
+        select(CostElement).where(
+            CostElement.linked_activity_id.in_([a.id for a in activities]),
+            CostElement.source == "schedule",
+        )
+    )
+    elements_by_activity = {el.linked_activity_id: el for el in result.scalars().all()}
+    period_ids = {a.period_id for a in activities}
+    periods_result = await db.execute(select(Period).where(Period.id.in_(period_ids)))
+    data_dates = {p.id: data_date_for_period(p) for p in periods_result.scalars().all()}
+    for a in activities:
+        data_date = data_dates[a.period_id]
+        fraction = elapsed_duration_fraction(a.start, a.finish, data_date)
+        # "Duration % Complete" — how far along its own current schedule this
+        # activity should be, distinct from the manually-assessed pct_complete
+        # (Physical % Complete) that drives EV. The direct transparency aid
+        # Maro asked for: exactly the input PV below is prorated from.
+        a.duration_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
+
+        element = elements_by_activity.get(a.id)
+        if element is None:
+            for field in _EVM_FIELDS:
+                setattr(a, field, None)
+            continue
+        evm = compute_schedule_linked_evm(element, a.start, a.finish, data_date)
+        for field in _EVM_FIELDS:
+            setattr(a, field, evm[field])
 
 
 async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
@@ -70,13 +126,24 @@ async def list_activities(
     # Returned in outline order (parent immediately followed by its subtree) so the
     # frontend's data grid / Gantt rows line up with the WBS without re-deriving the
     # tree client-side — see docs/SCHEDULING_MODULE_PLAN.md Phase 2.
-    return _dfs_order(activities)
+    ordered = _dfs_order(activities)
+    await _attach_evm_fields(db, ordered)
+    return ordered
 
 
 async def get_activity(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
     activity = await db.get(Activity, activity_id)
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found")
+    await _attach_evm_fields(db, [activity])
+    return activity
+
+
+async def update_activity_actuals(db: AsyncSession, activity_id: uuid.UUID, actuals: Decimal | None) -> Activity:
+    activity = await get_activity(db, activity_id)
+    await _require_live_period(db, activity.period_id)
+    await cost_sync.sync_activity_actuals(db, activity_id, actuals)
+    await _attach_evm_fields(db, [activity])
     return activity
 
 
@@ -102,6 +169,15 @@ def _apply_computed_fields(activity: Activity) -> None:
     activity.total_float_hours = None
     activity.free_float_hours = None
     activity.is_critical = None
+    # Remaining Duration is derived, never typed in (Session 16 fix, per Maro):
+    # duration x (1 - pct_complete/100) — e.g. 20 days at 10% complete leaves 18
+    # days remaining. pct_complete defaults to 0 (not yet assessed = nothing done
+    # yet), matching how the UI already shows "0%" for an unset pct_complete.
+    activity.remaining_duration_hours = (
+        activity.duration_hours * (Decimal(100) - (activity.pct_complete or Decimal(0))) / Decimal(100)
+        if activity.duration_hours is not None
+        else None
+    )
 
 
 def _validate_no_cycle(
@@ -225,6 +301,7 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
 
     await _recompute_hierarchy(db, data.period_id)
     await scheduling_cpm.recompute_schedule(db, data.period_id)
+    await _attach_evm_fields(db, [activity])
     return activity
 
 
@@ -286,6 +363,9 @@ async def update_activity(
 
     await _recompute_hierarchy(db, activity.period_id)
     await scheduling_cpm.recompute_schedule(db, activity.period_id)
+    if "pct_complete" in updates:
+        await cost_sync.sync_cost_element_pct_complete(db, activity)
+    await _attach_evm_fields(db, [activity])
     return activity
 
 

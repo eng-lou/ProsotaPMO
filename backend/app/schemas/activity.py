@@ -32,7 +32,6 @@ class ActivityBase(BaseModel):
     duration_hours: Decimal | None = Field(default=None, ge=0)
     actual_start: datetime | None = None
     actual_finish: datetime | None = None
-    remaining_duration_hours: Decimal | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
@@ -76,13 +75,19 @@ class ActivityUpdate(BaseModel):
     finish: datetime | None = None
     actual_start: datetime | None = None
     actual_finish: datetime | None = None
-    remaining_duration_hours: Decimal | None = Field(default=None, ge=0)
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
     constraint_date: datetime | None = None
     calendar_id: uuid.UUID | None = None
     last_reviewed_date: date | None = None
+
+
+class ActivityActualsUpdate(BaseModel):
+    """Records Actual Cost directly against a resourced activity from
+    Scheduling's Resources tab (matching how P6 captures Actual Cost alongside
+    resource assignments) — see app/services/cost_sync.py:sync_activity_actuals."""
+    actuals: Decimal | None = Field(default=None, ge=0)
 
 
 class ActivityResponse(ActivityBase):
@@ -102,6 +107,11 @@ class ActivityResponse(ActivityBase):
     # a placeholder. duration_days is a computed display value (duration_hours /
     # the resolved calendar's net hours/day) — see app/models/activity.py.
     duration_days: Decimal | None = None
+    # Computed, never accepted as input (Session 16 fix, per Maro): remaining
+    # duration is duration_hours x (1 - pct_complete/100) — e.g. 20 days at 10%
+    # complete leaves 18 days remaining. See
+    # app/services/activity.py:_apply_computed_fields.
+    remaining_duration_hours: Decimal | None = None
     start: datetime | None = None
     finish: datetime | None = None
     bl_start: datetime | None = None
@@ -115,3 +125,28 @@ class ActivityResponse(ActivityBase):
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.
     wbs_path: str | None = None
     sort_order: int | None = None
+    # "Duration % Complete" (0-100) — how far along its own current start/finish
+    # this activity should be by the data date, per Maro's confirmed P6
+    # correction. Distinct from pct_complete (Physical % Complete, manually
+    # assessed, drives EV) — shown side by side as the direct input PV is
+    # prorated from (see app/services/activity.py:_attach_evm_fields). Null
+    # until the activity is scheduled (no live start/finish yet).
+    duration_pct_complete: Decimal | None = None
+    # EVM — sourced from this activity's linked "schedule" Cost Element (Resources
+    # module), the same figures Cost Plan already shows for that line, never a
+    # second independently-derived set. Null until the activity has a resourced
+    # cost line (see app/services/activity.py:_attach_evm_fields). BAC/AC = that
+    # element's budget/actuals; PV/EV/SV/SPI need this activity to be scheduled
+    # (have a live start/finish) — NOT a captured baseline, which drives schedule
+    # variance (variance_days) instead (see
+    # app/services/cost_element.py:compute_schedule_linked_evm).
+    bac: Decimal | None = None
+    ac: Decimal | None = None
+    pv: Decimal | None = None
+    ev: Decimal | None = None
+    cv: Decimal | None = None
+    sv: Decimal | None = None
+    cpi: Decimal | None = None
+    spi: Decimal | None = None
+    eac: Decimal | None = None
+    etc: Decimal | None = None

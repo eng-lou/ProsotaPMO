@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.activity import ActivityCreate, ActivityResponse, ActivityUpdate
+from app.schemas.activity import ActivityActualsUpdate, ActivityCreate, ActivityResponse, ActivityUpdate
 from app.services import activity as svc
 from app.services import scheduling_baseline
 from app.services import scheduling_reschedule
@@ -65,6 +65,18 @@ async def update_activity(
     db: AsyncSession = Depends(get_db),
 ):
     return await svc.update_activity(db, activity_id, data)
+
+
+@router.patch("/{activity_id}/actuals", response_model=ActivityResponse)
+async def update_activity_actuals(
+    activity_id: uuid.UUID,
+    data: ActivityActualsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Records Actual Cost against a resourced activity directly from
+    Scheduling's Resources tab — matching P6, rather than requiring a trip to
+    Cost Plan. 422 if the activity has no resourced cost line yet."""
+    return await svc.update_activity_actuals(db, activity_id, data.actuals)
 
 
 @router.delete("/{activity_id}", status_code=204)

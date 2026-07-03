@@ -102,9 +102,11 @@ class CostElementResponse(CostElementBase):
     vac: Decimal | None = None
     tcpi: Decimal | None = None
     # Schedule-side EVM (Resources module, Phase 3) — only computable for a
-    # "schedule"-sourced element whose linked activity has captured baseline dates
-    # (bl_start/bl_finish); null otherwise, same "leave it blank rather than show a
-    # fake number" discipline used everywhere else. See app/services/cost_element.py.
+    # "schedule"-sourced element whose linked activity has live start/finish
+    # dates (i.e. is scheduled); null otherwise, same "leave it blank rather
+    # than show a fake number" discipline used everywhere else. PV is prorated
+    # against the activity's own current start/finish, not a captured baseline
+    # — see app/services/cost_element.py:_schedule_evm.
     pv: Decimal | None = None
     ev: Decimal | None = None
     sv: Decimal | None = None
