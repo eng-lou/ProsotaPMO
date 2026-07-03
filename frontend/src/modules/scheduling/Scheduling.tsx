@@ -2,28 +2,35 @@ import axios from 'axios'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
+import { FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
+import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
+import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
 import { BaselineWidget } from './BaselineWidget'
+import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
 import { CalendarWidget } from './CalendarWidget'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
+import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
+import { LayoutWidget } from './LayoutWidget'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
 import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingPrintView } from './SchedulingPrintView'
+import { SchedulingQualityPrintView } from './SchedulingQualityPrintView'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import {
-  ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type Resource, type ResourceAssignment,
+  ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type QualityReport, type Resource, type ResourceAssignment,
 } from './types'
 
 const PANE_MAX_HEIGHT = 600
 
-type ColumnKey =
+export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'free_float' | 'pct_complete' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
@@ -66,15 +73,16 @@ function loadVisibleColumns(): Set<ColumnKey> {
   return new Set(ALL_COLUMNS.map(c => c.key))
 }
 
-// Resizable columns — 'activity' (always visible) and 'actions' (the trailing
-// icon column) aren't in ALL_COLUMNS (that's only the toggleable ones) but are
-// still user-resizable, so they get entries here too.
-type ResizableColumnKey = ColumnKey | 'activity' | 'actions'
+// Resizable columns — 'activity' (always visible) isn't in ALL_COLUMNS (that's only
+// the toggleable ones) but is still user-resizable, so it gets an entry here too.
+// The old trailing 'actions' icon column is gone — those tools now live in the
+// toolbar and act on the checkbox selection instead of one row at a time.
+type ResizableColumnKey = ColumnKey | 'activity'
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, free_float: 80, pct_complete: 80,
-  resources: 96, actions: 176,
+  resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
 }
 
@@ -116,13 +124,15 @@ function ResizableTh({
 
 // Same formatting convention as Cost Plan (frontend/src/modules/costs/CostPlan.tsx)
 // so a figure reads identically whether seen here or on its linked Cost Plan line.
-function formatMoney(value: string | null) {
+// Exported so SchedulingPrintView.tsx renders the exact same figures, not a second,
+// independently-formatted copy.
+export function formatMoney(value: string | null) {
   if (value === null) return '—'
   const n = Number(value)
   return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
 }
 
-function formatRatio(value: string | null) {
+export function formatRatio(value: string | null) {
   if (value === null) return '—'
   return Number(value).toFixed(3)
 }
@@ -145,6 +155,30 @@ const ROW_CLIPBOARD_FIELDS: (keyof Activity)[] = [
 export function Scheduling() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
+  const { letterhead, save: saveLetterhead, refetch: refetchLetterhead } = useProjectLetterhead(selectedProject?.id)
+  const { style: ganttStyle, refetch: refetchGanttStyle } = useActiveGanttStyle(selectedProject?.id)
+  const {
+    layouts, create: createLayout, update: updateLayoutRequest, apply: applyLayout, remove: removeLayout, reset: resetLayout,
+  } = useGanttLayouts(selectedProject?.id)
+  // Applying/resetting also changes the live letterhead server-side (a saved
+  // snapshot gets pushed in, or the row is cleared) — refresh both so the
+  // toolbar and print view immediately reflect it, not just on next reload.
+  const handleApplyLayout = async (layoutId: string) => {
+    await applyLayout(layoutId)
+    await Promise.all([refetchGanttStyle(), refetchLetterhead()])
+  }
+  const handleUpdateLayout = async (layoutId: string, name: string, layoutStyle: GanttStyle) => {
+    await updateLayoutRequest(layoutId, name, layoutStyle)
+    await refetchGanttStyle()
+  }
+  const handleDeleteLayout = async (layoutId: string) => {
+    await removeLayout(layoutId)
+    await refetchGanttStyle()
+  }
+  const handleResetLayout = async () => {
+    await resetLayout()
+    await Promise.all([refetchGanttStyle(), refetchLetterhead()])
+  }
   const [activities, setActivities] = useState<Activity[]>([])
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
   const [calendars, setCalendars] = useState<Calendar[]>([])
@@ -152,18 +186,80 @@ export function Scheduling() {
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [formOpen, setFormOpen] = useState(false)
   // expandedId now drives one unified activity-detail panel (fields + Logic +
   // Resources + Reassessment) — single click on an activity's name opens it;
-  // there's no separate floating edit form anymore (only "+ Add Activity" still
-  // uses a standalone ActivityForm, since there's no existing row to expand into).
+  // "+ Add Activity" just creates a blank row and jumps straight here too
+  // (2026-07-03, per Maro) rather than opening a separate modal form.
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Detail panel visibility (2026-07-03, per Maro): default auto-hides unless
+  // an activity is selected; pinning keeps it permanently docked (showing a
+  // placeholder when nothing's selected) so a planner working through rows
+  // one after another doesn't get layout jumps as the panel appears/disappears.
+  const [panelPinned, setPanelPinned] = useState<boolean>(() => localStorage.getItem('prosota_scheduling_panel_pinned') === 'true')
+  const togglePanelPinned = () => {
+    setPanelPinned(p => {
+      localStorage.setItem('prosota_scheduling_panel_pinned', String(!p))
+      return !p
+    })
+  }
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [resourcePoolWidgetOpen, setResourcePoolWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
+  const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
+  const [layoutWidgetOpen, setLayoutWidgetOpen] = useState(false)
+  // Gantt timescale zoom — a view preference (like column widths), persisted
+  // per-browser rather than saved with a Layout, so switching it while
+  // looking at the chart doesn't require a save/apply round trip.
+  const [ganttZoom, setGanttZoom] = useState<GanttZoom>(loadGanttZoom)
+  const handleZoomChange = (zoom: GanttZoom) => {
+    setGanttZoom(zoom)
+    saveGanttZoom(zoom)
+  }
   const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
+  // Two independently-printable views share this page (the schedule
+  // table+Gantt, and the Quality Analysis) — only one .print-only block may
+  // be shown at a time, so printTarget picks which. qualityPrintReport is
+  // fed up from SchedulingQualityWidget (whatever it's currently displaying,
+  // live or a viewed saved run) purely so SchedulingQualityPrintView has
+  // something to render without lifting that widget's whole state up here.
+  const [printTarget, setPrintTarget] = useState<'schedule' | 'quality'>('schedule')
+  const [printTrigger, setPrintTrigger] = useState(0)
+  const [qualityPrintReport, setQualityPrintReport] = useState<QualityReport | null>(null)
+  const [qualityPrintRunName, setQualityPrintRunName] = useState<string | undefined>(undefined)
+
+  // Fires window.print() only after printTarget has committed to the DOM —
+  // same reasoning as Risk/ICD/Cost's own print-trigger pattern (state
+  // updates are batched/async, so calling print() directly after
+  // setPrintTarget could still print the previous target's content).
+  useEffect(() => {
+    if (printTrigger > 0) window.print()
+  }, [printTrigger])
+
+  const printSchedule = () => {
+    setPrintTarget('schedule')
+    setPrintTrigger(t => t + 1)
+  }
+  const printQuality = () => {
+    setPrintTarget('quality')
+    setPrintTrigger(t => t + 1)
+  }
   const [rescheduleWidgetOpen, setRescheduleWidgetOpen] = useState(false)
   const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
+
+  // Row selection (checkbox column) — drives the bulk action toolbar next to Print.
+  // Replaces the old per-row copy/paste/move/indent/outdent/delete icon column;
+  // those tools now act on whichever rows are checked here instead of one at a time.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkAssignMode, setBulkAssignMode] = useState<BulkAssignMode | null>(null)
+  const [bulkAssignMenuOpen, setBulkAssignMenuOpen] = useState(false)
+  const toggleSelected = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // Search / Filters — client-side, matching the prototype's toolbar row. No separate
   // Group-by control: unlike Risk/ICD/Cost (flat lists needing an artificial grouping
@@ -178,7 +274,7 @@ export function Scheduling() {
   const [filterAtRisk, setFilterAtRisk] = useState(false)
 
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
-  // a reload. Activity name + actions columns are always shown (not toggleable).
+  // a reload. Activity name + checkbox columns are always shown (not toggleable).
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(loadVisibleColumns)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const isColumnVisible = (key: ColumnKey) => visibleColumns.has(key)
@@ -384,15 +480,22 @@ export function Scheduling() {
     setResourceAssignments(assignmentsRes.data)
   }
 
-  const handleCreate = async (values: ActivityFormValues) => {
+  // Just adds a blank row (2026-07-03, per Maro) — the old modal form was
+  // redundant since clicking any row already opens the same fields via the
+  // unified detail panel below the grid; this jumps straight there.
+  const handleQuickAdd = async () => {
     if (!period) return
-    await api.post('/api/v1/activities/', {
-      ...toActivityPayload(values, calendars),
-      project_id: selectedProject.id,
-      period_id: period.id,
+    // duration_hours defaults to one nominal working day, not left blank —
+    // a zero/null-duration task is a degenerate zero-length span, which
+    // (since it starts and finishes at the very same instant as today's
+    // data date) reads as 100% "Duration % Complete" the moment it's
+    // created, rather than 0% at the start of its first working day
+    // (2026-07-03, per Maro).
+    const { data } = await api.post<Activity>('/api/v1/activities/', {
+      task_name: 'New Activity', project_id: selectedProject.id, period_id: period.id, duration_hours: 8,
     })
-    setFormOpen(false)
     await refresh()
+    setExpandedId(data.id)
   }
 
   const handleUpdate = async (activity: Activity, values: ActivityFormValues, reassessmentNote: string | null) => {
@@ -406,7 +509,7 @@ export function Scheduling() {
     await refresh()
   }
 
-  const handleDelete = async (activity: Activity) => {
+  const handleDelete = async (activity: Activity): Promise<boolean> => {
     const childCount = activities.filter(a => a.parent_id === activity.id).length
     let cascade = true
 
@@ -418,11 +521,12 @@ export function Scheduling() {
         `Cancel = delete only "${activity.task_name}" — its ${label} move up to its level instead.`
       )
     } else if (!window.confirm(`Delete activity "${activity.task_name}"? This cannot be undone.`)) {
-      return
+      return false
     }
 
     await api.delete(`/api/v1/activities/${activity.id}`, { params: { cascade } })
     await refresh()
+    return true
   }
 
   // Indent = become a child of the row immediately above it in outline order (which the
@@ -527,17 +631,20 @@ export function Scheduling() {
     setRowClipboard(snapshot)
   }
 
-  const handlePasteRow = async (a: Activity) => {
-    if (!rowClipboard) return
-    if (!window.confirm(
-      `Paste the copied settings (type, duration, % complete, constraint, calendar, commentary) onto "${a.task_name}"?\n\nThis overwrites its current values.`
-    )) return
-    await api.patch(`/api/v1/activities/${a.id}`, rowClipboard)
-    await refresh()
-  }
-
   const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
   const expandedActivity = activities.find(a => a.id === expandedId) ?? null
+
+  // Row shade signifies type (2026-07-03, per Maro — replaces an earlier
+  // bold/uppercase idea): critical status takes priority over type, then WBS
+  // summary (shaded progressively lighter per nesting level — see
+  // wbsRowBackground), then milestone, else the flat "normal activity" tint
+  // (white by default, i.e. invisible, until a Layout changes it).
+  const rowBackground = (a: Activity): string | undefined => {
+    if (a.is_critical) return withAlpha(ganttStyle.critical_color, 0.12)
+    if (a.activity_type === 'wbs_summary') return wbsRowBackground(ganttStyle, depthOf(a))
+    if (a.activity_type === 'milestone') return withAlpha(ganttStyle.milestone_row_color, 0.15)
+    return ganttStyle.activity_row_color === '#ffffff' ? undefined : withAlpha(ganttStyle.activity_row_color, 1)
+  }
 
   // True siblings (same parent_id), not the filtered/searched visibleActivities —
   // move up/down talks to the backend's real sibling group regardless of what a
@@ -550,6 +657,99 @@ export function Scheduling() {
   const isLastSibling = (a: Activity) => {
     const siblings = sortedSiblingsOf(a)
     return siblings[siblings.length - 1]?.id === a.id
+  }
+
+  // Bulk toolbar (checkbox column + the icons next to Print) — replaces the old
+  // per-row copy/paste/move/indent/outdent/delete column. Single-target actions
+  // (copy, move, indent/outdent) only apply with exactly one row checked; the
+  // toolbar buttons below enforce that via their disabled state.
+  const selectedActivities = activities.filter(a => selectedIds.has(a.id))
+  const soleSelected = selectedActivities.length === 1 ? selectedActivities[0] : null
+  const soleSelectedVisibleIndex = soleSelected ? visibleActivities.findIndex(a => a.id === soleSelected.id) : -1
+
+  const toggleSelectAll = () => {
+    setSelectedIds(prev =>
+      prev.size === visibleActivities.length && visibleActivities.length > 0
+        ? new Set()
+        : new Set(visibleActivities.map(a => a.id))
+    )
+  }
+
+  const handleBulkCopy = () => { if (soleSelected) handleCopyRow(soleSelected) }
+  const handleBulkMoveUp = async () => { if (soleSelected) await handleMoveUp(soleSelected) }
+  const handleBulkMoveDown = async () => { if (soleSelected) await handleMoveDown(soleSelected) }
+  const handleBulkIndent = async () => { if (soleSelected) await handleIndent(soleSelected) }
+  const handleBulkOutdent = async () => { if (soleSelected) await handleOutdent(soleSelected) }
+
+  const handleBulkPaste = async () => {
+    if (!rowClipboard || selectedActivities.length === 0) return
+    if (!window.confirm(
+      `Paste the copied settings (type, duration, % complete, constraint, calendar, commentary) onto ${selectedActivities.length} selected activit${selectedActivities.length === 1 ? 'y' : 'ies'}?\n\nThis overwrites their current values.`
+    )) return
+    for (const a of selectedActivities) {
+      await api.patch(`/api/v1/activities/${a.id}`, rowClipboard)
+    }
+    await refresh()
+  }
+
+  const handleBulkDuplicate = async () => {
+    if (selectedActivities.length === 0 || !period) return
+    if (!window.confirm(
+      `Duplicate ${selectedActivities.length} selected activit${selectedActivities.length === 1 ? 'y' : 'ies'}? Each copy is added at the end of its original parent group. Relationships and resource assignments are not copied.`
+    )) return
+    for (const a of selectedActivities) {
+      await api.post('/api/v1/activities/', {
+        project_id: selectedProject.id,
+        period_id: period.id,
+        parent_id: a.parent_id,
+        task_name: `${a.task_name} (copy)`,
+        activity_type: a.activity_type,
+        duration_hours: a.duration_hours,
+        pct_complete: a.pct_complete,
+        constraint_type: a.constraint_type,
+        constraint_date: a.constraint_date,
+        calendar_id: a.calendar_id,
+        commentary: a.commentary,
+      })
+    }
+    setSelectedIds(new Set())
+    await refresh()
+  }
+
+  // Only top-level checked activities get their own cascade-delete call — a
+  // checked descendant of another checked activity would otherwise 404 once its
+  // ancestor's cascade already removed it.
+  const isDescendantOfSelected = (a: Activity): boolean => {
+    let current = a
+    while (current.parent_id) {
+      const parent = activities.find(x => x.id === current.parent_id)
+      if (!parent) return false
+      if (selectedIds.has(parent.id)) return true
+      current = parent
+    }
+    return false
+  }
+
+  const handleBulkDelete = async () => {
+    // Single selection keeps the richer per-activity confirm (option to move its
+    // children up a level instead of cascading) — only true multi-select falls
+    // back to the simpler always-cascade bulk confirm below.
+    if (soleSelected) {
+      if (await handleDelete(soleSelected)) setSelectedIds(new Set())
+      return
+    }
+    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a))
+    if (topLevel.length === 0) return
+    const withChildren = topLevel.filter(a => activities.some(x => x.parent_id === a.id))
+    const message = withChildren.length > 0
+      ? `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? ${withChildren.length} of them ${withChildren.length === 1 ? 'has' : 'have'} sub-activities — those will be deleted too. This cannot be undone.`
+      : `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? This cannot be undone.`
+    if (!window.confirm(message)) return
+    for (const a of topLevel) {
+      await api.delete(`/api/v1/activities/${a.id}`, { params: { cascade: true } })
+    }
+    setSelectedIds(new Set())
+    await refresh()
   }
 
   if (loading || periodLoading) {
@@ -611,7 +811,13 @@ export function Scheduling() {
 
       {qualityWidgetOpen && period && (
         <div className="no-print">
-          <SchedulingQualityWidget periodId={period.id} onClose={() => setQualityWidgetOpen(false)} />
+          <SchedulingQualityWidget
+            projectId={selectedProject.id}
+            periodId={period.id}
+            onClose={() => setQualityWidgetOpen(false)}
+            onReportForPrint={(report, runName) => { setQualityPrintReport(report); setQualityPrintRunName(runName) }}
+            onPrint={printQuality}
+          />
         </div>
       )}
 
@@ -625,18 +831,8 @@ export function Scheduling() {
         </div>
       )}
 
-      {formOpen && (
-        <div className="no-print">
-          <ActivityForm
-            activity={null} calendars={calendars}
-            onCancel={() => setFormOpen(false)} onSubmit={handleCreate}
-          />
-        </div>
-      )}
-
-      {!formOpen && (
-        <div className="mb-4 flex items-center gap-3 no-print">
-          <button onClick={() => setFormOpen(true)} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+      <div className="mb-4 flex items-center gap-3 no-print">
+          <button onClick={handleQuickAdd} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
             + Add Activity
           </button>
           <button
@@ -682,8 +878,7 @@ export function Scheduling() {
           >
             🔄 Reschedule
           </button>
-        </div>
-      )}
+      </div>
 
       <div className="flex items-center gap-2 mb-3 flex-wrap no-print">
         <div className="relative max-w-xs w-full">
@@ -735,13 +930,165 @@ export function Scheduling() {
           ⇩ Export ({visibleActivities.length})
         </button>
         <button
-          onClick={() => window.print()}
+          onClick={printSchedule}
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
           title="Print the activity list exactly as currently shown (respecting search/filters)."
         >
           🖨️ Print
         </button>
+        <button
+          onClick={() => setLetterheadWidgetOpen(o => !o)}
+          title="Edit the shared logo/header/footer used on every module's printed reports for this project"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🎨 Letterhead
+        </button>
+        <button
+          onClick={() => setLayoutWidgetOpen(o => !o)}
+          title="Save/apply named colour + font themes for the Gantt and activity table"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            layoutWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🖼️ Layout
+        </button>
+
+        {/* Bulk actions — act on whichever rows are checked in the leftmost column.
+            Replaces the old per-row copy/paste/move/indent/outdent/delete icons. */}
+        <div className="flex items-center gap-0.5 border-l border-gray-200 pl-2 ml-1">
+          <span className="text-xs text-gray-400 mr-1">
+            {selectedActivities.length > 0 ? `${selectedActivities.length} selected` : 'Select rows for bulk actions'}
+          </span>
+          <button
+            onClick={handleBulkCopy} disabled={selectedActivities.length !== 1}
+            title="Copy row settings (select exactly one)"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >⧉</button>
+          <button
+            onClick={handleBulkPaste} disabled={!rowClipboard || selectedActivities.length === 0}
+            title="Paste copied settings onto all selected"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >📋</button>
+          <button
+            onClick={handleBulkMoveUp} disabled={!soleSelected || isFirstSibling(soleSelected)}
+            title="Move up (select exactly one)"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >▲</button>
+          <button
+            onClick={handleBulkMoveDown} disabled={!soleSelected || isLastSibling(soleSelected)}
+            title="Move down (select exactly one)"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >▼</button>
+          <button
+            onClick={handleBulkOutdent} disabled={!soleSelected || !soleSelected.parent_id}
+            title="Outdent (select exactly one)"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >⇤</button>
+          <button
+            onClick={handleBulkIndent} disabled={!soleSelected || soleSelectedVisibleIndex <= 0}
+            title="Indent (select exactly one)"
+            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+          >⇥</button>
+          <button
+            onClick={handleBulkDuplicate} disabled={selectedActivities.length === 0}
+            title="Duplicate all selected"
+            className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+          >Duplicate</button>
+          <div className="relative">
+            <button
+              onClick={() => setBulkAssignMenuOpen(o => !o)}
+              disabled={selectedActivities.length === 0}
+              title="Assign a common predecessor/successor/calendar/resource to all selected"
+              className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+            >
+              🔗 Assign ▾
+            </button>
+            {bulkAssignMenuOpen && (
+              <div className="absolute z-10 top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-40">
+                {([
+                  ['predecessor', 'Predecessor…'], ['successor', 'Successor…'],
+                  ['calendar', 'Calendar…'], ['resource', 'Resource…'],
+                ] as [BulkAssignMode, string][]).map(([m, label]) => (
+                  <button
+                    key={m}
+                    onClick={() => { setBulkAssignMode(m); setBulkAssignMenuOpen(false) }}
+                    className="block w-full text-left text-xs text-gray-600 hover:bg-gray-50 px-3 py-1.5"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleBulkDelete} disabled={selectedActivities.length === 0}
+            title="Delete all selected"
+            className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+          >Delete</button>
+        </div>
+
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-xs text-gray-400 mr-1">Zoom</span>
+          {ZOOM_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => handleZoomChange(opt.value)}
+              title={`Show the Gantt timescale by ${opt.label.toLowerCase()}`}
+              className={`text-xs px-2 py-1 rounded-md font-medium border ${
+                ganttZoom === opt.value ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {bulkAssignMode && (
+        <div className="no-print">
+          <BulkAssignWidget
+            mode={bulkAssignMode}
+            selectedActivities={selectedActivities}
+            allActivities={activities}
+            calendars={calendars}
+            resources={resources}
+            onApplied={refresh}
+            onClose={() => setBulkAssignMode(null)}
+          />
+        </div>
+      )}
+
+      {letterheadWidgetOpen && letterhead && (
+        <div className="no-print">
+          <LetterheadEditorWidget
+            letterhead={letterhead}
+            previewTokens={{
+              project: selectedProject.name, module: 'Schedule',
+              count: `${visibleActivities.length} activit${visibleActivities.length === 1 ? 'y' : 'ies'}`,
+              printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+            }}
+            onSave={saveLetterhead}
+            onClose={() => setLetterheadWidgetOpen(false)}
+          />
+        </div>
+      )}
+
+      {layoutWidgetOpen && (
+        <div className="no-print">
+          <LayoutWidget
+            layouts={layouts}
+            activeStyle={ganttStyle}
+            onCreate={createLayout}
+            onUpdate={handleUpdateLayout}
+            onApply={handleApplyLayout}
+            onDelete={handleDeleteLayout}
+            onReset={handleResetLayout}
+            onClose={() => setLayoutWidgetOpen(false)}
+          />
+        </div>
+      )}
 
       {filtersOpen && (
         <div className="no-print bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-6 flex-wrap">
@@ -775,8 +1122,12 @@ export function Scheduling() {
           className="overflow-y-auto overflow-x-hidden shrink-0"
           style={{ maxHeight: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
         >
-          <table className="text-sm border-collapse table-fixed">
+          <table
+            className="text-sm border-collapse table-fixed"
+            style={{ color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family] }}
+          >
             <colgroup>
+              <col style={{ width: 32 }} />
               {isColumnVisible('code') && <col style={{ width: columnWidths.code }} />}
               {isColumnVisible('wbs') && <col style={{ width: columnWidths.wbs }} />}
               <col style={{ width: columnWidths.activity }} />
@@ -801,13 +1152,21 @@ export function Scheduling() {
               {isColumnVisible('spi') && <col style={{ width: columnWidths.spi }} />}
               {isColumnVisible('eac') && <col style={{ width: columnWidths.eac }} />}
               {isColumnVisible('etc') && <col style={{ width: columnWidths.etc }} />}
-              <col style={{ width: columnWidths.actions }} />
             </colgroup>
             <thead>
               <tr
                 style={{ height: 36 }}
                 className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide sticky top-0"
               >
+                <th className="px-2 py-2.5 no-print">
+                  <input
+                    type="checkbox"
+                    checked={visibleActivities.length > 0 && selectedIds.size === visibleActivities.length}
+                    ref={el => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < visibleActivities.length }}
+                    onChange={toggleSelectAll}
+                    title="Select all shown"
+                  />
+                </th>
                 {isColumnVisible('code') && <ResizableTh width={columnWidths.code} onResizeStart={startColumnResize('code')}>Code</ResizableTh>}
                 {isColumnVisible('wbs') && <ResizableTh width={columnWidths.wbs} onResizeStart={startColumnResize('wbs')}>WBS</ResizableTh>}
                 <ResizableTh width={columnWidths.activity} onResizeStart={startColumnResize('activity')}>Activity</ResizableTh>
@@ -839,20 +1198,20 @@ export function Scheduling() {
                 {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
                 {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
                 {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
-                <ResizableTh width={columnWidths.actions} onResizeStart={startColumnResize('actions')} className="no-print" />
               </tr>
             </thead>
             <tbody>
-              {visibleActivities.map((a, index) => {
+              {visibleActivities.map(a => {
                 const editingField = editingCell?.id === a.id ? editingCell.field : null
                 return (
                 <tr
                   key={a.id}
-                  style={{ height: GANTT_ROW_HEIGHT }}
-                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
-                    expandedId === a.id ? 'bg-blue-50/50' : a.is_critical ? 'bg-red-50/40' : ''
-                  }`}
+                  style={{ height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a) }}
+                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
                 >
+                  <td className="px-2 py-1 no-print">
+                    <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
+                  </td>
                   {isColumnVisible('code') && (
                     <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
                       {editingField === 'code' ? (
@@ -885,7 +1244,6 @@ export function Scheduling() {
                         className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]"
                         title="Click to open, double-click to rename in place"
                       >
-                        {a.activity_type === 'wbs_summary' && '📦 '}
                         {a.task_name}
                       </button>
                     )}
@@ -1020,58 +1378,6 @@ export function Scheduling() {
                   {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.spi)}</td>}
                   {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.eac)}</td>}
                   {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.etc)}</td>}
-                  <td className="px-3 py-1 text-right whitespace-nowrap no-print">
-                    <button
-                      onClick={() => handleCopyRow(a)}
-                      title="Copy row settings (type, duration, % complete, constraint, calendar, commentary)"
-                      className="text-xs text-gray-400 hover:text-blue-600 mr-1.5"
-                    >
-                      ⧉
-                    </button>
-                    <button
-                      onClick={() => handlePasteRow(a)}
-                      disabled={!rowClipboard}
-                      title="Paste copied row settings onto this activity"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      📋
-                    </button>
-                    <button
-                      onClick={() => handleMoveUp(a)}
-                      disabled={isFirstSibling(a)}
-                      title="Move up (reorder among siblings — doesn't change hierarchy level)"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      onClick={() => handleMoveDown(a)}
-                      disabled={isLastSibling(a)}
-                      title="Move down (reorder among siblings — doesn't change hierarchy level)"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      ▼
-                    </button>
-                    <button
-                      onClick={() => handleOutdent(a)}
-                      disabled={!a.parent_id}
-                      title="Outdent"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-1.5"
-                    >
-                      ⇤
-                    </button>
-                    <button
-                      onClick={() => handleIndent(a)}
-                      disabled={index === 0}
-                      title="Indent"
-                      className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 mr-2.5"
-                    >
-                      ⇥
-                    </button>
-                    <button onClick={() => handleDelete(a)} className="text-xs text-gray-400 hover:text-red-600">
-                      Delete
-                    </button>
-                  </td>
                 </tr>
                 )
               })}
@@ -1098,41 +1404,76 @@ export function Scheduling() {
           className="flex-1 overflow-auto no-print"
           style={{ maxHeight: PANE_MAX_HEIGHT }}
         >
-          <GanttChart activities={visibleActivities} relationships={relationships} />
+          <GanttChart
+            activities={visibleActivities} relationships={relationships} style={ganttStyle}
+            zoom={ganttZoom} onZoomChange={handleZoomChange}
+          />
         </div>
       </div>
 
-      {expandedActivity && (
+      {(expandedActivity || panelPinned) && (
         <div className="bg-white border border-gray-200 rounded-lg mt-3 overflow-hidden no-print">
           <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
             <div className="text-sm font-semibold text-gray-700">
-              {expandedActivity.code}: {expandedActivity.task_name}
+              {expandedActivity ? `${expandedActivity.code}: ${expandedActivity.task_name}` : 'No activity selected'}
             </div>
-            <button onClick={() => setExpandedId(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
-          </div>
-          <div className="grid grid-cols-5 divide-x divide-gray-100">
-            <div className="col-span-3">
-              <ActivityForm
-                activity={expandedActivity} calendars={calendars} embedded
-                onCancel={() => setExpandedId(null)}
-                onSubmit={(values, note) => handleUpdate(expandedActivity, values, note)}
-              />
-            </div>
-            <div className="col-span-2 divide-y divide-gray-100 overflow-y-auto" style={{ maxHeight: 420 }}>
-              <ActivityLogic activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh} />
-              <ResourceAssignments activity={expandedActivity} resources={resources} onChange={refresh} />
-              <ReassessmentLog
-                recordType="activity"
-                recordId={expandedActivity.id}
-                refreshKey={reassessmentRefreshKey}
-                onLogged={() => refresh()}
-              />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={togglePanelPinned}
+                title={panelPinned ? 'Unpin — panel will hide again when nothing is selected' : 'Pin — keep this panel visible permanently'}
+                className={`text-sm ${panelPinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                📌
+              </button>
+              {expandedActivity && <button onClick={() => setExpandedId(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>}
             </div>
           </div>
+          {expandedActivity ? (
+            <div className="grid grid-cols-5 divide-x divide-gray-100">
+              <div className="col-span-3">
+                <ActivityForm
+                  activity={expandedActivity} calendars={calendars} embedded
+                  onCancel={() => setExpandedId(null)}
+                  onSubmit={(values, note) => handleUpdate(expandedActivity, values, note)}
+                />
+              </div>
+              <div className="col-span-2 divide-y divide-gray-100 overflow-y-auto" style={{ maxHeight: 420 }}>
+                <ActivityLogic activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh} />
+                <ResourceAssignments activity={expandedActivity} resources={resources} onChange={refresh} />
+                <ReassessmentLog
+                  recordType="activity"
+                  recordId={expandedActivity.id}
+                  refreshKey={reassessmentRefreshKey}
+                  onLogged={() => refresh()}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-sm text-gray-400">Click an activity's name in the table to view/edit its details here.</div>
+          )}
         </div>
       )}
     </div>
-    <SchedulingPrintView activities={visibleActivities} relationships={relationships} projectName={selectedProject.name} />
+    {printTarget === 'schedule' && (
+      <SchedulingPrintView
+        activities={visibleActivities}
+        relationships={relationships}
+        resourceAssignments={resourceAssignments}
+        visibleColumns={visibleColumns}
+        projectName={selectedProject.name}
+        letterhead={letterhead}
+        ganttStyle={ganttStyle}
+        ganttZoom={ganttZoom}
+      />
+    )}
+    {printTarget === 'quality' && qualityPrintReport && (
+      <SchedulingQualityPrintView
+        report={qualityPrintReport}
+        projectName={selectedProject.name}
+        letterhead={letterhead}
+        runName={qualityPrintRunName}
+      />
+    )}
     </>
   )
 }

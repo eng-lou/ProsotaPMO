@@ -1,3 +1,5 @@
+import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
+import type { ProjectLetterhead } from '@/lib/letterhead'
 import { COST_ELEMENT_STATUS_LABELS, type CostElement } from './types'
 
 function formatCurrency(value: string | null) {
@@ -10,23 +12,24 @@ interface CostPrintViewProps {
   mode: 'list' | 'detail'
   elements: CostElement[]
   projectName: string
+  letterhead: ProjectLetterhead | null
 }
 
 // A dedicated printable rendering, shown only via @media print (see index.css
 // .print-only). 'list' mirrors the on-screen table; 'detail' is a full-detail
 // report per element (scope note, variance commentary, EVM, QS sign-off).
-export function CostPrintView({ mode, elements, projectName }: CostPrintViewProps) {
+export function CostPrintView({ mode, elements, projectName, letterhead }: CostPrintViewProps) {
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  const letterheadTokens = {
+    project: projectName, module: 'Cost Plan',
+    count: `${elements.length} element${elements.length === 1 ? '' : 's'}`,
+    printed_at: printedAt,
+  }
 
   return (
     <div className="print-only p-8">
-      <div className="mb-6 flex items-baseline justify-between border-b border-gray-300 pb-3">
-        <div>
-          <h1 className="text-xl font-bold">{projectName} — Cost Plan</h1>
-          <p className="text-sm text-gray-500">{mode === 'list' ? 'Cost Plan (as shown)' : 'Full detail'} · {elements.length} element{elements.length === 1 ? '' : 's'}</p>
-        </div>
-        <p className="text-xs text-gray-400">Printed {printedAt}</p>
-      </div>
+      {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
+      <p className="text-sm text-gray-500 mb-4">{mode === 'list' ? 'Cost Plan (as shown)' : 'Full detail'} · {elements.length} element{elements.length === 1 ? '' : 's'}</p>
 
       {mode === 'list' ? (
         <table className="w-full text-xs border-collapse">
@@ -118,6 +121,7 @@ export function CostPrintView({ mode, elements, projectName }: CostPrintViewProp
           })}
         </div>
       )}
+      {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={letterheadTokens} />}
     </div>
   )
 }

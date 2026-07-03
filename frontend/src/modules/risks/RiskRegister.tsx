@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
+import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { HeatMatrix } from '@/components/HeatMatrix'
+import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { RiskForm, toRiskPayload, type RiskFormValues } from './RiskForm'
 import { MitigationActions } from './MitigationActions'
@@ -62,6 +64,8 @@ function uniqueValues(risks: Risk[], field: 'category' | 'area'): string[] {
 export function RiskRegister() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
+  const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [risks, setRisks] = useState<Risk[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -398,7 +402,29 @@ export function RiskRegister() {
         >
           🖨️ Print selected, full detail ({selectedForPrint.size})
         </button>
+        <button
+          onClick={() => setLetterheadWidgetOpen(o => !o)}
+          title="Edit the shared logo/header/footer used on every module's printed reports for this project"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🎨 Letterhead
+        </button>
       </div>
+
+      {letterheadWidgetOpen && letterhead && (
+        <LetterheadEditorWidget
+          letterhead={letterhead}
+          previewTokens={{
+            project: selectedProject.name, module: 'Risk Register',
+            count: `${visibleRisks.length} risk${visibleRisks.length === 1 ? '' : 's'}`,
+            printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+          }}
+          onSave={saveLetterhead}
+          onClose={() => setLetterheadWidgetOpen(false)}
+        />
+      )}
 
       {filtersOpen && (
         <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-8 flex-wrap">
@@ -512,6 +538,7 @@ export function RiskRegister() {
       mode={printMode}
       risks={printMode === 'list' ? visibleRisks : risks.filter(r => selectedForPrint.has(r.id))}
       projectName={selectedProject.name}
+      letterhead={letterhead}
     />
     </>
   )

@@ -6,6 +6,10 @@ export interface Period {
   // The CPM anchor / "data date" — activities with no predecessors can't start
   // earlier than this. Reschedule (Scheduling module) shifts it directly.
   start_date: string | null
+  // The data date's time-of-day ("HH:MM:SS") — null means "the default
+  // calendar's day start". Only ever set via Reschedule's "set data date
+  // directly" mode.
+  start_time: string | null
 }
 
 export type RecordType = 'activity' | 'risk' | 'cost_element' | 'issue' | 'change' | 'decision'

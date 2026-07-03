@@ -20,4 +20,11 @@
   @page {
     size: landscape;
   }
+  /* Browsers drop CSS background-color by default when printing (only borders
+     survive) — that's what turned the Gantt's solid critical-path bars into bare
+     red outlines in the printed output. This forces backgrounds through. */
+  .print-only, .print-only * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }

@@ -1,4 +1,6 @@
 import { HeatMatrix } from '@/components/HeatMatrix'
+import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
+import type { ProjectLetterhead } from '@/lib/letterhead'
 import type { Risk } from './types'
 
 function formatPercent(value: string | null) {
@@ -16,6 +18,7 @@ interface RiskPrintViewProps {
   mode: 'list' | 'detail'
   risks: Risk[]
   projectName: string
+  letterhead: ProjectLetterhead | null
 }
 
 // A dedicated printable rendering, shown only via @media print (see index.css
@@ -24,18 +27,18 @@ interface RiskPrintViewProps {
 // strategy) — doesn't include mitigation actions/reassessment history sub-lists,
 // since those need a separate fetch per risk; everything stored on the risk
 // record itself is included.
-export function RiskPrintView({ mode, risks, projectName }: RiskPrintViewProps) {
+export function RiskPrintView({ mode, risks, projectName, letterhead }: RiskPrintViewProps) {
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  const letterheadTokens = {
+    project: projectName, module: 'Risk Register',
+    count: `${risks.length} risk${risks.length === 1 ? '' : 's'}`,
+    printed_at: printedAt,
+  }
 
   return (
     <div className="print-only p-8">
-      <div className="mb-6 flex items-baseline justify-between border-b border-gray-300 pb-3">
-        <div>
-          <h1 className="text-xl font-bold">{projectName} — Risk Register</h1>
-          <p className="text-sm text-gray-500">{mode === 'list' ? 'Register (as shown)' : 'Full detail'} · {risks.length} risk{risks.length === 1 ? '' : 's'}</p>
-        </div>
-        <p className="text-xs text-gray-400">Printed {printedAt}</p>
-      </div>
+      {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
+      <p className="text-sm text-gray-500 mb-4">{mode === 'list' ? 'Register (as shown)' : 'Full detail'} · {risks.length} risk{risks.length === 1 ? '' : 's'}</p>
 
       {mode === 'list' ? (
         <table className="w-full text-xs border-collapse">
@@ -144,6 +147,7 @@ export function RiskPrintView({ mode, risks, projectName }: RiskPrintViewProps) 
           ))}
         </div>
       )}
+      {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={letterheadTokens} />}
     </div>
   )
 }

@@ -173,13 +173,50 @@ export interface QualityCheck {
   threshold_label: string
   actual: number | string | null
   status: QualityCheckStatus
+  // Codes of the activities that tripped this check — empty for check 12
+  // (Critical Path Test) and for any "na" check. Server-computed.
+  failing_activity_codes: string[]
 }
 
 export interface QualityReport {
   period_id: string
   activity_count: number
-  logic_score: number
+  // null when activity_count is 0 — no activities means nothing to score,
+  // not a 0%.
+  logic_score: number | null
   checks: QualityCheck[]
+}
+
+// A project-editable DCMA threshold (checks 1-11 only — check 12 has no
+// numeric threshold, see backend app/services/scheduling_quality_criterion.py).
+export interface SchedulingQualityCriterion {
+  id: string
+  project_id: string
+  check_number: number
+  threshold: string
+  created_at: string
+  updated_at: string
+}
+
+// A named, saved snapshot of a Schedule Quality Analysis — "save the test to
+// view again". List view omits the full report (cheap fetch); GET /{id} on
+// SchedulingQualityRunResponse returns it.
+export interface SchedulingQualityRunSummary {
+  id: string
+  period_id: string
+  name: string
+  created_at: string
+  logic_score: number | null
+  failing_count: number
+  warning_count: number
+}
+
+export interface SchedulingQualityRunResponse {
+  id: string
+  period_id: string
+  name: string
+  created_at: string
+  report: QualityReport
 }
 
 // Resources module (2026-07-02) — a project-scoped resource pool + per-activity

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import axios from 'axios'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import type { Period } from '@/lib/types'
 import { formatDateTime } from './dateTime'
@@ -10,19 +11,21 @@ interface Props {
 }
 
 interface RescheduleResult {
-  shift_days: number
+  shift_days: number | null
   old_project_finish: string | null
   new_project_finish: string | null
   new_anchor_date: string
+  new_anchor_time: string | null
 }
 
 const UNIT_DAYS: Record<string, number> = { days: 1, weeks: 7, months: 30 }
 
-function formatDataDate(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(`${iso}T00:00:00`)
+function formatDataDate(dateIso: string | null, timeIso?: string | null): string {
+  if (!dateIso) return '—'
+  const d = new Date(`${dateIso}T00:00:00`)
   if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const datePart = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  return timeIso ? `${datePart}, ${timeIso.slice(0, 5)}` : datePart
 }
 
 // yyyy-mm-dd, matching what a date input and the backend's Date type both use.
@@ -39,6 +42,9 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
   // app/services/scheduling_cpm.py:data_date_for_period) — same fallback here
   // so the date picker starts from the same value Reschedule would actually move.
   const [targetDate, setTargetDate] = useState(period.start_date ?? toIsoDate(new Date()))
+  // Blank = "use the default calendar's day start" (2026-07-03, per Maro —
+  // wants the option to pick a time too, "similar to the calendar").
+  const [targetTime, setTargetTime] = useState(period.start_time?.slice(0, 5) ?? '')
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<RescheduleResult | null>(null)
   // The tool's own record of the data date — updated after each apply so repeated
@@ -47,7 +53,22 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
   // previousDataDate captures what it was right before the most recent apply, for
   // the before/after summary line.
   const [currentDataDate, setCurrentDataDate] = useState(period.start_date)
+  const [currentDataTime, setCurrentDataTime] = useState(period.start_time)
   const [previousDataDate, setPreviousDataDate] = useState<string | null>(null)
+  const [previousDataTime, setPreviousDataTime] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Keeps the widget's own "current data date" display in sync with the real
+  // Period record whenever the parent's own fetch of it changes — not just
+  // the mount-time snapshot the useState initializers above captured. Belt-
+  // and-braces alongside handleApply's own explicit setters below, so
+  // there's no window where this widget could be comparing targetDate
+  // against a value that's gone stale relative to the server's own record
+  // (2026-07-04, per Maro: a reported "first apply does nothing" case).
+  useEffect(() => {
+    setCurrentDataDate(period.start_date)
+    setCurrentDataTime(period.start_time)
+  }, [period.start_date, period.start_time])
 
   const shiftDays = mode === 'shift'
     ? (Number(amount) || 0) * UNIT_DAYS[unit] * (direction === 'forward' ? 1 : -1)
@@ -55,13 +76,15 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
         (new Date(`${targetDate}T00:00:00`).getTime() - new Date(`${currentDataDate ?? toIsoDate(new Date())}T00:00:00`).getTime())
         / 86_400_000
       )
+  const timeChanged = mode === 'date' && targetTime !== (currentDataTime?.slice(0, 5) ?? '')
+  const canApply = mode === 'shift' ? shiftDays !== 0 : (shiftDays !== 0 || timeChanged)
 
   const describeShift = () => mode === 'shift'
     ? `${direction === 'forward' ? 'forward' : 'backward'} by ${amount} ${unit}`
-    : `to ${formatDataDate(targetDate)}`
+    : `to ${formatDataDate(targetDate, targetTime ? `${targetTime}:00` : null)}`
 
   const handleApply = async () => {
-    if (shiftDays === 0) return
+    if (!canApply) return
     if (!window.confirm(
       `Shift the whole schedule ${describeShift()}?\n\n` +
       `Activities already in progress (% Complete > 0) keep their Start — only their Finish updates, based on ` +
@@ -69,15 +92,31 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
       `move either — that's correct, not a bug.`
     )) return
     setApplying(true)
+    setError(null)
     try {
-      const { data } = await api.post<RescheduleResult>('/api/v1/activities/reschedule', null, {
-        params: { period_id: period.id, shift_days: shiftDays },
-      })
+      const { data } = mode === 'shift'
+        ? await api.post<RescheduleResult>('/api/v1/activities/reschedule', null, {
+            params: { period_id: period.id, shift_days: shiftDays },
+          })
+        : await api.post<RescheduleResult>(
+            '/api/v1/activities/set-data-date',
+            { date: targetDate, time: targetTime ? `${targetTime}:00` : null },
+            { params: { period_id: period.id } },
+          )
       setResult(data)
       setPreviousDataDate(currentDataDate)
+      setPreviousDataTime(currentDataTime)
       setCurrentDataDate(data.new_anchor_date)
+      setCurrentDataTime(data.new_anchor_time)
       setTargetDate(data.new_anchor_date)
+      setTargetTime(data.new_anchor_time?.slice(0, 5) ?? '')
       await onApplied()
+    } catch (err) {
+      // Previously swallowed silently (no catch at all) — a failed apply
+      // (e.g. a validation error) looked exactly like "nothing happens,"
+      // indistinguishable from a real bug. Now it says so.
+      const detail = axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
+      setError(detail ?? 'Could not apply the reschedule — check your connection and try again.')
     } finally {
       setApplying(false)
     }
@@ -94,10 +133,10 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
 
       <div className="flex items-center gap-2 mb-3 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Date</span>
-        <span className="text-sm font-bold text-gray-900">{formatDataDate(currentDataDate)}</span>
+        <span className="text-sm font-bold text-gray-900">{formatDataDate(currentDataDate, currentDataTime)}</span>
         <span className="text-xs text-gray-400 ml-1">
           — the anchor unconstrained, not-yet-started activities can't start earlier than; this is what Reschedule
-          actually moves.
+          actually moves. No time set means the default calendar's day start.
         </span>
       </div>
 
@@ -154,13 +193,23 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
             <div className="text-xs font-semibold text-gray-600 mb-1">New Data Date</div>
             <input
               type="date"
               value={targetDate}
               onChange={e => setTargetDate(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+            />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-gray-600 mb-1">Time (optional)</div>
+            <input
+              type="time"
+              value={targetTime}
+              onChange={e => setTargetTime(e.target.value)}
+              title="Leave blank to use the default calendar's day start"
               className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
             />
           </div>
@@ -180,9 +229,13 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
         duration + logic + calendar, not typed in, so there's no other honest way to "move" a constrained date.
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-md px-3 py-2 text-xs text-red-800 mb-3">{error}</div>
+      )}
+
       {result && (
         <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-xs text-blue-800 mb-3 space-y-1">
-          <div>Data date: <strong>{formatDataDate(previousDataDate)}</strong> → <strong>{formatDataDate(result.new_anchor_date)}</strong></div>
+          <div>Data date: <strong>{formatDataDate(previousDataDate, previousDataTime)}</strong> → <strong>{formatDataDate(result.new_anchor_date, result.new_anchor_time)}</strong></div>
           <div>Project finish: <strong>{formatDateTime(result.old_project_finish)}</strong> → <strong>{formatDateTime(result.new_project_finish)}</strong></div>
         </div>
       )}
@@ -190,7 +243,7 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
       <div className="flex gap-2">
         <button
           onClick={handleApply}
-          disabled={applying || shiftDays === 0}
+          disabled={applying || !canApply}
           className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {applying ? 'Applying…' : '✓ Apply Reschedule'}

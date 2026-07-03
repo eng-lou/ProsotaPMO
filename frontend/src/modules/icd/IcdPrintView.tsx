@@ -1,3 +1,5 @@
+import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
+import type { ProjectLetterhead } from '@/lib/letterhead'
 import { ITEM_TYPE_LABELS, STATUS_LABELS, type IcdItem } from './types'
 
 function formatCurrency(value: string | null) {
@@ -9,6 +11,7 @@ interface IcdPrintViewProps {
   mode: 'list' | 'detail'
   items: IcdItem[]
   projectName: string
+  letterhead: ProjectLetterhead | null
 }
 
 // A dedicated printable rendering, shown only via @media print (see index.css
@@ -16,18 +19,18 @@ interface IcdPrintViewProps {
 // report per item (description, dates, type-specific fields, resolution) —
 // doesn't include the reassessment history sub-list, since that needs a
 // separate fetch per item; everything stored on the item record is included.
-export function IcdPrintView({ mode, items, projectName }: IcdPrintViewProps) {
+export function IcdPrintView({ mode, items, projectName, letterhead }: IcdPrintViewProps) {
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  const letterheadTokens = {
+    project: projectName, module: 'ICD Tracker',
+    count: `${items.length} item${items.length === 1 ? '' : 's'}`,
+    printed_at: printedAt,
+  }
 
   return (
     <div className="print-only p-8">
-      <div className="mb-6 flex items-baseline justify-between border-b border-gray-300 pb-3">
-        <div>
-          <h1 className="text-xl font-bold">{projectName} — ICD Tracker</h1>
-          <p className="text-sm text-gray-500">{mode === 'list' ? 'Tracker (as shown)' : 'Full detail'} · {items.length} item{items.length === 1 ? '' : 's'}</p>
-        </div>
-        <p className="text-xs text-gray-400">Printed {printedAt}</p>
-      </div>
+      {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
+      <p className="text-sm text-gray-500 mb-4">{mode === 'list' ? 'Tracker (as shown)' : 'Full detail'} · {items.length} item{items.length === 1 ? '' : 's'}</p>
 
       {mode === 'list' ? (
         <table className="w-full text-xs border-collapse">
@@ -101,6 +104,7 @@ export function IcdPrintView({ mode, items, projectName }: IcdPrintViewProps) {
           ))}
         </div>
       )}
+      {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={letterheadTokens} />}
     </div>
   )
 }
