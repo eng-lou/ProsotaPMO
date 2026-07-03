@@ -1,3 +1,15 @@
+/* Syncfusion Tailwind3 theme — matches this project's existing Tailwind setup.
+   Must precede the @tailwind directives so plain CSS import ordering rules are
+   respected and Tailwind utilities can still win the cascade when needed.
+   ej2-react-charts has no CSS theme file (SVG/canvas rendering, themed via JS). */
+@import '@syncfusion/ej2-react-gantt/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-grids/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-pdfviewer/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-documenteditor/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-spreadsheet/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-schedule/styles/tailwind3.css';
+@import '@syncfusion/ej2-react-richtexteditor/styles/tailwind3.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
