@@ -14,7 +14,9 @@ from app.api.icd_action_items import router as icd_action_items_router
 from app.api.icd_comments import router as icd_comments_router
 from app.api.icd_criteria import router as icd_criteria_router
 from app.api.icd_items import router as icd_items_router
+from app.api.gantt_layouts import router as gantt_layouts_router
 from app.api.periods import router as periods_router
+from app.api.project_letterhead import router as project_letterhead_router
 from app.api.projects import router as projects_router
 from app.api.reassessments import router as reassessments_router
 from app.api.record_links import router as record_links_router
@@ -25,6 +27,8 @@ from app.api.risk_mitigation_actions import router as risk_mitigation_actions_ro
 from app.api.risks import router as risks_router
 from app.api.schedule_baselines import router as schedule_baselines_router
 from app.api.scheduling_quality import router as scheduling_quality_router
+from app.api.scheduling_quality_criteria import router as scheduling_quality_criteria_router
+from app.api.scheduling_quality_runs import router as scheduling_quality_runs_router
 from app.api.users import router as users_router
 from app.core.auth import get_current_user
 
@@ -65,6 +69,10 @@ app.include_router(icd_action_items_router, prefix="/api/v1", dependencies=_auth
 app.include_router(icd_comments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(reassessments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(schedule_baselines_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(project_letterhead_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(gantt_layouts_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(scheduling_quality_criteria_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(scheduling_quality_runs_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

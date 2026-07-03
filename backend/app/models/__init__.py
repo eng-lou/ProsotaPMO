@@ -19,7 +19,13 @@ from app.models.icd_action_item import IcdActionItem
 from app.models.icd_comment import IcdComment
 from app.models.reassessment import Reassessment
 from app.models.record_link import RecordLink
+from app.models.resource import Resource
+from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
+from app.models.project_letterhead import ProjectLetterhead
+from app.models.gantt_layout import GanttLayout
+from app.models.scheduling_quality_criterion import SchedulingQualityCriterion
+from app.models.scheduling_quality_run import SchedulingQualityRun
 
 __all__ = [
     "Base",
@@ -45,6 +51,12 @@ __all__ = [
     "IcdComment",
     "Reassessment",
     "RecordLink",
+    "Resource",
+    "ResourceAssignment",
     "ScheduleBaseline",
     "ScheduleBaselineActivity",
+    "ProjectLetterhead",
+    "GanttLayout",
+    "SchedulingQualityCriterion",
+    "SchedulingQualityRun",
 ]

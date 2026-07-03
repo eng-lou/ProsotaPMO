@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from httpx import AsyncClient
+
+from app.models.project import Project
+
+
+async def test_get_returns_default_when_unsaved(client: AsyncClient, project: Project):
+    resp = await client.get("/api/v1/letterhead/", params={"project_id": str(project.id)})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["id"] is None
+    assert data["header_left"]["text"] == "{project} — {module}"
+    assert data["header_left"]["bold"] is True
+    assert data["header_right"]["text"] == "Printed {printed_at}"
+    assert data["footer_left"]["text"] == ""
+    assert data["show_gantt_legend"] is False
+
+
+async def test_save_then_get_persists_and_updates(client: AsyncClient, project: Project):
+    payload = {
+        "project_id": str(project.id),
+        "logo_position": "left",
+        "header_left": {"text": "ACME Co", "bold": True, "italic": False, "font_size": 18, "align": "left"},
+        "header_center": {"text": "{module} Report", "bold": False, "italic": True, "font_size": 12, "align": "center"},
+        "header_right": {"text": "Printed {printed_at}", "bold": False, "italic": False, "font_size": 10, "align": "right"},
+        "footer_left": {"text": "Confidential", "bold": False, "italic": False, "font_size": 8, "align": "left"},
+        "footer_center": {"text": "", "bold": False, "italic": False, "font_size": 11, "align": "center"},
+        "footer_right": {"text": "", "bold": False, "italic": False, "font_size": 11, "align": "right"},
+        "show_gantt_legend": True,
+    }
+    resp = await client.put("/api/v1/letterhead/", json=payload)
+    assert resp.status_code == 200, resp.text
+    saved = resp.json()
+    assert saved["id"] is not None
+    assert saved["header_left"]["text"] == "ACME Co"
+    assert saved["header_center"]["italic"] is True
+    assert saved["footer_left"]["text"] == "Confidential"
+    assert saved["show_gantt_legend"] is True
+
+    refetched = await client.get("/api/v1/letterhead/", params={"project_id": str(project.id)})
+    assert refetched.json()["id"] == saved["id"]
+    assert refetched.json()["header_left"]["font_size"] == 18
+
+    # Saving again updates the same row rather than creating a second one.
+    payload["header_left"]["text"] = "Updated Co"
+    resp2 = await client.put("/api/v1/letterhead/", json=payload)
+    assert resp2.json()["id"] == saved["id"]
+    assert resp2.json()["header_left"]["text"] == "Updated Co"
+
+
+async def test_oversized_logo_rejected(client: AsyncClient, project: Project):
+    resp = await client.put("/api/v1/letterhead/", json={
+        "project_id": str(project.id),
+        "logo_data_url": "data:image/png;base64," + ("A" * 800_000),
+    })
+    assert resp.status_code == 422

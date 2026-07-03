@@ -34,6 +34,11 @@ async def test_quality_report_empty_period(client: AsyncClient, project: Project
     data = resp.json()
     assert data["activity_count"] == 0
     assert len(data["checks"]) == 12
+    # Zero activities means nothing was assessed — every check should read N/A,
+    # not a misleading "pass" from a 0/0 percentage (Maro, 2026-07-03).
+    assert data["logic_score"] is None
+    assert all(c["status"] == "na" for c in data["checks"])
+    assert all(c["actual"] is None for c in data["checks"])
 
 
 async def test_fully_linked_chain_passes_logic_checks(
