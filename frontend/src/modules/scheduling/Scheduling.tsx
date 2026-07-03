@@ -98,6 +98,24 @@ function loadColumnWidths(): Record<ResizableColumnKey, number> {
   return DEFAULT_COLUMN_WIDTHS
 }
 
+// A plain right-pointing triangle, rotated 90° when expanded — used for both
+// the per-row WBS collapse toggle and the Collapse All/Expand All buttons, so
+// they're guaranteed the same colour (2026-07-04, per Maro: the two looked
+// inconsistent). Drawn as an SVG rather than the ▶/▼ Unicode characters used
+// before — some fonts render those as fixed-colour glyphs that ignore CSS
+// `color` entirely, which is why the per-row icon and the toolbar buttons
+// could show different colours despite having the same Tailwind classes.
+function CollapseIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width="7" height="7" viewBox="0 0 8 8"
+      className={`inline-block shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+    >
+      <path d="M1,0 L7,4 L1,8 Z" fill="currentColor" />
+    </svg>
+  )
+}
+
 // A <th> with a drag handle on its right edge. Requires the parent <table> to use
 // table-layout:fixed (Tailwind's table-fixed) — otherwise the browser can ignore
 // an explicit header width once cell content forces the column wider.
@@ -579,25 +597,12 @@ export function Scheduling() {
     return true
   }
 
-  // Indent = become a child of the row immediately above it in outline order (which the
-  // API already returns pre-sorted — see app/services/activity.py:list_activities).
-  // Outdent = move up one level, to the current parent's parent. Both are just a
-  // parent_id PATCH; the server re-derives wbs_path/activity_type/rollups. MS Project
-  // style, per docs/SCHEDULING_MODULE_PLAN.md Phase 2.
-  const handleIndent = async (activity: Activity) => {
-    const index = visibleActivities.findIndex(a => a.id === activity.id)
-    if (index <= 0) return
-    const newParent = visibleActivities[index - 1]
-    await api.patch(`/api/v1/activities/${activity.id}`, { parent_id: newParent.id })
-    await refresh()
-  }
-
-  const handleOutdent = async (activity: Activity) => {
-    if (!activity.parent_id) return
-    const parent = activities.find(a => a.id === activity.parent_id)
-    await api.patch(`/api/v1/activities/${activity.id}`, { parent_id: parent?.parent_id ?? null })
-    await refresh()
-  }
+  // Indent = become a child of the row immediately above it in outline order;
+  // Outdent = move up one level, to the current parent's parent — both just a
+  // parent_id PATCH, the server re-derives wbs_path/activity_type/rollups. MS
+  // Project style, per docs/SCHEDULING_MODULE_PLAN.md Phase 2. Now bulk-only
+  // (handleBulkIndent/handleBulkOutdent below) — the single-row versions were
+  // retired once selection could hold more than one row.
 
   // Move up/down = reorder among current siblings (display order/WBS numbering
   // only — a separate lever from indent/outdent's hierarchy level). Added per
@@ -710,12 +715,11 @@ export function Scheduling() {
   }
 
   // Bulk toolbar (checkbox column + the icons next to Print) — replaces the old
-  // per-row copy/paste/move/indent/outdent/delete column. Single-target actions
-  // (copy, move, indent/outdent) only apply with exactly one row checked; the
-  // toolbar buttons below enforce that via their disabled state.
+  // per-row copy/paste/move/indent/outdent/delete column. Copy/Move still only
+  // apply with exactly one row checked (soleSelected); indent/outdent below
+  // work on the whole selection at once.
   const selectedActivities = activities.filter(a => selectedIds.has(a.id))
   const soleSelected = selectedActivities.length === 1 ? selectedActivities[0] : null
-  const soleSelectedVisibleIndex = soleSelected ? visibleActivities.findIndex(a => a.id === soleSelected.id) : -1
 
   const toggleSelectAll = () => {
     setSelectedIds(prev =>
@@ -728,8 +732,46 @@ export function Scheduling() {
   const handleBulkCopy = () => { if (soleSelected) handleCopyRow(soleSelected) }
   const handleBulkMoveUp = async () => { if (soleSelected) await handleMoveUp(soleSelected) }
   const handleBulkMoveDown = async () => { if (soleSelected) await handleMoveDown(soleSelected) }
-  const handleBulkIndent = async () => { if (soleSelected) await handleIndent(soleSelected) }
-  const handleBulkOutdent = async () => { if (soleSelected) await handleOutdent(soleSelected) }
+
+  // Indent/outdent work on the whole selection at once (2026-07-04, per Maro
+  // — previously single-row only). Outdent has no ordering dependency between
+  // selected rows, so each just moves to its own parent's parent independently.
+  const handleBulkOutdent = async () => {
+    const targets = selectedActivities.filter(a => a.parent_id)
+    if (targets.length === 0) return
+    for (const a of targets) {
+      const parent = activities.find(x => x.id === a.parent_id)
+      await api.patch(`/api/v1/activities/${a.id}`, { parent_id: parent?.parent_id ?? null })
+    }
+    await refresh()
+  }
+
+  // Indent needs one shared target: whichever row sits immediately above the
+  // topmost selected row (skipping past any other selected rows there) —
+  // every selected activity becomes a sibling child of that one row, rather
+  // than nesting inside each other one at a time (which is what re-applying
+  // "the row above me" per activity, in sequence, would otherwise produce
+  // for a contiguous selection).
+  const bulkIndentTarget = (): Activity | null => {
+    if (selectedActivities.length === 0) return null
+    const sorted = [...selectedActivities].sort(
+      (a, b) => visibleActivities.findIndex(x => x.id === a.id) - visibleActivities.findIndex(x => x.id === b.id)
+    )
+    let cursor = visibleActivities.findIndex(a => a.id === sorted[0].id) - 1
+    while (cursor >= 0 && selectedIds.has(visibleActivities[cursor].id)) cursor--
+    return cursor >= 0 ? visibleActivities[cursor] : null
+  }
+  const handleBulkIndent = async () => {
+    const target = bulkIndentTarget()
+    if (!target) return
+    const sorted = [...selectedActivities].sort(
+      (a, b) => visibleActivities.findIndex(x => x.id === a.id) - visibleActivities.findIndex(x => x.id === b.id)
+    )
+    for (const a of sorted) {
+      await api.patch(`/api/v1/activities/${a.id}`, { parent_id: target.id })
+    }
+    await refresh()
+  }
 
   const handleBulkPaste = async () => {
     if (!rowClipboard || selectedActivities.length === 0) return
@@ -1032,13 +1074,13 @@ export function Scheduling() {
             className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >▼</button>
           <button
-            onClick={handleBulkOutdent} disabled={!soleSelected || !soleSelected.parent_id}
-            title="Outdent (select exactly one)"
+            onClick={handleBulkOutdent} disabled={!selectedActivities.some(a => a.parent_id)}
+            title="Outdent all selected"
             className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >⇤</button>
           <button
-            onClick={handleBulkIndent} disabled={!soleSelected || soleSelectedVisibleIndex <= 0}
-            title="Indent (select exactly one)"
+            onClick={handleBulkIndent} disabled={!bulkIndentTarget()}
+            title="Indent all selected (they become siblings under whichever row sits above the topmost one)"
             className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >⇥</button>
           <button
@@ -1081,13 +1123,13 @@ export function Scheduling() {
           <button
             onClick={handleCollapseAll}
             title="Collapse every WBS summary"
-            className="text-xs text-gray-400 hover:text-blue-600 px-1.5"
-          >▶ Collapse All</button>
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+          ><CollapseIcon expanded={false} /> Collapse All</button>
           <button
             onClick={handleExpandAll}
             title="Expand every WBS summary"
-            className="text-xs text-gray-400 hover:text-blue-600 px-1.5"
-          >▼ Expand All</button>
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+          ><CollapseIcon expanded /> Expand All</button>
         </div>
 
         <div className="flex items-center gap-1 ml-auto">
@@ -1304,9 +1346,9 @@ export function Scheduling() {
                           <button
                             onClick={e => { e.stopPropagation(); toggleCollapsed(a.id) }}
                             title={collapsedIds.has(a.id) ? 'Expand' : 'Collapse'}
-                            className="text-gray-400 hover:text-gray-700 text-[9px] shrink-0 w-3"
+                            className="text-blue-600 hover:text-blue-700 shrink-0 w-3"
                           >
-                            {collapsedIds.has(a.id) ? '▶' : '▼'}
+                            <CollapseIcon expanded={!collapsedIds.has(a.id)} />
                           </button>
                         )}
                         <button
