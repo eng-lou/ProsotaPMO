@@ -461,3 +461,75 @@ async def test_log_reassessment_against_activity(client: AsyncClient, project: P
     })
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+
+
+# --- Auto Actual Finish on reaching 100% Complete (per Maro's P6 correction) -
+
+async def test_reaching_100_percent_sets_actual_finish_to_planned_finish(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=80)
+    assert activity["actual_finish"] is None
+
+    resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={"pct_complete": "100"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["actual_finish"] == data["finish"]
+
+
+async def test_partial_percent_complete_does_not_set_actual_finish(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=80)
+
+    resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={"pct_complete": "75"})
+    assert resp.status_code == 200
+    assert resp.json()["actual_finish"] is None
+
+
+async def test_explicit_actual_finish_overrides_auto_set(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=80)
+    planned_finish = activity["finish"]
+
+    resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={
+        "pct_complete": "100", "actual_finish": "2020-01-01T08:00:00",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    # The explicit value wins over the auto-set-from-planned-finish default —
+    # and per Session 17, actual_finish is itself a hard CPM input once set, so
+    # Finish moves to match it rather than staying at the original plan.
+    assert data["actual_finish"] == "2020-01-01T08:00:00"
+    assert data["finish"] == "2020-01-01T08:00:00"
+    assert planned_finish != "2020-01-01T08:00:00"
+
+
+async def test_unrelated_edit_does_not_clobber_hand_corrected_actual_finish(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=80)
+    completed = await client.patch(f"/api/v1/activities/{activity['id']}", json={"pct_complete": "100"})
+    assert completed.status_code == 200
+
+    # Hand-correct actual_finish to a real date that differs from the planned finish.
+    corrected = await client.patch(f"/api/v1/activities/{activity['id']}", json={
+        "actual_finish": "2020-01-01T08:00:00",
+    })
+    assert corrected.status_code == 200
+    assert corrected.json()["actual_finish"] == "2020-01-01T08:00:00"
+
+    # A later edit that doesn't touch pct_complete must not reset it back to Finish.
+    unrelated = await client.patch(f"/api/v1/activities/{activity['id']}", json={"commentary": "note"})
+    assert unrelated.status_code == 200
+    assert unrelated.json()["actual_finish"] == "2020-01-01T08:00:00"
+
+
+async def test_create_activity_at_100_percent_sets_actual_finish(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    activity = await _create(
+        client, project, live_period, task_name="Snagging", duration_hours=8, pct_complete="100",
+    )
+    assert activity["actual_finish"] == activity["finish"]

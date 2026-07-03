@@ -147,6 +147,35 @@ async def update_activity_actuals(db: AsyncSession, activity_id: uuid.UUID, actu
     return activity
 
 
+def _maybe_set_actual_finish_on_completion(
+    activity: Activity, pct_complete_provided: bool, actual_finish_provided: bool
+) -> bool:
+    """Reaching 100% Complete is "this genuinely finished" — a hard fact, not
+    just a progress percentage — per Maro's confirmed correction. Auto-records
+    Actual Finish from the activity's current (just-recomputed) Finish,
+    mirroring how actual_finish already behaves as a hard input into the CPM
+    forward pass (app/services/scheduling_cpm.py) once it's set, rather than a
+    bystander field.
+
+    Only fires when this request actually touched pct_complete (not on every
+    unrelated edit to an already-100%-complete activity — someone may have
+    since hand-corrected actual_finish to a real date that differs slightly
+    from the planned finish, and a later commentary-only edit shouldn't
+    silently clobber that) and the caller didn't already send their own
+    actual_finish in the same request (an explicit value always wins). Returns
+    True if it changed anything, so the caller knows to commit + recompute
+    again (setting actual_finish is itself a CPM input for this activity's
+    successors going forward)."""
+    if not pct_complete_provided or actual_finish_provided or activity.finish is None:
+        return False
+    if activity.pct_complete != Decimal(100):
+        return False
+    if activity.actual_finish == activity.finish:
+        return False
+    activity.actual_finish = activity.finish
+    return True
+
+
 def _apply_computed_fields(activity: Activity) -> None:
     """Recompute the fields that are never accepted directly from clients.
 
@@ -301,6 +330,9 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
 
     await _recompute_hierarchy(db, data.period_id)
     await scheduling_cpm.recompute_schedule(db, data.period_id)
+    if _maybe_set_actual_finish_on_completion(activity, True, data.actual_finish is not None):
+        await db.commit()
+        await scheduling_cpm.recompute_schedule(db, data.period_id)
     await _attach_evm_fields(db, [activity])
     return activity
 
@@ -365,6 +397,9 @@ async def update_activity(
     await scheduling_cpm.recompute_schedule(db, activity.period_id)
     if "pct_complete" in updates:
         await cost_sync.sync_cost_element_pct_complete(db, activity)
+    if _maybe_set_actual_finish_on_completion(activity, "pct_complete" in updates, "actual_finish" in updates):
+        await db.commit()
+        await scheduling_cpm.recompute_schedule(db, activity.period_id)
     await _attach_evm_fields(db, [activity])
     return activity
 
