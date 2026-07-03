@@ -202,6 +202,54 @@ export function Scheduling() {
       return !p
     })
   }
+
+  // WBS collapse/expand (2026-07-04, per Maro) — collapsedIds holds WBS
+  // summary activities whose descendants are currently hidden. Persisted so
+  // a planner's chosen outline state survives a reload, same convention as
+  // column widths/visibility.
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('prosota_scheduling_collapsed_wbs')
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set()
+    } catch {
+      return new Set()
+    }
+  })
+  const persistCollapsed = (next: Set<string>) => {
+    localStorage.setItem('prosota_scheduling_collapsed_wbs', JSON.stringify([...next]))
+  }
+  const toggleCollapsed = (id: string) => {
+    setCollapsedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      persistCollapsed(next)
+      return next
+    })
+  }
+  const handleCollapseAll = () => {
+    const next = new Set(activities.filter(a => a.activity_type === 'wbs_summary').map(a => a.id))
+    setCollapsedIds(next)
+    persistCollapsed(next)
+  }
+  const handleExpandAll = () => {
+    setCollapsedIds(new Set())
+    persistCollapsed(new Set())
+  }
+  // True if any ancestor (parent, grandparent, ...) is currently collapsed —
+  // walks parent_id against the *full* activity list (not visibleActivities),
+  // same reasoning as sortedSiblingsOf below: the real hierarchy, regardless
+  // of what a search/filter is hiding.
+  const isHiddenByCollapse = (a: Activity): boolean => {
+    let current = a
+    while (current.parent_id) {
+      const parent = activities.find(x => x.id === current.parent_id)
+      if (!parent) return false
+      if (collapsedIds.has(parent.id)) return true
+      current = parent
+    }
+    return false
+  }
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [resourcePoolWidgetOpen, setResourcePoolWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
@@ -439,6 +487,7 @@ export function Scheduling() {
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     return activities.filter(a => {
+      if (isHiddenByCollapse(a)) return false
       if (q) {
         const haystack = [a.code, a.task_name, a.commentary].filter(Boolean).join(' ').toLowerCase()
         if (!haystack.includes(q)) return false
@@ -450,7 +499,8 @@ export function Scheduling() {
       if (filterAtRisk && !(a.total_float_hours !== null && a.total_float_hours > 0 && a.total_float_hours <= 40)) return false
       return true
     })
-  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk, collapsedIds])
 
   if (!selectedProject) return null
 
@@ -1027,6 +1077,17 @@ export function Scheduling() {
             title="Delete all selected"
             className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Delete</button>
+          <div className="w-px h-4 bg-gray-200 mx-1" />
+          <button
+            onClick={handleCollapseAll}
+            title="Collapse every WBS summary"
+            className="text-xs text-gray-400 hover:text-blue-600 px-1.5"
+          >▶ Collapse All</button>
+          <button
+            onClick={handleExpandAll}
+            title="Expand every WBS summary"
+            className="text-xs text-gray-400 hover:text-blue-600 px-1.5"
+          >▼ Expand All</button>
         </div>
 
         <div className="flex items-center gap-1 ml-auto">
@@ -1238,14 +1299,25 @@ export function Scheduling() {
                         className="w-full max-w-[13rem] border border-blue-400 rounded px-1 py-0.5 text-sm"
                       />
                     ) : (
-                      <button
-                        onClick={() => handleNameClick(a)}
-                        onDoubleClick={() => handleNameDoubleClick(a)}
-                        className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]"
-                        title="Click to open, double-click to rename in place"
-                      >
-                        {a.task_name}
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {a.activity_type === 'wbs_summary' && (
+                          <button
+                            onClick={e => { e.stopPropagation(); toggleCollapsed(a.id) }}
+                            title={collapsedIds.has(a.id) ? 'Expand' : 'Collapse'}
+                            className="text-gray-400 hover:text-gray-700 text-[9px] shrink-0 w-3"
+                          >
+                            {collapsedIds.has(a.id) ? '▶' : '▼'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleNameClick(a)}
+                          onDoubleClick={() => handleNameDoubleClick(a)}
+                          className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]"
+                          title="Click to open, double-click to rename in place"
+                        >
+                          {a.task_name}
+                        </button>
+                      </div>
                     )}
                   </td>
                   {isColumnVisible('type') && (
