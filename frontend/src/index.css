@@ -51,26 +51,50 @@
    SyncfusionGanttChart.tsx (gantt-critical/gantt-normal/gantt-milestone) rather
    than Syncfusion's queryTaskbarInfo event. Critical-path red matches the
    retired custom GanttChart's #ef4444 exactly, so the colour convention doesn't
-   shift for anyone used to the old chart. */
+   shift for anyone used to the old chart.
+   border-color alone had no effect — Tailwind's Preflight (@tailwind base)
+   resets border-width to 0 globally, and Syncfusion's flat Tailwind3 theme
+   doesn't set its own border-width on these bars either, so there was no
+   border to recolour. Setting the full `border` shorthand (width+style+color)
+   is what actually gives the bar a visible edge. */
 .prosota-gantt .gantt-normal .e-gantt-child-taskbar-inner-div {
   background-color: #dbeafe;
-  border-color: #1a2e6b;
+  border: 2px solid #1a2e6b;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(26, 46, 107, 0.25);
 }
 .prosota-gantt .gantt-normal .e-gantt-child-progressbar-inner-div {
   background-color: #0ea5b7;
 }
 .prosota-gantt .gantt-critical .e-gantt-child-taskbar-inner-div {
   background-color: #fee2e2;
-  border-color: #ef4444;
+  border: 2px solid #ef4444;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(239, 68, 68, 0.25);
 }
 .prosota-gantt .gantt-critical .e-gantt-child-progressbar-inner-div {
   background-color: #ef4444;
 }
 .prosota-gantt .gantt-milestone .e-gantt-milestone {
   background-color: #0ea5b7;
-  border-color: #1a2e6b;
+  border: 2px solid #1a2e6b;
 }
 .prosota-gantt .gantt-milestone.gantt-critical .e-gantt-milestone {
   background-color: #ef4444;
-  border-color: #b91c1c;
+  border: 2px solid #b91c1c;
+}
+
+/* Dependency connector lines and their arrowheads — same Preflight border-reset
+   issue can leave SVG-adjacent connector elements looking too faint to read
+   against the grid; force a visible stroke colour matching the retired custom
+   GanttChart's arrow convention (grey normal, red critical — critical-path
+   colouring is handled by Syncfusion itself here via the taskbar's own
+   critical state propagating to its connector lines). */
+.prosota-gantt .e-connector-line {
+  stroke: #94a3b8 !important;
+  stroke-width: 1.5px !important;
+}
+.prosota-gantt .e-connector-line-arrow {
+  fill: #94a3b8 !important;
+  stroke: #94a3b8 !important;
 }

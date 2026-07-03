@@ -112,9 +112,15 @@ const taskFields: GanttModel['taskFields'] = {
   cssClass: 'cssClass',
 }
 
+// timelineViewMode is a flat/simple property (unlike topTier/bottomTier, which
+// are nested Complex-in-Complex objects that didn't reliably reach the
+// underlying instance as a plain object literal — confirmed by Maro's
+// screenshot showing an auto-picked Week/Day header instead of the requested
+// Month/Week). ej2-gantt's own auto-derivation (Timeline.processTimelineUnit)
+// expands a single mode into a sensible top/bottom tier pair, so this gets
+// Month/Week without needing the nested object to survive the prop boundary.
 const timelineSettings: GanttModel['timelineSettings'] = {
-  topTier: { unit: 'Month', format: 'MMM yyyy' },
-  bottomTier: { unit: 'Week', format: 'dd MMM' },
+  timelineViewMode: 'Month',
 }
 
 export function SyncfusionGanttChart({
