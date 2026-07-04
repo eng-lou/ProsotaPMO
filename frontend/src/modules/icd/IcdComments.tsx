@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { IcdComment } from './types'
 
 interface IcdCommentsProps {
@@ -70,7 +71,7 @@ export function IcdComments({ icdItemId }: IcdCommentsProps) {
   }
 
   const handleDelete = async (comment: IcdComment) => {
-    if (!window.confirm('Delete this comment? This cannot be undone.')) return
+    if (!(await confirmWithDontAsk('icd.comment-delete', 'Delete this comment? This cannot be undone.'))) return
     await api.delete(`/api/v1/icd-comments/${comment.id}`)
     load()
   }

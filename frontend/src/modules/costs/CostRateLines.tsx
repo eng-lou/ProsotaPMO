@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { CostRateLine } from './types'
 
 interface NewLineForm {
@@ -50,7 +51,7 @@ export function CostRateLines({ costElementId, isScheduleLinked = false }: CostR
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.description.trim() || form.qty === '' || form.rate === '') return
-    if (isScheduleLinked && !window.confirm(UNLINK_WARNING)) return
+    if (isScheduleLinked && !(await confirmWithDontAsk('cost.rateline-add-unlink', UNLINK_WARNING))) return
     try {
       await api.post('/api/v1/cost-rate-lines/', {
         cost_element_id: costElementId,
@@ -69,7 +70,7 @@ export function CostRateLines({ costElementId, isScheduleLinked = false }: CostR
 
   const deleteLine = async (line: CostRateLine) => {
     const message = isScheduleLinked ? `${UNLINK_WARNING}\n\n(This will also delete "${line.description}".)` : `Delete "${line.description}"?`
-    if (!window.confirm(message)) return
+    if (!(await confirmWithDontAsk(isScheduleLinked ? 'cost.rateline-delete-unlink' : 'cost.rateline-delete', message))) return
     await api.delete(`/api/v1/cost-rate-lines/${line.id}`)
     load()
   }

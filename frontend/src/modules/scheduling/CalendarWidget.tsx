@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { WEEKDAY_FIELDS, type Calendar, type CalendarBreak, type CalendarException } from './types'
 
 interface Props {
@@ -112,7 +113,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   }
 
   const handleDeleteCalendar = async (calendar: Calendar) => {
-    if (!window.confirm(`Delete calendar "${calendar.name}"? Activities using it revert to the project default.`)) return
+    if (!(await confirmWithDontAsk('scheduling.calendar-delete', `Delete calendar "${calendar.name}"? Activities using it revert to the project default.`))) return
     await api.delete(`/api/v1/calendars/${calendar.id}`)
     if (selectedCalendarId === calendar.id) setSelectedCalendarId(null)
     await onChange()

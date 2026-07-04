@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
@@ -178,7 +179,7 @@ export function IcdTracker() {
   }
 
   const handleDelete = async (item: IcdItem) => {
-    if (!window.confirm(`Delete "${item.title}"? This cannot be undone.`)) return
+    if (!(await confirmWithDontAsk('icd.delete-item', `Delete "${item.title}"? This cannot be undone.`))) return
     await api.delete(`/api/v1/icd-items/${item.id}`)
     await refreshItems()
   }

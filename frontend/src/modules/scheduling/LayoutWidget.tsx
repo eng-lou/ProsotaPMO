@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { GanttFontFamily, GanttLayout, GanttStyle } from '@/lib/ganttLayout'
 
 interface Props {
@@ -82,9 +83,10 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
   }
 
   const handleApply = async (layout: GanttLayout) => {
-    if (!window.confirm(
+    if (!(await confirmWithDontAsk(
+      'scheduling.layout-apply',
       `Apply layout "${layout.name}"? This changes the Gantt colours, activity table shading/font, and letterhead (logo/header/footer) for everyone viewing or printing this project.`
-    )) return
+    ))) return
     setBusyId(layout.id)
     setError(null)
     try {
@@ -97,7 +99,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
   }
 
   const handleDelete = async (layout: GanttLayout) => {
-    if (!window.confirm(`Delete the saved layout "${layout.name}"? This cannot be undone.`)) return
+    if (!(await confirmWithDontAsk('scheduling.layout-delete', `Delete the saved layout "${layout.name}"? This cannot be undone.`))) return
     setBusyId(layout.id)
     setError(null)
     try {
@@ -110,7 +112,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
   }
 
   const handleReset = async () => {
-    if (!window.confirm('Reset to the built-in default colours, fonts, and letterhead? Saved layouts are not deleted — just deactivated.')) return
+    if (!(await confirmWithDontAsk('scheduling.layout-reset', 'Reset to the built-in default colours, fonts, and letterhead? Saved layouts are not deleted — just deactivated.'))) return
     setResetting(true)
     setError(null)
     try {

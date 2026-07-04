@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { ACTION_STATUSES, type RiskMitigationAction } from './types'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -64,7 +65,7 @@ export function MitigationActions({ riskId }: MitigationActionsProps) {
   }
 
   const deleteAction = async (action: RiskMitigationAction) => {
-    if (!window.confirm(`Delete "${action.code} · ${action.description}"?`)) return
+    if (!(await confirmWithDontAsk('risk.mitigation-action-delete', `Delete "${action.code} · ${action.description}"?`))) return
     await api.delete(`/api/v1/risk-mitigation-actions/${action.id}`)
     load()
   }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { CostCommitment } from './types'
 
 interface NewCommitmentForm {
@@ -56,7 +57,7 @@ export function CostCommitments({ costElementId }: CostCommitmentsProps) {
   }
 
   const deleteCommitment = async (commitment: CostCommitment) => {
-    if (!window.confirm(`Delete "${commitment.description}"?`)) return
+    if (!(await confirmWithDontAsk('cost.commitment-delete', `Delete "${commitment.description}"?`))) return
     await api.delete(`/api/v1/cost-commitments/${commitment.id}`)
     load()
   }

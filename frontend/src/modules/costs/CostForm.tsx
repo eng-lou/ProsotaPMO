@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import {
   COST_ELEMENT_STATUSES, COST_ELEMENT_STATUS_LABELS, ELEMENT_TYPES, REASSESSMENT_TRIGGER_FIELDS,
   type CostElement, type CostElementStatus,
@@ -102,10 +103,11 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
       setError('Rate is required for percentage elements')
       return
     }
-    if (isScheduleLinked && budgetChanged && !window.confirm(
+    if (isScheduleLinked && budgetChanged && !(await confirmWithDontAsk(
+      'cost.form-unlink-from-schedule',
       'This line\'s budget is currently managed automatically from Scheduling resource assignments. ' +
       'Editing it directly will unlink it permanently — future resource assignment changes won\'t update it anymore. Continue?'
-    )) {
+    ))) {
       return
     }
     setSubmitting(true)

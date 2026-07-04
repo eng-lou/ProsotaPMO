@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import { resetAllDismissedWarnings, useDismissedWarningsCount } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 
 const NAV = [
@@ -17,6 +18,7 @@ export function Sidebar() {
   const { user, logout } = useAuth0()
   const { selectedProject, clearProject } = useProject()
   const navigate = useNavigate()
+  const dismissedCount = useDismissedWarningsCount()
 
   const handleSwitchProject = () => {
     clearProject()
@@ -64,6 +66,20 @@ export function Sidebar() {
       </nav>
 
       <div className="px-4 py-4 border-t border-gray-700">
+        {dismissedCount > 0 && (
+          <button
+            onClick={() => {
+              if (window.confirm(
+                `Show all ${dismissedCount} dismissed warning${dismissedCount === 1 ? '' : 's'} again? ` +
+                `Any "don't show this again" warning you've dismissed will start reappearing.`
+              )) resetAllDismissedWarnings()
+            }}
+            title="Warnings you've dismissed with 'don't show this again' are hidden until reset here"
+            className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors mb-2"
+          >
+            ⚙ Reset {dismissedCount} dismissed warning{dismissedCount === 1 ? '' : 's'}
+          </button>
+        )}
         <p className="text-xs text-gray-400 truncate mb-2">{user?.email}</p>
         <button
           onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Layout } from './components/Layout'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
+import { ConfirmHost } from './lib/confirmWithDontAsk'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
 import { Scheduling } from './modules/scheduling/Scheduling'
@@ -85,6 +86,7 @@ export default function App() {
     <AuthTokenProvider>
       <ProjectProvider>
         <AuthenticatedApp />
+        <ConfirmHost />
       </ProjectProvider>
     </AuthTokenProvider>
   )

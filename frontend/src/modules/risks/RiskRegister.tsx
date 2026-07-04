@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
@@ -189,7 +190,7 @@ export function RiskRegister() {
   }
 
   const handleDelete = async (risk: Risk) => {
-    if (!window.confirm(`Delete risk "${risk.title}"? This cannot be undone.`)) return
+    if (!(await confirmWithDontAsk('risk.delete', `Delete risk "${risk.title}"? This cannot be undone.`))) return
     await api.delete(`/api/v1/risks/${risk.id}`)
     await refreshRisks()
   }

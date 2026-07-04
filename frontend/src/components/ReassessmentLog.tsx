@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 
 export interface Reassessment {
   id: string
@@ -78,7 +79,7 @@ export function ReassessmentLog({ recordType, recordId, refreshKey, onLogged }: 
   }
 
   const handleDelete = async (entry: Reassessment) => {
-    if (!window.confirm('Delete this reassessment entry? This cannot be undone.')) return
+    if (!(await confirmWithDontAsk('reassessment.delete', 'Delete this reassessment entry? This cannot be undone.'))) return
     await api.delete(`/api/v1/reassessments/${entry.id}`)
     load()
   }

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
@@ -212,7 +213,7 @@ export function CostPlan() {
   }
 
   const handleDelete = async (el: CostElement) => {
-    if (!window.confirm(`Delete cost element "${el.description}"? This cannot be undone.`)) return
+    if (!(await confirmWithDontAsk('cost.element-delete', `Delete cost element "${el.description}"? This cannot be undone.`))) return
     await api.delete(`/api/v1/cost-elements/${el.id}`)
     await refreshElements()
   }

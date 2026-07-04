@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { ACTION_STATUSES, type IcdActionItem } from './types'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -65,7 +66,7 @@ export function IcdActionItems({ icdItemId }: IcdActionItemsProps) {
   }
 
   const deleteAction = async (action: IcdActionItem) => {
-    if (!window.confirm(`Delete "${action.code} · ${action.description}"?`)) return
+    if (!(await confirmWithDontAsk('icd.action-item-delete', `Delete "${action.code} · ${action.description}"?`))) return
     await api.delete(`/api/v1/icd-action-items/${action.id}`)
     load()
   }

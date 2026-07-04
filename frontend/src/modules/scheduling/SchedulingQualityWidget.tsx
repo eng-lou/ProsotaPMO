@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadQualityReportCsv } from './exportQualityReport'
 import type { QualityCheckStatus, QualityReport, SchedulingQualityCriterion, SchedulingQualityRunSummary } from './types'
 
@@ -90,7 +91,7 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
   }
 
   const handleReset = async () => {
-    if (!window.confirm('Reset all thresholds to the standard DCMA defaults?')) return
+    if (!(await confirmWithDontAsk('scheduling.quality-reset-thresholds', 'Reset all thresholds to the standard DCMA defaults?'))) return
     setResetting(true)
     try {
       const { data } = await api.post<SchedulingQualityCriterion[]>('/api/v1/scheduling-quality-criteria/reset', null, { params: { project_id: projectId } })
@@ -126,7 +127,7 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
   }
 
   const handleDeleteRun = async (run: SchedulingQualityRunSummary) => {
-    if (!window.confirm(`Delete the saved analysis "${run.name}"? This cannot be undone.`)) return
+    if (!(await confirmWithDontAsk('scheduling.quality-delete-run', `Delete the saved analysis "${run.name}"? This cannot be undone.`))) return
     await api.delete(`/api/v1/scheduling-quality-runs/${run.id}`)
     if (viewingRun?.id === run.id) handleBackToLive()
     await loadRuns()

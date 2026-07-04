@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { Period } from '@/lib/types'
 import { formatDateTime } from './dateTime'
 
@@ -85,12 +86,13 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
 
   const handleApply = async () => {
     if (!canApply) return
-    if (!window.confirm(
+    if (!(await confirmWithDontAsk(
+      'scheduling.reschedule-apply',
       `Shift the whole schedule ${describeShift()}?\n\n` +
       `Activities already in progress (% Complete > 0) keep their Start — only their Finish updates, based on ` +
       `remaining duration. Activities pinned by a hard constraint (Mandatory Start / Finish On or Before) won't ` +
       `move either — that's correct, not a bug.`
-    )) return
+    ))) return
     setApplying(true)
     setError(null)
     try {

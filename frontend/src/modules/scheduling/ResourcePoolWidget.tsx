@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { RESOURCE_TYPES, RESOURCE_TYPE_LABELS, type Resource, type ResourceType } from './types'
 
 interface Props {
@@ -73,7 +74,7 @@ export function ResourcePoolWidget({ projectId, resources, onChange, onClose }: 
   }
 
   const handleDelete = async (r: Resource) => {
-    if (!window.confirm(`Delete resource "${r.name}"? This is only possible if it isn't assigned to any activity.`)) return
+    if (!(await confirmWithDontAsk('scheduling.resource-delete', `Delete resource "${r.name}"? This is only possible if it isn't assigned to any activity.`))) return
     try {
       await api.delete(`/api/v1/resources/${r.id}`)
       await onChange()
