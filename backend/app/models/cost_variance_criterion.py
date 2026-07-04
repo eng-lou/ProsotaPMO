@@ -19,7 +19,9 @@ class CostVarianceCriterion(Base, TimestampMixin):
     __tablename__ = "cost_variance_criteria"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     level: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 (Saving) .. 4 (Over Budget)
     label: Mapped[str] = mapped_column(String(50), nullable=False)
     min_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))

@@ -15,8 +15,12 @@ class CostElement(Base, TimestampMixin):
     __tablename__ = "cost_elements"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    period_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("periods.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    period_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+    )
     # Human-readable reference (e.g. "CST-0001"), auto-generated, unique per project. Never reused.
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     # 'fixed' = direct budget figure; 'percentage' = rate applied to sum of fixed elements

@@ -18,7 +18,9 @@ class Period(Base, TimestampMixin):
     __tablename__ = "periods"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     period_label: Mapped[str] = mapped_column(String(100), nullable=False)
     start_date: Mapped[date | None] = mapped_column(Date)
     # The data date's time-of-day (2026-07-03, per Maro) — null means "use the

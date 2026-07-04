@@ -20,7 +20,9 @@ class IcdActionItem(Base, TimestampMixin):
     __tablename__ = "icd_action_items"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    icd_item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("icd_items.id"), nullable=False)
+    icd_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("icd_items.id", ondelete="CASCADE"), nullable=False
+    )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     owner: Mapped[str | None] = mapped_column(String(255))

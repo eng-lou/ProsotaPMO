@@ -27,7 +27,9 @@ class Calendar(Base, TimestampMixin):
     __tablename__ = "calendars"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_project_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     day_start_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(8, 0))

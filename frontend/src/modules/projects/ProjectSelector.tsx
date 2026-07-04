@@ -10,19 +10,72 @@ export function ProjectSelector() {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newClient, setNewClient] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [working, setWorking] = useState(false)
   const { selectProject } = useProject()
   const navigate = useNavigate()
 
-  useEffect(() => {
+  const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
       .then(r => setProjects(r.data))
       .catch(() => setError('Failed to load projects'))
       .finally(() => setLoading(false))
+
+  useEffect(() => {
+    refresh()
   }, [])
 
   const handleSelect = (project: Project) => {
     selectProject(project)
     navigate('/dashboard')
+  }
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const selectedProjects = projects.filter(p => selectedIds.has(p.id))
+
+  const handleSetStatus = async (status: 'active' | 'archived') => {
+    setWorking(true)
+    setError(null)
+    try {
+      await Promise.all(
+        selectedProjects.map(p => api.patch(`/api/v1/projects/${p.id}`, { status }))
+      )
+      setSelectedIds(new Set())
+      await refresh()
+    } catch {
+      setError(`Failed to update ${selectedProjects.length > 1 ? 'projects' : 'project'}`)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!window.confirm(
+      `Permanently delete ${selectedProjects.length} project${selectedProjects.length > 1 ? 's' : ''}?\n\n` +
+      `${selectedProjects.map(p => p.name).join(', ')}\n\n` +
+      `This removes everything in ${selectedProjects.length > 1 ? 'them' : 'it'} — schedule, cost plan, risks, ` +
+      `ICD log, resources, calendars — for good. This cannot be undone. If you just want to hide old projects, ` +
+      `use Archive instead.`
+    )) return
+    setWorking(true)
+    setError(null)
+    try {
+      await Promise.all(selectedProjects.map(p => api.delete(`/api/v1/projects/${p.id}`)))
+      setSelectedIds(new Set())
+      await refresh()
+    } catch {
+      setError(`Failed to delete ${selectedProjects.length > 1 ? 'projects' : 'project'}`)
+    } finally {
+      setWorking(false)
+    }
   }
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -64,29 +117,68 @@ export function ProjectSelector() {
           </div>
         )}
 
+        {selectedIds.size > 0 && (
+          <div className="mb-3 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
+            <span className="text-xs font-medium text-blue-800">{selectedIds.size} selected</span>
+            <button
+              onClick={() => handleSetStatus('active')}
+              disabled={working}
+              className="text-xs text-green-700 hover:text-green-800 font-medium disabled:opacity-50"
+            >
+              Set Active
+            </button>
+            <button
+              onClick={() => handleSetStatus('archived')}
+              disabled={working}
+              className="text-xs text-gray-600 hover:text-gray-800 font-medium disabled:opacity-50"
+            >
+              Archive
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={working}
+              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+            >
+              Delete
+            </button>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-xs text-gray-400 hover:text-gray-600 ml-auto"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         <div className="space-y-3 mb-6">
           {projects.map(project => (
-            <button
+            <div
               key={project.id}
-              onClick={() => handleSelect(project)}
-              className="w-full text-left bg-white border border-gray-200 rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
+              className="w-full flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
             >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-gray-900 group-hover:text-blue-600">{project.name}</p>
+              <input
+                type="checkbox"
+                checked={selectedIds.has(project.id)}
+                onChange={() => toggleSelected(project.id)}
+                onClick={e => e.stopPropagation()}
+                className="shrink-0"
+              />
+              <button onClick={() => handleSelect(project)} className="flex-1 text-left flex items-center justify-between min-w-0">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-900 group-hover:text-blue-600 truncate">{project.name}</p>
                   {project.client_name && (
-                    <p className="text-sm text-gray-500 mt-0.5">{project.client_name}</p>
+                    <p className="text-sm text-gray-500 mt-0.5 truncate">{project.client_name}</p>
                   )}
                 </div>
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                <span className={`shrink-0 ml-3 text-xs px-2 py-1 rounded-full font-medium ${
                   project.status === 'active'
                     ? 'bg-green-100 text-green-700'
                     : 'bg-gray-100 text-gray-500'
                 }`}>
                   {project.status}
                 </span>
-              </div>
-            </button>
+              </button>
+            </div>
           ))}
 
           {projects.length === 0 && !creating && (

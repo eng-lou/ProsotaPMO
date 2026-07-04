@@ -18,7 +18,9 @@ class RiskProbabilityCriterion(Base, TimestampMixin):
     __tablename__ = "risk_probability_criteria"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     level: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 (Very Low) .. 5 (Very High)
     label: Mapped[str] = mapped_column(String(50), nullable=False)
     min_probability: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
@@ -34,7 +36,9 @@ class RiskImpactCriterion(Base, TimestampMixin):
     __tablename__ = "risk_impact_criteria"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     level: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 (Negligible) .. 5 (Critical)
     label: Mapped[str] = mapped_column(String(50), nullable=False)
     min_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))

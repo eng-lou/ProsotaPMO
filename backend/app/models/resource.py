@@ -21,7 +21,9 @@ class Resource(Base, TimestampMixin):
     __tablename__ = "resources"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
     # labour | equipment | material | subcontractor — determines both what rate/unit
     # mean and how an assignment's budget is costed (see
     # app/services/resource_costing.py):

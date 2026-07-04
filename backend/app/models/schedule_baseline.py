@@ -40,7 +40,9 @@ class ScheduleBaseline(Base, TimestampMixin):
     __tablename__ = "schedule_baselines"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    period_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("periods.id"), nullable=False)
+    period_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

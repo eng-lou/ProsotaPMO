@@ -5,6 +5,7 @@ import uuid
 from httpx import AsyncClient
 
 from app.models.organisation import Organisation
+from app.models.project import Project
 from app.models.user import User
 
 
@@ -51,6 +52,40 @@ async def test_delete_project(client: AsyncClient):
     p = await _create(client)
     assert (await client.delete(f"/api/v1/projects/{p['id']}")).status_code == 204
     assert (await client.get(f"/api/v1/projects/{p['id']}")).status_code == 404
+
+
+async def test_delete_project_with_real_data_cascades_cleanly(client: AsyncClient, project: Project, live_period):
+    """Regression test: a project with real cross-module data used to throw a
+    Postgres IntegrityError on delete, since most tables referencing projects
+    had no ON DELETE CASCADE. Covers the resource-assignment RESTRICT edge case
+    too — that FK is deliberately left non-cascading (see
+    app/models/resource_assignment.py), so the delete endpoint must clear
+    assignments explicitly before the project-level cascade runs."""
+    activity_resp = await client.post("/api/v1/activities/", json={
+        "project_id": project.id.__str__(), "period_id": live_period.id.__str__(), "task_name": "Piling",
+    })
+    assert activity_resp.status_code == 201
+    activity = activity_resp.json()
+
+    resource_resp = await client.post("/api/v1/resources/", json={
+        "project_id": project.id.__str__(), "resource_type": "labour", "name": "J. Davies", "unit": "day", "rate": "45",
+    })
+    assert resource_resp.status_code == 201
+    resource = resource_resp.json()
+
+    assignment_resp = await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+    assert assignment_resp.status_code == 201
+
+    risk_resp = await client.post("/api/v1/risks/", json={
+        "project_id": project.id.__str__(), "period_id": live_period.id.__str__(), "title": "Test risk",
+    })
+    assert risk_resp.status_code == 201
+
+    resp = await client.delete(f"/api/v1/projects/{project.id}")
+    assert resp.status_code == 204
+    assert (await client.get(f"/api/v1/projects/{project.id}")).status_code == 404
 
 
 async def test_get_me(client: AsyncClient, user: User):
