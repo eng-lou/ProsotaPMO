@@ -49,6 +49,12 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 
 ---
 
+## Direct database inspection (a one-off Python script, not a saved tool)
+
+| Command | What it does |
+|---|---|
+| `python -c "import psycopg; conn = psycopg.connect(...); cur = conn.cursor(); cur.execute('select ...'); print(cur.fetchall())"` | Talks directly to the real Postgres database from the command line, bypassing the app entirely — useful when a bug might be in the *data itself* rather than the code. This is exactly how a real bug was found in session 20: querying the `periods` table directly revealed two "Period 1" rows created 1.5 milliseconds apart for the same project, something no amount of reading the code alone would have shown. |
+
 ## curl (a simple way to check a website or server from the command line)
 
 | Command | What it does |
