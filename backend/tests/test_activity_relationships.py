@@ -3,6 +3,7 @@ from __future__ import annotations
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.activity import Activity
 from app.models.period import Period
 from app.models.project import Project
 
@@ -88,20 +89,24 @@ async def test_reverse_relationship_rejected(client: AsyncClient, project: Proje
 async def test_cross_period_relationship_rejected(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
-    other_period = Period(project_id=project.id, period_label="Period 2", freeze_status="live")
+    # Only one "live" period is allowed per project (uq_periods_project_live —
+    # see migration a3f9c02e5b71), so the second period here is a non-live one
+    # instead, with its activity inserted directly rather than through the API
+    # (which would reject a write to a non-live period) — same pattern used
+    # elsewhere in this suite for seeding data into a frozen period.
+    other_period = Period(project_id=project.id, period_label="Period 2", freeze_status="frozen")
     db.add(other_period)
     await db.commit()
     await db.refresh(other_period)
 
     a = await _create_activity(client, project, live_period, "Excavation")
-    resp = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(other_period.id), "task_name": "Piling",
-    })
-    assert resp.status_code == 201
-    b = resp.json()
+    b_orm = Activity(project_id=project.id, period_id=other_period.id, task_name="Piling", code="ACT-9101")
+    db.add(b_orm)
+    await db.commit()
+    await db.refresh(b_orm)
 
     resp = await client.post("/api/v1/activity-relationships/", json={
-        "predecessor_id": a["id"], "successor_id": b["id"],
+        "predecessor_id": a["id"], "successor_id": str(b_orm.id),
     })
     assert resp.status_code == 422
     assert "same period" in resp.json()["detail"].lower()
@@ -159,7 +164,7 @@ async def test_delete_activity_cascades_relationships(
     await client.post("/api/v1/activity-relationships/", json={"predecessor_id": a["id"], "successor_id": b["id"]})
 
     resp = await client.delete(f"/api/v1/activities/{a['id']}")
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     resp = await client.get("/api/v1/activity-relationships/", params={"period_id": str(live_period.id)})
     assert resp.json() == []

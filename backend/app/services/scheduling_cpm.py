@@ -240,8 +240,11 @@ class _CalendarLookup:
 def _cpm_participants(activities: list[Activity]) -> list[Activity]:
     # WBS summary rows are rollups from children (app/services/activity.py:
     # _recompute_hierarchy), not part of the CPM network — deliberately excluded
-    # here rather than given a fake float value.
-    return [a for a in activities if a.activity_type in ("task", "milestone")]
+    # here rather than given a fake float value. Archived activities (2026-07-04,
+    # per Maro's archive system) are parked/done and forced to 100% complete —
+    # also excluded, the same way, rather than let a dead task keep driving or
+    # being driven by the live network's critical path.
+    return [a for a in activities if a.activity_type in ("task", "milestone") and not a.is_archived]
 
 
 async def get_project_finish(db: AsyncSession, period_id: uuid.UUID) -> datetime | None:
@@ -412,7 +415,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
     participant_ids = {a.id for a in participants}
 
     for a in all_activities:
-        if a.activity_type == "wbs_summary":
+        if a.activity_type == "wbs_summary" or a.is_archived:
             a.total_float_hours = None
             a.free_float_hours = None
             a.is_critical = None

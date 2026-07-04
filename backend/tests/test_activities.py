@@ -28,7 +28,10 @@ async def test_create_activity(client: AsyncClient, project: Project, live_perio
     assert float(data["total_float_hours"]) == 0.0
     assert data["start"] is not None
     assert data["finish"] is not None
-    assert data["code"] == "ACT-0001"
+    # T (Task) — the P/W/T/M role-based scheme (2026-07-04, per Maro); a brand-new
+    # standalone activity has no children so it's a plain task, not a WBS summary.
+    assert data["code"] == "T-0001"
+    assert data["wbs_role"] == "T"
     assert "id" in data
     assert data["project_id"] == str(project.id)
 
@@ -248,7 +251,8 @@ async def test_delete_activity(client: AsyncClient, project: Project, live_perio
     activity_id = create.json()["id"]
 
     resp = await client.delete(f"/api/v1/activities/{activity_id}")
-    assert resp.status_code == 204
+    assert resp.status_code == 200
+    assert resp.json() == {"archived": False}
 
     resp = await client.get(f"/api/v1/activities/{activity_id}")
     assert resp.status_code == 404
@@ -472,7 +476,7 @@ async def test_delete_summary_cascades_to_children(
     child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}")
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     resp = await client.get(f"/api/v1/activities/{child['id']}")
     assert resp.status_code == 404
@@ -486,7 +490,7 @@ async def test_delete_without_cascade_promotes_children(
     child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     # Parent is gone, but the child survives, now level with what were the parent's
     # own siblings — i.e. parented directly under the grandparent.
@@ -505,7 +509,7 @@ async def test_delete_without_cascade_promotes_children_to_root(
     child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     resp = await client.get(f"/api/v1/activities/{child['id']}")
     assert resp.status_code == 200

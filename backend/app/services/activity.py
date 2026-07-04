@@ -7,18 +7,21 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
 from app.models.cost_element import CostElement
 from app.models.period import Period
+from app.models.schedule_baseline import ScheduleBaselineActivity
 from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
+from app.schemas.reassessment import ReassessmentCreate
 from app.services import cost_sync, scheduling_cpm
 from app.services.cost_element import compute_schedule_linked_evm
-from app.services.reference_codes import next_code
+from app.services.reassessment import create_reassessment
 from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
 _EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc")
@@ -96,6 +99,34 @@ async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID
         raise HTTPException(status_code=404, detail="Calendar not found in this project")
 
 
+def _activity_role(activity_type: str, parent_id: uuid.UUID | None) -> str:
+    """P (top-level WBS summary) | W (nested WBS summary) | T (task) | M (milestone)
+    — the structural role an activity's code prefix should reflect (2026-07-04,
+    per Maro's P/W/T/M scheme, e.g. "the overarching WBS summary top of the
+    hierarchy can be P-0001")."""
+    if activity_type == "milestone":
+        return "M"
+    if activity_type == "wbs_summary":
+        return "P" if parent_id is None else "W"
+    return "T"
+
+
+async def _next_role_code(db: AsyncSession, project_id: uuid.UUID, role: str) -> str:
+    """Role-scoped numbering: each of P/W/T/M has its own independent sequence per
+    project (2026-07-04, per Maro — "if there's another wbs with that exact code
+    then of course W-0002", not sharing a counter with T-codes). Unlike the shared
+    app/services/reference_codes.py:next_code() used by Risk/Cost/ICD (exactly one
+    prefix per project), activities carry four different prefixes in the same
+    table, so the max-lookup must also filter to this role's own prefix."""
+    stmt = select(func.max(cast(func.split_part(Activity.code, "-", 2), Integer))).where(
+        Activity.project_id == project_id,
+        Activity.code.like(f"{role}-%"),
+    )
+    current_max = (await db.execute(stmt)).scalar()
+    next_seq = (current_max or 0) + 1
+    return f"{role}-{next_seq:04d}"
+
+
 def _build_children_map(activities: list[Activity]) -> dict[uuid.UUID | None, list[Activity]]:
     children: dict[uuid.UUID | None, list[Activity]] = defaultdict(list)
     for a in activities:
@@ -135,6 +166,15 @@ async def list_activities(
     ordered = _dfs_order(activities)
     await _attach_evm_fields(db, ordered)
     return ordered
+
+
+async def list_code_history(db: AsyncSession, activity_id: uuid.UUID) -> list[ActivityCodeHistory]:
+    result = await db.execute(
+        select(ActivityCodeHistory)
+        .where(ActivityCodeHistory.activity_id == activity_id)
+        .order_by(ActivityCodeHistory.created_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 async def get_activity(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
@@ -214,14 +254,62 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
     """
     result = await db.execute(select(Activity).where(Activity.period_id == period_id))
     activities = list(result.scalars().all())
+
+    # Pin the reserved Archive container to always sort last among top-level
+    # activities (2026-07-04, per Maro) — self-correcting on every pass, since
+    # a newly-created top-level activity would otherwise land after it (its
+    # sort_order is just "current max + 1", and the container had been that
+    # max). Done before _build_children_map below so this same pass's
+    # wbs_path/ordering already reflects the correction, not just the next one.
+    container = next((a for a in activities if a.is_archive_container), None)
+    if container is not None:
+        top_level_siblings = [a for a in activities if a.parent_id is None and not a.is_archive_container]
+        max_sort = max((s.sort_order or 0) for s in top_level_siblings) if top_level_siblings else -1
+        if (container.sort_order or 0) <= max_sort:
+            container.sort_order = max_sort + 1
+
     children = _build_children_map(activities)
 
     for a in activities:
+        if a.is_archive_container:
+            # Always styled as a WBS summary, regardless of how many archived
+            # activities currently sit under it (even zero, momentarily).
+            a.activity_type = "wbs_summary"
+            continue
         has_children = bool(children.get(a.id))
         if has_children and a.activity_type != "wbs_summary":
             a.activity_type = "wbs_summary"
         elif not has_children and a.activity_type == "wbs_summary":
             a.activity_type = "task"
+
+    # Role-based code prefix (P/W/T/M, 2026-07-04 per Maro) — reassign + log
+    # history for any activity whose *structural role* changed in this pass
+    # (promoted to WBS, demoted to task, or a WBS moving in/out of top-level).
+    # Compared against the stored wbs_role, not the code string itself, since
+    # code is also manually editable — see app/models/activity.py's wbs_role
+    # field docstring for why that distinction matters. The reserved Archive
+    # container keeps its fixed code/role forever; an archived activity's code
+    # is likewise frozen at whatever it was the moment it was archived — being
+    # reparented under the container would otherwise look exactly like a real
+    # promote/demote to this loop and get needlessly renumbered.
+    for a in activities:
+        if a.is_archive_container or a.is_archived:
+            continue
+        new_role = _activity_role(a.activity_type, a.parent_id)
+        if new_role == a.wbs_role:
+            continue
+        old_code = a.code
+        a.code = await _next_role_code(db, a.project_id, new_role)
+        if new_role == "M" or a.wbs_role == "M":
+            reason = "manual_edit"  # only an explicit activity_type edit can involve M
+        elif a.wbs_role == "T" and new_role in ("P", "W"):
+            reason = "promoted_to_wbs"
+        elif a.wbs_role in ("P", "W") and new_role == "T":
+            reason = "demoted_to_task"
+        else:
+            reason = "wbs_reparented"  # still a WBS summary, but P<->W (top-level status changed)
+        db.add(ActivityCodeHistory(activity_id=a.id, old_code=old_code, new_code=a.code, reason=reason))
+        a.wbs_role = new_role
 
     def assign_codes(parent_id: uuid.UUID | None, prefix: str) -> None:
         for i, child in enumerate(children.get(parent_id, []), start=1):
@@ -287,6 +375,28 @@ async def _next_sibling_sort_order(
     return max((s.sort_order or 0) for s in siblings) + 1 if siblings else 0
 
 
+async def _next_sibling_sort_order_after(
+    db: AsyncSession, period_id: uuid.UUID, parent_id: uuid.UUID | None, after_id: uuid.UUID,
+) -> int:
+    """Same self-healing renumber-then-insert approach as move_activity: normalises
+    every current sibling to sequential 0..n-1 sort_order, then makes room for a
+    new activity to land immediately after `after_id` rather than appended at the
+    end (2026-07-04, per Maro — Duplicate should place the copy right next to its
+    source, not wherever the group's current end happens to be, e.g. past the
+    reserved Archive container)."""
+    q = select(Activity).where(Activity.period_id == period_id, _parent_filter(parent_id))
+    siblings = list((await db.execute(q)).scalars().all())
+    siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
+    for index, sibling in enumerate(siblings):
+        sibling.sort_order = index
+
+    after_index = next((i for i, s in enumerate(siblings) if s.id == after_id), len(siblings) - 1)
+    insert_at = after_index + 1
+    for sibling in siblings[insert_at:]:
+        sibling.sort_order += 1
+    return insert_at
+
+
 async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down"]) -> Activity:
     """Reorder an activity among its current siblings — display order and WBS
     numbering only, never hierarchy level (that's indent/outdent, a parent_id
@@ -339,9 +449,23 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
     if data.calendar_id is not None:
         await _validate_calendar_in_project(db, data.calendar_id, data.project_id)
 
-    next_sort_order = await _next_sibling_sort_order(db, data.period_id, data.parent_id)
-    code = await next_code(db, Activity, "ACT", data.project_id)
-    activity = Activity(**data.model_dump(), code=code, sort_order=next_sort_order)
+    if data.insert_after_id is not None:
+        after = await db.get(Activity, data.insert_after_id)
+        if after is None or after.period_id != data.period_id or after.parent_id != data.parent_id:
+            raise HTTPException(status_code=404, detail="insert_after_id activity not found among these siblings")
+        next_sort_order = await _next_sibling_sort_order_after(db, data.period_id, data.parent_id, data.insert_after_id)
+    else:
+        next_sort_order = await _next_sibling_sort_order(db, data.period_id, data.parent_id)
+    # A brand-new activity has zero children, so a "wbs_summary" request would be
+    # reverted to "task" the moment _recompute_hierarchy runs right after this —
+    # anticipate that here so the code/role are right immediately, rather than
+    # generating a WBS-role code that gets renumbered away again a moment later.
+    effective_type = "task" if data.activity_type == "wbs_summary" else data.activity_type
+    role = _activity_role(effective_type, data.parent_id)
+    code = await _next_role_code(db, data.project_id, role)
+    activity = Activity(
+        **data.model_dump(exclude={"insert_after_id"}), code=code, wbs_role=role, sort_order=next_sort_order,
+    )
     _apply_computed_fields(activity)
     db.add(activity)
     await db.commit()
@@ -360,6 +484,7 @@ async def update_activity(
     await _require_live_period(db, activity.period_id)
 
     updates = data.model_dump(exclude_unset=True)
+    old_code = activity.code
 
     if "code" in updates and updates["code"] is not None:
         new_code = updates["code"]
@@ -380,12 +505,20 @@ async def update_activity(
         if target_finish is not None:
             updates["duration_hours"] = await scheduling_cpm.compute_duration_for_finish(db, activity, target_finish)
 
+    if activity.is_archive_container:
+        raise HTTPException(status_code=422, detail="The Archived container can't be edited directly")
+
     if "parent_id" in updates and updates["parent_id"] is not None:
         result = await db.execute(select(Activity).where(Activity.period_id == activity.period_id))
         by_id = {a.id: a for a in result.scalars().all()}
         _validate_no_cycle(by_id, activity_id, updates["parent_id"])
         if updates["parent_id"] not in by_id:
             raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+        if by_id[updates["parent_id"]].is_archive_container:
+            raise HTTPException(
+                status_code=422,
+                detail="Can't indent an activity under the Archived container directly — use Archive instead",
+            )
 
     if updates.get("calendar_id") is not None:
         await _validate_calendar_in_project(db, updates["calendar_id"], activity.project_id)
@@ -397,6 +530,14 @@ async def update_activity(
         activity.sort_order = await _next_sibling_sort_order(
             db, activity.period_id, activity.parent_id, exclude_id=activity.id
         )
+
+    # A manual code rename (inline editing) is a deliberate human choice, distinct
+    # from the automatic promote/demote renumbering _recompute_hierarchy does below
+    # — logged the same way so the audit trail covers both (2026-07-04, per Maro).
+    if "code" in updates and updates["code"] is not None and updates["code"] != old_code:
+        db.add(ActivityCodeHistory(
+            activity_id=activity.id, old_code=old_code, new_code=updates["code"], reason="manual_edit",
+        ))
 
     # ActivityUpdate can't run this as a schema-level validator (a partial PATCH can't
     # tell "field not sent" from "explicitly cleared to null"), so it's checked here
@@ -431,15 +572,141 @@ async def _subtree_ids(db: AsyncSession, period_id: uuid.UUID, root_id: uuid.UUI
     return ids
 
 
-async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> None:
+async def _has_baseline_history(db: AsyncSession, activity_ids: set[uuid.UUID]) -> bool:
+    result = await db.execute(
+        select(ScheduleBaselineActivity.id)
+        .where(ScheduleBaselineActivity.activity_id.in_(activity_ids))
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _get_or_create_archive_container(db: AsyncSession, period_id: uuid.UUID) -> Activity:
+    """The one reserved "Archived" WBS per period that archived activities get
+    reparented under (2026-07-04, per Maro) — lazily created the first time
+    anything in that period is archived. Its own code uses a fifth, reserved
+    role ("A") via the same per-project _next_role_code sequence everything
+    else uses, rather than a bare fixed string — avoids any risk of colliding
+    with a real P/W/T/M code, and sidesteps needing this container to be
+    unique per *project* if a project ever has more than one period."""
+    result = await db.execute(
+        select(Activity).where(Activity.period_id == period_id, Activity.is_archive_container.is_(True))
+    )
+    container = result.scalar_one_or_none()
+    if container is not None:
+        return container
+
+    period = await db.get(Period, period_id)
+    next_sort_order = await _next_sibling_sort_order(db, period_id, None)
+    container = Activity(
+        project_id=period.project_id,
+        period_id=period_id,
+        task_name="Archived",
+        activity_type="wbs_summary",
+        code=await _next_role_code(db, period.project_id, "A"),
+        wbs_role="A",
+        is_archive_container=True,
+        sort_order=next_sort_order,
+    )
+    db.add(container)
+    await db.commit()
+    await db.refresh(container)
+    return container
+
+
+async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> list[Activity]:
+    """Actualise + reparent under the Archived container, instead of deleting
+    (2026-07-04, per Maro): forces pct_complete to 100 ("all work is done to
+    this point, not expecting to do more") and strips every relationship the
+    archived subtree had, so it no longer drives or is driven by the live CPM
+    network — but the row itself (and any baseline snapshot pointing at it)
+    stays, for audit/assurance, rather than being lost outright. cascade=True
+    (default) archives the whole WBS subtree together; cascade=False archives
+    only this row, promoting its direct children up to its former parent
+    first — same choice delete_activity already offers.
+
+    Codes are deliberately left untouched here (unlike a real promote/demote,
+    which _recompute_hierarchy renumbers) — the whole point is a stable,
+    traceable reference back to what this activity was."""
+    activity = await get_activity(db, activity_id)
+    await _require_live_period(db, activity.period_id)
+    if activity.is_archive_container:
+        raise HTTPException(status_code=422, detail="The Archived container can't be archived")
+    period_id = activity.period_id
+
+    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
+
+    rel_result = await db.execute(
+        select(ActivityRelationship).where(
+            or_(
+                ActivityRelationship.predecessor_id.in_(doomed_ids),
+                ActivityRelationship.successor_id.in_(doomed_ids),
+            )
+        )
+    )
+    for rel in rel_result.scalars().all():
+        await db.delete(rel)
+    await db.commit()
+
+    if not cascade:
+        result = await db.execute(select(Activity).where(Activity.parent_id == activity_id))
+        children = list(result.scalars().all())
+        for child in children:
+            child.parent_id = activity.parent_id
+            child.sort_order = await _next_sibling_sort_order(
+                db, period_id, activity.parent_id, exclude_id=child.id
+            )
+        await db.commit()
+
+    archived_result = await db.execute(select(Activity).where(Activity.id.in_(doomed_ids)))
+    archived_activities = list(archived_result.scalars().all())
+    for a in archived_activities:
+        a.pct_complete = Decimal(100)
+        a.is_archived = True
+        _apply_computed_fields(a)
+
+    container = await _get_or_create_archive_container(db, period_id)
+    activity.parent_id = container.id
+    activity.sort_order = await _next_sibling_sort_order(db, period_id, container.id, exclude_id=activity.id)
+
+    await db.commit()
+    for a in archived_activities:
+        await db.refresh(a)
+
+    await create_reassessment(db, ReassessmentCreate(
+        record_type="activity", record_id=activity.id,
+        note="Archived — actualised to 100% complete, relationships removed, moved under the Archived WBS.",
+    ))
+
+    await _recompute_hierarchy(db, period_id)
+    await scheduling_cpm.recompute_schedule(db, period_id)
+    await _attach_evm_fields(db, archived_activities)
+    return archived_activities
+
+
+async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> bool:
     """Delete an activity. cascade=True (default) removes its whole WBS subtree too
     (MS Project's usual "delete summary task" behaviour). cascade=False deletes only
     this row and promotes its direct children up to its own level — they become
     siblings of what used to be this activity's siblings, per Maro's confirmed spec.
+
+    Returns True if the activity was archived instead of deleted — an activity
+    (or, in a cascade, any activity in its subtree) that appears in a saved
+    baseline snapshot can no longer be hard-deleted at all (2026-07-04, per
+    Maro): that would sever the very audit trail baselines exist to provide,
+    so Archive is the only removal path available for it.
     """
     activity = await get_activity(db, activity_id)
     await _require_live_period(db, activity.period_id)
+    if activity.is_archive_container:
+        raise HTTPException(status_code=422, detail="The Archived container can't be deleted")
     period_id = activity.period_id
+
+    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
+
+    if await _has_baseline_history(db, doomed_ids):
+        await archive_activity(db, activity_id, cascade=cascade)
+        return True
 
     # Explicitly ORM-delete any activity_relationships touching the row(s) about to be
     # removed *before* the activity delete, rather than leaning on the FK's ON DELETE
@@ -448,7 +715,6 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     # identity map; a later unrelated query's autoflush pass touching that object's
     # expired FK attributes raises MissingGreenlet trying to refresh a row that no
     # longer exists. Doing the delete explicitly keeps the session's own state honest.
-    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
     rel_result = await db.execute(
         select(ActivityRelationship).where(
             or_(
@@ -497,3 +763,4 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     db.expunge_all()
     await _recompute_hierarchy(db, period_id)
     await scheduling_cpm.recompute_schedule(db, period_id)
+    return False

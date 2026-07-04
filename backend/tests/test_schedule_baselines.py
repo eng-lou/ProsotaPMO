@@ -170,9 +170,16 @@ async def test_delete_baseline(
     assert listing.json() == []
 
 
-async def test_deleting_assigned_baseline_does_not_clear_activity_bl_fields(
+async def test_deleting_active_baseline_clears_activity_bl_fields(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
+    """Regression test: deleting the active baseline used to leave every
+    activity's bl_start/bl_finish/bl_duration_hours/variance_days holding the
+    now-deleted baseline's stale snapshot forever (both the table and the
+    Gantt kept showing it) — Maro caught this in the real app. With the
+    baseline gone there's no reference point left, so these must clear, the
+    same "no snapshot = null" rule assign_baseline already applies to
+    activities created after a capture."""
     await _anchor(db, live_period)
     activity = await _create_activity(client, project, live_period)
     baseline = (await client.post("/api/v1/schedule-baselines/", json={
@@ -183,11 +190,111 @@ async def test_deleting_assigned_baseline_does_not_clear_activity_bl_fields(
     resp = await client.delete(f"/api/v1/schedule-baselines/{baseline['id']}")
     assert resp.status_code == 204
 
-    # The already-copied bl_start/bl_finish on the activity are untouched —
-    # is_active lived on the now-deleted baseline row, not a cross-table
-    # pointer that needs separate cleanup.
-    refreshed = await client.get(f"/api/v1/activities/{activity['id']}")
-    assert refreshed.json()["bl_start"] is not None
+    refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert refreshed["bl_start"] is None
+    assert refreshed["bl_finish"] is None
+    assert refreshed["bl_duration_hours"] is None
+    assert refreshed["variance_days"] is None
+
+
+async def test_unassign_baseline_clears_bl_fields_but_keeps_baseline(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    """Unassign is the opposite of assign: clears every activity's
+    bl_start/bl_finish/bl_duration_hours/variance_days like a delete would,
+    but the baseline itself stays in the saved list — assignable again later
+    (2026-07-04, per Maro: "I want to be able to unassign after I assign a
+    baseline")."""
+    await _anchor(db, live_period)
+    activity = await _create_activity(client, project, live_period)
+    baseline = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-01-01",
+    })).json()
+    await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/assign")
+
+    resp = await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/unassign")
+    assert resp.status_code == 200
+    unassigned = next(a for a in resp.json() if a["id"] == activity["id"])
+    assert unassigned["bl_start"] is None
+    assert unassigned["bl_finish"] is None
+    assert unassigned["bl_duration_hours"] is None
+    assert unassigned["variance_days"] is None
+
+    refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert refreshed["bl_start"] is None
+
+    listing = (await client.get("/api/v1/schedule-baselines/", params={"period_id": str(live_period.id)})).json()
+    saved = next(b for b in listing if b["id"] == baseline["id"])
+    assert saved["is_active"] is False
+
+
+async def test_unassign_then_reassign_baseline_restores_bl_fields(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    await _anchor(db, live_period)
+    activity = await _create_activity(client, project, live_period)
+    baseline = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-01-01",
+    })).json()
+    await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/assign")
+    await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/unassign")
+
+    resp = await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/assign")
+    reassigned = next(a for a in resp.json() if a["id"] == activity["id"])
+    assert reassigned["bl_start"] == activity["start"]
+    assert reassigned["bl_finish"] == activity["finish"]
+
+
+async def test_unassign_rejects_baseline_that_isnt_active(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    await _anchor(db, live_period)
+    baseline = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Never assigned", "baseline_date": "2026-01-01",
+    })).json()
+
+    resp = await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/unassign")
+    assert resp.status_code == 422
+
+
+async def test_unassign_baseline_rejects_frozen_period(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    await _anchor(db, live_period)
+    baseline = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "X", "baseline_date": "2026-01-01",
+    })).json()
+    await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/assign")
+
+    live_period.freeze_status = "frozen"
+    await db.commit()
+
+    resp = await client.post(f"/api/v1/schedule-baselines/{baseline['id']}/unassign")
+    assert resp.status_code == 422
+
+
+async def test_deleting_inactive_baseline_leaves_active_ones_bl_fields_alone(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+):
+    """Only the currently-*active* baseline's removal should clear anything —
+    deleting some other saved-but-not-assigned baseline has no effect on what
+    every activity is currently showing."""
+    await _anchor(db, live_period)
+    activity = await _create_activity(client, project, live_period)
+    active = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Active One", "baseline_date": "2026-01-01",
+    })).json()
+    other = (await client.post("/api/v1/schedule-baselines/", json={
+        "period_id": str(live_period.id), "name": "Unused", "baseline_date": "2026-02-01",
+    })).json()
+    await client.post(f"/api/v1/schedule-baselines/{active['id']}/assign")
+
+    resp = await client.delete(f"/api/v1/schedule-baselines/{other['id']}")
+    assert resp.status_code == 204
+
+    refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert refreshed["bl_start"] is not None
+    assert refreshed["bl_finish"] is not None
 
 
 async def test_create_baseline_rejects_frozen_period(

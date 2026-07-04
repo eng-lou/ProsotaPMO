@@ -45,7 +45,7 @@ async def create_baseline(db: AsyncSession, data: ScheduleBaselineCreate) -> Sch
     activities = list(result.scalars().all())
     for a in activities:
         db.add(ScheduleBaselineActivity(
-            baseline_id=baseline.id, activity_id=a.id,
+            baseline_id=baseline.id, activity_id=a.id, code=a.code,
             start=a.start, finish=a.finish, duration_hours=a.duration_hours,
         ))
 
@@ -53,6 +53,19 @@ async def create_baseline(db: AsyncSession, data: ScheduleBaselineCreate) -> Sch
     await db.refresh(baseline)
     baseline.activity_count = len(activities)
     return baseline
+
+
+async def get_baseline_snapshot(db: AsyncSession, baseline_id: uuid.UUID) -> list[ScheduleBaselineActivity]:
+    """Every activity's captured code/start/finish/duration_hours as of this
+    baseline (2026-07-04, per Maro: "what it was in the baseline" traceability) —
+    distinct from the live activity's current values, which may have moved on."""
+    baseline = await db.get(ScheduleBaseline, baseline_id)
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    result = await db.execute(
+        select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == baseline_id)
+    )
+    return list(result.scalars().all())
 
 
 async def list_baselines(db: AsyncSession, period_id: uuid.UUID) -> list[ScheduleBaseline]:
@@ -63,6 +76,35 @@ async def list_baselines(db: AsyncSession, period_id: uuid.UUID) -> list[Schedul
     baselines = list(result.scalars().all())
     await _attach_activity_counts(db, baselines)
     return baselines
+
+
+async def _clear_baseline_fields(db: AsyncSession, period_id: uuid.UUID) -> list[Activity]:
+    """Nulls bl_start/bl_finish/bl_duration_hours/variance_days on every
+    activity in a period — used whenever the period's active baseline goes
+    away (deleted or unassigned) and those figures have no reference point
+    left to reflect.
+
+    Load-mutate-flush-then-refresh-each, deliberately not a bulk UPDATE: a
+    bulk UPDATE's synchronize_session="evaluate" only syncs the columns
+    actually named in .values() onto already-loaded in-memory objects —
+    since it can't know the new server-computed value of `updated_at`
+    (onupdate=func.now(), not part of this update), it instead expires that
+    attribute on those objects, and a later request sharing this same
+    session (as the test client does) can then hit a synchronous re-fetch of
+    that expired attribute outside an active greenlet — MissingGreenlet.
+    Explicitly refreshing each object after flush, as assign_baseline
+    already does after its own commit, avoids that entirely."""
+    act_result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    activities = list(act_result.scalars().all())
+    for a in activities:
+        a.bl_start = None
+        a.bl_finish = None
+        a.bl_duration_hours = None
+        a.variance_days = None
+    await db.flush()
+    for a in activities:
+        await db.refresh(a)
+    return activities
 
 
 async def assign_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> list[Activity]:
@@ -116,9 +158,42 @@ async def delete_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> None:
     if baseline is None:
         raise HTTPException(status_code=404, detail="Baseline not found")
     await _require_live_period(db, baseline.period_id)
+
+    if baseline.is_active:
+        # Every activity's bl_start/bl_finish/bl_duration_hours/variance_days
+        # currently holds *this* baseline's snapshot (assign_baseline copied
+        # it in) — with the baseline gone, those figures have no reference
+        # point left and must clear, the same "no snapshot = null, not stale"
+        # rule assign_baseline already applies to activities created after a
+        # capture. Previously left untouched, which meant BL Start/BL Finish
+        # and Fin. Var (d) kept showing a deleted baseline's numbers
+        # indefinitely, in both the table and the Gantt.
+        await _clear_baseline_fields(db, baseline.period_id)
+
     # ScheduleBaselineActivity rows cascade via the FK's ON DELETE CASCADE. If
     # this was the active one, there's simply no baseline with is_active=True
     # for this period anymore — no cross-table pointer to clean up, since
     # is_active lives on this table, not a Period back-reference.
     await db.delete(baseline)
     await db.commit()
+
+
+async def unassign_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> list[Activity]:
+    """The opposite of assign_baseline: clears is_active without deleting the
+    saved baseline (2026-07-04, per Maro — "I want to be able to unassign
+    after I assign a baseline"). Every activity's bl_start/bl_finish/
+    bl_duration_hours/variance_days clears exactly as if the baseline had
+    been deleted, but it stays in the saved list to be assigned again later."""
+    baseline = await db.get(ScheduleBaseline, baseline_id)
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    await _require_live_period(db, baseline.period_id)
+    if not baseline.is_active:
+        raise HTTPException(status_code=422, detail="This baseline isn't currently assigned")
+
+    baseline.is_active = False
+    activities = await _clear_baseline_fields(db, baseline.period_id)  # already flushed + refreshed
+
+    await db.commit()
+    await _attach_evm_fields(db, activities)
+    return activities

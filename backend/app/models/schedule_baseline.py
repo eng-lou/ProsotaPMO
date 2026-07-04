@@ -55,7 +55,13 @@ class ScheduleBaselineActivity(Base):
     its historical snapshot entries rather than leaving orphaned references
     (this is pre-production data; a real "keep history past activity
     deletion" requirement would need denormalized code/task_name fields,
-    deliberately not built ahead of that need)."""
+    deliberately not built ahead of that need).
+
+    code: the activity's code at the moment this snapshot was captured
+    (2026-07-04, per Maro) — a code can change after baselining (promoted/
+    demoted, or manually renamed), so this answers "what was it called in
+    the baseline" independently of app/models/activity_code_history.py's
+    running history, which tracks the live activity's own code lineage."""
 
     __tablename__ = "schedule_baseline_activities"
 
@@ -66,6 +72,7 @@ class ScheduleBaselineActivity(Base):
     activity_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
     )
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
     start: Mapped[datetime | None] = mapped_column(DateTime)
     finish: Mapped[datetime | None] = mapped_column(DateTime)
     duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))

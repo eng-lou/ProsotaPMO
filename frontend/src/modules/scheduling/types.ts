@@ -81,6 +81,32 @@ export interface Activity {
   spi: string | null
   eac: string | null
   etc: string | null
+  // P/W/T/M — see backend app/services/activity.py:_activity_role. Never sent
+  // as input; auto-maintained alongside `code`.
+  wbs_role: string
+  // Archive system (2026-07-04, per Maro) — see
+  // backend app/services/activity.py:archive_activity.
+  is_archived: boolean
+  is_archive_container: boolean
+}
+
+// One entry in an activity's append-only code-change audit trail (2026-07-04,
+// per Maro: "so we know what it was before and now") — see backend
+// app/models/activity_code_history.py.
+export interface ActivityCodeHistory {
+  id: string
+  activity_id: string
+  old_code: string | null
+  new_code: string
+  reason: 'promoted_to_wbs' | 'demoted_to_task' | 'wbs_reparented' | 'manual_edit'
+  created_at: string
+}
+
+export const CODE_HISTORY_REASON_LABELS: Record<ActivityCodeHistory['reason'], string> = {
+  promoted_to_wbs: 'Promoted to WBS summary',
+  demoted_to_task: 'Demoted to task',
+  wbs_reparented: 'Moved between top-level and nested WBS',
+  manual_edit: 'Manually renamed',
 }
 
 export type ConstraintType = 'asap' | 'snet' | 'ms' | 'fnlt'

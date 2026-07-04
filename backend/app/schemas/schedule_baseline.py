@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,3 +30,17 @@ class ScheduleBaselineResponse(BaseModel):
     # snapshot actually covers, shown in the Baseline widget's saved-baseline
     # list so a planner isn't guessing what an old capture contains.
     activity_count: int
+
+
+class ScheduleBaselineActivityResponse(BaseModel):
+    """One activity's snapshot within a saved baseline — code is what that
+    activity was called at capture time, which can differ from its code now
+    if it's since been promoted/demoted/renamed (2026-07-04, per Maro: "what
+    it was in the baseline" for code traceability)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    activity_id: uuid.UUID
+    code: str
+    start: datetime | None
+    finish: datetime | None
+    duration_hours: Decimal | None = None

@@ -168,7 +168,7 @@ async def test_deleting_activity_removes_linked_cost_element(
     assert element is not None
 
     resp = await client.delete(f"/api/v1/activities/{activity['id']}")
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     resp = await client.get(f"/api/v1/cost-elements/{element['id']}")
     assert resp.status_code == 404
@@ -227,7 +227,7 @@ async def test_deleting_activity_leaves_unlinked_element_in_place(
     await client.patch(f"/api/v1/cost-elements/{element['id']}", json={"budget": "500.00"})  # unlinks it
 
     resp = await client.delete(f"/api/v1/activities/{activity['id']}")
-    assert resp.status_code == 204
+    assert resp.status_code == 200
 
     resp = await client.get(f"/api/v1/cost-elements/{element['id']}")
     assert resp.status_code == 200

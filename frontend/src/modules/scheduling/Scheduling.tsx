@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { useProjectLetterhead } from '@/lib/letterhead'
@@ -12,12 +13,14 @@ import { ActivityLogic } from './ActivityLogic'
 import { BaselineWidget } from './BaselineWidget'
 import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
 import { CalendarWidget } from './CalendarWidget'
+import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
 import { LayoutWidget } from './LayoutWidget'
+import { PasteFieldsWidget } from './PasteFieldsWidget'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
 import { RescheduleWidget } from './RescheduleWidget'
@@ -163,11 +166,34 @@ export function formatRatio(value: string | null) {
 // commitEdit below and backend app/services/scheduling_cpm.py:compute_duration_for_finish.
 type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish'
 
-// Fields copyable row-to-row via the clipboard buttons — everything a planner would
-// want to templatize across similar activities (task_name and computed fields
-// deliberately excluded — copying a name or a CPM-derived date makes no sense).
-const ROW_CLIPBOARD_FIELDS: (keyof Activity)[] = [
-  'activity_type', 'duration_hours', 'pct_complete', 'constraint_type', 'constraint_date', 'calendar_id', 'commentary',
+// Copy/paste is checkbox-driven (2026-07-04, per Maro): copying a row grabs a
+// full snapshot, and pasting lets you pick exactly which of these fields
+// actually get applied — see PasteFieldsWidget below. defaultChecked mirrors
+// the previous all-or-nothing behaviour for the fields that already existed;
+// name/start/finish are new, opt-in (unusual to copy, or carry a side effect).
+// Commentary is deliberately not offered — it was removed from the activity
+// form back in session 16 (the reassessment log already covers "what changed
+// and why"), so it shouldn't reappear here as something to templatize either.
+type PasteFieldKey =
+  | 'task_name' | 'activity_type' | 'duration_hours' | 'start' | 'finish'
+  | 'pct_complete' | 'constraint' | 'calendar_id'
+
+interface PasteFieldOption {
+  key: PasteFieldKey
+  label: string
+  hint?: string
+  defaultChecked: boolean
+}
+
+const PASTE_FIELD_OPTIONS: PasteFieldOption[] = [
+  { key: 'task_name', label: 'Name', defaultChecked: false },
+  { key: 'activity_type', label: 'Type', defaultChecked: true },
+  { key: 'duration_hours', label: 'Duration', defaultChecked: true },
+  { key: 'start', label: 'Start date', hint: 'applies a soft "Start On or After" constraint, like inline-editing Start', defaultChecked: false },
+  { key: 'finish', label: 'Finish date', hint: 'recomputes duration to match, like inline-editing Finish', defaultChecked: false },
+  { key: 'pct_complete', label: '% Complete', defaultChecked: true },
+  { key: 'constraint', label: 'Constraint', hint: 'copies the constraint type/date as-is; Start date above takes precedence if both are ticked', defaultChecked: true },
+  { key: 'calendar_id', label: 'Calendar', defaultChecked: true },
 ]
 
 export function Scheduling() {
@@ -337,6 +363,10 @@ export function Scheduling() {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filterCritical, setFilterCritical] = useState(false)
   const [filterDelayed, setFilterDelayed] = useState(false)
+  // Archived activities are visible by default (2026-07-04, per Maro) — this
+  // only ever narrows the list when explicitly ticked, same as the other
+  // filter checkboxes below.
+  const [hideArchived, setHideArchived] = useState(false)
   const [filterAtRisk, setFilterAtRisk] = useState(false)
 
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
@@ -433,11 +463,14 @@ export function Scheduling() {
     startEdit(a, 'task_name')
   }
 
-  // Row clipboard — "copy" snapshots one activity's editable settings; "paste" applies
-  // them to another. True cell-value copy/paste is handled for free by the native
-  // browser clipboard once a cell becomes a text <input> (see editingCell above); this
-  // covers the "seed several similar activities from one configured row" workflow.
-  const [rowClipboard, setRowClipboard] = useState<Partial<Activity> | null>(null)
+  // Row clipboard — "copy" snapshots one whole activity; "paste" opens
+  // PasteFieldsWidget so exactly which fields get applied is a deliberate,
+  // per-paste choice (2026-07-04, per Maro), not fixed at copy time. True
+  // cell-value copy/paste is handled for free by the native browser clipboard
+  // once a cell becomes a text <input> (see editingCell above); this covers
+  // the "seed several similar activities from one configured row" workflow.
+  const [rowClipboard, setRowClipboard] = useState<Activity | null>(null)
+  const [pasteWidgetOpen, setPasteWidgetOpen] = useState(false)
 
   // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
   // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
@@ -515,10 +548,13 @@ export function Scheduling() {
       // ~1-5 working days of float at a nominal 8h/day — an approximation, same as
       // the backend quality module's DCMA thresholds (app/services/scheduling_quality.py).
       if (filterAtRisk && !(a.total_float_hours !== null && a.total_float_hours > 0 && a.total_float_hours <= 40)) return false
+      // Hiding archived work also hides the reserved Archived container itself —
+      // an empty "Archived" heading with nothing under it is just clutter.
+      if (hideArchived && (a.is_archived || a.is_archive_container)) return false
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk, collapsedIds])
+  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds])
 
   if (!selectedProject) return null
 
@@ -583,16 +619,47 @@ export function Scheduling() {
 
     if (childCount > 0) {
       const label = `${childCount} sub-activit${childCount === 1 ? 'y' : 'ies'}`
+      // Deliberately a plain window.confirm, not confirmWithDontAsk: OK and
+      // Cancel are both live, meaningful branches here (cascade-delete vs.
+      // promote children), not a single "proceed/cancel" choice — there's no
+      // safe default to silently remember and replay forever.
       cascade = window.confirm(
         `"${activity.task_name}" has ${label}. Delete them too?\n\n` +
         `OK = delete "${activity.task_name}" and all ${label}.\n` +
         `Cancel = delete only "${activity.task_name}" — its ${label} move up to its level instead.`
       )
-    } else if (!window.confirm(`Delete activity "${activity.task_name}"? This cannot be undone.`)) {
+    } else if (!(await confirmWithDontAsk('scheduling.activity-delete', `Delete activity "${activity.task_name}"? This cannot be undone.`))) {
       return false
     }
 
-    await api.delete(`/api/v1/activities/${activity.id}`, { params: { cascade } })
+    const { data } = await api.delete<{ archived: boolean }>(`/api/v1/activities/${activity.id}`, { params: { cascade } })
+    await refresh()
+    if (data.archived) {
+      window.alert(
+        `"${activity.task_name}" is part of a saved baseline, so it was archived instead of deleted — ` +
+        `actualised to 100% complete and moved under the Archived WBS, to keep that baseline's audit trail intact.`
+      )
+    }
+    return true
+  }
+
+  const handleArchive = async (activity: Activity): Promise<boolean> => {
+    const childCount = activities.filter(a => a.parent_id === activity.id).length
+    let cascade = true
+    if (childCount > 0) {
+      const label = `${childCount} sub-activit${childCount === 1 ? 'y' : 'ies'}`
+      cascade = window.confirm(
+        `"${activity.task_name}" has ${label}. Archive them too?\n\n` +
+        `OK = archive "${activity.task_name}" and all ${label}.\n` +
+        `Cancel = archive only "${activity.task_name}" — its ${label} move up to its level instead.`
+      )
+    } else if (!(await confirmWithDontAsk(
+      'scheduling.activity-archive',
+      `Archive "${activity.task_name}"? It's actualised to 100% complete, its relationships are removed, and it moves under the Archived WBS — not deleted, so it stays fully referenceable.`
+    ))) {
+      return false
+    }
+    await api.post(`/api/v1/activities/${activity.id}/archive`, null, { params: { cascade } })
     await refresh()
     return true
   }
@@ -656,10 +723,11 @@ export function Scheduling() {
       if (!editingValue) { setEditingCell(null); return }
       // Soft constraint (P6/MS Project "Start On or After") — the activity's normal
       // logic can still push it later than this; it just can't start earlier.
-      if (!window.confirm(
+      if (!(await confirmWithDontAsk(
+        'scheduling.set-start-constraint',
         'Setting a start date applies a "Start On or After" constraint — this activity ' +
         'will never start earlier than it, though its normal logic/dependencies can still push it later. Continue?'
-      )) { setEditingCell(null); return }
+      ))) { setEditingCell(null); return }
       payload = { constraint_type: 'snet', constraint_date: editingValue }
     } else if (field === 'finish') {
       if (!editingValue) { setEditingCell(null); return }
@@ -681,9 +749,7 @@ export function Scheduling() {
   }
 
   const handleCopyRow = (a: Activity) => {
-    const snapshot: Partial<Activity> = {}
-    for (const field of ROW_CLIPBOARD_FIELDS) (snapshot as Record<string, unknown>)[field] = a[field]
-    setRowClipboard(snapshot)
+    setRowClipboard(a)
   }
 
   const depthOf = (a: Activity) => (a.wbs_path ? a.wbs_path.split('.').length - 1 : 0)
@@ -695,6 +761,10 @@ export function Scheduling() {
   // wbsRowBackground), then milestone, else the flat "normal activity" tint
   // (white by default, i.e. invisible, until a Layout changes it).
   const rowBackground = (a: Activity): string | undefined => {
+    // Archived rows read as parked/done regardless of anything else — a flat
+    // grey rather than any live-schedule colour (critical, WBS, milestone),
+    // since they're no longer part of the live network at all.
+    if (a.is_archived || a.is_archive_container) return '#f3f4f6'
     if (a.is_critical) return withAlpha(ganttStyle.critical_color, 0.12)
     if (a.activity_type === 'wbs_summary') return wbsRowBackground(ganttStyle, depthOf(a))
     if (a.activity_type === 'milestone') return withAlpha(ganttStyle.milestone_row_color, 0.15)
@@ -773,27 +843,26 @@ export function Scheduling() {
     await refresh()
   }
 
-  const handleBulkPaste = async () => {
+  const handleBulkPaste = () => {
     if (!rowClipboard || selectedActivities.length === 0) return
-    if (!window.confirm(
-      `Paste the copied settings (type, duration, % complete, constraint, calendar, commentary) onto ${selectedActivities.length} selected activit${selectedActivities.length === 1 ? 'y' : 'ies'}?\n\nThis overwrites their current values.`
-    )) return
-    for (const a of selectedActivities) {
-      await api.patch(`/api/v1/activities/${a.id}`, rowClipboard)
-    }
-    await refresh()
+    setPasteWidgetOpen(true)
   }
 
   const handleBulkDuplicate = async () => {
     if (selectedActivities.length === 0 || !period) return
-    if (!window.confirm(
-      `Duplicate ${selectedActivities.length} selected activit${selectedActivities.length === 1 ? 'y' : 'ies'}? Each copy is added at the end of its original parent group. Relationships and resource assignments are not copied.`
-    )) return
+    if (!(await confirmWithDontAsk(
+      'scheduling.bulk-duplicate',
+      `Duplicate ${selectedActivities.length} selected activit${selectedActivities.length === 1 ? 'y' : 'ies'}? Each copy is added immediately below its original. Relationships and resource assignments are not copied.`
+    ))) return
     for (const a of selectedActivities) {
       await api.post('/api/v1/activities/', {
         project_id: selectedProject.id,
         period_id: period.id,
         parent_id: a.parent_id,
+        // Lands right after the source, not appended at the end of the group
+        // (2026-07-04, per Maro — that "end" could otherwise be past the
+        // reserved Archive container, or past unrelated later siblings).
+        insert_after_id: a.id,
         task_name: `${a.task_name} (copy)`,
         activity_type: a.activity_type,
         duration_hours: a.duration_hours,
@@ -836,9 +905,37 @@ export function Scheduling() {
     const message = withChildren.length > 0
       ? `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? ${withChildren.length} of them ${withChildren.length === 1 ? 'has' : 'have'} sub-activities — those will be deleted too. This cannot be undone.`
       : `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? This cannot be undone.`
-    if (!window.confirm(message)) return
+    if (!(await confirmWithDontAsk('scheduling.bulk-delete', message))) return
+    let archivedCount = 0
     for (const a of topLevel) {
-      await api.delete(`/api/v1/activities/${a.id}`, { params: { cascade: true } })
+      const { data } = await api.delete<{ archived: boolean }>(`/api/v1/activities/${a.id}`, { params: { cascade: true } })
+      if (data.archived) archivedCount += 1
+    }
+    setSelectedIds(new Set())
+    await refresh()
+    if (archivedCount > 0) {
+      window.alert(
+        `${archivedCount} of ${topLevel.length} selected activit${topLevel.length === 1 ? 'y is' : 'ies were'} part of a ` +
+        `saved baseline, so ${archivedCount === 1 ? 'it was' : 'they were'} archived instead of deleted — actualised to 100% ` +
+        `complete and moved under the Archived WBS, to keep that baseline's audit trail intact.`
+      )
+    }
+  }
+
+  const handleBulkArchive = async () => {
+    if (soleSelected) {
+      if (await handleArchive(soleSelected)) setSelectedIds(new Set())
+      return
+    }
+    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a))
+    if (topLevel.length === 0) return
+    if (!(await confirmWithDontAsk(
+      'scheduling.bulk-archive',
+      `Archive ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'} (and any sub-activities)? ` +
+      `Each is actualised to 100% complete, its relationships are removed, and it moves under the Archived WBS.`
+    ))) return
+    for (const a of topLevel) {
+      await api.post(`/api/v1/activities/${a.id}/archive`, null, { params: { cascade: true } })
     }
     setSelectedIds(new Set())
     await refresh()
@@ -960,6 +1057,15 @@ export function Scheduling() {
             }`}
           >
             🔬 Quality Check
+          </button>
+          <button
+            onClick={() => setHideArchived(h => !h)}
+            title="Archived activities are visible by default in the table, Gantt, export, and print — toggle to hide them"
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+              hideArchived ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            🗄 {hideArchived ? 'Show Archived' : 'Hide Archived'}
           </button>
           <button
             onClick={() => setRescheduleWidgetOpen(o => !o)}
@@ -1115,7 +1221,12 @@ export function Scheduling() {
             )}
           </div>
           <button
-            onClick={handleBulkDelete} disabled={selectedActivities.length === 0}
+            onClick={handleBulkArchive} disabled={selectedActivities.length === 0 || selectedActivities.some(a => a.is_archive_container)}
+            title="Archive all selected — actualise to 100% complete and move under the Archived WBS, instead of deleting"
+            className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+          >Archive</button>
+          <button
+            onClick={handleBulkDelete} disabled={selectedActivities.length === 0 || selectedActivities.some(a => a.is_archive_container)}
             title="Delete all selected"
             className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Delete</button>
@@ -1159,6 +1270,18 @@ export function Scheduling() {
             resources={resources}
             onApplied={refresh}
             onClose={() => setBulkAssignMode(null)}
+          />
+        </div>
+      )}
+
+      {pasteWidgetOpen && rowClipboard && (
+        <div className="no-print">
+          <PasteFieldsWidget
+            source={rowClipboard}
+            targets={selectedActivities}
+            options={PASTE_FIELD_OPTIONS}
+            onApplied={refresh}
+            onClose={() => setPasteWidgetOpen(false)}
           />
         </div>
       )}
@@ -1359,6 +1482,16 @@ export function Scheduling() {
                         >
                           {a.task_name}
                         </button>
+                        {(a.is_archived || a.is_archive_container) && (
+                          <span
+                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-500 bg-gray-200 rounded px-1 py-0.5"
+                            title={a.is_archive_container
+                              ? 'Reserved container for archived activities — audit/reference only'
+                              : 'Archived — actualised to 100% complete, no longer part of the live schedule'}
+                          >
+                            Archived
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>
@@ -1560,6 +1693,7 @@ export function Scheduling() {
                   refreshKey={reassessmentRefreshKey}
                   onLogged={() => refresh()}
                 />
+                <CodeHistory activityId={expandedActivity.id} code={expandedActivity.code} />
               </div>
             </div>
           ) : (

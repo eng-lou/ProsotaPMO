@@ -58,6 +58,13 @@ class ActivityBase(BaseModel):
 class ActivityCreate(ActivityBase):
     project_id: uuid.UUID
     period_id: uuid.UUID
+    # Positioning hint only, not a stored column — when set, the new activity
+    # lands immediately after this sibling (same parent_id) instead of
+    # appended at the end of the group (2026-07-04, per Maro: Duplicate should
+    # place the copy right next to its source, not wherever the group's
+    # current end happens to be — e.g. past the reserved Archive container).
+    # See app/services/activity.py:_next_sibling_sort_order_after.
+    insert_after_id: uuid.UUID | None = None
 
 
 class ActivityUpdate(BaseModel):
@@ -166,3 +173,28 @@ class ActivityResponse(ActivityBase):
     spi: Decimal | None = None
     eac: Decimal | None = None
     etc: Decimal | None = None
+    # P/W/T/M — see app/services/activity.py:_activity_role. Never accepted as
+    # API input; auto-maintained alongside `code`.
+    wbs_role: str = "T"
+    is_archived: bool = False
+    is_archive_container: bool = False
+
+
+class DeleteActivityResponse(BaseModel):
+    """archived=True means the delete was redirected to Archive instead (the
+    activity, or one in its subtree, appears in a saved baseline snapshot) —
+    see app/services/activity.py:delete_activity."""
+    archived: bool
+
+
+class ActivityCodeHistoryResponse(BaseModel):
+    """One entry in an activity's append-only code-change audit trail — see
+    app/models/activity_code_history.py."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    activity_id: uuid.UUID
+    old_code: str | None
+    new_code: str
+    reason: str
+    created_at: datetime

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { ScheduleBaseline } from './types'
 
 interface Props {
@@ -39,9 +40,10 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
   }
 
   const handleAssign = async (b: ScheduleBaseline) => {
-    if (!window.confirm(
+    if (!(await confirmWithDontAsk(
+      'scheduling.baseline-assign',
       `Assign "${b.name}" as the active baseline? This overwrites BL Start/BL Finish/Fin. Var (d) on every activity in this period with ${b.name}'s captured dates.`
-    )) return
+    ))) return
     setAssigningId(b.id)
     try {
       await api.post(`/api/v1/schedule-baselines/${b.id}/assign`)
@@ -51,14 +53,29 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
     }
   }
 
+  const handleUnassign = async (b: ScheduleBaseline) => {
+    if (!(await confirmWithDontAsk(
+      'scheduling.baseline-unassign',
+      `Unassign "${b.name}"? BL Start/BL Finish/Fin. Var (d) clear on every activity in this period. The saved baseline itself isn't deleted — you can assign it again later.`
+    ))) return
+    setAssigningId(b.id)
+    try {
+      await api.post(`/api/v1/schedule-baselines/${b.id}/unassign`)
+      await Promise.all([load(), onChange()])
+    } finally {
+      setAssigningId(null)
+    }
+  }
+
   const handleDelete = async (b: ScheduleBaseline) => {
-    if (!window.confirm(
+    if (!(await confirmWithDontAsk(
+      'scheduling.baseline-delete',
       `Delete the saved baseline "${b.name}"? This cannot be undone.${
-        b.is_active ? '\n\nIt is currently assigned — deleting it does not change any activity\'s BL Start/BL Finish, it just removes this saved snapshot from the list.' : ''
+        b.is_active ? '\n\nIt is currently assigned — deleting it clears BL Start/BL Finish/Fin. Var (d) on every activity in this period, since there\'d be no baseline left for them to reflect.' : ''
       }`
-    )) return
+    ))) return
     await api.delete(`/api/v1/schedule-baselines/${b.id}`)
-    await load()
+    await Promise.all([load(), onChange()])
   }
 
   return (
@@ -88,7 +105,16 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
               <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500">{b.activity_count}</td>
               <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
                 {b.is_active ? (
-                  <span className="text-blue-600 font-medium">✓ Assigned</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-blue-600 font-medium">✓ Assigned</span>
+                    <button
+                      onClick={() => handleUnassign(b)}
+                      disabled={assigningId === b.id}
+                      className="text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                    >
+                      Unassign
+                    </button>
+                  </span>
                 ) : (
                   <button
                     onClick={() => handleAssign(b)}

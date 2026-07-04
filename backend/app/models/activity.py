@@ -17,6 +17,16 @@ class Activity(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(20), nullable=False)
+    # P (top-level WBS summary) | W (nested WBS summary) | T (task) | M (milestone) —
+    # the structural role `code`'s prefix is meant to reflect, tracked independently
+    # of the code string itself (2026-07-04, per Maro's P/W/T/M scheme). Kept as its
+    # own column rather than parsed from `code` on every check, because `code` is
+    # also manually editable (inline editing) — a user renaming T-0001 to something
+    # of their own choosing must not be mistaken for a real hierarchy-driven role
+    # change the next time app/services/activity.py:_recompute_hierarchy runs.
+    # Never accepted as API input; auto-maintained by _recompute_hierarchy alongside
+    # activity_type.
+    wbs_role: Mapped[str] = mapped_column(String(1), nullable=False, default="T")
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
@@ -106,3 +116,18 @@ class Activity(Base, TimestampMixin):
     # (app/services/reassessment.py). Stays a plain Date — "last reviewed" only ever
     # needed day granularity, unlike the CPM-facing fields above.
     last_reviewed_date: Mapped[date | None] = mapped_column(Date)
+    # Archive system (2026-07-04, per Maro): archiving actualises an activity
+    # (pct_complete forced to 100, all its relationships stripped) and reparents it
+    # under the period's reserved Archived container instead of hard-deleting it —
+    # preserves the row (and its baseline history) for audit/assurance rather than
+    # losing it. is_archived is never accepted as API input directly; only
+    # app/services/activity.py:archive_activity sets it. Deleting an activity that
+    # appears in any saved baseline snapshot now archives it instead — real deletion
+    # would otherwise sever the very audit trail baselines exist to provide.
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Marks the one reserved "Archived" WBS container per period that archived
+    # activities get reparented under (see app/services/activity.py:
+    # _get_or_create_archive_container) — excluded from normal WBS numbering,
+    # promote/demote logic, and can't itself be deleted, archived, or used as an
+    # indent/outdent target.
+    is_archive_container: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

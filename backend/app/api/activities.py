@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.activity import (
     ActivityActualsUpdate,
+    ActivityCodeHistoryResponse,
     ActivityCreate,
     ActivityMoveRequest,
     ActivityResponse,
     ActivityUpdate,
+    DeleteActivityResponse,
     SetDataDateRequest,
 )
 from app.services import activity as svc
@@ -67,6 +69,16 @@ async def get_activity(
     return await svc.get_activity(db, activity_id)
 
 
+@router.get("/{activity_id}/code-history", response_model=list[ActivityCodeHistoryResponse])
+async def list_code_history(
+    activity_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list:
+    """Every code change this activity has ever had (auto-logged promotions/
+    demotions, plus manual renames) — see app/models/activity_code_history.py."""
+    return await svc.list_code_history(db, activity_id)
+
+
 @router.patch("/{activity_id}", response_model=ActivityResponse)
 async def update_activity(
     activity_id: uuid.UUID,
@@ -100,13 +112,29 @@ async def update_activity_actuals(
     return await svc.update_activity_actuals(db, activity_id, data.actuals)
 
 
-@router.delete("/{activity_id}", status_code=204)
+@router.delete("/{activity_id}", response_model=DeleteActivityResponse)
 async def delete_activity(
     activity_id: uuid.UUID,
     cascade: bool = True,
     db: AsyncSession = Depends(get_db),
-) -> Response:
+):
     """cascade=false promotes direct children to the deleted activity's own parent
-    (they end up "level with" its former siblings) instead of deleting them too."""
-    await svc.delete_activity(db, activity_id, cascade=cascade)
-    return Response(status_code=204)
+    (they end up "level with" its former siblings) instead of deleting them too.
+    Returns archived=True if this was redirected to Archive instead of a real
+    delete (the activity, or one in its subtree, appears in a saved baseline
+    snapshot) — see app/services/activity.py:delete_activity."""
+    archived = await svc.delete_activity(db, activity_id, cascade=cascade)
+    return {"archived": archived}
+
+
+@router.post("/{activity_id}/archive", response_model=list[ActivityResponse])
+async def archive_activity(
+    activity_id: uuid.UUID,
+    cascade: bool = True,
+    db: AsyncSession = Depends(get_db),
+) -> list:
+    """Actualises (100% complete), strips relationships, and reparents under
+    the period's reserved Archived WBS, instead of deleting — available as an
+    explicit choice for any activity, not just ones Delete would otherwise
+    redirect automatically. See app/services/activity.py:archive_activity."""
+    return await svc.archive_activity(db, activity_id, cascade=cascade)

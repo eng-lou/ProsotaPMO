@@ -4,6 +4,7 @@ from app.models.user import User
 from app.models.project import Project
 from app.models.period import Period
 from app.models.activity import Activity
+from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarException
 from app.models.risk import Risk
@@ -34,6 +35,7 @@ __all__ = [
     "Project",
     "Period",
     "Activity",
+    "ActivityCodeHistory",
     "ActivityRelationship",
     "Calendar",
     "CalendarException",
