@@ -14,20 +14,17 @@ export function useActivePeriod(projectId: string | undefined) {
     if (!projectId) return
     try {
       setLoading(true)
-      const { data: periods } = await api.get<Period[]>('/api/v1/periods/', {
+      // The find-or-create used to happen here, client-side (fetch periods,
+      // create one if the list was empty) — two of these racing for the same
+      // brand-new project could both see an empty list and both create a
+      // "Period 1", silently splitting the project's data across two "live"
+      // periods (see backend migration a3f9c02e5b71). One atomic backend call
+      // now does the whole thing, with a DB-level constraint as the real
+      // guard against the race.
+      const { data } = await api.post<Period>('/api/v1/periods/bootstrap', null, {
         params: { project_id: projectId },
       })
-      let active = periods.find(p => p.freeze_status === 'live') ?? periods[0] ?? null
-
-      if (!active) {
-        const { data: created } = await api.post<Period>('/api/v1/periods/', {
-          project_id: projectId,
-          period_label: 'Period 1',
-          freeze_status: 'live',
-        })
-        active = created
-      }
-      setPeriod(active)
+      setPeriod(data)
     } catch {
       setError('Failed to load period')
     } finally {

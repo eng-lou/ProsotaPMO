@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.organisation import Organisation
 from app.models.project import Project
@@ -108,3 +110,42 @@ async def test_create_and_list_periods(client: AsyncClient):
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 1
     assert list_resp.json()[0]["period_label"] == "Period 1"
+
+
+async def test_bootstrap_period_creates_once_then_reuses(client: AsyncClient):
+    """The stopgap 'auto-create Period 1' used to do find-or-create client-side,
+    which raced under concurrent calls and could silently create two 'live'
+    periods for the same brand-new project (real incident: two rows ~1.5ms
+    apart, splitting that project's activities across both — see migration
+    a3f9c02e5b71). The bootstrap endpoint does it as one atomic call instead;
+    calling it twice for the same project must return the exact same period,
+    not create a second one."""
+    p = await _create(client)
+    first = await client.post("/api/v1/periods/bootstrap", params={"project_id": p["id"]})
+    assert first.status_code == 200
+    second = await client.post("/api/v1/periods/bootstrap", params={"project_id": p["id"]})
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+    list_resp = await client.get("/api/v1/periods/", params={"project_id": p["id"]})
+    assert len(list_resp.json()) == 1
+
+
+async def test_bootstrap_period_returns_existing_live_period(client: AsyncClient, project: Project, live_period):
+    resp = await client.post("/api/v1/periods/bootstrap", params={"project_id": project.id.__str__()})
+    assert resp.status_code == 200
+    assert resp.json()["id"] == live_period.id.__str__()
+
+
+async def test_only_one_live_period_allowed_per_project(db: AsyncSession, project: Project, live_period):
+    """The DB-level guard behind bootstrap's race safety: a second 'live'
+    period for the same project must be rejected outright, not silently
+    accepted the way the two pre-existing rows were before this fix."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.period import Period
+
+    dupe = Period(project_id=project.id, period_label="Period 1 (dupe)", freeze_status="live")
+    db.add(dupe)
+    with pytest.raises(IntegrityError):
+        await db.commit()

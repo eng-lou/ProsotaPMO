@@ -4,7 +4,7 @@ import uuid
 from datetime import date, time
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, Time
+from sqlalchemy import Boolean, Date, ForeignKey, Index, String, Time, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,21 @@ if TYPE_CHECKING:
 
 class Period(Base, TimestampMixin):
     __tablename__ = "periods"
+
+    # A project may accumulate many periods over its life (frozen, incorporated,
+    # ...) but only one can ever be "live" at a time (ARCHITECTURE.md §3) — this
+    # is the real DB-level guard behind app/api/periods.py's bootstrap endpoint,
+    # added after two concurrent client-side "auto-create Period 1" calls once
+    # silently created two "live" rows ~1.5ms apart for the same project (see
+    # migration a3f9c02e5b71).
+    __table_args__ = (
+        Index(
+            "uq_periods_project_live",
+            "project_id",
+            unique=True,
+            postgresql_where=text("freeze_status = 'live'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
