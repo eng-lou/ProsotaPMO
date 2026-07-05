@@ -7,7 +7,9 @@ export function formatDateTime(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const datePart = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+  // year included (2026-07-04, per Maro) — a schedule routinely spans more
+  // than one calendar year, and "22 Jun" is genuinely ambiguous without it.
+  const datePart = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
   const timePart = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
   return `${datePart} ${timePart}`
 }

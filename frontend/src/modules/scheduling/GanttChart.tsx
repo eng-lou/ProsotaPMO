@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react'
 import { DEFAULT_GANTT_STYLE, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { formatDateTime } from './dateTime'
 import { computeTimeMarks, DAY_WIDTH_BY_ZOOM, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
@@ -26,13 +26,18 @@ export const GANTT_ROW_HEIGHT = 46
 // can match its own printed table's header height the same way.
 export const HEADER_HEIGHT = 36
 
-const BAR_ZONE_TOP = 5
+// The live bar is centered on the FULL row height (matching the data grid's
+// own vertically-centered text — table cells default to vertical-align:
+// middle), with the baseline "ghost" zone squeezed into what's left below it
+// (2026-07-05, per Maro: the live bar previously sat in a fixed upper zone
+// regardless of row height, reading as slightly off-center against the text).
 const BAR_ZONE_HEIGHT = 22
-const BAR_CENTER_Y = BAR_ZONE_TOP + BAR_ZONE_HEIGHT / 2 // 16
+const BAR_CENTER_Y = GANTT_ROW_HEIGHT / 2 // 23
+const BAR_ZONE_TOP = BAR_CENTER_Y - BAR_ZONE_HEIGHT / 2 // 12
 const MILESTONE_SIZE = 14
 
-const BASELINE_ZONE_TOP = 30
-const BASELINE_CENTER_Y = 38
+const BASELINE_ZONE_TOP = BAR_ZONE_TOP + BAR_ZONE_HEIGHT // 34
+const BASELINE_CENTER_Y = BASELINE_ZONE_TOP + (GANTT_ROW_HEIGHT - BASELINE_ZONE_TOP) / 2 // 40
 const BASELINE_MILESTONE_SIZE = 10
 
 // Phase 10: start/finish/bl_start/bl_finish are full ISO datetimes, not date-only
@@ -98,13 +103,20 @@ export function WbsSummaryBar({
   )
 }
 
-export function GanttChart({
-  activities,
-  relationships = [],
-  style = DEFAULT_GANTT_STYLE,
-  zoom = 'week',
-  onZoomChange,
-}: {
+export interface GanttChartHandle {
+  // Shifts the row/bar body by -scrollTop via a direct DOM mutation, bypassing
+  // React state/re-render entirely (2026-07-05, per Maro: driving this through
+  // React state made the Gantt visibly lag behind the data grid while
+  // scrolling — a full ~140-row re-render + reconcile on every scroll tick is
+  // too slow to track a native scroll gesture smoothly). The grid's onScroll
+  // handler (Scheduling.tsx) calls this directly with its own live scrollTop,
+  // same principle as before (github.com/pekingstyle/OnlineGantt derives a bar's
+  // Y from the grid's real, current scroll state) — just applied without
+  // going through a React render this time.
+  setScrollTop: (scrollTop: number) => void
+}
+
+export const GanttChart = forwardRef<GanttChartHandle, {
   activities: Activity[]
   relationships?: ActivityRelationship[]
   style?: GanttStyle
@@ -114,7 +126,25 @@ export function GanttChart({
   // to ... drag with my mouse") — optional since print's static GanttChart
   // has no interactive zoom to change.
   onZoomChange?: (zoom: GanttZoom) => void
-}) {
+  // The row/bar body is clipped to this height — paired with the ref handle
+  // above for the live split-pane view. Omit for the static print view, which
+  // renders the whole chart unclipped in normal page flow.
+  viewportHeight?: number
+}>(function GanttChart({
+  activities,
+  relationships = [],
+  style = DEFAULT_GANTT_STYLE,
+  zoom = 'week',
+  onZoomChange,
+  viewportHeight,
+}, ref) {
+  const bodyWrapperRef = useRef<HTMLDivElement>(null)
+  useImperativeHandle(ref, () => ({
+    setScrollTop: (scrollTop: number) => {
+      if (bodyWrapperRef.current) bodyWrapperRef.current.style.transform = `translateY(${-scrollTop}px)`
+    },
+  }), [])
+
   const dayWidth = DAY_WIDTH_BY_ZOOM[zoom]
 
   // mousedown on the header starts tracking; every PX_PER_ZOOM_STEP of
@@ -212,24 +242,26 @@ export function GanttChart({
     return map
   }, [activities, rangeStart, dayWidth])
 
-  return (
-    <div style={{ width, minWidth: '100%' }}>
-      <div
-        className="relative border-b border-gray-200 bg-gray-50"
-        style={{ height: HEADER_HEIGHT, width, cursor: onZoomChange ? 'ew-resize' : undefined }}
-        onMouseDown={handleHeaderMouseDown}
-        title={onZoomChange ? 'Drag to zoom the timescale' : undefined}
-      >
-        {timeMarks.map(m => (
-          <div
-            key={m.offset}
-            className="absolute top-0 border-l border-gray-200 pl-1 text-[10px] text-gray-400"
-            style={{ left: m.offset * dayWidth, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px` }}
-          >
-            {m.label}
-          </div>
-        ))}
-      </div>
+  const header = (
+    <div
+      className="relative border-b border-gray-200 bg-gray-50"
+      style={{ height: HEADER_HEIGHT, width, cursor: onZoomChange ? 'ew-resize' : undefined }}
+      onMouseDown={handleHeaderMouseDown}
+      title={onZoomChange ? 'Drag to zoom the timescale' : undefined}
+    >
+      {timeMarks.map(m => (
+        <div
+          key={m.offset}
+          className="absolute top-0 border-l border-gray-200 pl-1 text-[10px] text-gray-400"
+          style={{ left: m.offset * dayWidth, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px` }}
+        >
+          {m.label}
+        </div>
+      ))}
+    </div>
+  )
+
+  const body = (
       <div className="relative" style={{ width, height }}>
         {activities.map((a, i) => (
           i % 2 === 1 && (
@@ -377,6 +409,18 @@ export function GanttChart({
           )
         })}
       </div>
+  )
+
+  return (
+    <div style={{ width, minWidth: '100%' }}>
+      {header}
+      {viewportHeight !== undefined ? (
+        <div style={{ height: viewportHeight, overflow: 'hidden', position: 'relative' }}>
+          <div ref={bodyWrapperRef}>
+            {body}
+          </div>
+        </div>
+      ) : body}
     </div>
   )
-}
+})

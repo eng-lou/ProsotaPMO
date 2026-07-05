@@ -8,6 +8,27 @@
   display: none;
 }
 
+/* Solid column separators for the Scheduling activity grid (2026-07-05, per
+   Maro — columns ran together with no visible divider). Scoped by class
+   rather than repeated on every <td>/<th> in the JSX, since there are 20+
+   toggleable columns. */
+.scheduling-grid td, .scheduling-grid th {
+  border-right: 1px solid #e5e7eb;
+}
+
+/* Hard-enforces every body row at exactly GANTT_ROW_HEIGHT (46px, see
+   GanttChart.tsx) — the same technique a proven reference Gantt
+   implementation (github.com/pekingstyle/OnlineGantt) uses: its grid cells
+   are `overflow: hidden` and its row is a fixed `height: 30px` in CSS, so
+   content can never silently grow a row taller than what the chart assumes.
+   Without this, a <tr>'s explicit height is only ever a *minimum* — a row
+   whose content needs a hair more room (WBS summary rows in practice) would
+   render taller than the Gantt beside it assumes (2026-07-05, per Maro). */
+.scheduling-grid tbody td {
+  height: 46px;
+  overflow: hidden;
+}
+
 @media print {
   .no-print {
     display: none !important;

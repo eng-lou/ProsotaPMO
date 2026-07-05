@@ -19,6 +19,10 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | `git commit -m "message"` | Actually saves the staged changes, with a short note explaining why. This is the core "save my work" action in Git. |
 | `git push` | Uploads your saved commits to GitHub (the online copy), so they're backed up and shareable. |
 | `git branch` | Lists the different parallel lines of work ("branches"). We currently do all work on `main`. |
+| `git checkout -- <file>` | Throws away any un-saved edits to one specific file and puts it back exactly as it was at the last commit. Used to cleanly undo a whole run of failed experimental changes to a file, without touching any other files that had separate, wanted changes mixed into the same working copy. |
+| `git show HEAD:<path>` | Prints out an old (last-committed) version of a file without actually restoring it — used to pull just a snapshot for reference/copying, while leaving the current working file untouched. |
+| `git remote set-url origin <url>` | Changes which GitHub address `git push`/`git pull` actually talk to for this folder — used after a repo got renamed on GitHub's side, so this computer's copy points at the new name instead of relying on GitHub's redirect indefinitely. |
+| `git clone --depth 1 <url>` | Downloads a copy of someone else's public GitHub project to read its code, but only the latest snapshot (not its whole history) — much faster, used purely for research (reading how another Gantt-chart tool solved a layout problem) rather than to actually work on that project. |
 
 ---
 

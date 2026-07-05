@@ -1,7 +1,12 @@
+import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { WEEKDAY_FIELDS, type Calendar, type CalendarBreak, type CalendarException } from './types'
+
+function apiErrorDetail(err: unknown): string | undefined {
+  return axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
+}
 
 interface Props {
   projectId: string
@@ -47,6 +52,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   const [breakLabel, setBreakLabel] = useState('')
   const [breakStart, setBreakStart] = useState('12:00')
   const [breakEnd, setBreakEnd] = useState('13:00')
+  const [breakError, setBreakError] = useState<string | null>(null)
 
   const [addingException, setAddingException] = useState(false)
   const [exceptionLabel, setExceptionLabel] = useState('')
@@ -56,6 +62,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   const [exceptionPartialDay, setExceptionPartialDay] = useState(false)
   const [exceptionStartTime, setExceptionStartTime] = useState('08:00')
   const [exceptionEndTime, setExceptionEndTime] = useState('09:00')
+  const [exceptionError, setExceptionError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!selectedCalendarId) {
@@ -121,9 +128,17 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
 
   const handleAddBreak = async () => {
     if (!selectedCalendarId || !breakLabel.trim() || !breakStart || !breakEnd) return
-    await api.post('/api/v1/calendar-breaks/', {
-      calendar_id: selectedCalendarId, label: breakLabel, start_time: breakStart, end_time: breakEnd,
-    })
+    setBreakError(null)
+    try {
+      await api.post('/api/v1/calendar-breaks/', {
+        calendar_id: selectedCalendarId, label: breakLabel, start_time: breakStart, end_time: breakEnd,
+      })
+    } catch (err) {
+      // Previously swallowed silently — a validation error (e.g. end before
+      // start) looked exactly like the button doing nothing at all.
+      setBreakError(apiErrorDetail(err) ?? 'Could not add that break — check your connection and try again.')
+      return
+    }
     setAddingBreak(false)
     setBreakLabel('')
     setBreakStart('12:00')
@@ -140,15 +155,23 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
 
   const handleAddException = async () => {
     if (!selectedCalendarId || !exceptionLabel.trim() || !exceptionStart || !exceptionEnd) return
-    await api.post('/api/v1/calendar-exceptions/', {
-      calendar_id: selectedCalendarId,
-      label: exceptionLabel,
-      start_date: exceptionStart,
-      end_date: exceptionEnd,
-      is_working: exceptionIsWorking,
-      start_time: exceptionPartialDay ? exceptionStartTime : null,
-      end_time: exceptionPartialDay ? exceptionEndTime : null,
-    })
+    setExceptionError(null)
+    try {
+      await api.post('/api/v1/calendar-exceptions/', {
+        calendar_id: selectedCalendarId,
+        label: exceptionLabel,
+        start_date: exceptionStart,
+        end_date: exceptionEnd,
+        is_working: exceptionIsWorking,
+        start_time: exceptionPartialDay ? exceptionStartTime : null,
+        end_time: exceptionPartialDay ? exceptionEndTime : null,
+      })
+    } catch (err) {
+      // Previously swallowed silently — a validation error (e.g. end date
+      // before start) looked exactly like the button doing nothing at all.
+      setExceptionError(apiErrorDetail(err) ?? 'Could not add that exception — check your connection and try again.')
+      return
+    }
     setAddingException(false)
     setExceptionLabel('')
     setExceptionStart('')
@@ -156,6 +179,10 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     setExceptionIsWorking(false)
     setExceptionPartialDay(false)
     await refreshExceptions()
+    // The backend now recomputes the schedule itself when an exception
+    // changes — but Scheduling.tsx's own activity list is still stale until
+    // it refetches, or the Gantt won't visibly reflect the new exception.
+    await onChange()
   }
 
   const handleDeleteException = async (id: string) => {
@@ -322,9 +349,17 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                       <span className="text-gray-400">–</span>
                       <input type="time" value={breakEnd} onChange={e => setBreakEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
                     </div>
+                    {breakError && <p className="text-xs text-red-600">{breakError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => setAddingBreak(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                      <button onClick={handleAddBreak} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Break</button>
+                      <button onClick={() => { setAddingBreak(false); setBreakError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button
+                        onClick={handleAddBreak}
+                        disabled={!breakLabel.trim() || !breakStart || !breakEnd}
+                        title={!breakLabel.trim() ? 'Enter a label first' : undefined}
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Add Break
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -403,9 +438,17 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                         <input type="time" value={exceptionEndTime} onChange={e => setExceptionEndTime(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
                       </div>
                     )}
+                    {exceptionError && <p className="text-xs text-red-600">{exceptionError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => setAddingException(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                      <button onClick={handleAddException} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Exception</button>
+                      <button onClick={() => { setAddingException(false); setExceptionError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button
+                        onClick={handleAddException}
+                        disabled={!exceptionLabel.trim() || !exceptionStart || !exceptionEnd}
+                        title={!exceptionLabel.trim() ? 'Enter a label first' : (!exceptionStart || !exceptionEnd) ? 'Pick a start and end date first' : undefined}
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Add Exception
+                      </button>
                     </div>
                   </div>
                 ) : (

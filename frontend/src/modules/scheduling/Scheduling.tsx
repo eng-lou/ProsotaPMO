@@ -17,7 +17,7 @@ import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
-import { GanttChart, GANTT_ROW_HEIGHT } from './GanttChart'
+import { GanttChart, GANTT_ROW_HEIGHT, HEADER_HEIGHT, type GanttChartHandle } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
 import { LayoutWidget } from './LayoutWidget'
 import { PasteFieldsWidget } from './PasteFieldsWidget'
@@ -82,6 +82,56 @@ function loadVisibleColumns(): Set<ColumnKey> {
 // toolbar and act on the checkbox selection instead of one row at a time.
 type ResizableColumnKey = ColumnKey | 'activity'
 
+// Column sort (2026-07-05, per Maro). Sorts within each WBS parent's sibling
+// group rather than flattening the whole tree — matches P6's "sort within
+// grouping" convention, so the outline/indentation stays intact.
+type SortKey = ResizableColumnKey
+
+function sortValue(a: Activity, key: SortKey, resourceAssignments: ResourceAssignment[]): string | number | null {
+  switch (key) {
+    case 'code': return a.code
+    case 'wbs': return a.wbs_path
+    case 'activity': return a.task_name
+    case 'type': return a.activity_type
+    case 'duration': return a.duration_days !== null ? Number(a.duration_days) : null
+    case 'start': return a.start ? new Date(a.start).getTime() : null
+    case 'bl_start': return a.bl_start ? new Date(a.bl_start).getTime() : null
+    case 'finish': return a.finish ? new Date(a.finish).getTime() : null
+    case 'bl_finish': return a.bl_finish ? new Date(a.bl_finish).getTime() : null
+    case 'variance': return a.variance_days
+    case 'float': return a.total_float_hours
+    case 'free_float': return a.free_float_hours
+    case 'pct_complete': return a.pct_complete !== null ? Number(a.pct_complete) : null
+    case 'resources': {
+      const names = resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name)
+      return names.length ? names.join(', ') : null
+    }
+    case 'bac': return a.bac !== null ? Number(a.bac) : null
+    case 'pv': return a.pv !== null ? Number(a.pv) : null
+    case 'ev': return a.ev !== null ? Number(a.ev) : null
+    case 'ac': return a.ac !== null ? Number(a.ac) : null
+    case 'cv': return a.cv !== null ? Number(a.cv) : null
+    case 'sv': return a.sv !== null ? Number(a.sv) : null
+    case 'cpi': return a.cpi !== null ? Number(a.cpi) : null
+    case 'spi': return a.spi !== null ? Number(a.spi) : null
+    case 'eac': return a.eac !== null ? Number(a.eac) : null
+    case 'etc': return a.etc !== null ? Number(a.etc) : null
+    default: return null
+  }
+}
+
+// Nulls always sort last regardless of direction (a blank Start/Var/etc. isn't
+// "smaller" than a real value, it's unknown/not-yet-applicable).
+function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: ResourceAssignment[]): number {
+  const av = sortValue(a, key, resourceAssignments)
+  const bv = sortValue(b, key, resourceAssignments)
+  if (av === null && bv === null) return 0
+  if (av === null) return 1
+  if (bv === null) return -1
+  const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv))
+  return direction === 'asc' ? cmp : -cmp
+}
+
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, free_float: 80, pct_complete: 80,
@@ -123,17 +173,25 @@ function CollapseIcon({ expanded }: { expanded: boolean }) {
 // table-layout:fixed (Tailwind's table-fixed) — otherwise the browser can ignore
 // an explicit header width once cell content forces the column wider.
 function ResizableTh({
-  width, onResizeStart, children, className = '', title,
+  width, onResizeStart, children, className = '', title, onSortClick, sortDirection,
 }: {
   width: number
   onResizeStart: (e: React.MouseEvent) => void
   children?: React.ReactNode
   className?: string
   title?: string
+  onSortClick?: () => void
+  sortDirection?: 'asc' | 'desc' | null
 }) {
   return (
     <th className={`relative px-3 py-2.5 ${className}`} style={{ width }} title={title}>
-      <div className="truncate pr-2">{children}</div>
+      <div
+        className={`truncate pr-2 ${onSortClick ? 'cursor-pointer select-none hover:text-gray-900' : ''}`}
+        onClick={onSortClick}
+      >
+        {children}
+        {sortDirection && <span className="ml-0.5">{sortDirection === 'asc' ? '▲' : '▼'}</span>}
+      </div>
       <span
         onMouseDown={onResizeStart}
         onClick={e => e.stopPropagation()}
@@ -373,6 +431,25 @@ export function Scheduling() {
   // a reload. Activity name + checkbox columns are always shown (not toggleable).
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(loadVisibleColumns)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
+  // Column sort — 3-state cycle per header click: unsorted -> asc -> desc -> unsorted.
+  // Not persisted (unlike column widths/visibility) since it's a transient view
+  // of "what am I looking for right now", not a durable layout preference.
+  const [sortColumn, setSortColumn] = useState<SortKey | null>(null)
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
+  const handleSort = (key: SortKey) => {
+    if (sortColumn !== key) {
+      setSortColumn(key)
+      setSortDirection('asc')
+    } else if (sortDirection === 'asc') {
+      setSortDirection('desc')
+    } else {
+      setSortColumn(null)
+    }
+  }
+  const sortHeader = (key: SortKey) => ({
+    onSortClick: () => handleSort(key),
+    sortDirection: sortColumn === key ? sortDirection : null,
+  })
   const isColumnVisible = (key: ColumnKey) => visibleColumns.has(key)
   const toggleColumn = (key: ColumnKey) => {
     setVisibleColumns(prev => {
@@ -472,23 +549,25 @@ export function Scheduling() {
   const [rowClipboard, setRowClipboard] = useState<Activity | null>(null)
   const [pasteWidgetOpen, setPasteWidgetOpen] = useState(false)
 
-  // Left (data grid) and right (Gantt) panes scroll independently in the DOM but must
-  // stay row-aligned — see "Gantt Chart — Rendering Plan" in docs/SCHEDULING_MODULE_PLAN.md.
+  // The data grid (left) is the ONE real scrollable element — the Gantt (right)
+  // has no scrollbar of its own at all anymore. Instead its row/bar content is
+  // shifted by a CSS transform driven directly from the grid's live scrollTop,
+  // read straight off its onScroll event every tick (below), the same
+  // principle a proven reference Gantt implementation uses (see the long
+  // comment on GanttChart.tsx's GanttChartHandle). There is no second scroll
+  // position left to fall out of sync with the first — copying scrollTop
+  // between two independently-scrolling panes (the previous approach) only
+  // stays aligned if both sides' scrollHeight is pixel-identical, which
+  // repeatedly turned out not to be reliably true at 140+ rows (2026-07-05,
+  // per Maro, after several failed attempts at exactly that).
+  //
+  // The transform itself is applied via a ref-exposed method (setScrollTop),
+  // not React state, so scrolling the grid never triggers a Gantt re-render —
+  // going through state/props made the Gantt visibly lag behind the grid,
+  // since reconciling ~140 rows of bars on every scroll tick is too slow to
+  // track a native scroll gesture smoothly (2026-07-05, per Maro).
   const leftPaneRef = useRef<HTMLDivElement>(null)
-  const rightPaneRef = useRef<HTMLDivElement>(null)
-  const syncingScroll = useRef(false)
-
-  const syncScroll = (source: 'left' | 'right') => {
-    if (syncingScroll.current) {
-      syncingScroll.current = false
-      return
-    }
-    const from = source === 'left' ? leftPaneRef.current : rightPaneRef.current
-    const to = source === 'left' ? rightPaneRef.current : leftPaneRef.current
-    if (!from || !to) return
-    syncingScroll.current = true
-    to.scrollTop = from.scrollTop
-  }
+  const ganttRef = useRef<GanttChartHandle>(null)
 
   useEffect(() => {
     if (!selectedProject || !period) return
@@ -535,9 +614,38 @@ export function Scheduling() {
   // Delayed/At Risk are computed badges, not stored fields — consistent with how
   // Cost Plan's variance-band fix went (never expose a derivable value as manual
   // input). Delayed = finished later than baseline; At Risk = has float, but not much.
+  // Sorts within each WBS parent's sibling group, then re-flattens depth-first —
+  // preserves the outline/indentation instead of flattening the whole tree.
+  const orderedActivities = useMemo(() => {
+    if (!sortColumn) return activities
+    const byParent = new Map<string | null, Activity[]>()
+    for (const a of activities) {
+      const list = byParent.get(a.parent_id)
+      if (list) list.push(a)
+      else byParent.set(a.parent_id, [a])
+    }
+    const result: Activity[] = []
+    const visit = (parentId: string | null) => {
+      const siblings = [...(byParent.get(parentId) ?? [])]
+        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, resourceAssignments))
+      for (const a of siblings) {
+        result.push(a)
+        visit(a.id)
+      }
+    }
+    visit(null)
+    // Guards against a stale/orphaned parent_id (parent not present in the
+    // current list) silently dropping activities from the sorted view.
+    if (result.length < activities.length) {
+      const seen = new Set(result.map(a => a.id))
+      for (const a of activities) if (!seen.has(a.id)) result.push(a)
+    }
+    return result
+  }, [activities, sortColumn, sortDirection, resourceAssignments])
+
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    return activities.filter(a => {
+    return orderedActivities.filter(a => {
       if (isHiddenByCollapse(a)) return false
       if (q) {
         const haystack = [a.code, a.task_name, a.commentary].filter(Boolean).join(' ').toLowerCase()
@@ -554,7 +662,7 @@ export function Scheduling() {
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds])
+  }, [orderedActivities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds])
 
   if (!selectedProject) return null
 
@@ -1344,12 +1452,16 @@ export function Scheduling() {
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
-          onScroll={() => syncScroll('left')}
+          onScroll={e => ganttRef.current?.setScrollTop(e.currentTarget.scrollTop)}
           className="overflow-y-auto overflow-x-hidden shrink-0"
-          style={{ maxHeight: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
+          // A fixed height (not max-height) on purpose: the Gantt pane beside it
+          // has no scrollbar of its own, so it can't "shrink to fit" a shorter
+          // list the way this pane's overflow-y:auto naturally would — both
+          // sides need the same, unconditional number to stay comparable.
+          style={{ height: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
         >
           <table
-            className="text-sm border-collapse table-fixed"
+            className="scheduling-grid text-sm border-collapse table-fixed"
             style={{ color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family] }}
           >
             <colgroup>
@@ -1393,37 +1505,37 @@ export function Scheduling() {
                     title="Select all shown"
                   />
                 </th>
-                {isColumnVisible('code') && <ResizableTh width={columnWidths.code} onResizeStart={startColumnResize('code')}>Code</ResizableTh>}
-                {isColumnVisible('wbs') && <ResizableTh width={columnWidths.wbs} onResizeStart={startColumnResize('wbs')}>WBS</ResizableTh>}
-                <ResizableTh width={columnWidths.activity} onResizeStart={startColumnResize('activity')}>Activity</ResizableTh>
-                {isColumnVisible('type') && <ResizableTh width={columnWidths.type} onResizeStart={startColumnResize('type')}>Type</ResizableTh>}
-                {isColumnVisible('duration') && <ResizableTh width={columnWidths.duration} onResizeStart={startColumnResize('duration')}>Dur (d)</ResizableTh>}
-                {isColumnVisible('start') && <ResizableTh width={columnWidths.start} onResizeStart={startColumnResize('start')}>Start</ResizableTh>}
-                {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} title="Baseline start — assigned via the Baseline widget">BL Start</ResizableTh>}
-                {isColumnVisible('finish') && <ResizableTh width={columnWidths.finish} onResizeStart={startColumnResize('finish')}>Finish</ResizableTh>}
-                {isColumnVisible('bl_finish') && <ResizableTh width={columnWidths.bl_finish} onResizeStart={startColumnResize('bl_finish')} title="Baseline finish — assigned via the Baseline widget">BL Finish</ResizableTh>}
+                {isColumnVisible('code') && <ResizableTh width={columnWidths.code} onResizeStart={startColumnResize('code')} {...sortHeader('code')}>Code</ResizableTh>}
+                {isColumnVisible('wbs') && <ResizableTh width={columnWidths.wbs} onResizeStart={startColumnResize('wbs')} {...sortHeader('wbs')}>WBS</ResizableTh>}
+                <ResizableTh width={columnWidths.activity} onResizeStart={startColumnResize('activity')} {...sortHeader('activity')}>Activity</ResizableTh>
+                {isColumnVisible('type') && <ResizableTh width={columnWidths.type} onResizeStart={startColumnResize('type')} {...sortHeader('type')}>Type</ResizableTh>}
+                {isColumnVisible('duration') && <ResizableTh width={columnWidths.duration} onResizeStart={startColumnResize('duration')} {...sortHeader('duration')}>Dur (d)</ResizableTh>}
+                {isColumnVisible('start') && <ResizableTh width={columnWidths.start} onResizeStart={startColumnResize('start')} {...sortHeader('start')}>Start</ResizableTh>}
+                {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} {...sortHeader('bl_start')} title="Baseline start — assigned via the Baseline widget">BL Start</ResizableTh>}
+                {isColumnVisible('finish') && <ResizableTh width={columnWidths.finish} onResizeStart={startColumnResize('finish')} {...sortHeader('finish')}>Finish</ResizableTh>}
+                {isColumnVisible('bl_finish') && <ResizableTh width={columnWidths.bl_finish} onResizeStart={startColumnResize('bl_finish')} {...sortHeader('bl_finish')} title="Baseline finish — assigned via the Baseline widget">BL Finish</ResizableTh>}
                 {isColumnVisible('variance') && (
                   <ResizableTh
-                    width={columnWidths.variance} onResizeStart={startColumnResize('variance')}
+                    width={columnWidths.variance} onResizeStart={startColumnResize('variance')} {...sortHeader('variance')}
                     title="Current Finish vs Baseline Finish, in days. Positive = later than the baseline plan."
                   >
                     Fin. Var (d)
                   </ResizableTh>
                 )}
-                {isColumnVisible('float') && <ResizableTh width={columnWidths.float} onResizeStart={startColumnResize('float')} title="Slip this activity can absorb without delaying the whole project (hours)">Total Float</ResizableTh>}
-                {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} title="Slip this activity can absorb without delaying its own successors (hours)">Free Float</ResizableTh>}
-                {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')}>% Comp</ResizableTh>}
-                {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')}>Resources</ResizableTh>}
-                {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
-                {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
-                {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
-                {isColumnVisible('ac') && <ResizableTh width={columnWidths.ac} onResizeStart={startColumnResize('ac')} title="Actual Cost — actuals recorded against this activity's linked Cost Plan line">AC</ResizableTh>}
-                {isColumnVisible('cv') && <ResizableTh width={columnWidths.cv} onResizeStart={startColumnResize('cv')} title="Cost Variance — EV minus AC">CV</ResizableTh>}
-                {isColumnVisible('sv') && <ResizableTh width={columnWidths.sv} onResizeStart={startColumnResize('sv')} title="Schedule Variance — EV minus PV">SV</ResizableTh>}
-                {isColumnVisible('cpi') && <ResizableTh width={columnWidths.cpi} onResizeStart={startColumnResize('cpi')} title="Cost Performance Index — EV ÷ AC">CPI</ResizableTh>}
-                {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
-                {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
-                {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
+                {isColumnVisible('float') && <ResizableTh width={columnWidths.float} onResizeStart={startColumnResize('float')} {...sortHeader('float')} title="Slip this activity can absorb without delaying the whole project (hours)">Total Float</ResizableTh>}
+                {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} {...sortHeader('free_float')} title="Slip this activity can absorb without delaying its own successors (hours)">Free Float</ResizableTh>}
+                {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
+                {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
+                {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} {...sortHeader('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
+                {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} {...sortHeader('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
+                {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} {...sortHeader('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
+                {isColumnVisible('ac') && <ResizableTh width={columnWidths.ac} onResizeStart={startColumnResize('ac')} {...sortHeader('ac')} title="Actual Cost — actuals recorded against this activity's linked Cost Plan line">AC</ResizableTh>}
+                {isColumnVisible('cv') && <ResizableTh width={columnWidths.cv} onResizeStart={startColumnResize('cv')} {...sortHeader('cv')} title="Cost Variance — EV minus AC">CV</ResizableTh>}
+                {isColumnVisible('sv') && <ResizableTh width={columnWidths.sv} onResizeStart={startColumnResize('sv')} {...sortHeader('sv')} title="Schedule Variance — EV minus PV">SV</ResizableTh>}
+                {isColumnVisible('cpi') && <ResizableTh width={columnWidths.cpi} onResizeStart={startColumnResize('cpi')} {...sortHeader('cpi')} title="Cost Performance Index — EV ÷ AC">CPI</ResizableTh>}
+                {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} {...sortHeader('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
+                {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} {...sortHeader('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
+                {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} {...sortHeader('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
               </tr>
             </thead>
             <tbody>
@@ -1630,7 +1742,13 @@ export function Scheduling() {
               })}
               {visibleActivities.length === 0 && (
                 <tr>
-                  <td colSpan={visibleColumns.size + 2} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td
+                    colSpan={visibleColumns.size + 2}
+                    className="px-4 py-10 text-center text-gray-400 text-sm"
+                    // Overrides .scheduling-grid tbody td's row-height cap (index.css)
+                    // — that's sized for a real activity row, not this placeholder message.
+                    style={{ height: 'auto', overflow: 'visible' }}
+                  >
                     {activities.length === 0
                       ? 'No activities yet for this period. Add the first one above.'
                       : 'No activities match your search/filters.'}
@@ -1646,14 +1764,19 @@ export function Scheduling() {
           className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 no-print"
         />
         <div
-          ref={rightPaneRef}
-          onScroll={() => syncScroll('right')}
-          className="flex-1 overflow-auto no-print"
-          style={{ maxHeight: PANE_MAX_HEIGHT }}
+          // No vertical scroll here at all (overflow-y hidden, not auto) — the
+          // grid pane's own scroll (above) is the single source of truth;
+          // this pane just clips to the same fixed height and lets
+          // GanttChart's internal transform reveal the right slice of rows.
+          // Horizontal scroll (panning the wide timeline) stays independent.
+          className="flex-1 overflow-x-auto overflow-y-hidden no-print"
+          style={{ height: PANE_MAX_HEIGHT }}
         >
           <GanttChart
+            ref={ganttRef}
             activities={visibleActivities} relationships={relationships} style={ganttStyle}
             zoom={ganttZoom} onZoomChange={handleZoomChange}
+            viewportHeight={PANE_MAX_HEIGHT - HEADER_HEIGHT}
           />
         </div>
       </div>
@@ -1708,6 +1831,7 @@ export function Scheduling() {
         relationships={relationships}
         resourceAssignments={resourceAssignments}
         visibleColumns={visibleColumns}
+        columnWidths={columnWidths}
         projectName={selectedProject.name}
         letterhead={letterhead}
         ganttStyle={ganttStyle}
