@@ -217,9 +217,20 @@ class _CalendarLookup:
         return self.subtract_duration(calendar, dt, -hours)
 
     def working_hours_between(self, calendar: Calendar, a: datetime, b: datetime) -> Decimal:
-        """Signed working-hour count from a to b. 0 if equal."""
+        """Signed working-hour count from a to b. 0 if equal.
+
+        Quantized to 2 decimal places — matching total_float_hours/
+        free_float_hours/duration_hours's actual Numeric(7,2) column precision
+        — since a plain minutes/60 division can produce a long repeating
+        decimal (e.g. 485 minutes = 8.08333...). Postgres itself rounds to 2dp
+        on every write, so this was previously only ever "corrected" by
+        whichever caller happened to re-fetch the row from the DB afterward;
+        quantizing at the source means the in-memory value is already correct
+        even when nothing refreshes it (found as a real inconsistency,
+        2026-07-04, once refreshes stopped happening unconditionally for
+        performance — see recompute_schedule's dirty-tracking below)."""
         if a == b:
-            return Decimal(0)
+            return Decimal("0.00")
         sign = 1 if b > a else -1
         lo, hi = (a, b) if b > a else (b, a)
         total_minutes = 0
@@ -234,7 +245,7 @@ class _CalendarLookup:
                 if overlap_end > overlap_start:
                     total_minutes += int((overlap_end - overlap_start).total_seconds() // 60)
             d += timedelta(days=1)
-        return sign * Decimal(total_minutes) / 60
+        return (sign * Decimal(total_minutes) / 60).quantize(Decimal("0.01"))
 
 
 def _cpm_participants(activities: list[Activity]) -> list[Activity]:
@@ -551,8 +562,12 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
         a.start = es[a.id]
         a.finish = ef[a.id]
         hours_per_day = lookup.hours_per_day(calendar)
-        a.duration_days = (a.duration_hours / hours_per_day) if a.duration_hours and hours_per_day > 0 else (
-            Decimal(0) if a.duration_hours == 0 else None
+        # Quantized for the same reason working_hours_between is (above) — a
+        # plain division can produce a long repeating decimal that only ever
+        # got rounded away by a coincidental DB refresh.
+        a.duration_days = (
+            (a.duration_hours / hours_per_day).quantize(Decimal("0.01")) if a.duration_hours and hours_per_day > 0
+            else (Decimal("0.00") if a.duration_hours == 0 else None)
         )
         a.total_float_hours = lookup.working_hours_between(calendar, es[a.id], ls[a.id])
 
@@ -582,6 +597,18 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
         # here too since CPM is what just set (possibly changed) this activity's finish.
         a.variance_days = (a.finish - a.bl_finish).days if a.bl_finish is not None else None
 
+    # Refresh only the rows this pass actually changed — captured before commit
+    # clears SQLAlchemy's dirty-tracking. Same fix as app/services/activity.py:
+    # _recompute_hierarchy — unconditionally refreshing *every* activity in the
+    # period (rather than just the ones whose dates/float genuinely moved) was
+    # a real, measured performance bug: one extra DB round trip per activity,
+    # on every single create/update/delete, found at ~140-activity schedule
+    # scale (2026-07-04 per Maro). Most edits (e.g. a commentary change) don't
+    # shift anyone's computed dates, so this now refreshes close to nothing;
+    # a duration/logic change that cascades still correctly refreshes everyone
+    # it actually moved.
+    dirty_ids = {a.id for a in all_activities if db.is_modified(a)}
     await db.commit()
     for a in all_activities:
-        await db.refresh(a)
+        if a.id in dirty_ids:
+            await db.refresh(a)

@@ -348,17 +348,24 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
             node.pct_complete = None
         _apply_computed_fields(node)
 
-    # Flush + refresh every row this pass touched. Without this, an object mutated
-    # here (e.g. a parent promoted to wbs_summary) keeps a server-computed column
-    # (updated_at's onupdate=func.now()) expired in the session's identity map; the
-    # next unrelated read of that same object in the same session — a later request
-    # sharing this session, e.g. in tests — raises MissingGreenlet trying to lazily
-    # refresh it outside an awaited context. Real request handling gets a fresh
-    # session per call (app/database.py:get_db) so this is latent rather than a
-    # request-facing bug today, but it's cheap to close properly.
+    # Refresh only the rows this pass actually modified — captured as a set of
+    # ids *before* commit, since committing clears SQLAlchemy's dirty-tracking.
+    # Without refreshing a changed row, it keeps a server-computed column
+    # (updated_at's onupdate=func.now()) expired in the session's identity map;
+    # the next unrelated read of that same object in the same session — a later
+    # request sharing this session, e.g. in tests — raises MissingGreenlet
+    # trying to lazily refresh it outside an awaited context. Real request
+    # handling gets a fresh session per call (app/database.py:get_db), so this
+    # is latent rather than a request-facing bug today — but refreshing *every*
+    # activity in the period regardless of whether it changed was a genuine,
+    # measured performance bug: one extra DB round trip per activity, on every
+    # single create/update/delete, even when only one row actually changed
+    # (found at ~140-activity schedule scale, 2026-07-04 per Maro).
+    dirty_ids = {a.id for a in activities if db.is_modified(a)}
     await db.commit()
     for a in activities:
-        await db.refresh(a)
+        if a.id in dirty_ids:
+            await db.refresh(a)
 
 
 def _parent_filter(parent_id: uuid.UUID | None):

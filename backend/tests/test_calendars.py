@@ -163,6 +163,40 @@ async def test_create_calendar_exception(client: AsyncClient, project: Project):
     assert resp.json()["label"] == "Christmas Shutdown"
 
 
+async def test_adding_exception_immediately_recomputes_affected_activities(
+    client: AsyncClient, db, project: Project, live_period
+):
+    """Regression test: adding a non-working exception used to save fine but
+    never trigger a recompute — an activity's dates only shifted around it
+    once some *unrelated* edit happened to trigger the CPM engine next,
+    making the exception look like it silently did nothing (2026-07-04, per
+    Maro: "add exception isn't working")."""
+    from datetime import date
+    live_period.start_date = date(2025, 6, 2)  # a Monday
+    await db.commit()
+
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    activity = (await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "period_id": str(live_period.id),
+        "task_name": "Excavation", "duration_hours": 8,
+    })).json()
+    assert activity["start"].startswith("2025-06-02")  # scheduled on the Monday, as expected
+
+    resp = await client.post("/api/v1/calendar-exceptions/", json={
+        "calendar_id": calendar_id, "label": "Site Closure", "start_date": "2025-06-02", "end_date": "2025-06-02",
+        "is_working": False,
+    })
+    assert resp.status_code == 201
+
+    # No unrelated activity edit happened — the exception alone must have
+    # triggered the recompute for the activity to have moved off the Monday.
+    refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert not refreshed["start"].startswith("2025-06-02")
+    assert refreshed["start"].startswith("2025-06-03")  # pushed to the Tuesday
+
+
 async def test_exception_end_before_start_rejected(client: AsyncClient, project: Project):
     calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
     calendar_id = calendars.json()[0]["id"]

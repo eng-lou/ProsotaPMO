@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
+from app.models.period import Period
 from app.schemas.calendar import (
     CalendarBreakCreate,
     CalendarBreakUpdate,
@@ -20,6 +21,28 @@ from app.schemas.calendar import (
 from app.services.calendar_time import compute_hours_per_day
 
 _STANDARD_CALENDAR_NAME = "Standard Calendar"
+
+
+async def _recompute_all_live_periods_for_project(db: AsyncSession, project_id: uuid.UUID) -> None:
+    """A calendar change (working days, hours, breaks, non-working exceptions)
+    can shift every already-computed date for activities using it — without
+    this, saving a new exception looked like it did nothing at all, since
+    nothing re-ran the CPM engine until some unrelated activity edit happened
+    to trigger it (found 2026-07-04, per Maro: "add exception isn't working").
+
+    Recomputes every *live* period in the project — frozen ones are
+    deliberately skipped, since a calendar edit retroactively changing a
+    frozen period's dates would break the "frozen = immutable" trust
+    guarantee (ARCHITECTURE.md §3). Local import to avoid a circular
+    dependency: scheduling_cpm already imports this module for calendar
+    lookups."""
+    from app.services import scheduling_cpm
+
+    result = await db.execute(
+        select(Period.id).where(Period.project_id == project_id, Period.freeze_status == "live")
+    )
+    for period_id in result.scalars().all():
+        await scheduling_cpm.recompute_schedule(db, period_id)
 
 
 async def _attach_hours_per_day(db: AsyncSession, calendars: list[Calendar]) -> None:
@@ -102,6 +125,7 @@ async def update_calendar(db: AsyncSession, calendar_id: uuid.UUID, data: Calend
     await db.commit()
     await db.refresh(calendar)
     await _attach_hours_per_day(db, [calendar])
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return calendar
 
 
@@ -112,8 +136,12 @@ async def delete_calendar(db: AsyncSession, calendar_id: uuid.UUID) -> None:
             status_code=422,
             detail="Cannot delete the default calendar — set another calendar as default first",
         )
+    project_id = calendar.project_id
     await db.delete(calendar)
     await db.commit()
+    # Activities that had this calendar assigned revert to the project default
+    # (ON DELETE SET NULL) — their effective calendar just changed too.
+    await _recompute_all_live_periods_for_project(db, project_id)
 
 
 async def list_exceptions(db: AsyncSession, calendar_id: uuid.UUID) -> list[CalendarException]:
@@ -126,11 +154,12 @@ async def list_exceptions(db: AsyncSession, calendar_id: uuid.UUID) -> list[Cale
 
 
 async def create_exception(db: AsyncSession, data: CalendarExceptionCreate) -> CalendarException:
-    await _get_calendar(db, data.calendar_id)
+    calendar = await _get_calendar(db, data.calendar_id)
     exception = CalendarException(**data.model_dump())
     db.add(exception)
     await db.commit()
     await db.refresh(exception)
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return exception
 
 
@@ -140,6 +169,7 @@ async def update_exception(
     exception = await db.get(CalendarException, exception_id)
     if exception is None:
         raise HTTPException(status_code=404, detail="Calendar exception not found")
+    calendar = await _get_calendar(db, exception.calendar_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(exception, field, value)
     if exception.end_date < exception.start_date:
@@ -150,6 +180,7 @@ async def update_exception(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(exception)
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return exception
 
 
@@ -157,8 +188,10 @@ async def delete_exception(db: AsyncSession, exception_id: uuid.UUID) -> None:
     exception = await db.get(CalendarException, exception_id)
     if exception is None:
         raise HTTPException(status_code=404, detail="Calendar exception not found")
+    calendar = await _get_calendar(db, exception.calendar_id)
     await db.delete(exception)
     await db.commit()
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
 
 
 async def list_breaks(db: AsyncSession, calendar_id: uuid.UUID) -> list[CalendarBreak]:
@@ -169,11 +202,12 @@ async def list_breaks(db: AsyncSession, calendar_id: uuid.UUID) -> list[Calendar
 
 
 async def create_break(db: AsyncSession, data: CalendarBreakCreate) -> CalendarBreak:
-    await _get_calendar(db, data.calendar_id)
+    calendar = await _get_calendar(db, data.calendar_id)
     calendar_break = CalendarBreak(**data.model_dump())
     db.add(calendar_break)
     await db.commit()
     await db.refresh(calendar_break)
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return calendar_break
 
 
@@ -181,12 +215,14 @@ async def update_break(db: AsyncSession, break_id: uuid.UUID, data: CalendarBrea
     calendar_break = await db.get(CalendarBreak, break_id)
     if calendar_break is None:
         raise HTTPException(status_code=404, detail="Calendar break not found")
+    calendar = await _get_calendar(db, calendar_break.calendar_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(calendar_break, field, value)
     if calendar_break.end_time <= calendar_break.start_time:
         raise HTTPException(status_code=422, detail="end_time must be after start_time")
     await db.commit()
     await db.refresh(calendar_break)
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return calendar_break
 
 
@@ -194,5 +230,7 @@ async def delete_break(db: AsyncSession, break_id: uuid.UUID) -> None:
     calendar_break = await db.get(CalendarBreak, break_id)
     if calendar_break is None:
         raise HTTPException(status_code=404, detail="Calendar break not found")
+    calendar = await _get_calendar(db, calendar_break.calendar_id)
     await db.delete(calendar_break)
     await db.commit()
+    await _recompute_all_live_periods_for_project(db, calendar.project_id)
