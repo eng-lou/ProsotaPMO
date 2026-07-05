@@ -2,7 +2,7 @@
 
 A browser-native project controls platform — schedule, cost, risk, and change control in one integrated tool, built for organisations running structured PMOs (NEC/JCT-style construction programmes and beyond).
 
-Built by [Prosota Consulting Ltd](https://prosota.co.uk), founded by Maro Sota (Senior Planner / 4D Project Controls Specialist).
+Built by [Prosota Ltd](https://prosota.com), founded by Maro Sota (Senior Planner / 4D Project Controls Specialist).
 
 ## What it does
 
@@ -59,4 +59,4 @@ CI runs the full backend test suite against a real Postgres service container on
 
 ## License
 
-Proprietary — © Prosota Consulting Ltd. All rights reserved.
+Proprietary — © Prosota Ltd. All rights reserved.
