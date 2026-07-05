@@ -82,7 +82,17 @@ export function Sidebar() {
         )}
         <p className="text-xs text-gray-400 truncate mb-2">{user?.email}</p>
         <button
-          onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+          onClick={() => {
+            // Auth0's logout redirect is a same-tab page navigation, not a
+            // tab close, so sessionStorage (and the project selection in it)
+            // survives it — meaning signing back in used to always resume
+            // whatever project was last selected, with no way to land on the
+            // selector fresh (2026-07-05, per Maro: "when I sign in it goes
+            // straight into the project"). Clearing it here, on a deliberate
+            // sign-out, is the actual point where "start over" should mean it.
+            clearProject()
+            logout({ logoutParams: { returnTo: window.location.origin } })
+          }}
           className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors"
         >
           Sign out

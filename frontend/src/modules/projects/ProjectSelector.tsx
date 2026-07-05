@@ -17,7 +17,7 @@ export function ProjectSelector() {
 
   const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
-      .then(r => setProjects(r.data))
+      .then(r => { setProjects(r.data); setError(null) })
       .catch(() => setError('Failed to load projects'))
       .finally(() => setLoading(false))
 
@@ -112,8 +112,14 @@ export function ProjectSelector() {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center justify-between gap-3">
             {error}
+            <button
+              onClick={() => { setError(null); setLoading(true); refresh() }}
+              className="shrink-0 text-red-700 hover:text-red-800 font-medium underline"
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -181,7 +187,7 @@ export function ProjectSelector() {
             </div>
           ))}
 
-          {projects.length === 0 && !creating && (
+          {projects.length === 0 && !creating && !error && (
             <p className="text-gray-400 text-sm text-center py-8">
               No projects yet. Create your first one below.
             </p>

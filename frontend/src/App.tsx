@@ -38,33 +38,37 @@ function LoginPage() {
 function AuthenticatedApp() {
   const { selectedProject } = useProject()
 
-  // No project selected — show the selector without the shell layout
-  if (!selectedProject) {
-    return (
-      <BrowserRouter>
+  // A SINGLE <BrowserRouter> for the whole app, not one recreated per branch
+  // below — two separate router instances that get mounted/unmounted as
+  // `selectedProject` flips used to exist here, and "Switch project" called
+  // navigate() on the *old* router right as it was being torn down and
+  // replaced by a brand-new one, which is exactly the kind of thing that
+  // makes navigation land somewhere unexpected (2026-07-05, per Maro:
+  // "I can't return to that selector page... it goes straight into the
+  // project"). One router, mounted once, with the content underneath it
+  // switching instead of the router itself.
+  return (
+    <BrowserRouter>
+      {!selectedProject ? (
         <Routes>
           <Route path="*" element={<ProjectSelector />} />
         </Routes>
-      </BrowserRouter>
-    )
-  }
-
-  return (
-    <BrowserRouter>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/projects" element={<ProjectSelector />} />
-          <Route path="/dashboard" element={<Placeholder title="Controls Dashboard" />} />
-          <Route path="/scheduling" element={<Scheduling />} />
-          <Route path="/risks" element={<RiskRegister />} />
-          <Route path="/costs" element={<CostPlan />} />
-          <Route path="/icd" element={<IcdTracker />} />
-          <Route path="/files" element={<Placeholder title="File Manager" />} />
-          <Route path="/periods" element={<Placeholder title="Period Manager" />} />
-          <Route path="/exports" element={<Placeholder title="Export Centre" />} />
-        </Routes>
-      </Layout>
+      ) : (
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/projects" element={<ProjectSelector />} />
+            <Route path="/dashboard" element={<Placeholder title="Controls Dashboard" />} />
+            <Route path="/scheduling" element={<Scheduling />} />
+            <Route path="/risks" element={<RiskRegister />} />
+            <Route path="/costs" element={<CostPlan />} />
+            <Route path="/icd" element={<IcdTracker />} />
+            <Route path="/files" element={<Placeholder title="File Manager" />} />
+            <Route path="/periods" element={<Placeholder title="Period Manager" />} />
+            <Route path="/exports" element={<Placeholder title="Export Centre" />} />
+          </Routes>
+        </Layout>
+      )}
     </BrowserRouter>
   )
 }
