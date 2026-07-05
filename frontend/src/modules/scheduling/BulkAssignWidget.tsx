@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { ActivityPicker } from './ActivityPicker'
 import {
   RELATIONSHIP_TYPES, RESOURCE_TYPE_LABELS,
   type Activity, type Calendar, type Resource, type RelationshipType, type ResourceType,
@@ -107,13 +108,10 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
           <>
             <label className="text-xs text-gray-600">
               {mode === 'predecessor' ? 'Predecessor' : 'Successor'}
-              <select
-                value={targetActivityId} onChange={e => setTargetActivityId(e.target.value)}
-                className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-64"
-              >
-                <option value="">Select activity…</option>
-                {relationshipCandidates.map(a => <option key={a.id} value={a.id}>{a.code}: {a.task_name}</option>)}
-              </select>
+              <ActivityPicker
+                activities={relationshipCandidates} value={targetActivityId} onChange={setTargetActivityId}
+                className="mt-0.5 w-64"
+              />
             </label>
             <label className="text-xs text-gray-600">
               Type

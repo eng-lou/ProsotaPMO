@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { ActivityPicker } from './ActivityPicker'
 import { RELATIONSHIP_TYPES, type Activity, type ActivityRelationship, type RelationshipType } from './types'
 
 interface Props {
@@ -92,10 +93,7 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
 
   const AddForm = ({ mode, onCancel }: { mode: 'predecessor' | 'successor'; onCancel: () => void }) => (
     <div className="flex items-center gap-2 mb-2 flex-wrap">
-      <select value={candidateId} onChange={e => setCandidateId(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1">
-        <option value="">Select activity…</option>
-        {candidates.map(a => <option key={a.id} value={a.id}>{a.code}: {a.task_name}</option>)}
-      </select>
+      <ActivityPicker activities={candidates} value={candidateId} onChange={setCandidateId} className="w-56" />
       <select value={relType} onChange={e => setRelType(e.target.value as RelationshipType)} className="text-xs border border-gray-300 rounded px-2 py-1">
         {RELATIONSHIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
       </select>
