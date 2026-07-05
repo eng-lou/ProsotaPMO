@@ -3,19 +3,29 @@ import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/Print
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import type { ProjectLetterhead } from '@/lib/letterhead'
 import { formatDateTime } from './dateTime'
-import { GANTT_ROW_HEIGHT, HEADER_HEIGHT } from './GanttChart'
+import { buildBarLabel, GANTT_ROW_HEIGHT, HEADER_HEIGHT } from './GanttChart'
 import { computeTimeMarks, type GanttZoom } from './ganttZoom'
-import { formatMoney, formatRatio, type ColumnKey } from './Scheduling'
+import { formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
 import type { Activity, ActivityRelationship, ResourceAssignment } from './types'
 
-// The gantt column always gets the leftover 58% of the table's width — data
-// columns are pinned to 42% between them (see the <colgroup> below). Used to
-// convert a position that's local to the gantt column (0-100, its own day
-// range) into one relative to the whole table, for the connector overlay.
-const DATA_PCT = 42
-const GANTT_PCT = 58
-function toTableXPct(colPct: number): number {
-  return DATA_PCT + (colPct / 100) * GANTT_PCT
+// Data columns get their real configured pixel widths (same widths the
+// on-screen grid uses) — NOT a percentage of the table, which used to make
+// them balloon on larger paper (2026-07-05, per Maro: "at A3/A2/A1 etc the
+// column widths aren't optimised, too much space" — a fixed 42/58 split
+// scales the data columns up right along with the page, even though a date
+// string doesn't need more room just because the paper is bigger). The gantt
+// column has no explicit width in the <colgroup> below, so table-layout:
+// fixed hands it 100% of whatever's left over — meaning it automatically
+// grows to fill any extra room on larger paper, which is exactly what was
+// asked for ("if in doubt, give more space to the gantt chart").
+//
+// Converts a position that's local to the gantt column (0-100, its own day
+// range) into one relative to the whole table, for the connector overlay —
+// as a CSS calc() string, not a plain percentage number, since the gantt
+// column's own width is itself a mixed unit (100% of the table minus the
+// data columns' fixed pixel width), not a fixed percentage anymore.
+function toTableX(colPct: number, dataWidthPx: number): string {
+  return `calc(${dataWidthPx}px + (100% - ${dataWidthPx}px) * ${colPct / 100})`
 }
 
 interface Props {
@@ -92,8 +102,28 @@ function xGeometryPct(start: string | null, finish: string | null, isMilestone: 
 // table's real rendered pixel width (see the file-level comment).
 const STUB_PX = 10
 
-function cssX(pct: number, pxOffset = 0): string {
-  return pxOffset === 0 ? `${pct}%` : `calc(${pct}% + ${pxOffset}px)`
+// Adds a fixed pixel offset to an already-resolved CSS position (a plain
+// percentage, or another calc()/min()/max() expression) — used to build the
+// stub jogs below without ever needing to know the base's actual pixel value.
+function plusPx(base: string, px: number): string {
+  return px === 0 ? base : `calc(${base} + ${px}px)`
+}
+
+// Purely a routing heuristic ("is the target clearly ahead, or basically
+// same-x/backward") — evaluated on the LOCAL gantt-column percentages
+// (0-100), before conversion to table-wide CSS strings via toTableX, since
+// that conversion is a strictly increasing function of the local percentage
+// — comparing the local values gives the same ordering a comparison of the
+// (unresolvable-in-JS) table-wide values would. Doesn't need to precisely
+// match STUB_PX, just needs to be a small percentage. Same branch condition
+// as GanttChart.tsx's own elbowPath (a full stub-width gap required before
+// taking the simple route) — same-date milestone-to-milestone links
+// intentionally get the loop-out "S" route, same as on-screen (2026-07-05,
+// per Maro: wanted print to match the on-screen zigzag, not a plain
+// vertical line).
+function isForwardRoute(x1LocalPct: number, y1: number, x2LocalPct: number, y2: number): boolean {
+  const routeThresholdPct = 0.5
+  return x2LocalPct >= x1LocalPct + routeThresholdPct || (y1 === y2 && x2LocalPct >= x1LocalPct)
 }
 
 // A connector's elbow route as a list of straight segments (x as a CSS
@@ -102,46 +132,40 @@ function cssX(pct: number, pxOffset = 0): string {
 // an SVG viewBox scaled non-uniformly to fake that mix would also warp
 // stroke widths (2026-07-05, per Maro — see the file-level comment). Same
 // routing logic as GanttChart.tsx's own elbowPath (stub out, across, stub
-// in), just emitting segments instead of a `d` string. Each 'h' segment's
-// two x's aren't assumed to be in left-to-right order (a resolved calc()
-// value can't be compared in JS) — the renderer uses CSS min()/max() to
-// sort them at layout time instead.
+// in), just emitting segments instead of a `d` string. x1/x2 are already
+// table-wide CSS positions (see toTableX) — forward/backward is decided by
+// the caller via isForwardRoute, using the local percentages, since a
+// resolved calc() string can't be compared numerically in JS. Each 'h'
+// segment's two x's aren't assumed to be in left-to-right order either —
+// the renderer uses CSS min()/max() to sort them at layout time.
 type Segment =
   | { kind: 'h'; x1: string; x2: string; y: number }
   | { kind: 'v'; x: string; yStart: number; yEnd: number }
 
-function elbowSegments(x1Pct: number, y1: number, x2Pct: number, y2: number): Segment[] {
-  // Purely a routing heuristic ("is the target clearly ahead, or basically
-  // same-x/backward") — doesn't need to precisely match STUB_PX, just needs
-  // to be a small percentage.
-  const routeThresholdPct = 0.5
-  // Same branch condition as GanttChart.tsx's own elbowPath (a full stub-width
-  // gap required before taking the simple route) — same-date milestone-to-
-  // milestone links intentionally get the loop-out "S" route below, same as
-  // on-screen (2026-07-05, per Maro: wanted print to match the on-screen
-  // zigzag, not a plain vertical line).
-  if (x2Pct >= x1Pct + routeThresholdPct || (y1 === y2 && x2Pct >= x1Pct)) {
-    const midX = cssX(x1Pct, STUB_PX)
+function elbowSegments(x1: string, y1: number, x2: string, y2: number, forward: boolean, dataWidthPx: number): Segment[] {
+  if (forward) {
+    const midX = plusPx(x1, STUB_PX)
     return [
-      { kind: 'h', x1: cssX(x1Pct), x2: midX, y: y1 },
+      { kind: 'h', x1, x2: midX, y: y1 },
       { kind: 'v', x: midX, yStart: Math.min(y1, y2), yEnd: Math.max(y1, y2) },
-      { kind: 'h', x1: midX, x2: cssX(x2Pct), y: y2 },
+      { kind: 'h', x1: midX, x2, y: y2 },
     ]
   }
-  const outX = `min(100%, ${cssX(x1Pct, STUB_PX)})`
-  // Clamped to DATA_PCT — the gantt column's own left edge within the
-  // table-wide 0-100 scale. Without this, a stub subtracted from an x that's
-  // already close to that edge (e.g. two early-dated, nearly same-date
-  // activities) pushes the route left of DATA_PCT, spilling the connector
-  // visibly into the data columns (2026-07-05, per Maro).
-  const inX = `max(${DATA_PCT}%, ${cssX(x2Pct, -STUB_PX)})`
+  const outX = `min(100%, ${plusPx(x1, STUB_PX)})`
+  // Clamped to the gantt column's own left edge (a literal, known pixel
+  // value now — see toTableX — not a percentage). Without this, a stub
+  // subtracted from an x that's already close to that edge (e.g. two
+  // early-dated, nearly same-date activities) pushes the route left of it,
+  // spilling the connector visibly into the data columns (2026-07-05, per
+  // Maro).
+  const inX = `max(${dataWidthPx}px, ${plusPx(x2, -STUB_PX)})`
   const midY = (y1 + y2) / 2
   return [
-    { kind: 'h', x1: cssX(x1Pct), x2: outX, y: y1 },
+    { kind: 'h', x1, x2: outX, y: y1 },
     { kind: 'v', x: outX, yStart: Math.min(y1, midY), yEnd: Math.max(y1, midY) },
     { kind: 'h', x1: outX, x2: inX, y: midY },
     { kind: 'v', x: inX, yStart: Math.min(midY, y2), yEnd: Math.max(midY, y2) },
-    { kind: 'h', x1: inX, x2: cssX(x2Pct), y: y2 },
+    { kind: 'h', x1: inX, x2, y: y2 },
   ]
 }
 
@@ -173,22 +197,34 @@ interface PrintColumnDef {
   key: ColumnKey
   label: string
   align?: 'right'
-  render: (a: Activity, resourceAssignments: ResourceAssignment[]) => string
+  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle) => string
   cellClassName?: (a: Activity) => string
 }
 
 const NEGATIVE_RED = 'text-red-600 font-semibold'
 const NORMAL_GREY = 'text-gray-600'
 
+const DATE_COLUMN_KEYS = new Set<ColumnKey>(['start', 'bl_start', 'finish', 'bl_finish'])
+// A date-only column doesn't need nearly as much room as the on-screen width
+// (sized for "06 Jul 2026 09:00") once the time-of-day is hidden — reusing
+// that full width left a wide blank gap next to "06 Jul 2026" (2026-07-05,
+// per Maro). 72px comfortably fits the date-only string at print's 9px font.
+const DATE_ONLY_COLUMN_WIDTH = 72
+
+function printColumnWidth(key: ColumnKey, columnWidths: Record<string, number>, showTimeOfDay: boolean): number {
+  if (!showTimeOfDay && DATE_COLUMN_KEYS.has(key)) return DATE_ONLY_COLUMN_WIDTH
+  return columnWidths[key] ?? 96
+}
+
 const PRINT_COLUMNS: PrintColumnDef[] = [
   { key: 'code', label: 'Code', render: a => a.code, cellClassName: () => 'text-gray-500 font-mono' },
   { key: 'wbs', label: 'WBS', render: a => a.wbs_path ?? '—', cellClassName: () => 'text-gray-400 font-mono' },
   { key: 'type', label: 'Type', render: a => a.activity_type.replace('_', ' ') },
-  { key: 'duration', label: 'Dur (d)', align: 'right', render: a => String(a.duration_days ?? '—') },
-  { key: 'start', label: 'Start', render: a => formatDateTime(a.start) },
-  { key: 'bl_start', label: 'BL Start', render: a => formatDateTime(a.bl_start), cellClassName: () => 'text-gray-400' },
-  { key: 'finish', label: 'Finish', render: a => formatDateTime(a.finish) },
-  { key: 'bl_finish', label: 'BL Finish', render: a => formatDateTime(a.bl_finish), cellClassName: () => 'text-gray-400' },
+  { key: 'duration', label: 'Dur (d)', align: 'right', render: a => formatDuration(a.duration_days) },
+  { key: 'start', label: 'Start', render: (a, _r, style) => formatDateTime(a.start, style.show_time_of_day) },
+  { key: 'bl_start', label: 'BL Start', render: (a, _r, style) => formatDateTime(a.bl_start, style.show_time_of_day), cellClassName: () => 'text-gray-400' },
+  { key: 'finish', label: 'Finish', render: (a, _r, style) => formatDateTime(a.finish, style.show_time_of_day) },
+  { key: 'bl_finish', label: 'BL Finish', render: (a, _r, style) => formatDateTime(a.bl_finish, style.show_time_of_day), cellClassName: () => 'text-gray-400' },
   {
     key: 'variance', label: 'Fin. Var (d)', align: 'right', render: a => String(a.variance_days ?? '—'),
     cellClassName: a => (a.variance_days ?? 0) > 0 ? NEGATIVE_RED : NORMAL_GREY,
@@ -283,7 +319,7 @@ export function SchedulingPrintView({
   const columnsBeforeActivity = columns.filter(c => c.key === 'code' || c.key === 'wbs')
   const columnsAfterActivity = columns.filter(c => c.key !== 'code' && c.key !== 'wbs')
   const activityWidth = columnWidths.activity ?? 224
-  const totalDataWidth = activityWidth + columns.reduce((sum, c) => sum + (columnWidths[c.key] ?? 96), 0) || 1
+  const totalDataWidth = activityWidth + columns.reduce((sum, c) => sum + printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day), 0) || 1
 
   const { rangeStart, totalDays } = useMemo(() => computeGanttRange(activities), [activities])
   const timeMarks = useMemo(() => computeTimeMarks(rangeStart, totalDays, ganttZoom), [rangeStart, totalDays, ganttZoom])
@@ -324,10 +360,11 @@ export function SchedulingPrintView({
         {/* Connector lines overlay — sits directly above the <table> (not the
             outer letterhead+count wrapper), so its origin lines up with the
             table's own top-left with no extra offset to account for. Each
-            segment is its own positioned <div> (x in % of the table width,
-            y in real pixels) — see elbowSegments and the file-level comment
-            for why this can't be pixel-measured or drawn as one SVG path. */}
-        {relationships.map(r => {
+            segment is its own positioned <div> (x as a table-wide CSS
+            position via toTableX, y in real pixels) — see elbowSegments and
+            the file-level comment for why this can't be pixel-measured or
+            drawn as one SVG path. */}
+        {ganttStyle.show_connectors && relationships.map(r => {
           const predIndex = rowIndexById.get(r.predecessor_id)
           const succIndex = rowIndexById.get(r.successor_id)
           const predGeo = geometryById.get(r.predecessor_id)
@@ -335,11 +372,14 @@ export function SchedulingPrintView({
           if (predIndex === undefined || succIndex === undefined || !predGeo || !succGeo) return null
           const predCenterY = HEADER_HEIGHT + predIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
           const succCenterY = HEADER_HEIGHT + succIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
-          const x1Pct = toTableXPct(r.relationship_type === 'SS' || r.relationship_type === 'SF' ? predGeo.leftPct : predGeo.rightPct)
-          const x2Pct = toTableXPct(r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succGeo.rightPct : succGeo.leftPct)
+          const x1LocalPct = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? predGeo.leftPct : predGeo.rightPct
+          const x2LocalPct = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succGeo.rightPct : succGeo.leftPct
+          const forward = isForwardRoute(x1LocalPct, predCenterY, x2LocalPct, succCenterY)
+          const x1 = toTableX(x1LocalPct, totalDataWidth)
+          const x2 = toTableX(x2LocalPct, totalDataWidth)
           const critical = criticalById.get(r.predecessor_id) && criticalById.get(r.successor_id)
           const color = critical ? ganttStyle.critical_color : '#94a3b8'
-          return elbowSegments(x1Pct, predCenterY, x2Pct, succCenterY).map((seg, i) => seg.kind === 'h' ? (
+          return elbowSegments(x1, predCenterY, x2, succCenterY, forward, totalDataWidth).map((seg, i) => seg.kind === 'h' ? (
             // left/width via CSS min()/max() rather than Math.min/abs — seg.x1
             // and seg.x2 can be calc() strings (a fixed-pixel stub applied to
             // a percentage base), so which one is actually smaller can only
@@ -365,11 +405,11 @@ export function SchedulingPrintView({
       >
         <colgroup>
           {columnsBeforeActivity.map(c => (
-            <col key={c.key} style={{ width: `${((columnWidths[c.key] ?? 96) / totalDataWidth) * DATA_PCT}%` }} />
+            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day) }} />
           ))}
-          <col style={{ width: `${(activityWidth / totalDataWidth) * DATA_PCT}%` }} />
+          <col style={{ width: activityWidth }} />
           {columnsAfterActivity.map(c => (
-            <col key={c.key} style={{ width: `${((columnWidths[c.key] ?? 96) / totalDataWidth) * DATA_PCT}%` }} />
+            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day) }} />
           ))}
           <col />
         </colgroup>
@@ -412,6 +452,7 @@ export function SchedulingPrintView({
             const isWbs = a.activity_type === 'wbs_summary'
             const geo = xGeometryPct(a.start, a.finish, isMilestone, rangeStart, totalDays)
             const critical = a.is_critical === true
+            const barLabel = buildBarLabel(a, ganttStyle, resourceAssignments)
             return (
               <tr
                 key={a.id}
@@ -426,7 +467,7 @@ export function SchedulingPrintView({
               >
                 {columnsBeforeActivity.map(c => (
                   <td key={c.key} className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}>
-                    {c.render(a, resourceAssignments)}
+                    {c.render(a, resourceAssignments, ganttStyle)}
                   </td>
                 ))}
                 <td
@@ -443,7 +484,7 @@ export function SchedulingPrintView({
                 </td>
                 {columnsAfterActivity.map(c => (
                   <td key={c.key} className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}>
-                    {c.render(a, resourceAssignments)}
+                    {c.render(a, resourceAssignments, ganttStyle)}
                   </td>
                 ))}
                 <td className="p-0 relative" style={{ overflow: 'hidden', height: GANTT_ROW_HEIGHT }}>
@@ -501,6 +542,23 @@ export function SchedulingPrintView({
                           }}
                         >
                           <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                        </div>
+                      )
+                    })()}
+                    {/* Bar label — same trio as GanttChart.tsx's own (name/
+                        resources/finish), positioned right after the bar's own
+                        right edge. Clipped by this <td>'s overflow:hidden if
+                        it would run past the printed page's right margin — an
+                        inherent print trade-off (there's no scrollable space
+                        to spill into the way there is on-screen), not a bug. */}
+                    {geo && barLabel && (() => {
+                      const anchorPct = isMilestone ? geo.leftPct : geo.rightPct
+                      return (
+                        <div
+                          className="absolute whitespace-nowrap"
+                          style={{ top: BAR_CENTER_Y - 7, left: `calc(${anchorPct}% + 6px)`, fontSize: 8, color: '#6b7280' }}
+                        >
+                          {barLabel}
                         </div>
                       )
                     })()}

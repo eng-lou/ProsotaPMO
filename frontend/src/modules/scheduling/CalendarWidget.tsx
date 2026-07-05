@@ -1,7 +1,8 @@
 import axios from 'axios'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
+import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import { WEEKDAY_FIELDS, type Calendar, type CalendarBreak, type CalendarException } from './types'
 
 function apiErrorDetail(err: unknown): string | undefined {
@@ -47,6 +48,8 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null)
   const [breaks, setBreaks] = useState<CalendarBreak[]>([])
   const [exceptions, setExceptions] = useState<CalendarException[]>([])
+  const [importError, setImportError] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const [addingBreak, setAddingBreak] = useState(false)
   const [breakLabel, setBreakLabel] = useState('')
@@ -112,6 +115,70 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     setCreating(false)
     setNewCalendar(BLANK_NEW_CALENDAR)
     await onChange()
+  }
+
+  // Fetches breaks/exceptions fresh rather than reusing `breaks`/`exceptions`
+  // state — that state only ever holds the *currently selected* calendar's
+  // rows, but Export is a per-row button in the calendar list, not tied to
+  // selection.
+  const handleExportCalendar = async (calendar: Calendar) => {
+    const [breaksRes, exceptionsRes] = await Promise.all([
+      api.get<CalendarBreak[]>('/api/v1/calendar-breaks/', { params: { calendar_id: calendar.id } }),
+      api.get<CalendarException[]>('/api/v1/calendar-exceptions/', { params: { calendar_id: calendar.id } }),
+    ])
+    downloadJson(`${calendar.name}.calendar.json`, {
+      name: calendar.name,
+      day_start_time: calendar.day_start_time,
+      day_end_time: calendar.day_end_time,
+      works_monday: calendar.works_monday,
+      works_tuesday: calendar.works_tuesday,
+      works_wednesday: calendar.works_wednesday,
+      works_thursday: calendar.works_thursday,
+      works_friday: calendar.works_friday,
+      works_saturday: calendar.works_saturday,
+      works_sunday: calendar.works_sunday,
+      breaks: breaksRes.data.map(b => ({ label: b.label, start_time: b.start_time, end_time: b.end_time })),
+      exceptions: exceptionsRes.data.map(e => ({
+        label: e.label, start_date: e.start_date, end_date: e.end_date, is_working: e.is_working,
+        start_time: e.start_time, end_time: e.end_time,
+      })),
+    })
+  }
+
+  // Recreates the calendar via the same create endpoint the "+ Add Calendar"
+  // form uses, then loops its breaks/exceptions through their own existing
+  // create endpoints against the new calendar's id — client-side only, like
+  // every other Export/Import pair in this app (P6's own Copy/Paste,
+  // adapted to a file-based workflow — 2026-07-05, per Maro).
+  const handleImportFile = async (file: File) => {
+    setImportError(null)
+    try {
+      const parsed = await readJsonFile(file) as Partial<Calendar> & {
+        breaks?: Pick<CalendarBreak, 'label' | 'start_time' | 'end_time'>[]
+        exceptions?: Pick<CalendarException, 'label' | 'start_date' | 'end_date' | 'is_working' | 'start_time' | 'end_time'>[]
+      }
+      if (typeof parsed.name !== 'string') throw new Error(`"${file.name}" isn't a valid exported calendar.`)
+      const { data: created } = await api.post<Calendar>('/api/v1/calendars/', {
+        project_id: projectId,
+        name: parsed.name,
+        day_start_time: parsed.day_start_time ?? '08:00',
+        day_end_time: parsed.day_end_time ?? '17:00',
+        works_monday: parsed.works_monday ?? true,
+        works_tuesday: parsed.works_tuesday ?? true,
+        works_wednesday: parsed.works_wednesday ?? true,
+        works_thursday: parsed.works_thursday ?? true,
+        works_friday: parsed.works_friday ?? true,
+        works_saturday: parsed.works_saturday ?? false,
+        works_sunday: parsed.works_sunday ?? false,
+      })
+      await Promise.all([
+        ...(parsed.breaks ?? []).map(b => api.post('/api/v1/calendar-breaks/', { calendar_id: created.id, ...b })),
+        ...(parsed.exceptions ?? []).map(ex => api.post('/api/v1/calendar-exceptions/', { calendar_id: created.id, ...ex })),
+      ])
+      await onChange()
+    } catch (err) {
+      setImportError(apiErrorDetail(err) ?? (err instanceof Error ? err.message : 'Could not import that file.'))
+    }
   }
 
   const handleSetDefault = async (id: string) => {
@@ -234,14 +301,17 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                   </td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
                     {!c.is_project_default && (
-                      <>
-                        <button onClick={e => { e.stopPropagation(); handleSetDefault(c.id) }} className="text-blue-600 hover:text-blue-700 mr-2">
-                          Set default
-                        </button>
-                        <button onClick={e => { e.stopPropagation(); handleDeleteCalendar(c) }} className="text-gray-400 hover:text-red-600">
-                          Delete
-                        </button>
-                      </>
+                      <button onClick={e => { e.stopPropagation(); handleSetDefault(c.id) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                        Set default
+                      </button>
+                    )}
+                    <button onClick={e => { e.stopPropagation(); handleExportCalendar(c) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                      Export
+                    </button>
+                    {!c.is_project_default && (
+                      <button onClick={e => { e.stopPropagation(); handleDeleteCalendar(c) }} className="text-gray-400 hover:text-red-600">
+                        Delete
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -299,8 +369,22 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
               </div>
             </div>
           ) : (
-            <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Calendar</button>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Calendar</button>
+              <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+                ⇧ Import Calendar
+              </button>
+              <input
+                ref={importInputRef} type="file" accept="application/json,.json" className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) handleImportFile(file)
+                  e.target.value = ''
+                }}
+              />
+            </div>
           )}
+          {importError && <p className="text-xs text-red-600 mt-1">{importError}</p>}
         </div>
 
         <div className="space-y-4">

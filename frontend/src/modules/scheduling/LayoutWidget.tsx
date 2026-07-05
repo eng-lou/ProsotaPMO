@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
+import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import type { GanttFontFamily, GanttLayout, GanttStyle } from '@/lib/ganttLayout'
 
 interface Props {
@@ -86,6 +87,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
   const [saving, setSaving] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const setField = <K extends keyof GanttStyle>(key: K) => (value: GanttStyle[K]) => setDraft(d => ({ ...d, [key]: value }))
   const setWbsLevel = (index: number) => (color: string) => setDraft(d => {
@@ -178,6 +180,27 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
     }
   }
 
+  const handleExport = (layout: GanttLayout) => {
+    downloadJson(`${layout.name}.layout.json`, { name: layout.name, style: layout.style })
+  }
+
+  // Client-side only, like every other Export/Import pair in this app
+  // (P6's own Copy/Paste, adapted to a file-based workflow — 2026-07-05, per
+  // Maro) — reads the file, then feeds it straight into the same onCreate
+  // this widget's own "Save Layout" button already calls.
+  const handleImportFile = async (file: File) => {
+    setError(null)
+    try {
+      const parsed = await readJsonFile(file) as Partial<GanttLayout>
+      if (typeof parsed.name !== 'string' || typeof parsed.style !== 'object' || parsed.style === null) {
+        throw new Error(`"${file.name}" isn't a valid exported layout.`)
+      }
+      await onCreate(parsed.name, parsed.style as GanttStyle)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import that file.')
+    }
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
@@ -197,6 +220,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
         <thead>
           <tr className="bg-gray-50 text-left text-gray-500">
             <th className="px-2 py-1.5 border border-gray-200">Name</th>
+            <th className="px-2 py-1.5 border border-gray-200"></th>
             <th className="px-2 py-1.5 border border-gray-200"></th>
             <th className="px-2 py-1.5 border border-gray-200"></th>
             <th className="px-2 py-1.5 border border-gray-200"></th>
@@ -220,6 +244,11 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
                   Edit
                 </button>
               </td>
+              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
+                <button onClick={() => handleExport(l)} className="text-blue-600 hover:text-blue-700">
+                  Export
+                </button>
+              </td>
               <td className="px-2 py-1.5 border border-gray-200 text-right">
                 <button onClick={() => handleDelete(l)} disabled={busyId === l.id} className="text-gray-400 hover:text-red-600 disabled:opacity-40">
                   Delete
@@ -228,7 +257,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
             </tr>
           ))}
           {layouts.length === 0 && !creating && (
-            <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No layouts saved yet — the built-in defaults are active</td></tr>
+            <tr><td colSpan={5} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No layouts saved yet — the built-in defaults are active</td></tr>
           )}
         </tbody>
       </table>
@@ -243,7 +272,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
             />
           </label>
 
-          <div className="grid grid-cols-3 gap-6">
+          <div className="grid grid-cols-4 gap-6">
             <div>
               <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Gantt colours</div>
               <div className="space-y-1.5">
@@ -292,6 +321,50 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
                     <option value="mono">Monospace</option>
                   </select>
                 </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Show time of day
+                  <input
+                    type="checkbox" checked={draft.show_time_of_day}
+                    onChange={e => setField('show_time_of_day')(e.target.checked)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+                Gantt display <span className="normal-case text-gray-400">(on-screen + print)</span>
+              </div>
+              <div className="space-y-1.5">
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Predecessor/successor lines
+                  <input
+                    type="checkbox" checked={draft.show_connectors}
+                    onChange={e => setField('show_connectors')(e.target.checked)}
+                  />
+                </label>
+                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-1">Bar labels</div>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Activity name
+                  <input
+                    type="checkbox" checked={draft.show_label_name}
+                    onChange={e => setField('show_label_name')(e.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Assigned resources
+                  <input
+                    type="checkbox" checked={draft.show_label_resource}
+                    onChange={e => setField('show_label_resource')(e.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Finish date
+                  <input
+                    type="checkbox" checked={draft.show_label_finish}
+                    onChange={e => setField('show_label_finish')(e.target.checked)}
+                  />
+                </label>
               </div>
             </div>
           </div>
@@ -304,7 +377,20 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
           </div>
         </div>
       ) : (
-        <button onClick={startCreating} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Save current as new layout</button>
+        <div className="flex items-center gap-3">
+          <button onClick={startCreating} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Save current as new layout</button>
+          <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+            ⇧ Import Layout
+          </button>
+          <input
+            ref={importInputRef} type="file" accept="application/json,.json" className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) handleImportFile(file)
+              e.target.value = ''
+            }}
+          />
+        </div>
       )}
 
       {error && <p className="text-xs text-red-600 mt-2">{error}</p>}

@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
-import type { LetterheadTokens, LetterheadZone, ProjectLetterhead } from '@/lib/letterhead'
+import { useRef, useState, type ReactNode } from 'react'
+import { downloadJson, readJsonFile } from '@/lib/exportImport'
+import { EMPTY_ZONE, type LetterheadTokens, type LetterheadZone, type ProjectLetterhead } from '@/lib/letterhead'
 import { PrintLetterheadFooter, PrintLetterheadHeader } from './PrintLetterhead'
 
 interface Props {
@@ -74,6 +75,7 @@ export function LetterheadEditorWidget({ letterhead, previewTokens, onSave, onCl
   const [draft, setDraft] = useState<ProjectLetterhead>(letterhead)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const setZone = (key: keyof Pick<ProjectLetterhead,
     'header_left' | 'header_center' | 'header_right' | 'footer_left' | 'footer_center' | 'footer_right'
@@ -100,6 +102,49 @@ export function LetterheadEditorWidget({ letterhead, previewTokens, onSave, onCl
       setError('Could not save the letterhead.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleExport = () => {
+    downloadJson('letterhead.json', {
+      logo_data_url: draft.logo_data_url,
+      logo_position: draft.logo_position,
+      header_left: draft.header_left,
+      header_center: draft.header_center,
+      header_right: draft.header_right,
+      footer_left: draft.footer_left,
+      footer_center: draft.footer_center,
+      footer_right: draft.footer_right,
+      show_gantt_legend: draft.show_gantt_legend,
+    })
+  }
+
+  // Loads the imported file into the draft/preview only — same "stage it,
+  // then click Save Letterhead yourself" pattern this form already uses for
+  // an uploaded logo, rather than overwriting the live letterhead the
+  // instant a file is chosen (client-side only, P6's own Copy/Paste adapted
+  // to a file-based workflow — 2026-07-05, per Maro).
+  const handleImportFile = async (file: File) => {
+    setError(null)
+    try {
+      const parsed = await readJsonFile(file) as Partial<ProjectLetterhead>
+      if (typeof parsed.header_left !== 'object' || parsed.header_left === null) {
+        throw new Error(`"${file.name}" isn't a valid exported letterhead.`)
+      }
+      setDraft(d => ({
+        ...d,
+        logo_data_url: parsed.logo_data_url ?? null,
+        logo_position: parsed.logo_position ?? 'left',
+        header_left: parsed.header_left as LetterheadZone,
+        header_center: (parsed.header_center as LetterheadZone) ?? EMPTY_ZONE,
+        header_right: (parsed.header_right as LetterheadZone) ?? EMPTY_ZONE,
+        footer_left: (parsed.footer_left as LetterheadZone) ?? EMPTY_ZONE,
+        footer_center: (parsed.footer_center as LetterheadZone) ?? EMPTY_ZONE,
+        footer_right: (parsed.footer_right as LetterheadZone) ?? EMPTY_ZONE,
+        show_gantt_legend: parsed.show_gantt_legend ?? false,
+      }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import that file.')
     }
   }
 
@@ -197,6 +242,19 @@ export function LetterheadEditorWidget({ letterhead, previewTokens, onSave, onCl
           {saving ? 'Saving…' : 'Save Letterhead'}
         </button>
         <button onClick={onClose} className="text-xs text-gray-400 hover:text-gray-600 px-2">Cancel</button>
+        <div className="w-px h-4 bg-gray-200" />
+        <button onClick={handleExport} className="text-xs text-blue-600 hover:text-blue-700 font-medium">Export</button>
+        <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+          ⇧ Import
+        </button>
+        <input
+          ref={importInputRef} type="file" accept="application/json,.json" className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0]
+            if (file) handleImportFile(file)
+            e.target.value = ''
+          }}
+        />
       </div>
     </div>
   )

@@ -2,7 +2,23 @@ import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react'
 import { DEFAULT_GANTT_STYLE, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { formatDateTime } from './dateTime'
 import { computeTimeMarks, DAY_WIDTH_BY_ZOOM, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
-import type { Activity, ActivityRelationship } from './types'
+import type { Activity, ActivityRelationship, ResourceAssignment } from './types'
+
+// The bar-label trio (2026-07-05, per Maro: "show/hide specific fields...
+// by the right side of the relevant task, milestone") — joins whichever of
+// name/resources/finish are individually switched on in GanttStyle into one
+// string, rather than three separately-positioned labels that would need
+// their own collision/stacking logic.
+export function buildBarLabel(a: Activity, style: GanttStyle, resourceAssignments: ResourceAssignment[]): string {
+  const parts: string[] = []
+  if (style.show_label_name) parts.push(a.task_name)
+  if (style.show_label_resource) {
+    const names = resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name)
+    if (names.length > 0) parts.push(names.join(', '))
+  }
+  if (style.show_label_finish) parts.push(formatDateTime(a.finish, style.show_time_of_day))
+  return parts.join('   ·   ')
+}
 
 const ZOOM_ORDER = ZOOM_OPTIONS.map(o => o.value)
 // Pixels of horizontal drag needed to cross one zoom level — tuned so a
@@ -119,6 +135,9 @@ export interface GanttChartHandle {
 export const GanttChart = forwardRef<GanttChartHandle, {
   activities: Activity[]
   relationships?: ActivityRelationship[]
+  // Only needed for the show_label_resource toggle — omitted entirely
+  // renders as if that toggle were off, regardless of its actual setting.
+  resourceAssignments?: ResourceAssignment[]
   style?: GanttStyle
   zoom?: GanttZoom
   // Lets the timescale header itself be click-dragged to zoom (Maro,
@@ -133,6 +152,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
 }>(function GanttChart({
   activities,
   relationships = [],
+  resourceAssignments = [],
   style = DEFAULT_GANTT_STYLE,
   zoom = 'week',
   onZoomChange,
@@ -291,7 +311,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           {todayOffset !== null && (
             <line x1={todayOffset} y1={0} x2={todayOffset} y2={height} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 3" />
           )}
-          {relationships.map(r => {
+          {style.show_connectors && relationships.map(r => {
             const pred = geometry.get(r.predecessor_id)
             const succ = geometry.get(r.successor_id)
             if (!pred || !succ) return null
@@ -362,28 +382,47 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           const geo = geometry.get(a.id)
           if (!geo) return null
           const critical = a.is_critical === true
+          const label = buildBarLabel(a, style, resourceAssignments)
+          // className="contents" — an invisible wrapper for layout purposes
+          // only, so the bar/milestone shape and its optional label stay
+          // two independent absolutely-positioned siblings (both still
+          // positioned against this same relative body div) rather than one
+          // nested inside the other.
+          const labelEl = label && (
+            <div
+              className="absolute text-[10px] text-gray-500 whitespace-nowrap pointer-events-none"
+              style={{ top: geo.centerY - 7, left: geo.right + 6 }}
+            >
+              {label}
+            </div>
+          )
 
           if (a.activity_type === 'milestone') {
             const color = critical ? style.milestone_critical_color : style.milestone_noncritical_color
             return (
-              <div
-                key={a.id}
-                className="absolute rotate-45 border"
-                style={{
-                  top: geo.centerY - MILESTONE_SIZE / 2, left: geo.left - MILESTONE_SIZE / 2,
-                  width: MILESTONE_SIZE, height: MILESTONE_SIZE,
-                  backgroundColor: color, borderColor: withAlpha(color, 0.7),
-                }}
-                title={`${a.task_name} — ${formatDateTime(a.start ?? a.finish)}${critical ? ' (critical)' : ''}`}
-              />
+              <div key={a.id} className="contents">
+                <div
+                  className="absolute rotate-45 border"
+                  style={{
+                    top: geo.centerY - MILESTONE_SIZE / 2, left: geo.left - MILESTONE_SIZE / 2,
+                    width: MILESTONE_SIZE, height: MILESTONE_SIZE,
+                    backgroundColor: color, borderColor: withAlpha(color, 0.7),
+                  }}
+                  title={`${a.task_name} — ${formatDateTime(a.start ?? a.finish)}${critical ? ' (critical)' : ''}`}
+                />
+                {labelEl}
+              </div>
             )
           }
 
           if (a.activity_type === 'wbs_summary') {
             const color = wbsLevelColor(style, depthOf(a))
             return (
-              <div key={a.id} title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)}`}>
-                <WbsSummaryBar left={geo.left} right={geo.right} top={geo.top} centerY={BAR_CENTER_Y} color={color} />
+              <div key={a.id} className="contents">
+                <div title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)}`}>
+                  <WbsSummaryBar left={geo.left} right={geo.right} top={geo.top} centerY={BAR_CENTER_Y} color={color} />
+                </div>
+                {labelEl}
               </div>
             )
           }
@@ -395,16 +434,18 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           // is invisible too — a solid border makes the bar's extent legible
           // at a glance regardless of progress.
           return (
-            <div
-              key={a.id}
-              className="absolute overflow-hidden rounded border-2"
-              style={{
-                top: geo.top + BAR_ZONE_TOP, left: geo.left, width: geo.right - geo.left, height: BAR_ZONE_HEIGHT,
-                backgroundColor: withAlpha(color, 0.25), borderColor: color,
-              }}
-              title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)} (${pct}% complete)${critical ? ' — critical path' : ''}`}
-            >
-              <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+            <div key={a.id} className="contents">
+              <div
+                className="absolute overflow-hidden rounded border-2"
+                style={{
+                  top: geo.top + BAR_ZONE_TOP, left: geo.left, width: geo.right - geo.left, height: BAR_ZONE_HEIGHT,
+                  backgroundColor: withAlpha(color, 0.25), borderColor: color,
+                }}
+                title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)} (${pct}% complete)${critical ? ' — critical path' : ''}`}
+              >
+                <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+              </div>
+              {labelEl}
             </div>
           )
         })}

@@ -27,6 +27,7 @@ from app.models.project_letterhead import ProjectLetterhead
 from app.models.gantt_layout import GanttLayout
 from app.models.scheduling_quality_criterion import SchedulingQualityCriterion
 from app.models.scheduling_quality_run import SchedulingQualityRun
+from app.models.scheduling_filter import SchedulingFilter
 
 __all__ = [
     "Base",
@@ -61,4 +62,5 @@ __all__ = [
     "GanttLayout",
     "SchedulingQualityCriterion",
     "SchedulingQualityRun",
+    "SchedulingFilter",
 ]

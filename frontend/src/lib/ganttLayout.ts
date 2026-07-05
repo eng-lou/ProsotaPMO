@@ -36,6 +36,23 @@ export interface GanttStyle {
   wbs_level_colors: string[]
   activity_row_color: string
   milestone_row_color: string
+  // Display-only toggle (2026-07-05, per Maro) — doesn't affect any stored
+  // or computed value, just whether the activity table/print view shows a
+  // date's time-of-day (e.g. "06 Jul 2026 09:00" vs "06 Jul 2026"). Duration
+  // has no equivalent toggle — its decimal places never meant anything to
+  // read, so it always rounds to a whole number of days (see
+  // Scheduling.tsx:formatDuration).
+  show_time_of_day: boolean
+  // Gantt display toggles (2026-07-05, per Maro) — show_connectors hides the
+  // predecessor/successor lines entirely (both on-screen and print); the
+  // show_label_* trio each independently add a small text label to the
+  // right of a bar/milestone (activity name / assigned resources / finish
+  // date) — off by default, since this is new information appearing next
+  // to every bar, not a toggle for something already always shown.
+  show_connectors: boolean
+  show_label_name: boolean
+  show_label_resource: boolean
+  show_label_finish: boolean
 }
 
 export const DEFAULT_GANTT_STYLE: GanttStyle = {
@@ -50,6 +67,11 @@ export const DEFAULT_GANTT_STYLE: GanttStyle = {
   wbs_level_colors: [...DEFAULT_WBS_LEVEL_COLORS],
   activity_row_color: '#ffffff',
   milestone_row_color: '#a855f7',
+  show_time_of_day: true,
+  show_connectors: true,
+  show_label_name: false,
+  show_label_resource: false,
+  show_label_finish: false,
 }
 
 // Appends an alpha channel to a "#rrggbb" colour — used throughout for

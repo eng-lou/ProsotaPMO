@@ -317,3 +317,111 @@ export interface ScheduleBaseline {
   // snapshot actually covers.
   activity_count: number
 }
+
+// Custom activity-table filters (2026-07-05, per Maro, modelled on P6's own
+// Filters dialog) — a "Global" tier of built-in presets (Critical/Delayed/At
+// Risk, still hardcoded checkboxes in Scheduling.tsx, not represented here)
+// plus a "User Defined" tier of these: named, saved, backend-persisted,
+// each a list of conditions plus its own match_mode for combining them. A
+// *separate* global "match All selected filters/Any selected filter" radio
+// (a UI preference, not stored here) then combines whichever filters — built-
+// in and custom — are currently enabled; see Scheduling.tsx's visibleActivities.
+export type FilterFieldKey =
+  | 'code' | 'wbs_path' | 'task_name' | 'activity_type' | 'constraint_type'
+  | 'is_critical' | 'is_archived'
+  | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
+  | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
+  | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'pct_complete' | 'duration_pct_complete'
+  | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
+
+export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
+
+export interface FilterCondition {
+  field: FilterFieldKey
+  operator: FilterOperator
+  value: string
+}
+
+export interface SchedulingFilter {
+  id: string
+  project_id: string
+  name: string
+  match_mode: 'all' | 'any'
+  conditions: FilterCondition[]
+  created_at: string
+  updated_at: string
+}
+
+export type FilterFieldType = 'number' | 'boolean' | 'enum' | 'text' | 'date'
+
+export interface FilterFieldDef {
+  key: FilterFieldKey
+  label: string
+  type: FilterFieldType
+  operators: FilterOperator[]
+  options?: { value: string; label: string }[]
+}
+
+export const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
+  eq: '=', neq: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤',
+  is_true: 'is true', is_false: 'is false', contains: 'contains', starts_with: 'starts with',
+}
+
+const NUMBER_OPERATORS: FilterOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte']
+const DATE_OPERATORS: FilterOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte']
+const BOOLEAN_OPERATORS: FilterOperator[] = ['is_true', 'is_false']
+const ENUM_OPERATORS: FilterOperator[] = ['eq', 'neq']
+// starts_with first — the common case for wbs_path ("everything under this
+// branch"), not just an exact-match lookup (2026-07-05, per Maro: "where wbs
+// is (then editable)" — a free-text match against the outline, not a fixed
+// preset dropdown).
+const TEXT_OPERATORS: FilterOperator[] = ['starts_with', 'contains', 'eq', 'neq']
+
+// Every field a condition can be built from — deliberately the same set the
+// activity table/print columns already expose (2026-07-05, per Maro: "use
+// all the relevant columns... more utility, not just preset options" — free-
+// text/date inputs where that's the natural fit, e.g. "WBS starts with 1.2"
+// + "Start < 28 May 2026" as two conditions of one filter, rather than only
+// fixed-option dropdowns). Resource assignments aren't included — they're a
+// separate joined list per activity, not a single value on it.
+export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
+  { key: 'code', label: 'Code', type: 'text', operators: TEXT_OPERATORS },
+  { key: 'wbs_path', label: 'WBS', type: 'text', operators: TEXT_OPERATORS },
+  { key: 'task_name', label: 'Activity Name', type: 'text', operators: TEXT_OPERATORS },
+  {
+    key: 'activity_type', label: 'Activity Type', type: 'enum', operators: ENUM_OPERATORS,
+    options: ACTIVITY_TYPES.map(t => ({ value: t, label: t.replace('_', ' ') })),
+  },
+  {
+    key: 'constraint_type', label: 'Constraint', type: 'enum', operators: ENUM_OPERATORS,
+    options: CONSTRAINT_TYPES.map(c => ({ value: c.value, label: c.label })),
+  },
+  { key: 'is_critical', label: 'Critical', type: 'boolean', operators: BOOLEAN_OPERATORS },
+  { key: 'is_archived', label: 'Archived', type: 'boolean', operators: BOOLEAN_OPERATORS },
+  { key: 'start', label: 'Start', type: 'date', operators: DATE_OPERATORS },
+  { key: 'finish', label: 'Finish', type: 'date', operators: DATE_OPERATORS },
+  { key: 'actual_start', label: 'Actual Start', type: 'date', operators: DATE_OPERATORS },
+  { key: 'actual_finish', label: 'Actual Finish', type: 'date', operators: DATE_OPERATORS },
+  { key: 'bl_start', label: 'BL Start', type: 'date', operators: DATE_OPERATORS },
+  { key: 'bl_finish', label: 'BL Finish', type: 'date', operators: DATE_OPERATORS },
+  { key: 'constraint_date', label: 'Constraint Date', type: 'date', operators: DATE_OPERATORS },
+  { key: 'duration_hours', label: 'Duration (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'duration_days', label: 'Duration (d)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'remaining_duration_hours', label: 'Remaining Duration (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'bl_duration_hours', label: 'BL Duration (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'variance_days', label: 'Variance (d)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'total_float_hours', label: 'Total Float (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'free_float_hours', label: 'Free Float (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'pct_complete', label: '% Complete', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'duration_pct_complete', label: 'Duration % Complete', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'bac', label: 'BAC', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'ac', label: 'AC', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'pv', label: 'PV', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'ev', label: 'EV', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'cv', label: 'CV', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'sv', label: 'SV', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'cpi', label: 'CPI', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'spi', label: 'SPI', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'eac', label: 'EAC', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'etc', label: 'ETC', type: 'number', operators: NUMBER_OPERATORS },
+]

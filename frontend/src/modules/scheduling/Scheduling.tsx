@@ -5,6 +5,7 @@ import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { useProjectLetterhead } from '@/lib/letterhead'
+import { evaluateFilter, useSchedulingFilters } from '@/lib/schedulingFilters'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
@@ -25,10 +26,12 @@ import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
 import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingPrintView } from './SchedulingPrintView'
+import { SchedulingFiltersWidget } from './SchedulingFiltersWidget'
 import { SchedulingQualityPrintView } from './SchedulingQualityPrintView'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import {
   ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type QualityReport, type Resource, type ResourceAssignment,
+  type SchedulingFilter,
 } from './types'
 
 const PANE_MAX_HEIGHT = 600
@@ -216,6 +219,17 @@ export function formatRatio(value: string | null) {
   return Number(value).toFixed(3)
 }
 
+// Duration is stored/served with 2 decimal places (e.g. "1.33"), but that
+// precision never actually means anything to read (2026-07-05, per Maro) —
+// always rounds to a whole number of days. Exported so SchedulingPrintView.tsx
+// renders the exact same figure.
+export function formatDuration(value: number | string | null): string {
+  if (value === null) return '—'
+  const n = Number(value)
+  if (Number.isNaN(n)) return '—'
+  return String(Math.round(n))
+}
+
 // Inline-editable fields (double-click a cell) — the value types PATCH accepts.
 // start/finish aren't plain passthrough fields: editing Start applies a soft "Start
 // On or After" constraint (P6/MS Project convention — the activity's normal logic
@@ -262,6 +276,9 @@ export function Scheduling() {
   const {
     layouts, create: createLayout, update: updateLayoutRequest, apply: applyLayout, remove: removeLayout, reset: resetLayout,
   } = useGanttLayouts(selectedProject?.id)
+  const {
+    filters: customFilters, create: createSchedulingFilter, update: updateSchedulingFilter, remove: removeSchedulingFilter,
+  } = useSchedulingFilters(selectedProject?.id)
   // Applying/resetting also changes the live letterhead server-side (a saved
   // snapshot gets pushed in, or the row is cleared) — refresh both so the
   // toolbar and print view immediately reflect it, not just on next reload.
@@ -352,6 +369,45 @@ export function Scheduling() {
     }
     return false
   }
+
+  // Row DOM nodes, keyed by activity id — populated by each row's own ref
+  // callback below, used only to scroll a specific row into view (not a
+  // measurement/positioning dependency the way earlier ref-map attempts in
+  // this file's history were, see SchedulingPrintView.tsx's own saga).
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
+
+  // Jumps to a specific activity from anywhere else in the UI (2026-07-05,
+  // per Maro: clicking a predecessor/successor's name in the Logic panel
+  // should select it and bring it into view) — expands any collapsed WBS
+  // ancestor so the row actually exists in the DOM first, opens its detail
+  // panel, then scrolls the grid pane to it once the (possibly just-
+  // expanded) row has had a render to appear.
+  const handleFocusActivity = (activityId: string) => {
+    const target = activities.find(a => a.id === activityId)
+    if (!target) return
+    setCollapsedIds(prev => {
+      let next = prev
+      let current = target
+      while (current.parent_id) {
+        const parent = activities.find(x => x.id === current.parent_id)
+        if (!parent) break
+        if (next.has(parent.id)) {
+          if (next === prev) next = new Set(prev)
+          next.delete(parent.id)
+        }
+        current = parent
+      }
+      if (next !== prev) persistCollapsed(next)
+      return next
+    })
+    setExpandedId(activityId)
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        rowRefs.current.get(activityId)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      }, 50)
+    })
+  }
+
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [resourcePoolWidgetOpen, setResourcePoolWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
@@ -426,6 +482,52 @@ export function Scheduling() {
   // filter checkboxes below.
   const [hideArchived, setHideArchived] = useState(false)
   const [filterAtRisk, setFilterAtRisk] = useState(false)
+
+  // Custom filters (2026-07-05, per Maro, modelled on P6's own Filters
+  // dialog) — a "User Defined" tier alongside the 3 built-in checkboxes
+  // above. Each enabled custom filter has its own Show/Hide mode — a filter
+  // matching an activity either keeps it (Show, the default) or removes it
+  // (Hide) — kept separate from the saved filter's own conditions, since the
+  // same saved filter (e.g. "Milestones") is equally useful either way
+  // depending on the moment ("show me only milestones" vs "hide all
+  // milestones"), per Maro: a filter he'd built matched an activity but
+  // ticking it hid that activity instead of keeping it — the fix isn't a
+  // bug fix, it's this explicit Show/Hide choice replacing an implicit
+  // "ticked = show-only-matches" assumption. Modes + which filters are
+  // enabled, and the global "match All selected filters / Any selected
+  // filter" mode combining *all* enabled filters (built-in + custom)
+  // together, are all UI preferences (localStorage), not server-side — only
+  // the filters' own name/conditions/match_mode are (see useSchedulingFilters).
+  const [customFilterModes, setCustomFilterModes] = useState<Record<string, 'show' | 'hide'>>(() => {
+    try {
+      const saved = localStorage.getItem('prosota_scheduling_custom_filter_modes')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const setCustomFilterMode = (filterId: string, mode: 'off' | 'show' | 'hide') => {
+    setCustomFilterModes(prev => {
+      const next = { ...prev }
+      if (mode === 'off') delete next[filterId]
+      else next[filterId] = mode
+      localStorage.setItem('prosota_scheduling_custom_filter_modes', JSON.stringify(next))
+      return next
+    })
+  }
+  const [filterMatchMode, setFilterMatchMode] = useState<'all' | 'any'>(() => {
+    const saved = localStorage.getItem('prosota_scheduling_filter_match_mode')
+    return saved === 'any' ? 'any' : 'all'
+  })
+  const handleFilterMatchModeChange = (mode: 'all' | 'any') => {
+    setFilterMatchMode(mode)
+    localStorage.setItem('prosota_scheduling_filter_match_mode', mode)
+  }
+  const handleClearAllFilters = () => {
+    setFilterCritical(false); setFilterDelayed(false); setFilterAtRisk(false)
+    setCustomFilterModes({})
+    localStorage.removeItem('prosota_scheduling_custom_filter_modes')
+  }
 
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
   // a reload. Activity name + checkbox columns are always shown (not toggleable).
@@ -511,6 +613,41 @@ export function Scheduling() {
     )(e)
   }
 
+  // Same drag pattern as beginDrag, tracking clientY instead — the divider
+  // between the grid+Gantt pane and the activity-detail panel below it
+  // (2026-07-05, per Maro: wanted that split resizable too).
+  const beginDragY = (onMove: (deltaY: number) => void, onEnd: () => void) => (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startY = e.clientY
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+    const onMouseMove = (moveEvent: MouseEvent) => onMove(moveEvent.clientY - startY)
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.style.userSelect = previousUserSelect
+      onEnd()
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+
+  const [topPaneHeight, setTopPaneHeight] = useState<number>(() => {
+    const saved = localStorage.getItem('prosota_scheduling_top_pane_height')
+    return saved ? Number(saved) : PANE_MAX_HEIGHT
+  })
+  const startTopPaneResize = (e: React.MouseEvent) => {
+    const startHeight = topPaneHeight
+    beginDragY(
+      deltaY => setTopPaneHeight(Math.max(200, startHeight + deltaY)),
+      () => setTopPaneHeight(h => {
+        localStorage.setItem('prosota_scheduling_top_pane_height', String(h))
+        return h
+      }),
+    )(e)
+  }
+
   // Inline editing — double-click a cell to edit it in place instead of opening the
   // modal form. Only a handful of fields are safe to edit this way (everything else
   // is either computed by the CPM engine or benefits from the modal's fuller context).
@@ -524,17 +661,31 @@ export function Scheduling() {
   // (twice, toggling back off) before inline-editing a moment later. Delaying the
   // single-click action lets a following dblclick cancel it — the standard fix for
   // this browser quirk.
-  const nameClickTimer = useRef<number | null>(null)
+  // Keyed by which activity the pending timer belongs to, not just "is one
+  // pending" — a bare boolean guard meant a rapid click on a *different* row
+  // while the previous row's timer was still pending got silently dropped,
+  // and only the stale first row's delayed action ever fired: clicking
+  // Building Pad then quickly clicking Fourth Floor Masonry left the panel
+  // showing Building Pad, requiring a second, now-unguarded click on Fourth
+  // Floor to actually open it (2026-07-05, per Maro). A different row now
+  // cancels the stale pending timer and starts its own immediately, instead
+  // of being ignored.
+  const nameClickTimer = useRef<{ id: string; timer: number } | null>(null)
   const handleNameClick = (a: Activity) => {
-    if (nameClickTimer.current !== null) return
-    nameClickTimer.current = window.setTimeout(() => {
+    if (nameClickTimer.current) {
+      if (nameClickTimer.current.id === a.id) return
+      window.clearTimeout(nameClickTimer.current.timer)
+      nameClickTimer.current = null
+    }
+    const timer = window.setTimeout(() => {
       nameClickTimer.current = null
       setExpandedId(id => id === a.id ? null : a.id)
     }, 220)
+    nameClickTimer.current = { id: a.id, timer }
   }
   const handleNameDoubleClick = (a: Activity) => {
-    if (nameClickTimer.current !== null) {
-      window.clearTimeout(nameClickTimer.current)
+    if (nameClickTimer.current && nameClickTimer.current.id === a.id) {
+      window.clearTimeout(nameClickTimer.current.timer)
       nameClickTimer.current = null
     }
     startEdit(a, 'task_name')
@@ -645,24 +796,46 @@ export function Scheduling() {
 
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
+    const enabledCustomFilters = customFilters
+      .map(f => ({ filter: f, mode: customFilterModes[f.id] }))
+      .filter((x): x is { filter: SchedulingFilter; mode: 'show' | 'hide' } => x.mode !== undefined)
     return orderedActivities.filter(a => {
       if (isHiddenByCollapse(a)) return false
       if (q) {
         const haystack = [a.code, a.task_name, a.commentary].filter(Boolean).join(' ').toLowerCase()
         if (!haystack.includes(q)) return false
       }
-      if (filterCritical && a.is_critical !== true) return false
-      if (filterDelayed && !(a.variance_days !== null && a.variance_days > 0)) return false
+      // Hiding archived work also hides the reserved Archived container itself —
+      // an empty "Archived" heading with nothing under it is just clutter. Kept
+      // as its own always-applied toggle, not folded into the match-mode
+      // combination below — "hide archived" is a display preference, not one
+      // of the P6-style filter criteria being combined by All/Any.
+      if (hideArchived && (a.is_archived || a.is_archive_container)) return false
+
+      // Built-in (P6's "Global" tier) + custom ("User Defined") filters,
+      // whichever are currently enabled, combined via the single global
+      // match-mode radio — same two-tier model as P6's own Filters dialog.
+      // Each custom filter's Show/Hide mode inverts its own result before
+      // joining the combination, so "Hide" and "Show" filters can be mixed
+      // freely under the same All/Any radio.
+      const results: boolean[] = []
+      if (filterCritical) results.push(a.is_critical === true)
+      if (filterDelayed) results.push(a.variance_days !== null && a.variance_days > 0)
       // ~1-5 working days of float at a nominal 8h/day — an approximation, same as
       // the backend quality module's DCMA thresholds (app/services/scheduling_quality.py).
-      if (filterAtRisk && !(a.total_float_hours !== null && a.total_float_hours > 0 && a.total_float_hours <= 40)) return false
-      // Hiding archived work also hides the reserved Archived container itself —
-      // an empty "Archived" heading with nothing under it is just clutter.
-      if (hideArchived && (a.is_archived || a.is_archive_container)) return false
-      return true
+      if (filterAtRisk) results.push(a.total_float_hours !== null && a.total_float_hours > 0 && a.total_float_hours <= 40)
+      for (const { filter, mode } of enabledCustomFilters) {
+        const matched = evaluateFilter(a, filter)
+        results.push(mode === 'show' ? matched : !matched)
+      }
+      if (results.length === 0) return true
+      return filterMatchMode === 'all' ? results.every(Boolean) : results.some(Boolean)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderedActivities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds])
+  }, [
+    orderedActivities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds,
+    customFilters, customFilterModes, filterMatchMode,
+  ])
 
   if (!selectedProject) return null
 
@@ -1200,13 +1373,13 @@ export function Scheduling() {
         <button
           onClick={() => setFiltersOpen(o => !o)}
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            filtersOpen || filterCritical || filterDelayed || filterAtRisk
+            filtersOpen || filterCritical || filterDelayed || filterAtRisk || Object.keys(customFilterModes).length > 0
               ? 'bg-gray-900 text-white border-gray-900'
               : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          ⚙ Filters{[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length > 0
-            ? ` (${[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length})` : ''}
+          ⚙ Filters{[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length + Object.keys(customFilterModes).length > 0
+            ? ` (${[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length + Object.keys(customFilterModes).length})` : ''}
         </button>
         <div className="relative">
           <button
@@ -1425,27 +1598,20 @@ export function Scheduling() {
       )}
 
       {filtersOpen && (
-        <div className="no-print bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-6 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-gray-600">
-            <input type="checkbox" checked={filterCritical} onChange={e => setFilterCritical(e.target.checked)} />
-            Critical only
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-gray-600">
-            <input type="checkbox" checked={filterDelayed} onChange={e => setFilterDelayed(e.target.checked)} />
-            Delayed (finish later than baseline)
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-gray-600">
-            <input type="checkbox" checked={filterAtRisk} onChange={e => setFilterAtRisk(e.target.checked)} />
-            At risk (float ≤ 40h, ~1–5 working days)
-          </label>
-          {(filterCritical || filterDelayed || filterAtRisk) && (
-            <button
-              onClick={() => { setFilterCritical(false); setFilterDelayed(false); setFilterAtRisk(false) }}
-              className="text-xs text-gray-400 hover:text-red-600"
-            >
-              Clear filters
-            </button>
-          )}
+        <div className="no-print">
+          <SchedulingFiltersWidget
+            filters={customFilters}
+            onCreate={createSchedulingFilter}
+            onUpdate={updateSchedulingFilter}
+            onDelete={removeSchedulingFilter}
+            onClose={() => setFiltersOpen(false)}
+            filterCritical={filterCritical} onFilterCriticalChange={setFilterCritical}
+            filterDelayed={filterDelayed} onFilterDelayedChange={setFilterDelayed}
+            filterAtRisk={filterAtRisk} onFilterAtRiskChange={setFilterAtRisk}
+            customFilterModes={customFilterModes} onCustomFilterModeChange={setCustomFilterMode}
+            matchMode={filterMatchMode} onMatchModeChange={handleFilterMatchModeChange}
+            onClearAll={handleClearAllFilters}
+          />
         </div>
       )}
 
@@ -1458,7 +1624,7 @@ export function Scheduling() {
           // has no scrollbar of its own, so it can't "shrink to fit" a shorter
           // list the way this pane's overflow-y:auto naturally would — both
           // sides need the same, unconditional number to stay comparable.
-          style={{ height: PANE_MAX_HEIGHT, width: leftPaneWidth ?? undefined }}
+          style={{ height: topPaneHeight, width: leftPaneWidth ?? undefined }}
         >
           <table
             className="scheduling-grid text-sm border-collapse table-fixed"
@@ -1544,6 +1710,7 @@ export function Scheduling() {
                 return (
                 <tr
                   key={a.id}
+                  ref={el => { if (el) rowRefs.current.set(a.id, el); else rowRefs.current.delete(a.id) }}
                   style={{ height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a) }}
                   className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
                 >
@@ -1573,10 +1740,10 @@ export function Scheduling() {
                         onChange={e => setEditingValue(e.target.value)}
                         onBlur={commitEdit}
                         onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                        className="w-full max-w-[13rem] border border-blue-400 rounded px-1 py-0.5 text-sm"
+                        className="w-full border border-blue-400 rounded px-1 py-0.5 text-sm"
                       />
                     ) : (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 min-w-0">
                         {a.activity_type === 'wbs_summary' && (
                           <button
                             onClick={e => { e.stopPropagation(); toggleCollapsed(a.id) }}
@@ -1589,7 +1756,7 @@ export function Scheduling() {
                         <button
                           onClick={() => handleNameClick(a)}
                           onDoubleClick={() => handleNameDoubleClick(a)}
-                          className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block max-w-[13rem]"
+                          className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block min-w-0"
                           title="Click to open, double-click to rename in place"
                         >
                           {a.task_name}
@@ -1637,7 +1804,7 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
                         />
-                      ) : (a.duration_days ?? '—')}
+                      ) : formatDuration(a.duration_days)}
                     </td>
                   )}
                   {isColumnVisible('start') && (
@@ -1656,10 +1823,10 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
-                      ) : formatDateTime(a.start)}
+                      ) : formatDateTime(a.start, ganttStyle.show_time_of_day)}
                     </td>
                   )}
-                  {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_start)}</td>}
+                  {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_start, ganttStyle.show_time_of_day)}</td>}
                   {isColumnVisible('finish') && (
                     <td
                       className="px-3 py-1 text-gray-600 whitespace-nowrap"
@@ -1676,10 +1843,10 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
-                      ) : formatDateTime(a.finish)}
+                      ) : formatDateTime(a.finish, ganttStyle.show_time_of_day)}
                     </td>
                   )}
-                  {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_finish)}</td>}
+                  {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_finish, ganttStyle.show_time_of_day)}</td>}
                   {isColumnVisible('variance') && (
                     <td className={`px-3 py-1 ${(a.variance_days ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
                       {a.variance_days ?? '—'}
@@ -1770,19 +1937,27 @@ export function Scheduling() {
           // GanttChart's internal transform reveal the right slice of rows.
           // Horizontal scroll (panning the wide timeline) stays independent.
           className="flex-1 overflow-x-auto overflow-y-hidden no-print"
-          style={{ height: PANE_MAX_HEIGHT }}
+          style={{ height: topPaneHeight }}
         >
           <GanttChart
             ref={ganttRef}
-            activities={visibleActivities} relationships={relationships} style={ganttStyle}
+            activities={visibleActivities} relationships={relationships} resourceAssignments={resourceAssignments} style={ganttStyle}
             zoom={ganttZoom} onZoomChange={handleZoomChange}
-            viewportHeight={PANE_MAX_HEIGHT - HEADER_HEIGHT}
+            viewportHeight={topPaneHeight - HEADER_HEIGHT}
           />
         </div>
       </div>
 
       {(expandedActivity || panelPinned) && (
-        <div className="bg-white border border-gray-200 rounded-lg mt-3 overflow-hidden no-print">
+        <div
+          onMouseDown={startTopPaneResize}
+          title="Drag to resize"
+          className="h-1.5 shrink-0 cursor-row-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 rounded-full my-1 no-print"
+        />
+      )}
+
+      {(expandedActivity || panelPinned) && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden no-print">
           <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
             <div className="text-sm font-semibold text-gray-700">
               {expandedActivity ? `${expandedActivity.code}: ${expandedActivity.task_name}` : 'No activity selected'}
@@ -1802,13 +1977,17 @@ export function Scheduling() {
             <div className="grid grid-cols-5 divide-x divide-gray-100">
               <div className="col-span-3">
                 <ActivityForm
+                  key={expandedActivity.id}
                   activity={expandedActivity} calendars={calendars} embedded
                   onCancel={() => setExpandedId(null)}
                   onSubmit={(values, note) => handleUpdate(expandedActivity, values, note)}
                 />
               </div>
               <div className="col-span-2 divide-y divide-gray-100 overflow-y-auto" style={{ maxHeight: 420 }}>
-                <ActivityLogic activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh} />
+                <ActivityLogic
+                  activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh}
+                  onFocusActivity={handleFocusActivity}
+                />
                 <ResourceAssignments activity={expandedActivity} resources={resources} onChange={refresh} />
                 <ReassessmentLog
                   recordType="activity"

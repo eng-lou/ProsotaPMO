@@ -8,6 +8,10 @@ interface Props {
   activities: Activity[]
   relationships: ActivityRelationship[]
   onChange: () => Promise<void>
+  // Jumps the main grid/Gantt to a given activity (2026-07-05, per Maro —
+  // clicking a predecessor/successor's name here should select it in the
+  // main view and scroll it into view, not just be inert text).
+  onFocusActivity: (activityId: string) => void
 }
 
 function LinkTable({
@@ -16,12 +20,14 @@ function LinkTable({
   otherIdField,
   activitiesById,
   onDelete,
+  onFocusActivity,
 }: {
   title: string
   rows: ActivityRelationship[]
   otherIdField: 'predecessor_id' | 'successor_id'
   activitiesById: Map<string, Activity>
   onDelete: (id: string) => void
+  onFocusActivity: (activityId: string) => void
 }) {
   return (
     <div>
@@ -36,7 +42,17 @@ function LinkTable({
               return (
                 <tr key={r.id} className="border-b border-gray-100 last:border-0">
                   <td className="py-1 pr-2 font-mono text-gray-500 whitespace-nowrap">{other?.code ?? '—'}</td>
-                  <td className="py-1 pr-2 text-gray-700 truncate max-w-[10rem]">{other?.task_name ?? 'Unknown'}</td>
+                  <td className="py-1 pr-2 text-gray-700 truncate max-w-[10rem]">
+                    {other ? (
+                      <button
+                        onClick={() => onFocusActivity(other.id)}
+                        title="Select and scroll to this activity"
+                        className="text-left text-blue-600 hover:text-blue-700 hover:underline truncate"
+                      >
+                        {other.task_name}
+                      </button>
+                    ) : 'Unknown'}
+                  </td>
                   <td className="py-1 pr-2">
                     <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">{r.relationship_type}</span>
                   </td>
@@ -56,7 +72,7 @@ function LinkTable({
   )
 }
 
-export function ActivityLogic({ activity, activities, relationships, onChange }: Props) {
+export function ActivityLogic({ activity, activities, relationships, onChange, onFocusActivity }: Props) {
   const [addingPred, setAddingPred] = useState(false)
   const [addingSucc, setAddingSucc] = useState(false)
   const [candidateId, setCandidateId] = useState('')
@@ -118,6 +134,7 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
           otherIdField="predecessor_id"
           activitiesById={activitiesById}
           onDelete={handleDelete}
+          onFocusActivity={onFocusActivity}
         />
         {addingPred ? (
           <AddForm mode="predecessor" onCancel={resetAddForm} />
@@ -134,6 +151,7 @@ export function ActivityLogic({ activity, activities, relationships, onChange }:
           otherIdField="successor_id"
           activitiesById={activitiesById}
           onDelete={handleDelete}
+          onFocusActivity={onFocusActivity}
         />
         {addingSucc ? (
           <AddForm mode="successor" onCancel={resetAddForm} />

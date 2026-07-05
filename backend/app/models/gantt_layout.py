@@ -36,6 +36,15 @@ DEFAULT_STYLE = {
     "wbs_level_colors": ["#374151", "#4b5563", "#6b7280", "#9ca3af", "#94a3b8", "#cbd5e1"],
     "activity_row_color": "#ffffff",
     "milestone_row_color": "#a855f7",
+    # Display-only toggle (2026-07-05, per Maro) — see
+    # app/schemas/gantt_layout.py:GanttStyle for what this controls.
+    "show_time_of_day": True,
+    # Gantt display toggles (2026-07-05, per Maro) — see
+    # app/schemas/gantt_layout.py:GanttStyle for what these control.
+    "show_connectors": True,
+    "show_label_name": False,
+    "show_label_resource": False,
+    "show_label_finish": False,
 }
 
 

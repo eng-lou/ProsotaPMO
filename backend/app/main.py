@@ -26,6 +26,7 @@ from app.api.risk_criteria import router as risk_criteria_router
 from app.api.risk_mitigation_actions import router as risk_mitigation_actions_router
 from app.api.risks import router as risks_router
 from app.api.schedule_baselines import router as schedule_baselines_router
+from app.api.scheduling_filters import router as scheduling_filters_router
 from app.api.scheduling_quality import router as scheduling_quality_router
 from app.api.scheduling_quality_criteria import router as scheduling_quality_criteria_router
 from app.api.scheduling_quality_runs import router as scheduling_quality_runs_router
@@ -73,6 +74,7 @@ app.include_router(project_letterhead_router, prefix="/api/v1", dependencies=_au
 app.include_router(gantt_layouts_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(scheduling_quality_criteria_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(scheduling_quality_runs_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(scheduling_filters_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")
