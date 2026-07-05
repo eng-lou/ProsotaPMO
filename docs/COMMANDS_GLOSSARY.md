@@ -23,6 +23,8 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | `git show HEAD:<path>` | Prints out an old (last-committed) version of a file without actually restoring it — used to pull just a snapshot for reference/copying, while leaving the current working file untouched. |
 | `git remote set-url origin <url>` | Changes which GitHub address `git push`/`git pull` actually talk to for this folder — used after a repo got renamed on GitHub's side, so this computer's copy points at the new name instead of relying on GitHub's redirect indefinitely. |
 | `git clone --depth 1 <url>` | Downloads a copy of someone else's public GitHub project to read its code, but only the latest snapshot (not its whole history) — much faster, used purely for research (reading how another Gantt-chart tool solved a layout problem) rather than to actually work on that project. |
+| `git fetch origin` | Downloads GitHub's latest history *without* merging it into your own work yet — used to check "has anything changed on GitHub that I don't have locally?" before pushing. |
+| `git rebase origin/main` | Replays your own not-yet-pushed commits on top of whatever's newly on GitHub (here, two small README edits made directly on GitHub's website), so the history stays a single straight line instead of a tangled merge. Used when `git push` is rejected because the remote has commits you don't have yet. |
 
 ---
 
