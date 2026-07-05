@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { GanttFontFamily, GanttLayout, GanttStyle } from '@/lib/ganttLayout'
 
@@ -13,15 +14,59 @@ interface Props {
   onClose: () => void
 }
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+
+// No native <input type="color"> here — that OS-level dialog itself was
+// hanging the whole browser tab on Windows/Chrome (2026-07-05, per Maro; two
+// rounds of trying to work around React's side of it didn't fix it, only
+// removing it did). The click-to-drag square+hue picker Maro asked to keep
+// is `ColorPickerPopover` (frontend/src/components/) — built from plain
+// divs/CSS gradients/pointer events, no OS dialog involved at all. The hex
+// text field stays as a direct-entry alternative.
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [hexText, setHexText] = useState(value)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  useEffect(() => { setHexText(value) }, [value])
+
+  const commitHex = () => {
+    if (HEX_COLOR_RE.test(hexText)) onChange(hexText)
+    else setHexText(value) // invalid — revert to the last real value
+  }
+
   return (
-    <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+    // A plain <div>, not <label> — the row holds two separate controls (the
+    // swatch button and the hex input), not one thing a label describes, and
+    // wrapping a <button> in a <label> risks the browser's label-click-
+    // forwarding behavior (activating/focusing "the" associated control)
+    // intercepting the click before our own onClick runs (2026-07-05, per
+    // Maro — clicking the swatch stopped opening the picker at all).
+    <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
       {label}
-      <span className="flex items-center gap-1.5">
-        <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-7 h-6 border border-gray-300 rounded cursor-pointer" />
-        <span className="font-mono text-[10px] text-gray-400 w-14">{value}</span>
+      <span className="relative flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setPickerOpen(o => !o)}
+          className="w-7 h-6 border border-gray-300 rounded shrink-0 cursor-pointer"
+          style={{ backgroundColor: HEX_COLOR_RE.test(hexText) ? hexText : value }}
+          title={value}
+        />
+        <input
+          value={hexText}
+          onChange={e => setHexText(e.target.value)}
+          onBlur={commitHex}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
+          spellCheck={false}
+          className="font-mono text-[10px] text-gray-600 w-16 border border-gray-200 rounded px-1 py-0.5"
+        />
+        {pickerOpen && (
+          <ColorPickerPopover
+            value={HEX_COLOR_RE.test(hexText) ? hexText : value}
+            onChange={hex => { onChange(hex); setHexText(hex) }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </span>
-    </label>
+    </div>
   )
 }
 
@@ -72,14 +117,23 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
     try {
       if (editingId) await onUpdate(editingId, name.trim(), draft)
       else await onCreate(name.trim(), draft)
-      setCreating(false)
-      setEditingId(null)
-      setName('')
+      closeForm()
     } catch {
       setError(`Could not ${editingId ? 'update' : 'save'} the layout — check your connection and try again.`)
     } finally {
       setSaving(false)
     }
+  }
+
+  // Blur before unmounting the form — a leftover defensive habit from when
+  // this form had native <input type="color"> swatches in it (now removed
+  // entirely, see ColorField above); harmless to keep for the text inputs
+  // that remain.
+  const closeForm = () => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    setCreating(false)
+    setEditingId(null)
+    setName('')
   }
 
   const handleApply = async (layout: GanttLayout) => {
@@ -246,7 +300,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
             <button onClick={handleSave} disabled={saving || !name.trim()} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
               {saving ? 'Saving…' : editingId ? 'Update Layout' : 'Save Layout'}
             </button>
-            <button onClick={() => { setCreating(false); setEditingId(null) }} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
+            <button onClick={closeForm} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
           </div>
         </div>
       ) : (

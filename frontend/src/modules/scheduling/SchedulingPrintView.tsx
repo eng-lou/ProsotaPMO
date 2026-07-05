@@ -190,12 +190,19 @@ export function SchedulingPrintView({
   const ganttColRef = useRef<HTMLTableCellElement>(null)
   const [ganttColWidth, setGanttColWidth] = useState<number | null>(null)
   useEffect(() => {
-    const measure = () => {
-      if (ganttColRef.current) setGanttColWidth(ganttColRef.current.clientWidth)
-    }
-    measure()
-    window.addEventListener('beforeprint', measure)
-    return () => window.removeEventListener('beforeprint', measure)
+    const el = ganttColRef.current
+    if (!el) return
+    // ResizeObserver instead of a single 'beforeprint' read — the .print-only
+    // ancestor is display:none outside of printing, so a one-shot measurement
+    // taken exactly when 'beforeprint' fires can still race the browser
+    // actually finishing applying print layout, capturing a stale/zero width
+    // (2026-07-05, per Maro: Q2/Q3 2026 time-mark labels landing on top of the
+    // data columns because dayWidth was computed from a wrong column width).
+    // Observing the real element directly reacts to whatever width the
+    // browser actually settles on, whenever that happens.
+    const observer = new ResizeObserver(([entry]) => setGanttColWidth(entry.contentRect.width))
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [activities])
 
   const { rangeStart, totalDays } = useMemo(() => computeGanttRange(activities), [activities])
@@ -239,7 +246,13 @@ export function SchedulingPrintView({
             {columnsAfterActivity.map(c => (
               <th key={c.key} className={`px-1 py-1 border-r border-gray-300 ${c.align === 'right' ? 'text-right' : ''}`}>{c.label}</th>
             ))}
-            <th ref={ganttColRef} className="p-0 relative">
+            <th ref={ganttColRef} className="p-0 relative" style={{ overflow: 'hidden' }}>
+              {/* overflow:hidden here (the body row's gantt <td> already had it,
+                  this one didn't) — without it, a time-mark label positioned from
+                  a stale/zero measured column width visually spills leftward into
+                  the data columns' own headers instead of just looking odd within
+                  its own column (2026-07-05, per Maro: "Q2 2026"/"Q3 2026" showing
+                  up overlapping BL Finish/Fin. Var (D)). */}
               <div className="relative" style={{ width: '100%', height: HEADER_HEIGHT }}>
                 {timeMarks.map(m => (
                   <div
