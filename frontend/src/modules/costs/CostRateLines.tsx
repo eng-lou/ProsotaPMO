@@ -12,6 +12,12 @@ interface NewLineForm {
 
 const EMPTY_FORM: NewLineForm = { description: '', qty: '', unit: '', rate: '' }
 
+interface ChildRow {
+  activityId: string
+  label: string
+  costElementId: string
+}
+
 interface CostRateLinesProps {
   costElementId: string
   // Resources module: rate lines under a "schedule"-sourced element are normally
@@ -19,6 +25,16 @@ interface CostRateLinesProps {
   // directly here unlinks the parent element permanently — confirm first, same
   // as CostForm.tsx does for editing budget directly.
   isScheduleLinked?: boolean
+  // Rate Card rollup (2026-07-10, per Maro) — direct children of this cost
+  // element's own linked activity that themselves have a linked cost element,
+  // shown as collapsed-by-default rows; expanding one recursively renders
+  // this same component for that child, so drilling down works at any depth.
+  // childRowsFor is threaded through unchanged at every level (it's a pure
+  // activityId -> ChildRow[] lookup owned by CostPlan.tsx, not specific to
+  // any one element) so each recursive instance can compute its own children.
+  childRows?: ChildRow[]
+  childRowsFor?: (activityId: string) => ChildRow[]
+  indentLevel?: number
 }
 
 function formatCurrency(value: string) {
@@ -31,8 +47,11 @@ const UNLINK_WARNING =
 
 // Qty x Unit x Rate build-up per cost element (e.g. "CFA piles to 8.5m x267 @
 // £576/nr"), matching the prototype's Budget & Versions tab Rate Card.
-export function CostRateLines({ costElementId, isScheduleLinked = false }: CostRateLinesProps) {
+export function CostRateLines({
+  costElementId, isScheduleLinked = false, childRows = [], childRowsFor, indentLevel = 0,
+}: CostRateLinesProps) {
   const [lines, setLines] = useState<CostRateLine[]>([])
+  const [expandedChildIds, setExpandedChildIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
@@ -75,12 +94,21 @@ export function CostRateLines({ costElementId, isScheduleLinked = false }: CostR
     load()
   }
 
+  const toggleChild = (activityId: string) => {
+    setExpandedChildIds(prev => {
+      const next = new Set(prev)
+      if (next.has(activityId)) next.delete(activityId)
+      else next.add(activityId)
+      return next
+    })
+  }
+
   if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading rate card…</p>
 
   const elementTotal = lines.reduce((sum, l) => sum + Number(l.total), 0)
 
   return (
-    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
+    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100" style={indentLevel > 0 ? { paddingLeft: 16 + indentLevel * 16 } : undefined}>
       <div className="text-xs font-semibold text-gray-600 mb-2">Rate card</div>
       {isScheduleLinked && (
         <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1.5 mb-2">
@@ -173,6 +201,35 @@ export function CostRateLines({ costElementId, isScheduleLinked = false }: CostR
         <button onClick={() => setAdding(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
           + Add rate line
         </button>
+      )}
+
+      {childRows.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-gray-200 space-y-1">
+          <div className="text-xs text-gray-400 mb-1">Child activities</div>
+          {childRows.map(child => {
+            const expanded = expandedChildIds.has(child.activityId)
+            return (
+              <div key={child.activityId}>
+                <button
+                  onClick={() => toggleChild(child.activityId)}
+                  className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-blue-600 py-1"
+                >
+                  <span className="text-gray-400">{expanded ? '▾' : '▸'}</span>
+                  {child.label}
+                </button>
+                {expanded && (
+                  <CostRateLines
+                    costElementId={child.costElementId}
+                    isScheduleLinked
+                    childRows={childRowsFor ? childRowsFor(child.activityId) : []}
+                    childRowsFor={childRowsFor}
+                    indentLevel={indentLevel + 1}
+                  />
+                )}
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )

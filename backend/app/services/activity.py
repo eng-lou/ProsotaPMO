@@ -15,9 +15,19 @@ from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
 from app.models.cost_element import CostElement
-from app.models.period import Period
 from app.models.schedule_baseline import ScheduleBaselineActivity
-from app.schemas.activity import ActivityCreate, ActivityUpdate, _validate_constraint
+from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_subproject import ScheduleSubproject
+from app.models.schedule_variant import ScheduleVariant
+from app.schemas.activity import (
+    ActivityCreate,
+    ActivityUpdate,
+    _validate_constraint,
+    _validate_suspend_resume,
+    amended_relationship_type,
+    is_milestone_type,
+    valid_relationship_types_for_successor,
+)
 from app.schemas.reassessment import ReassessmentCreate
 from app.services import cost_sync, scheduling_cpm
 from app.services.cost_element import compute_schedule_linked_evm
@@ -44,9 +54,9 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
     PV asks "how far along its own current duration should this activity be by
     the data date," independent of whether a baseline has ever been captured —
     see app/services/cost_element.py:_schedule_evm. The data date itself is
-    each activity's period's own data_date_for_period (moved by Reschedule),
-    not the real wall-clock date — otherwise rescheduling the data date
-    wouldn't move PV at all."""
+    each activity's schedule period's own data_date_for_period (moved by
+    Reschedule), not the real wall-clock date — otherwise rescheduling the
+    data date wouldn't move PV at all."""
     if not activities:
         return
     result = await db.execute(
@@ -56,15 +66,20 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         )
     )
     elements_by_activity = {el.linked_activity_id: el for el in result.scalars().all()}
-    period_ids = {a.period_id for a in activities}
-    periods = list((await db.execute(select(Period).where(Period.id.in_(period_ids)))).scalars().all())
-    default_starts = await default_day_start_times(db, {p.project_id for p in periods})
+    period_ids = {a.schedule_period_id for a in activities}
+    periods = list((await db.execute(select(SchedulePeriod).where(SchedulePeriod.id.in_(period_ids)))).scalars().all())
+    # SchedulePeriod has no project_id of its own (it's scoped by
+    # schedule_variant_id, not project — see app/models/schedule_period.py) —
+    # Activity already denormalizes project_id directly, so that's used here
+    # instead of an extra join through ScheduleVariant.
+    project_id_by_period_id = {a.schedule_period_id: a.project_id for a in activities}
+    default_starts = await default_day_start_times(db, {a.project_id for a in activities})
     data_dates = {
-        p.id: data_date_time_for_period(p, default_starts.get(p.project_id, time(8, 0)))
+        p.id: data_date_time_for_period(p, default_starts.get(project_id_by_period_id.get(p.id), time(8, 0)))
         for p in periods
     }
     for a in activities:
-        data_date = data_dates[a.period_id]
+        data_date = data_dates[a.schedule_period_id]
         fraction = elapsed_duration_fraction(a.start, a.finish, data_date)
         # "Duration % Complete" — how far along its own current schedule this
         # activity should be, distinct from the manually-assessed pct_complete
@@ -82,15 +97,17 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             setattr(a, field, evm[field])
 
 
-async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
-    period = await db.get(Period, period_id)
+async def _require_live_schedule_period(db: AsyncSession, schedule_period_id: uuid.UUID) -> SchedulePeriod:
+    period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
-        raise HTTPException(status_code=404, detail="Period not found")
+        raise HTTPException(status_code=404, detail="Schedule period not found")
     if period.freeze_status != "live":
         raise HTTPException(
             status_code=422,
-            detail=f"Period '{period.period_label}' is {period.freeze_status}. Writes to frozen periods are not allowed.",
+            detail=f"Schedule period '{period.period_label}' is {period.freeze_status}. Writes to frozen "
+                   "schedule periods are not allowed.",
         )
+    return period
 
 
 async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID, project_id: uuid.UUID) -> None:
@@ -99,13 +116,19 @@ async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID
         raise HTTPException(status_code=404, detail="Calendar not found in this project")
 
 
-def _activity_role(activity_type: str, parent_id: uuid.UUID | None) -> str:
+def _activity_role(activity_type: str, parent_id: uuid.UUID | None, is_subproject_root: bool = False) -> str:
     """P (top-level WBS summary) | W (nested WBS summary) | T (task) | M (milestone)
-    — the structural role an activity's code prefix should reflect (2026-07-04,
-    per Maro's P/W/T/M scheme, e.g. "the overarching WBS summary top of the
-    hierarchy can be P-0001")."""
-    if activity_type == "milestone":
+    | SP (a nested WBS summary tagged as a sub-project's root) — the structural
+    role an activity's code prefix should reflect (2026-07-04, per Maro's P/W/T/M
+    scheme, e.g. "the overarching WBS summary top of the hierarchy can be
+    P-0001"; SP added 2026-07-06 per docs/SUBPROJECT_FLOAT_PLAN.md §E). Only a
+    nested WBS node can ever be a tagged root (enforced at tag time in
+    app/services/schedule_subproject.py:_validate_root_wbs), so is_subproject_root
+    only ever coincides with what would otherwise be "W", never "P" or "M"."""
+    if is_milestone_type(activity_type):
         return "M"
+    if is_subproject_root:
+        return "SP"
     if activity_type == "wbs_summary":
         return "P" if parent_id is None else "W"
     return "T"
@@ -153,11 +176,11 @@ def _dfs_order(activities: list[Activity]) -> list[Activity]:
 async def list_activities(
     db: AsyncSession,
     project_id: uuid.UUID,
-    period_id: uuid.UUID | None = None,
+    schedule_period_id: uuid.UUID | None = None,
 ) -> list[Activity]:
     q = select(Activity).where(Activity.project_id == project_id)
-    if period_id is not None:
-        q = q.where(Activity.period_id == period_id)
+    if schedule_period_id is not None:
+        q = q.where(Activity.schedule_period_id == schedule_period_id)
     result = await db.execute(q)
     activities = list(result.scalars().all())
     # Returned in outline order (parent immediately followed by its subtree) so the
@@ -187,7 +210,7 @@ async def get_activity(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
 
 async def update_activity_actuals(db: AsyncSession, activity_id: uuid.UUID, actuals: Decimal | None) -> Activity:
     activity = await get_activity(db, activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
     await cost_sync.sync_activity_actuals(db, activity_id, actuals)
     await _attach_evm_fields(db, [activity])
     return activity
@@ -242,8 +265,8 @@ def _validate_no_cycle(
         cursor = parent.parent_id if parent else None
 
 
-async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
-    """Re-derive activity_type/wbs_path/rollups for the whole period's outline.
+async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) -> None:
+    """Re-derive activity_type/wbs_path/rollups for the whole schedule period's outline.
 
     Runs after every create/update/delete that could touch the tree — cheap at
     expected schedule sizes (hundreds to low thousands of activities) and far
@@ -252,8 +275,26 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
     soon as something is indented under it, and reverts to a task when it no
     longer has children (docs/SCHEDULING_MODULE_PLAN.md Phase 2).
     """
-    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
     activities = list(result.scalars().all())
+
+    # Built once, up front, before anything below starts mutating these rows —
+    # used later so a WBS summary's own Duration is expressed in the same
+    # "working days" unit its children's own duration_days already is
+    # (duration_hours / the resolved calendar's net hours/day), rather than a
+    # raw calendar-day span between its rolled-up start/finish (the two land
+    # on wildly different numbers the moment the span crosses a weekend —
+    # 2026-07-06, found by Maro: a WBS summary showing Duration 239 against
+    # its one child's own 171, despite matching Start/Finish). Deliberately
+    # queried here, before any mutation, not lazily right before first use:
+    # this function's own `db.is_modified(a)` dirty-check at the very end only
+    # works because nothing in between issues a fresh `db.execute()` — that
+    # would autoflush every pending change made so far, clearing SQLAlchemy's
+    # dirty-tracking before the final check ever runs, leaving those rows'
+    # server-computed `updated_at` expired and never refreshed (same
+    # MissingGreenlet class documented at this function's own dirty_ids
+    # capture below).
+    calendar_lookup = await scheduling_cpm._build_calendar_lookup(db, activities[0].project_id) if activities else None
 
     # Pin the reserved Archive container to always sort last among top-level
     # activities (2026-07-04, per Maro) — self-correcting on every pass, since
@@ -282,25 +323,43 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
         elif not has_children and a.activity_type == "wbs_summary":
             a.activity_type = "task"
 
-    # Role-based code prefix (P/W/T/M, 2026-07-04 per Maro) — reassign + log
-    # history for any activity whose *structural role* changed in this pass
-    # (promoted to WBS, demoted to task, or a WBS moving in/out of top-level).
+    # Every activity currently tagged as some sub-project's root, across the
+    # whole project (docs/SUBPROJECT_FLOAT_PLAN.md §E) — almost always empty,
+    # same "no cost for a project not using this feature" property as the CPM
+    # engine's own equivalent lookup in scheduling_cpm.py.
+    subproject_root_ids: set[uuid.UUID] = set()
+    if activities:
+        sp_result = await db.execute(
+            select(ScheduleSubproject.root_wbs_id).where(ScheduleSubproject.project_id == activities[0].project_id)
+        )
+        subproject_root_ids = set(sp_result.scalars().all())
+
+    # Role-based code prefix (P/W/T/M/SP, 2026-07-04 per Maro, SP added
+    # 2026-07-06) — reassign + log history for any activity whose *structural
+    # role* changed in this pass (promoted to WBS, demoted to task, a WBS
+    # moving in/out of top-level, or tagged/untagged as a sub-project root).
     # Compared against the stored wbs_role, not the code string itself, since
     # code is also manually editable — see app/models/activity.py's wbs_role
     # field docstring for why that distinction matters. The reserved Archive
     # container keeps its fixed code/role forever; an archived activity's code
     # is likewise frozen at whatever it was the moment it was archived — being
     # reparented under the container would otherwise look exactly like a real
-    # promote/demote to this loop and get needlessly renumbered.
+    # promote/demote to this loop and get needlessly renumbered. A tagged
+    # sub-project's root is frozen the same way once assigned — untagging
+    # doesn't revert it back to a fresh W-#### here; that's logged explicitly,
+    # at the moment it happens, in app/services/schedule_subproject.py instead
+    # (§E: "the code freezes on untagging, like Archive").
     for a in activities:
-        if a.is_archive_container or a.is_archived:
+        if a.is_archive_container or a.is_archived or a.wbs_role == "SP":
             continue
-        new_role = _activity_role(a.activity_type, a.parent_id)
+        new_role = _activity_role(a.activity_type, a.parent_id, a.id in subproject_root_ids)
         if new_role == a.wbs_role:
             continue
         old_code = a.code
         a.code = await _next_role_code(db, a.project_id, new_role)
-        if new_role == "M" or a.wbs_role == "M":
+        if new_role == "SP":
+            reason = "tagged_subproject"
+        elif new_role == "M" or a.wbs_role == "M":
             reason = "manual_edit"  # only an explicit activity_type edit can involve M
         elif a.wbs_role == "T" and new_role in ("P", "W"):
             reason = "promoted_to_wbs"
@@ -335,9 +394,13 @@ async def _recompute_hierarchy(db: AsyncSession, period_id: uuid.UUID) -> None:
         finishes = [k.finish for k in kids if k.finish is not None]
         node.start = min(starts) if starts else None
         node.finish = max(finishes) if finishes else None
-        node.duration_days = (
-            Decimal((node.finish - node.start).days) if node.start and node.finish else None
-        )
+        if node.start is not None and node.finish is not None and calendar_lookup is not None:
+            calendar = calendar_lookup.resolve(node)
+            hours_per_day = calendar_lookup.hours_per_day(calendar)
+            working_hours = calendar_lookup.working_hours_between(calendar, node.start, node.finish)
+            node.duration_days = (working_hours / hours_per_day).quantize(Decimal("0.01")) if hours_per_day > 0 else None
+        else:
+            node.duration_days = None
         weighted = [(k.pct_complete, k.duration_hours or 0) for k in kids if k.pct_complete is not None]
         total_weight = sum(w for _, w in weighted)
         if weighted and total_weight > 0:
@@ -373,9 +436,9 @@ def _parent_filter(parent_id: uuid.UUID | None):
 
 
 async def _next_sibling_sort_order(
-    db: AsyncSession, period_id: uuid.UUID, parent_id: uuid.UUID | None, exclude_id: uuid.UUID | None = None
+    db: AsyncSession, schedule_period_id: uuid.UUID, parent_id: uuid.UUID | None, exclude_id: uuid.UUID | None = None
 ) -> int:
-    q = select(Activity).where(Activity.period_id == period_id, _parent_filter(parent_id))
+    q = select(Activity).where(Activity.schedule_period_id == schedule_period_id, _parent_filter(parent_id))
     if exclude_id is not None:
         q = q.where(Activity.id != exclude_id)
     siblings = list((await db.execute(q)).scalars().all())
@@ -383,7 +446,7 @@ async def _next_sibling_sort_order(
 
 
 async def _next_sibling_sort_order_after(
-    db: AsyncSession, period_id: uuid.UUID, parent_id: uuid.UUID | None, after_id: uuid.UUID,
+    db: AsyncSession, schedule_period_id: uuid.UUID, parent_id: uuid.UUID | None, after_id: uuid.UUID,
 ) -> int:
     """Same self-healing renumber-then-insert approach as move_activity: normalises
     every current sibling to sequential 0..n-1 sort_order, then makes room for a
@@ -391,7 +454,7 @@ async def _next_sibling_sort_order_after(
     end (2026-07-04, per Maro — Duplicate should place the copy right next to its
     source, not wherever the group's current end happens to be, e.g. past the
     reserved Archive container)."""
-    q = select(Activity).where(Activity.period_id == period_id, _parent_filter(parent_id))
+    q = select(Activity).where(Activity.schedule_period_id == schedule_period_id, _parent_filter(parent_id))
     siblings = list((await db.execute(q)).scalars().all())
     siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
     for index, sibling in enumerate(siblings):
@@ -421,10 +484,12 @@ async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Lit
     tie-break-by-created_at fallback elsewhere in this file) rather than
     needing a one-off backfill migration."""
     activity = await get_activity(db, activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
 
     result = await db.execute(
-        select(Activity).where(Activity.period_id == activity.period_id, _parent_filter(activity.parent_id))
+        select(Activity).where(
+            Activity.schedule_period_id == activity.schedule_period_id, _parent_filter(activity.parent_id)
+        )
     )
     siblings = list(result.scalars().all())
     siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
@@ -440,29 +505,31 @@ async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Lit
         )
 
     await db.commit()
-    await _recompute_hierarchy(db, activity.period_id)
+    await _recompute_hierarchy(db, activity.schedule_period_id)
     await _attach_evm_fields(db, [activity])
     return activity
 
 
 async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
-    await _require_live_period(db, data.period_id)
+    period = await _require_live_schedule_period(db, data.schedule_period_id)
 
     if data.parent_id is not None:
         parent = await db.get(Activity, data.parent_id)
-        if parent is None or parent.period_id != data.period_id:
-            raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+        if parent is None or parent.schedule_period_id != data.schedule_period_id:
+            raise HTTPException(status_code=404, detail="Parent activity not found in this schedule period")
 
     if data.calendar_id is not None:
         await _validate_calendar_in_project(db, data.calendar_id, data.project_id)
 
     if data.insert_after_id is not None:
         after = await db.get(Activity, data.insert_after_id)
-        if after is None or after.period_id != data.period_id or after.parent_id != data.parent_id:
+        if after is None or after.schedule_period_id != data.schedule_period_id or after.parent_id != data.parent_id:
             raise HTTPException(status_code=404, detail="insert_after_id activity not found among these siblings")
-        next_sort_order = await _next_sibling_sort_order_after(db, data.period_id, data.parent_id, data.insert_after_id)
+        next_sort_order = await _next_sibling_sort_order_after(
+            db, data.schedule_period_id, data.parent_id, data.insert_after_id
+        )
     else:
-        next_sort_order = await _next_sibling_sort_order(db, data.period_id, data.parent_id)
+        next_sort_order = await _next_sibling_sort_order(db, data.schedule_period_id, data.parent_id)
     # A brand-new activity has zero children, so a "wbs_summary" request would be
     # reverted to "task" the moment _recompute_hierarchy runs right after this —
     # anticipate that here so the code/role are right immediately, rather than
@@ -472,14 +539,29 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
     code = await _next_role_code(db, data.project_id, role)
     activity = Activity(
         **data.model_dump(exclude={"insert_after_id"}), code=code, wbs_role=role, sort_order=next_sort_order,
+        schedule_variant_id=period.schedule_variant_id,
     )
     _apply_computed_fields(activity)
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
 
-    await _recompute_hierarchy(db, data.period_id)
-    await scheduling_cpm.recompute_schedule(db, data.period_id)
+    await _recompute_hierarchy(db, data.schedule_period_id)
+    await scheduling_cpm.recompute_schedule(db, data.schedule_period_id)
+    # Second pass, deliberately: the first _recompute_hierarchy above needs to
+    # run *before* CPM so a promoted/demoted activity_type is already correct
+    # when CPM decides who's a real participant (app/services/scheduling_cpm.py:
+    # _cpm_participants) — but that means any WBS summary's own rolled-up
+    # start/finish/duration_days was computed from its children's *previous*
+    # dates, one edit behind the very CPM pass that just ran. Re-running the
+    # (idempotent, no-op if nothing changed) rollup now is what
+    # activity_relationship.py's own _recompute_period already does correctly
+    # (CPM then hierarchy) — this makes create/update/archive/delete match
+    # that same guarantee instead of only "self-healing" on some later,
+    # unrelated edit (2026-07-06, found by Maro: a WBS summary's Start/Finish
+    # matching its child only after something else had already re-triggered a
+    # recompute).
+    await _recompute_hierarchy(db, data.schedule_period_id)
     await _attach_evm_fields(db, [activity])
     return activity
 
@@ -488,10 +570,78 @@ async def update_activity(
     db: AsyncSession, activity_id: uuid.UUID, data: ActivityUpdate
 ) -> Activity:
     activity = await get_activity(db, activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
 
     updates = data.model_dump(exclude_unset=True)
     old_code = activity.code
+    amend_relationships = updates.pop("amend_relationships", False)
+
+    # Changing activity_type to (or between) start_milestone/finish_milestone
+    # can leave existing *incoming* relationships invalid — e.g. a Finish
+    # Milestone's FS predecessor no longer makes sense once it becomes a
+    # Start Milestone, which only SS/SF can meaningfully drive (2026-07-07,
+    # per Maro: warn, then amend on confirmation, rather than silently
+    # leaving stale/nonsensical relationship types in place). Checked before
+    # the type is actually applied below, using the *new* type from the
+    # incoming request.
+    relationships_to_amend: list[ActivityRelationship] = []
+    if "activity_type" in updates and updates["activity_type"] != activity.activity_type:
+        valid = valid_relationship_types_for_successor(updates["activity_type"])
+        if valid is not None:
+            rel_result = await db.execute(
+                select(ActivityRelationship).where(ActivityRelationship.successor_id == activity.id)
+            )
+            conflicting = [r for r in rel_result.scalars().all() if r.relationship_type not in valid]
+            if conflicting:
+                if not amend_relationships:
+                    kind = "Start Milestone" if updates["activity_type"] == "start_milestone" else "Finish Milestone"
+                    pred_ids = [r.predecessor_id for r in conflicting]
+                    preds_result = await db.execute(select(Activity).where(Activity.id.in_(pred_ids)))
+                    preds_by_id = {p.id: p for p in preds_result.scalars().all()}
+                    changes = ", ".join(
+                        f"{preds_by_id[r.predecessor_id].code if r.predecessor_id in preds_by_id else '?'} "
+                        f"({r.relationship_type} → {amended_relationship_type(r.relationship_type, updates['activity_type'])})"
+                        for r in conflicting
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Changing '{activity.task_name}' to a {kind} would leave {len(conflicting)} "
+                               f"incoming relationship(s) invalid — only {' or '.join(valid)} relationships can "
+                               f"target a {kind}: {changes}. Resubmit with amend_relationships=true to fix them "
+                               f"automatically.",
+                    )
+                relationships_to_amend = conflicting
+
+    # A WBS/Project summary row's sequencing/progress is a rollup from its own
+    # children (_recompute_hierarchy below) — none of these can be manually set
+    # while it still has children, only once it's auto-demoted back to a plain
+    # task (2026-07-06, per Maro: "I shouldn't be able to input a duration
+    # because it computes the duration ... unless it's been demoted to a
+    # regular task"). Checked against the activity's state *before* this
+    # update — parent_id only ever changes something's relationship to its own
+    # parent, never its children, so there's no way to sneak a demotion and a
+    # locked-field edit through in the same request.
+    if activity.activity_type == "wbs_summary":
+        locked = {
+            "duration_hours": "Duration", "finish": "Finish", "pct_complete": "% Complete",
+            "constraint_type": "Constraint Type", "constraint_date": "Constraint Date", "calendar_id": "Calendar",
+        }
+        attempted = [label for field, label in locked.items() if field in updates]
+        # activity_type is checked by value, not presence — the form always
+        # echoes the current type back on every save (name/commentary edits
+        # included), and that harmless no-op shouldn't be rejected. A real
+        # attempted change away from wbs_summary would be a no-op anyway
+        # (_recompute_hierarchy below restores it while children remain), so
+        # this is about a clear error over a silently-ignored one, same as
+        # the other locked fields (2026-07-06, per Maro).
+        if "activity_type" in updates and updates["activity_type"] != "wbs_summary":
+            attempted.append("Type")
+        if attempted:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{', '.join(attempted)} can't be set directly on a WBS/Project summary row — these are "
+                       "computed from its children. Remove or outdent its children to edit them directly.",
+            )
 
     if "code" in updates and updates["code"] is not None:
         new_code = updates["code"]
@@ -516,11 +666,11 @@ async def update_activity(
         raise HTTPException(status_code=422, detail="The Archived container can't be edited directly")
 
     if "parent_id" in updates and updates["parent_id"] is not None:
-        result = await db.execute(select(Activity).where(Activity.period_id == activity.period_id))
+        result = await db.execute(select(Activity).where(Activity.schedule_period_id == activity.schedule_period_id))
         by_id = {a.id: a for a in result.scalars().all()}
         _validate_no_cycle(by_id, activity_id, updates["parent_id"])
         if updates["parent_id"] not in by_id:
-            raise HTTPException(status_code=404, detail="Parent activity not found in this period")
+            raise HTTPException(status_code=404, detail="Parent activity not found in this schedule period")
         if by_id[updates["parent_id"]].is_archive_container:
             raise HTTPException(
                 status_code=422,
@@ -535,8 +685,10 @@ async def update_activity(
         setattr(activity, field, value)
     if parent_changed:
         activity.sort_order = await _next_sibling_sort_order(
-            db, activity.period_id, activity.parent_id, exclude_id=activity.id
+            db, activity.schedule_period_id, activity.parent_id, exclude_id=activity.id
         )
+    for r in relationships_to_amend:
+        r.relationship_type = amended_relationship_type(r.relationship_type, activity.activity_type)
 
     # A manual code rename (inline editing) is a deliberate human choice, distinct
     # from the automatic promote/demote renumbering _recompute_hierarchy does below
@@ -551,22 +703,27 @@ async def update_activity(
     # against the activity's final, fully-resolved state instead.
     try:
         _validate_constraint(activity.constraint_type, activity.constraint_date)
+        _validate_suspend_resume(activity.suspend_date, activity.resume_date)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _apply_computed_fields(activity)
     await db.commit()
 
-    await _recompute_hierarchy(db, activity.period_id)
-    await scheduling_cpm.recompute_schedule(db, activity.period_id)
+    await _recompute_hierarchy(db, activity.schedule_period_id)
+    await scheduling_cpm.recompute_schedule(db, activity.schedule_period_id)
+    # See create_activity's own comment on this same second call — rolls up
+    # any WBS summary ancestor's start/finish/duration_days from the dates
+    # CPM just (re)computed above, rather than leaving them one edit stale.
+    await _recompute_hierarchy(db, activity.schedule_period_id)
     if "pct_complete" in updates:
         await cost_sync.sync_cost_element_pct_complete(db, activity)
     await _attach_evm_fields(db, [activity])
     return activity
 
 
-async def _subtree_ids(db: AsyncSession, period_id: uuid.UUID, root_id: uuid.UUID) -> set[uuid.UUID]:
-    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+async def _subtree_ids(db: AsyncSession, schedule_period_id: uuid.UUID, root_id: uuid.UUID) -> set[uuid.UUID]:
+    result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
     children = _build_children_map(list(result.scalars().all()))
     ids: set[uuid.UUID] = {root_id}
 
@@ -588,29 +745,34 @@ async def _has_baseline_history(db: AsyncSession, activity_ids: set[uuid.UUID]) 
     return result.scalar_one_or_none() is not None
 
 
-async def _get_or_create_archive_container(db: AsyncSession, period_id: uuid.UUID) -> Activity:
-    """The one reserved "Archived" WBS per period that archived activities get
-    reparented under (2026-07-04, per Maro) — lazily created the first time
-    anything in that period is archived. Its own code uses a fifth, reserved
-    role ("A") via the same per-project _next_role_code sequence everything
-    else uses, rather than a bare fixed string — avoids any risk of colliding
-    with a real P/W/T/M code, and sidesteps needing this container to be
-    unique per *project* if a project ever has more than one period."""
+async def _get_or_create_archive_container(db: AsyncSession, schedule_period_id: uuid.UUID) -> Activity:
+    """The one reserved "Archived" WBS per schedule period that archived activities
+    get reparented under (2026-07-04, per Maro) — lazily created the first time
+    anything in that schedule period is archived. Its own code uses a fifth,
+    reserved role ("A") via the same per-project _next_role_code sequence
+    everything else uses, rather than a bare fixed string — avoids any risk of
+    colliding with a real P/W/T/M code, and sidesteps needing this container to
+    be unique per *project* if a project ever has more than one schedule
+    period (which it now always does, one per variant — docs/SCHEDULE_VARIANTS_PLAN.md)."""
     result = await db.execute(
-        select(Activity).where(Activity.period_id == period_id, Activity.is_archive_container.is_(True))
+        select(Activity).where(
+            Activity.schedule_period_id == schedule_period_id, Activity.is_archive_container.is_(True)
+        )
     )
     container = result.scalar_one_or_none()
     if container is not None:
         return container
 
-    period = await db.get(Period, period_id)
-    next_sort_order = await _next_sibling_sort_order(db, period_id, None)
+    period = await db.get(SchedulePeriod, schedule_period_id)
+    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
+    next_sort_order = await _next_sibling_sort_order(db, schedule_period_id, None)
     container = Activity(
-        project_id=period.project_id,
-        period_id=period_id,
+        project_id=variant.project_id,
+        schedule_variant_id=period.schedule_variant_id,
+        schedule_period_id=schedule_period_id,
         task_name="Archived",
         activity_type="wbs_summary",
-        code=await _next_role_code(db, period.project_id, "A"),
+        code=await _next_role_code(db, variant.project_id, "A"),
         wbs_role="A",
         is_archive_container=True,
         sort_order=next_sort_order,
@@ -636,12 +798,12 @@ async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bo
     which _recompute_hierarchy renumbers) — the whole point is a stable,
     traceable reference back to what this activity was."""
     activity = await get_activity(db, activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
     if activity.is_archive_container:
         raise HTTPException(status_code=422, detail="The Archived container can't be archived")
-    period_id = activity.period_id
+    schedule_period_id = activity.schedule_period_id
 
-    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
+    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, schedule_period_id, activity_id)
 
     rel_result = await db.execute(
         select(ActivityRelationship).where(
@@ -661,7 +823,7 @@ async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bo
         for child in children:
             child.parent_id = activity.parent_id
             child.sort_order = await _next_sibling_sort_order(
-                db, period_id, activity.parent_id, exclude_id=child.id
+                db, schedule_period_id, activity.parent_id, exclude_id=child.id
             )
         await db.commit()
 
@@ -672,9 +834,9 @@ async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bo
         a.is_archived = True
         _apply_computed_fields(a)
 
-    container = await _get_or_create_archive_container(db, period_id)
+    container = await _get_or_create_archive_container(db, schedule_period_id)
     activity.parent_id = container.id
-    activity.sort_order = await _next_sibling_sort_order(db, period_id, container.id, exclude_id=activity.id)
+    activity.sort_order = await _next_sibling_sort_order(db, schedule_period_id, container.id, exclude_id=activity.id)
 
     await db.commit()
     for a in archived_activities:
@@ -685,8 +847,10 @@ async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bo
         note="Archived — actualised to 100% complete, relationships removed, moved under the Archived WBS.",
     ))
 
-    await _recompute_hierarchy(db, period_id)
-    await scheduling_cpm.recompute_schedule(db, period_id)
+    await _recompute_hierarchy(db, schedule_period_id)
+    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+    # See create_activity's own comment on this same second call.
+    await _recompute_hierarchy(db, schedule_period_id)
     await _attach_evm_fields(db, archived_activities)
     return archived_activities
 
@@ -704,12 +868,12 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     so Archive is the only removal path available for it.
     """
     activity = await get_activity(db, activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
     if activity.is_archive_container:
         raise HTTPException(status_code=422, detail="The Archived container can't be deleted")
-    period_id = activity.period_id
+    schedule_period_id = activity.schedule_period_id
 
-    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, period_id, activity_id)
+    doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, schedule_period_id, activity_id)
 
     if await _has_baseline_history(db, doomed_ids):
         await archive_activity(db, activity_id, cascade=cascade)
@@ -747,7 +911,7 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
         for child in children:
             child.parent_id = activity.parent_id
             child.sort_order = await _next_sibling_sort_order(
-                db, period_id, activity.parent_id, exclude_id=child.id
+                db, schedule_period_id, activity.parent_id, exclude_id=child.id
             )
         await db.commit()
 
@@ -768,6 +932,8 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     await db.delete(activity)
     await db.commit()
     db.expunge_all()
-    await _recompute_hierarchy(db, period_id)
-    await scheduling_cpm.recompute_schedule(db, period_id)
+    await _recompute_hierarchy(db, schedule_period_id)
+    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+    # See create_activity's own comment on this same second call.
+    await _recompute_hierarchy(db, schedule_period_id)
     return False

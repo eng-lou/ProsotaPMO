@@ -1,12 +1,17 @@
 import { useMemo } from 'react'
 import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
-import type { ProjectLetterhead } from '@/lib/letterhead'
+import type { ProjectLetterhead, TimescaleAnchorMode } from '@/lib/letterhead'
 import { formatDateTime } from './dateTime'
-import { buildBarLabel, GANTT_ROW_HEIGHT, HEADER_HEIGHT } from './GanttChart'
+import { buildBarLabel, CONNECTOR_STUB, GANTT_ROW_HEIGHT, HEADER_HEIGHT, LABEL_GAP } from './GanttChart'
 import { computeTimeMarks, type GanttZoom } from './ganttZoom'
+import { formatFloatDays } from './durationDisplay'
 import { formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
-import type { Activity, ActivityRelationship, ResourceAssignment } from './types'
+import {
+  indicatorOption, isMilestoneType,
+  type Activity, type ActivityRelationship, type Calendar, type ResourceAssignment,
+  type UserDefinedFieldDefinition, type UserDefinedFieldValue,
+} from './types'
 
 // Data columns get their real configured pixel widths (same widths the
 // on-screen grid uses) — NOT a percentage of the table, which used to make
@@ -32,12 +37,40 @@ interface Props {
   activities: Activity[]
   relationships: ActivityRelationship[]
   resourceAssignments: ResourceAssignment[]
+  calendars: Calendar[]
   visibleColumns: Set<ColumnKey>
   columnWidths: Record<string, number>
+  // User Defined Fields currently toggled on in the Columns menu (2026-07-07,
+  // per Maro: "make sure active columns and their right position onscreen
+  // are represented in print as well") — same source Scheduling.tsx's own
+  // grid reads from (visibleUdfDefinitions/getUdfValue), rendered in the
+  // same trailing position (after every built-in column, same as on-screen).
+  udfDefinitions?: UserDefinedFieldDefinition[]
+  getUdfValue?: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined
+  // All UDF columns currently share one adjustable width (2026-07-07, per
+  // Maro: "too much space for the new udf one") rather than each having its
+  // own resizable on-screen-style width — there's no on-screen equivalent to
+  // mirror per-field the way built-in columns' widths do, and one shared
+  // control is enough for the actual complaint. Defaults to UDF_COLUMN_WIDTH.
+  udfColumnWidth?: number
   projectName: string
   letterhead: ProjectLetterhead | null
   ganttStyle?: GanttStyle
   ganttZoom?: GanttZoom
+  // Which activities the Highlight widget currently flags (2026-07-06, per
+  // Maro) — computed once in Scheduling.tsx (highlightedActivityIds) and
+  // passed down rather than recomputed here, so screen and print always
+  // agree on exactly which rows are tinted.
+  highlightedActivityIds?: Set<string>
+  // The live period's Data Date (2026-07-06, per Maro) — only needed for the
+  // Print Timescale "DD" preset (see computeGanttRange/resolveTimescaleAnchor
+  // below); letterhead.timescale_*_mode/custom_date carry the rest.
+  dataDate?: string | null
+  // Renders visibly on-screen instead of only via @media print (2026-07-07,
+  // per Maro: "I need controls and a way to review before going to print") —
+  // see PrintPreviewWidget.tsx, which hosts this exact same component live
+  // so column-width adjustments can be seen before actually printing.
+  preview?: boolean
 }
 
 function depthOf(a: Activity): number {
@@ -54,22 +87,86 @@ function daysBetween(a: Date, b: Date): number {
   return (b.getTime() - a.getTime()) / 86_400_000
 }
 
+function startOfWeek(d: Date): Date {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const day = copy.getDay()
+  copy.setDate(copy.getDate() - (day === 0 ? 6 : day - 1)) // Monday-start week
+  return copy
+}
+
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1)
+}
+
+// Resolves one Timescale Start/Finish preset (2026-07-06, per Maro —
+// modelled on P6's own Print dialog's PS/PF/DD/CD/CW/CM shorthand) to an
+// actual Date — null for 'auto' (meaning "keep computing this side the
+// existing way", see computeGanttRange) or for a preset that can't currently
+// resolve (e.g. 'ps'/'pf' with no dated activities, 'dd' with no data date
+// set yet), in which case computeGanttRange falls back to its own auto value
+// for that side rather than rendering an empty/NaN range.
+function resolveTimescaleAnchor(
+  mode: TimescaleAnchorMode, customDate: string | null, activities: Activity[], dataDate: string | null
+): Date | null {
+  switch (mode) {
+    case 'ps': {
+      const starts = activities.map(a => parseDate(a.start)).filter((d): d is Date => d !== null)
+      return starts.length ? new Date(Math.min(...starts.map(d => d.getTime()))) : null
+    }
+    case 'pf': {
+      const finishes = activities.map(a => parseDate(a.finish)).filter((d): d is Date => d !== null)
+      return finishes.length ? new Date(Math.max(...finishes.map(d => d.getTime()))) : null
+    }
+    case 'dd': return parseDate(dataDate)
+    case 'cd': return new Date()
+    case 'cw': return startOfWeek(new Date())
+    case 'cm': return startOfMonth(new Date())
+    case 'custom': return parseDate(customDate)
+    case 'auto':
+    default: return null
+  }
+}
+
 // Same range-finding logic as GanttChart.tsx's internal useMemo — duplicated
 // rather than imported since GanttChart doesn't export it. Print positions
 // everything as a percentage of totalDays (see xGeometryPct below), not
 // pixels, so this doesn't need GanttChart's own zoom-driven pixel constant.
-function computeGanttRange(activities: Activity[]): { rangeStart: Date; totalDays: number } {
+//
+// letterhead's timescale_start_mode/timescale_finish_mode (2026-07-06, per
+// Maro — Page Setup's Print Timescale section) let either side override this
+// auto-computed range entirely; 'auto' (the default for both) reproduces the
+// exact pre-existing behaviour, so no project's print output changes until
+// someone explicitly picks a preset or custom date.
+function computeGanttRange(
+  activities: Activity[], letterhead: ProjectLetterhead | null, dataDate: string | null
+): { rangeStart: Date; totalDays: number } {
   const dates = activities
     .flatMap(a => [a.start, a.finish, a.bl_start, a.bl_finish])
     .filter((v): v is string => v !== null)
     .map(v => new Date(v))
     .filter(d => !Number.isNaN(d.getTime()))
   const today = new Date()
-  const min = dates.length ? new Date(Math.min(...dates.map(d => d.getTime()))) : today
-  const max = dates.length ? new Date(Math.max(...dates.map(d => d.getTime()))) : today
-  min.setDate(min.getDate() - 7)
-  max.setDate(max.getDate() + 7)
-  return { rangeStart: min, totalDays: Math.max(daysBetween(min, max), 42) }
+  const autoMin = dates.length ? new Date(Math.min(...dates.map(d => d.getTime()))) : today
+  const autoMax = dates.length ? new Date(Math.max(...dates.map(d => d.getTime()))) : today
+  autoMin.setDate(autoMin.getDate() - 7)
+  autoMax.setDate(autoMax.getDate() + 7)
+
+  const startMode = letterhead?.timescale_start_mode ?? 'auto'
+  const finishMode = letterhead?.timescale_finish_mode ?? 'auto'
+  const resolvedStart = resolveTimescaleAnchor(startMode, letterhead?.timescale_start_custom_date ?? null, activities, dataDate) ?? autoMin
+  const resolvedFinish = resolveTimescaleAnchor(finishMode, letterhead?.timescale_finish_custom_date ?? null, activities, dataDate) ?? autoMax
+
+  // Swap rather than render a negative-width Gantt if the resolved Finish
+  // ends up earlier than Start (e.g. a custom Finish date typed before Start).
+  const rangeStart = resolvedStart <= resolvedFinish ? resolvedStart : resolvedFinish
+  const rangeEnd = resolvedStart <= resolvedFinish ? resolvedFinish : resolvedStart
+
+  // The historical 42-day minimum only kicks in while both sides are still
+  // auto — once either is explicitly overridden, the whole point is to
+  // respect that exact window, even a narrow one.
+  const bothAuto = startMode === 'auto' && finishMode === 'auto'
+  const totalDays = Math.max(daysBetween(rangeStart, rangeEnd), bothAuto ? 42 : 1)
+  return { rangeStart, totalDays }
 }
 
 // Percentages of the gantt column's own width (0-100, spanning rangeStart to
@@ -100,7 +197,7 @@ function xGeometryPct(start: string | null, finish: string | null, isMilestone: 
 // pick whichever of two mixed-unit expressions is larger, entirely at
 // render time — exactly what's needed here, since JS never learns the
 // table's real rendered pixel width (see the file-level comment).
-const STUB_PX = 10
+const STUB_PX = CONNECTOR_STUB
 
 // Adds a fixed pixel offset to an already-resolved CSS position (a plain
 // percentage, or another calc()/min()/max() expression) — used to build the
@@ -179,14 +276,17 @@ const BAR_ZONE_TOP = BAR_CENTER_Y - BAR_ZONE_HEIGHT / 2
 const MILESTONE_SIZE = 12
 
 // Same priority order as Scheduling.tsx's rowBackground: archived (flat grey,
-// regardless of anything else), then critical, then WBS summary (shaded by
-// nesting level), then milestone, else the flat "normal activity" tint — kept
-// in sync so the printed table matches the viewport exactly.
-function rowBackground(a: Activity, style: GanttStyle): string | undefined {
+// regardless of anything else), then an enabled Highlight (2026-07-06, per
+// Maro — replaces the old always-on automatic critical tint; highlightedIds
+// is computed once in Scheduling.tsx and passed down so screen/print always
+// agree), then WBS summary (shaded by nesting level), then milestone, else
+// the flat "normal activity" tint — kept in sync so the printed table
+// matches the viewport exactly.
+function rowBackground(a: Activity, style: GanttStyle, highlightedIds: Set<string>): string | undefined {
   if (a.is_archived || a.is_archive_container) return '#f3f4f6'
-  if (a.is_critical) return withAlpha(style.critical_color, 0.12)
+  if (highlightedIds.has(a.id)) return withAlpha(style.highlight_color, 0.18)
   if (a.activity_type === 'wbs_summary') return wbsRowBackground(style, depthOf(a))
-  if (a.activity_type === 'milestone') return withAlpha(style.milestone_row_color, 0.15)
+  if (isMilestoneType(a.activity_type)) return withAlpha(style.milestone_row_color, 0.15)
   return style.activity_row_color === '#ffffff' ? undefined : withAlpha(style.activity_row_color, 1)
 }
 
@@ -197,7 +297,7 @@ interface PrintColumnDef {
   key: ColumnKey
   label: string
   align?: 'right'
-  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle) => string
+  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle, calendars: Calendar[]) => string
   cellClassName?: (a: Activity) => string
 }
 
@@ -208,18 +308,56 @@ const DATE_COLUMN_KEYS = new Set<ColumnKey>(['start', 'bl_start', 'finish', 'bl_
 // A date-only column doesn't need nearly as much room as the on-screen width
 // (sized for "06 Jul 2026 09:00") once the time-of-day is hidden — reusing
 // that full width left a wide blank gap next to "06 Jul 2026" (2026-07-05,
-// per Maro). 72px comfortably fits the date-only string at print's 9px font.
+// per Maro). 72px comfortably fits the date-only string at print's default
+// (9px) font — scaled by printFontScale below like every other column, so a
+// larger chosen print_font_size still gets more room instead of relying on
+// ellipsis truncation alone.
 const DATE_ONLY_COLUMN_WIDTH = 72
 
-function printColumnWidth(key: ColumnKey, columnWidths: Record<string, number>, showTimeOfDay: boolean): number {
-  if (!showTimeOfDay && DATE_COLUMN_KEYS.has(key)) return DATE_ONLY_COLUMN_WIDTH
-  return columnWidths[key] ?? 96
+// print_font_size's own schema default (app/schemas/gantt_layout.py) — the
+// baseline every column width below (on-screen resized pixel widths,
+// DATE_ONLY_COLUMN_WIDTH, the default 96/224 fallbacks) was implicitly tuned
+// against before print_font_size was itself configurable. Scaling every
+// width by (print_font_size / this baseline) is what "optimises the column
+// widths based on whatever's set in Layout" (2026-07-06, per Maro) means in
+// this print pipeline specifically — real text measurement isn't available
+// here at all (see the file-level comment on why pixel geometry can't be
+// read back during print), so a deterministic, proportional scale off the
+// one number that's actually known (the chosen font size) is the only option
+// that can't race the print snapshot.
+const PRINT_FONT_SIZE_BASELINE = 9
+
+function printColumnWidth(key: ColumnKey, columnWidths: Record<string, number>, showTimeOfDay: boolean, scale: number): number {
+  if (!showTimeOfDay && DATE_COLUMN_KEYS.has(key)) return DATE_ONLY_COLUMN_WIDTH * scale
+  return (columnWidths[key] ?? 96) * scale
+}
+
+// Same 9rem (144px) the on-screen grid gives every UDF column (Scheduling.tsx) —
+// UDFs don't have a persisted, resizable on-screen width the way built-in
+// columns do, so there's no per-column pixel value to mirror here.
+const UDF_COLUMN_WIDTH = 144
+
+function udfPrintValue(definition: UserDefinedFieldDefinition, value: UserDefinedFieldValue | undefined, showTimeOfDay: boolean): { text: string; color?: string } {
+  if (definition.data_type === 'indicator') {
+    const opt = indicatorOption(value?.value_indicator)
+    return { text: opt.label === 'None' ? opt.icon : `${opt.icon} ${opt.label}`, color: opt.color }
+  }
+  if (definition.data_type === 'start_date' || definition.data_type === 'finish_date') {
+    return { text: formatDateTime(value?.value_date ?? null, showTimeOfDay) }
+  }
+  if (definition.data_type === 'cost') {
+    return { text: value?.value_number ? `£${Number(value.value_number).toLocaleString()}` : '—' }
+  }
+  if (definition.data_type === 'number' || definition.data_type === 'integer') {
+    return { text: value?.value_number ?? '—' }
+  }
+  return { text: value?.value_text || '—' }
 }
 
 const PRINT_COLUMNS: PrintColumnDef[] = [
-  { key: 'code', label: 'Code', render: a => a.code, cellClassName: () => 'text-gray-500 font-mono' },
-  { key: 'wbs', label: 'WBS', render: a => a.wbs_path ?? '—', cellClassName: () => 'text-gray-400 font-mono' },
-  { key: 'type', label: 'Type', render: a => a.activity_type.replace('_', ' ') },
+  { key: 'code', label: 'Code', render: a => a.code, cellClassName: () => 'text-gray-500' },
+  { key: 'wbs', label: 'WBS', render: a => a.wbs_path ?? '—', cellClassName: () => 'text-gray-400' },
+  { key: 'type', label: 'Type', render: a => a.activity_type.replace('_', ' ').toUpperCase() },
   { key: 'duration', label: 'Dur (d)', align: 'right', render: a => formatDuration(a.duration_days) },
   { key: 'start', label: 'Start', render: (a, _r, style) => formatDateTime(a.start, style.show_time_of_day) },
   { key: 'bl_start', label: 'BL Start', render: (a, _r, style) => formatDateTime(a.bl_start, style.show_time_of_day), cellClassName: () => 'text-gray-400' },
@@ -230,11 +368,24 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
     cellClassName: a => (a.variance_days ?? 0) > 0 ? NEGATIVE_RED : NORMAL_GREY,
   },
   {
-    key: 'float', label: 'Total Float', align: 'right',
-    render: a => a.total_float_hours != null ? `${a.total_float_hours}h` : '—',
+    key: 'float', label: 'Total Float (d)', align: 'right',
+    render: (a, _r, _s, calendars) => formatFloatDays(a.total_float_hours, a, calendars),
     cellClassName: a => a.is_critical ? NEGATIVE_RED : NORMAL_GREY,
   },
-  { key: 'free_float', label: 'Free Float', align: 'right', render: a => a.free_float_hours != null ? `${a.free_float_hours}h` : '—' },
+  {
+    key: 'critical', label: 'Critical', render: a => a.is_critical === null ? '—' : a.is_critical ? 'Yes' : 'No',
+    cellClassName: a => a.is_critical ? NEGATIVE_RED : NORMAL_GREY,
+  },
+  { key: 'free_float', label: 'Free Float (d)', align: 'right', render: (a, _r, _s, calendars) => formatFloatDays(a.free_float_hours, a, calendars) },
+  {
+    key: 'sub_float', label: 'Sub Total Float (d)', align: 'right',
+    render: (a, _r, _s, calendars) => formatFloatDays(a.sub_total_float_hours, a, calendars),
+    cellClassName: a => a.sub_is_critical ? 'text-orange-600 font-semibold' : NORMAL_GREY,
+  },
+  {
+    key: 'sub_critical', label: 'Sub Critical', render: a => a.sub_is_critical === null ? '—' : a.sub_is_critical ? 'Yes' : 'No',
+    cellClassName: a => a.sub_is_critical ? 'text-orange-600 font-semibold' : NORMAL_GREY,
+  },
   { key: 'pct_complete', label: '% Comp', align: 'right', render: a => `${a.pct_complete ?? 0}%` },
   {
     key: 'resources', label: 'Resources',
@@ -306,11 +457,22 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
 // the same kind of cross-row line a dependency connector is, and wasn't
 // asked for here).
 export function SchedulingPrintView({
-  activities, relationships, resourceAssignments, visibleColumns, columnWidths, projectName, letterhead, ganttStyle = DEFAULT_GANTT_STYLE, ganttZoom = 'week',
+  activities, relationships, resourceAssignments, calendars, visibleColumns, columnWidths, projectName, letterhead,
+  udfDefinitions = [], getUdfValue, udfColumnWidth = UDF_COLUMN_WIDTH, ganttStyle = DEFAULT_GANTT_STYLE, ganttZoom = 'week',
+  highlightedActivityIds = new Set(), dataDate = null, preview = false,
 }: Props) {
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  // Mirrors PrintLetterheadFooter's own "nothing to show" guard — `preview`
+  // mode (used below to get the tfoot its plain, non-fixed markup) skips
+  // that guard entirely, since LetterheadEditorWidget's own live preview
+  // wants to render the empty state too. Without this, a project that's
+  // never customized its footer/legend would get a blank <tfoot> bar on
+  // every printed page instead of no footer row at all.
+  const hasFooterContent = letterhead
+    ? [letterhead.footer_left, letterhead.footer_center, letterhead.footer_right].some(z => z.text.trim() !== '') || letterhead.show_gantt_legend
+    : false
   const letterheadTokens = {
-    project: projectName, module: 'Schedule',
+    project: projectName, module: 'Activities',
     count: `${activities.length} activit${activities.length === 1 ? 'y' : 'ies'}`,
     printed_at: printedAt,
   }
@@ -318,10 +480,30 @@ export function SchedulingPrintView({
   const columns = PRINT_COLUMNS.filter(c => visibleColumns.has(c.key))
   const columnsBeforeActivity = columns.filter(c => c.key === 'code' || c.key === 'wbs')
   const columnsAfterActivity = columns.filter(c => c.key !== 'code' && c.key !== 'wbs')
-  const activityWidth = columnWidths.activity ?? 224
-  const totalDataWidth = activityWidth + columns.reduce((sum, c) => sum + printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day), 0) || 1
+  // Moved from GanttStyle to ProjectLetterhead (2026-07-07, per Maro — see
+  // frontend/src/lib/letterhead.ts) — letterhead can be null before the
+  // first real fetch resolves, hence the fallbacks (GanttStyle's own
+  // previous defaults).
+  const printFontSize = letterhead?.print_font_size ?? 9
+  const headerPrintFontSize = letterhead?.header_print_font_size ?? 9
+  const ganttPrintFontSize = letterhead?.gantt_print_font_size ?? 8
+  const printFontFamily = letterhead?.print_font_family ?? 'sans'
+  const ganttPrintFontFamily = letterhead?.gantt_print_font_family ?? 'sans'
+  const headerPrintFontFamily = letterhead?.header_print_font_family ?? 'sans'
+  const printFontScale = printFontSize / PRINT_FONT_SIZE_BASELINE
+  const activityWidth = (columnWidths.activity ?? 224) * printFontScale
+  const udfWidth = udfColumnWidth * printFontScale
+  const totalDataWidth = (
+    activityWidth
+    + columns.reduce((sum, c) => sum + printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale), 0)
+    + udfDefinitions.length * udfWidth
+  ) || 1
+  const colSpanCount = columns.length + udfDefinitions.length + 2
 
-  const { rangeStart, totalDays } = useMemo(() => computeGanttRange(activities), [activities])
+  const { rangeStart, totalDays } = useMemo(
+    () => computeGanttRange(activities, letterhead, dataDate),
+    [activities, letterhead, dataDate]
+  )
   const timeMarks = useMemo(() => computeTimeMarks(rangeStart, totalDays, ganttZoom), [rangeStart, totalDays, ganttZoom])
   const todayOffsetPct = useMemo(() => {
     const pct = (daysBetween(rangeStart, new Date()) / totalDays) * 100
@@ -334,7 +516,7 @@ export function SchedulingPrintView({
   const geometryById = useMemo(() => {
     const map = new Map<string, { leftPct: number; rightPct: number }>()
     activities.forEach(a => {
-      const geo = xGeometryPct(a.start, a.finish, a.activity_type === 'milestone', rangeStart, totalDays)
+      const geo = xGeometryPct(a.start, a.finish, isMilestoneType(a.activity_type), rangeStart, totalDays)
       if (geo) map.set(a.id, geo)
     })
     return map
@@ -349,8 +531,28 @@ export function SchedulingPrintView({
   // its vertical position is known the instant the row order is known.
   const rowIndexById = useMemo(() => new Map(activities.map((a, i) => [a.id, i])), [activities])
 
+  // Explicit fontSize on every header/data cell — not left to inherit from
+  // the <table>'s own style — plus a hard height+overflow cap matching
+  // HEADER_HEIGHT/GANTT_ROW_HEIGHT (2026-07-06, per Maro: print_font_size
+  // above 9 "just messes things up", and "not all fonts are being affected,
+  // the activity code... the header column labels"). Two distinct bugs, one
+  // fix: without a per-cell height cap, a larger font could make a cell
+  // naturally taller than the row's own inline `height` (which is only ever
+  // a minimum, not enforced) — since the Gantt column's bars/connectors are
+  // positioned analytically assuming every row is *exactly* GANTT_ROW_HEIGHT
+  // (see the file-level comment), a taller data cell silently pushed every
+  // bar below it out of alignment with its own row. Capping every cell's own
+  // box the same way the Gantt <td> already did removes that ceiling
+  // entirely — any print_font_size now holds row height exact, it just
+  // clips (ellipsis) rather than reflows if a value is too wide to fit.
+  const headerCellStyle = {
+    fontSize: headerPrintFontSize, fontFamily: FONT_FAMILY_CSS[headerPrintFontFamily],
+    height: HEADER_HEIGHT, overflow: 'hidden' as const, textOverflow: 'ellipsis' as const,
+  }
+  const dataCellStyle = { fontSize: printFontSize, height: GANTT_ROW_HEIGHT, overflow: 'hidden' as const, textOverflow: 'ellipsis' as const }
+
   return (
-    <div className="print-only p-8">
+    <div className={preview ? 'p-8 bg-white' : 'print-only p-8'}>
       {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
       <p className="text-sm text-gray-500 mb-3">
         {activities.length} activit{activities.length === 1 ? 'y' : 'ies'} (as shown, respecting search/filters/columns)
@@ -400,17 +602,18 @@ export function SchedulingPrintView({
         })}
 
       <table
-        className="text-[9px] border-collapse w-full"
-        style={{ tableLayout: 'fixed', color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family] }}
+        className="border-collapse w-full"
+        style={{ tableLayout: 'fixed', color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[printFontFamily], fontSize: printFontSize }}
       >
         <colgroup>
           {columnsBeforeActivity.map(c => (
-            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day) }} />
+            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale) }} />
           ))}
           <col style={{ width: activityWidth }} />
           {columnsAfterActivity.map(c => (
-            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day) }} />
+            <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale) }} />
           ))}
+          {udfDefinitions.map(d => <col key={d.id} style={{ width: udfWidth }} />)}
           <col />
         </colgroup>
         <thead>
@@ -419,11 +622,20 @@ export function SchedulingPrintView({
               repeats on every printed page automatically. */}
           <tr className="text-left bg-gray-50 border-b border-gray-300 text-gray-500 font-medium uppercase tracking-wide" style={{ height: HEADER_HEIGHT }}>
             {columnsBeforeActivity.map(c => (
-              <th key={c.key} className={`px-1 py-1 border-r border-gray-300 ${c.align === 'right' ? 'text-right' : ''}`}>{c.label}</th>
+              <th key={c.key} className={`px-1 py-1 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`} style={headerCellStyle}>
+                {c.label}
+              </th>
             ))}
-            <th className="px-1 py-1 border-r border-gray-300">Activity</th>
+            <th className="px-1 py-1 border-r border-gray-300 whitespace-nowrap" style={headerCellStyle}>Activity</th>
             {columnsAfterActivity.map(c => (
-              <th key={c.key} className={`px-1 py-1 border-r border-gray-300 ${c.align === 'right' ? 'text-right' : ''}`}>{c.label}</th>
+              <th key={c.key} className={`px-1 py-1 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`} style={headerCellStyle}>
+                {c.label}
+              </th>
+            ))}
+            {udfDefinitions.map(d => (
+              <th key={d.id} className="px-1 py-1 border-r border-gray-300 whitespace-nowrap" style={headerCellStyle}>
+                {d.name} (UDF)
+              </th>
             ))}
             <th className="p-0 relative" style={{ overflow: 'hidden' }}>
               {/* overflow:hidden here (the body row's gantt <td> already had it,
@@ -436,8 +648,11 @@ export function SchedulingPrintView({
                 {timeMarks.map(m => (
                   <div
                     key={m.offset}
-                    className="absolute top-0 border-l border-gray-200 pl-1 text-[8px] text-gray-400"
-                    style={{ left: `${(m.offset / totalDays) * 100}%`, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px` }}
+                    className="absolute top-0 border-l border-gray-200 pl-1 text-gray-400"
+                    style={{
+                      left: `${(m.offset / totalDays) * 100}%`, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px`,
+                      fontSize: ganttPrintFontSize, fontFamily: FONT_FAMILY_CSS[ganttPrintFontFamily],
+                    }}
                   >
                     {m.label}
                   </div>
@@ -448,16 +663,20 @@ export function SchedulingPrintView({
         </thead>
         <tbody>
           {activities.map((a, rowIndex) => {
-            const isMilestone = a.activity_type === 'milestone'
+            const isMilestone = isMilestoneType(a.activity_type)
             const isWbs = a.activity_type === 'wbs_summary'
             const geo = xGeometryPct(a.start, a.finish, isMilestone, rangeStart, totalDays)
             const critical = a.is_critical === true
+            // Same rule as GanttChart.tsx's own subCritical: only shown when
+            // not already master-critical, since that's the more prominent
+            // signal already (docs/SUBPROJECT_FLOAT_PLAN.md §G).
+            const subCritical = ganttStyle.show_sub_critical && a.sub_is_critical === true && !critical
             const barLabel = buildBarLabel(a, ganttStyle, resourceAssignments)
             return (
               <tr
                 key={a.id}
                 style={{
-                  height: GANTT_ROW_HEIGHT, pageBreakInside: 'avoid', backgroundColor: rowBackground(a, ganttStyle),
+                  height: GANTT_ROW_HEIGHT, pageBreakInside: 'avoid', backgroundColor: rowBackground(a, ganttStyle, highlightedActivityIds),
                   // box-shadow instead of border-bottom — a real per-row border
                   // can add a hair of extra height in some browsers' table
                   // border-collapse handling, which accumulates over many rows
@@ -466,13 +685,16 @@ export function SchedulingPrintView({
                 }}
               >
                 {columnsBeforeActivity.map(c => (
-                  <td key={c.key} className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}>
-                    {c.render(a, resourceAssignments, ganttStyle)}
+                  <td
+                    key={c.key} style={dataCellStyle}
+                    className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
+                  >
+                    {c.render(a, resourceAssignments, ganttStyle, calendars)}
                   </td>
                 ))}
                 <td
-                  className="px-1 py-0.5 border-r border-gray-300 overflow-hidden text-ellipsis whitespace-nowrap font-medium text-gray-900"
-                  style={{ paddingLeft: 4 + depthOf(a) * 10 }}
+                  className="px-1 py-0.5 border-r border-gray-300 whitespace-nowrap font-medium text-gray-900"
+                  style={{ ...dataCellStyle, paddingLeft: 4 + depthOf(a) * 10 }}
                   title={a.task_name}
                 >
                   {a.task_name}
@@ -483,10 +705,24 @@ export function SchedulingPrintView({
                   )}
                 </td>
                 {columnsAfterActivity.map(c => (
-                  <td key={c.key} className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}>
-                    {c.render(a, resourceAssignments, ganttStyle)}
+                  <td
+                    key={c.key} style={dataCellStyle}
+                    className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
+                  >
+                    {c.render(a, resourceAssignments, ganttStyle, calendars)}
                   </td>
                 ))}
+                {udfDefinitions.map(d => {
+                  const { text, color } = udfPrintValue(d, getUdfValue?.(d.id, a.id), ganttStyle.show_time_of_day)
+                  return (
+                    <td
+                      key={d.id} style={{ ...dataCellStyle, color: color ?? undefined }}
+                      className="px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis text-gray-600"
+                    >
+                      {text}
+                    </td>
+                  )
+                })}
                 <td className="p-0 relative" style={{ overflow: 'hidden', height: GANTT_ROW_HEIGHT }}>
                   {/* Explicit pixel height, not height:100% — percentage heights
                       inside a <td> are unreliable across print rendering engines
@@ -507,6 +743,7 @@ export function SchedulingPrintView({
                             top: BAR_CENTER_Y - MILESTONE_SIZE / 2, left: `calc(${geo.leftPct}% - ${MILESTONE_SIZE / 2}px)`,
                             width: MILESTONE_SIZE, height: MILESTONE_SIZE,
                             backgroundColor: color, borderColor: withAlpha(color, 0.7),
+                            boxShadow: subCritical ? `0 0 0 2px ${ganttStyle.sub_critical_color}` : undefined,
                           }}
                         />
                       )
@@ -539,6 +776,7 @@ export function SchedulingPrintView({
                           style={{
                             top: BAR_ZONE_TOP, left: `${geo.leftPct}%`, width: `${geo.rightPct - geo.leftPct}%`, minWidth: 4, height: BAR_ZONE_HEIGHT,
                             backgroundColor: withAlpha(color, 0.25), borderColor: color,
+                            boxShadow: subCritical ? `0 0 0 2px ${ganttStyle.sub_critical_color}` : undefined,
                           }}
                         >
                           <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
@@ -556,7 +794,7 @@ export function SchedulingPrintView({
                       return (
                         <div
                           className="absolute whitespace-nowrap"
-                          style={{ top: BAR_CENTER_Y - 7, left: `calc(${anchorPct}% + 6px)`, fontSize: 8, color: '#6b7280' }}
+                          style={{ top: BAR_CENTER_Y - 7, left: `calc(${anchorPct}% + ${LABEL_GAP}px)`, fontSize: ganttPrintFontSize, fontFamily: FONT_FAMILY_CSS[ganttPrintFontFamily], color: '#6b7280' }}
                         >
                           {barLabel}
                         </div>
@@ -568,12 +806,31 @@ export function SchedulingPrintView({
             )
           })}
           {activities.length === 0 && (
-            <tr><td colSpan={columns.length + 2} className="py-4 text-center text-gray-400">No activities to show.</td></tr>
+            <tr><td colSpan={colSpanCount} className="py-4 text-center text-gray-400">No activities to show.</td></tr>
           )}
         </tbody>
+        {letterhead && hasFooterContent && (
+          // A real <tfoot>, not PrintLetterheadFooter's usual `position:
+          // fixed; bottom: 0` (2026-07-06, per Maro: the Gantt legend was
+          // still overlapping content on later pages, not just page 1) —
+          // position:fixed in print is only reliably pinned to *a* page
+          // edge, not guaranteed to repeat correctly on every page of a long
+          // table the way a <thead> does; <tfoot> uses that exact same
+          // native, standards-based table-pagination mechanism (see the
+          // <thead> comment above) instead of a CSS positioning trick, so it
+          // repeats correctly regardless of how many pages this prints to.
+          // `preview` strips PrintLetterheadFooter's own fixed positioning,
+          // leaving just the plain in-flow markup this <tfoot> needs.
+          <tfoot>
+            <tr>
+              <td colSpan={colSpanCount} className="px-1 py-0">
+                <PrintLetterheadFooter letterhead={letterhead} tokens={letterheadTokens} ganttLegend ganttStyle={ganttStyle} preview noHorizontalPadding />
+              </td>
+            </tr>
+          </tfoot>
+        )}
       </table>
       </div>
-      {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={letterheadTokens} ganttLegend ganttStyle={ganttStyle} />}
     </div>
   )
 }

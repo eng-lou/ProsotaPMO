@@ -1,8 +1,8 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react'
-import { DEFAULT_GANTT_STYLE, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
+import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { formatDateTime } from './dateTime'
 import { computeTimeMarks, DAY_WIDTH_BY_ZOOM, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
-import type { Activity, ActivityRelationship, ResourceAssignment } from './types'
+import { isMilestoneType, type Activity, type ActivityRelationship, type ResourceAssignment } from './types'
 
 // The bar-label trio (2026-07-05, per Maro: "show/hide specific fields...
 // by the right side of the relevant task, milestone") — joins whichever of
@@ -19,6 +19,14 @@ export function buildBarLabel(a: Activity, style: GanttStyle, resourceAssignment
   if (style.show_label_finish) parts.push(formatDateTime(a.finish, style.show_time_of_day))
   return parts.join('   ·   ')
 }
+
+// Connector lines (elbowPath below) always leave a bar horizontally for at
+// least this many pixels before turning — a label starting any closer than
+// that sits right on top of that departing stub (2026-07-06, per Maro).
+// Kept as one constant so the label gap and the connector's own stub can
+// never drift back out of sync with each other.
+export const CONNECTOR_STUB = 10
+export const LABEL_GAP = CONNECTOR_STUB + 6
 
 const ZOOM_ORDER = ZOOM_OPTIONS.map(o => o.value)
 // Pixels of horizontal drag needed to cross one zoom level — tuned so a
@@ -85,7 +93,7 @@ interface BarGeometry {
 // Elbow-routed dependency line, MS Project style: out from the source connection
 // point, across, then into the target connection point.
 function elbowPath(x1: number, y1: number, x2: number, y2: number): string {
-  const stub = 10
+  const stub = CONNECTOR_STUB
   if (x2 >= x1 + stub || (y1 === y2 && x2 >= x1)) {
     const midX = Math.min(x1 + stub, Math.max(x1, x2 - stub))
     return `M ${x1},${y1} H ${midX} V ${y2} H ${x2}`
@@ -149,6 +157,15 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   // above for the live split-pane view. Omit for the static print view, which
   // renders the whole chart unclipped in normal page flow.
   viewportHeight?: number
+  // Click-to-select on bars/milestones/WBS-summary shapes (2026-07-09, per
+  // Maro: "the gantt in the 4d doesnt interact with the schedule in the
+  // 4d") — both optional and both omitted by Scheduling.tsx's own usage
+  // (that page drives selection from its own data-grid checkboxes instead,
+  // see Scheduling.tsx's selectedActivityIds), so this has zero effect
+  // there. Plain click replaces the selection; Ctrl/Cmd+click toggles
+  // membership, matching this session's other multi-select controls.
+  selectedActivityIds?: Set<string>
+  onSelectActivity?: (id: string, additive: boolean) => void
 }>(function GanttChart({
   activities,
   relationships = [],
@@ -157,6 +174,8 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   zoom = 'week',
   onZoomChange,
   viewportHeight,
+  selectedActivityIds,
+  onSelectActivity,
 }, ref) {
   const bodyWrapperRef = useRef<HTMLDivElement>(null)
   useImperativeHandle(ref, () => ({
@@ -231,7 +250,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       const start = parseDate(a.start)
       const finish = parseDate(a.finish)
 
-      if (a.activity_type === 'milestone') {
+      if (isMilestoneType(a.activity_type)) {
         const at = start ?? finish
         if (!at) return
         const x = daysBetween(rangeStart, at) * dayWidth
@@ -272,8 +291,8 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       {timeMarks.map(m => (
         <div
           key={m.offset}
-          className="absolute top-0 border-l border-gray-200 pl-1 text-[10px] text-gray-400"
-          style={{ left: m.offset * dayWidth, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px` }}
+          className="absolute top-0 border-l border-gray-200 pl-1 text-gray-400"
+          style={{ left: m.offset * dayWidth, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px`, fontSize: style.gantt_font_size }}
         >
           {m.label}
         </div>
@@ -338,7 +357,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           // Baseline milestones get their own small outlined diamond (in
           // baseline_color) instead of the near-zero-width bar a zero-duration
           // milestone would otherwise produce.
-          if (a.activity_type === 'milestone') {
+          if (isMilestoneType(a.activity_type)) {
             return (
               <div
                 key={`bl-${a.id}`}
@@ -382,7 +401,18 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           const geo = geometry.get(a.id)
           if (!geo) return null
           const critical = a.is_critical === true
+          // Secondary indicator (docs/SUBPROJECT_FLOAT_PLAN.md §G, 2026-07-06) —
+          // only shown when this activity is critical *within its own tagged
+          // sub-project* but not already on the master critical path; if it's
+          // already master-critical, that's already the more prominent signal
+          // and a second ring would just be redundant noise on top of it.
+          const subCritical = style.show_sub_critical && a.sub_is_critical === true && !critical
           const label = buildBarLabel(a, style, resourceAssignments)
+          const isSelected = selectedActivityIds?.has(a.id) ?? false
+          const selectionRing = isSelected ? `0 0 0 2px #2563eb` : undefined
+          const handleBarClick = onSelectActivity
+            ? (e: React.MouseEvent) => onSelectActivity(a.id, e.ctrlKey || e.metaKey)
+            : undefined
           // className="contents" — an invisible wrapper for layout purposes
           // only, so the bar/milestone shape and its optional label stay
           // two independent absolutely-positioned siblings (both still
@@ -390,25 +420,27 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           // nested inside the other.
           const labelEl = label && (
             <div
-              className="absolute text-[10px] text-gray-500 whitespace-nowrap pointer-events-none"
-              style={{ top: geo.centerY - 7, left: geo.right + 6 }}
+              className="absolute text-gray-500 whitespace-nowrap pointer-events-none"
+              style={{ top: geo.centerY - 7, left: geo.right + LABEL_GAP, fontSize: style.gantt_font_size }}
             >
               {label}
             </div>
           )
 
-          if (a.activity_type === 'milestone') {
+          if (isMilestoneType(a.activity_type)) {
             const color = critical ? style.milestone_critical_color : style.milestone_noncritical_color
             return (
               <div key={a.id} className="contents">
                 <div
-                  className="absolute rotate-45 border"
+                  className={`absolute rotate-45 border ${onSelectActivity ? 'cursor-pointer' : ''}`}
+                  onClick={handleBarClick}
                   style={{
                     top: geo.centerY - MILESTONE_SIZE / 2, left: geo.left - MILESTONE_SIZE / 2,
                     width: MILESTONE_SIZE, height: MILESTONE_SIZE,
                     backgroundColor: color, borderColor: withAlpha(color, 0.7),
+                    boxShadow: selectionRing ?? (subCritical ? `0 0 0 2px ${style.sub_critical_color}` : undefined),
                   }}
-                  title={`${a.task_name} — ${formatDateTime(a.start ?? a.finish)}${critical ? ' (critical)' : ''}`}
+                  title={`${a.task_name} — ${formatDateTime(a.start ?? a.finish)}${critical ? ' (critical)' : ''}${subCritical ? ' (critical within its sub-project)' : ''}`}
                 />
                 {labelEl}
               </div>
@@ -419,8 +451,21 @@ export const GanttChart = forwardRef<GanttChartHandle, {
             const color = wbsLevelColor(style, depthOf(a))
             return (
               <div key={a.id} className="contents">
-                <div title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)}`}>
-                  <WbsSummaryBar left={geo.left} right={geo.right} top={geo.top} centerY={BAR_CENTER_Y} color={color} />
+                {/* WbsSummaryBar's own <svg> is pointer-events-none (it's a
+                    decorative bracket shape, not normally clickable) — this
+                    wrapper is given the exact same absolute bounds so a click
+                    on that area still lands on *something* (the wrapper's own
+                    box, which the SVG's pointer-events-none lets through to). */}
+                <div
+                  onClick={handleBarClick}
+                  className={`absolute ${onSelectActivity ? 'cursor-pointer' : ''}`}
+                  style={{
+                    left: geo.left, top: geo.top, width: Math.max(geo.right - geo.left, 1), height: GANTT_ROW_HEIGHT,
+                    boxShadow: selectionRing,
+                  }}
+                  title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)}`}
+                >
+                  <WbsSummaryBar left={0} right={geo.right - geo.left} top={0} centerY={BAR_CENTER_Y} color={color} />
                 </div>
                 {labelEl}
               </div>
@@ -436,12 +481,14 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           return (
             <div key={a.id} className="contents">
               <div
-                className="absolute overflow-hidden rounded border-2"
+                onClick={handleBarClick}
+                className={`absolute overflow-hidden rounded border-2 ${onSelectActivity ? 'cursor-pointer' : ''}`}
                 style={{
                   top: geo.top + BAR_ZONE_TOP, left: geo.left, width: geo.right - geo.left, height: BAR_ZONE_HEIGHT,
                   backgroundColor: withAlpha(color, 0.25), borderColor: color,
+                  boxShadow: selectionRing ?? (subCritical ? `0 0 0 2px ${style.sub_critical_color}` : undefined),
                 }}
-                title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)} (${pct}% complete)${critical ? ' — critical path' : ''}`}
+                title={`${a.task_name}: ${formatDateTime(a.start)} → ${formatDateTime(a.finish)} (${pct}% complete)${critical ? ' — critical path' : ''}${subCritical ? ' — critical within its sub-project' : ''}`}
               >
                 <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
               </div>
@@ -453,7 +500,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   )
 
   return (
-    <div style={{ width, minWidth: '100%' }}>
+    <div style={{ width, minWidth: '100%', fontFamily: FONT_FAMILY_CSS[style.gantt_font_family] }}>
       {header}
       {viewportHeight !== undefined ? (
         <div style={{ height: viewportHeight, overflow: 'hidden', position: 'relative' }}>

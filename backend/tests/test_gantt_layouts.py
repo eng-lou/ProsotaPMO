@@ -28,6 +28,42 @@ async def test_create_does_not_apply(client: AsyncClient, project: Project):
     assert style["critical_color"] == "#ef4444"  # still the default — not applied yet
 
 
+async def test_gantt_font_family_is_independent_of_table_font_family(client: AsyncClient, project: Project):
+    default = (await client.get("/api/v1/gantt-layouts/active-style", params={"project_id": str(project.id)})).json()
+    assert default["table_font_family"] == "sans"
+    assert default["gantt_font_family"] == "sans"
+
+    create_resp = await client.post("/api/v1/gantt-layouts/", json={
+        "project_id": str(project.id), "name": "Serif Gantt",
+        "style": {"table_font_family": "mono", "gantt_font_family": "serif"},
+    })
+    assert create_resp.status_code == 201, create_resp.text
+    layout_id = create_resp.json()["id"]
+    assert create_resp.json()["style"]["table_font_family"] == "mono"
+    assert create_resp.json()["style"]["gantt_font_family"] == "serif"
+
+    await client.post(f"/api/v1/gantt-layouts/{layout_id}/apply")
+    applied = (await client.get("/api/v1/gantt-layouts/active-style", params={"project_id": str(project.id)})).json()
+    assert applied["table_font_family"] == "mono"
+    assert applied["gantt_font_family"] == "serif"
+
+
+async def test_header_font_family_defaults_and_persists(client: AsyncClient, project: Project):
+    default = (await client.get("/api/v1/gantt-layouts/active-style", params={"project_id": str(project.id)})).json()
+    assert default["header_font_family"] == "sans"
+
+    create_resp = await client.post("/api/v1/gantt-layouts/", json={
+        "project_id": str(project.id), "name": "Serif Header", "style": {"header_font_family": "serif"},
+    })
+    assert create_resp.status_code == 201, create_resp.text
+    layout_id = create_resp.json()["id"]
+    assert create_resp.json()["style"]["header_font_family"] == "serif"
+
+    await client.post(f"/api/v1/gantt-layouts/{layout_id}/apply")
+    applied = (await client.get("/api/v1/gantt-layouts/active-style", params={"project_id": str(project.id)})).json()
+    assert applied["header_font_family"] == "serif"
+
+
 async def test_apply_activates_and_snapshots_letterhead(client: AsyncClient, project: Project):
     await client.put("/api/v1/letterhead/", json={
         "project_id": str(project.id),

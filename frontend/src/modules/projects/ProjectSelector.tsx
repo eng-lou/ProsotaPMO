@@ -12,6 +12,14 @@ export function ProjectSelector() {
   const [newClient, setNewClient] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [working, setWorking] = useState(false)
+  // Inline rename/duplicate form, one row at a time — mirrors the app's
+  // established "click an action, an inline input replaces the row's normal
+  // content, Save/Cancel" pattern (e.g. CalendarWidget's Edit) rather than a
+  // separate modal (2026-07-06, per Maro: "allow me to duplicate a project...
+  // and rename ofcourse").
+  const [rowAction, setRowAction] = useState<{ mode: 'rename' | 'duplicate'; project: Project; value: string } | null>(null)
+  const [rowActionError, setRowActionError] = useState<string | null>(null)
+  const [rowActionBusy, setRowActionBusy] = useState(false)
   const { selectProject } = useProject()
   const navigate = useNavigate()
 
@@ -95,6 +103,45 @@ export function ProjectSelector() {
     }
   }
 
+  const startRename = (project: Project) => {
+    setRowAction({ mode: 'rename', project, value: project.name })
+    setRowActionError(null)
+  }
+
+  const startDuplicate = (project: Project) => {
+    setRowAction({ mode: 'duplicate', project, value: `${project.name} (Copy)` })
+    setRowActionError(null)
+  }
+
+  const cancelRowAction = () => {
+    setRowAction(null)
+    setRowActionError(null)
+  }
+
+  const confirmRowAction = async () => {
+    if (!rowAction || !rowAction.value.trim()) return
+    setRowActionBusy(true)
+    setRowActionError(null)
+    try {
+      if (rowAction.mode === 'rename') {
+        const { data } = await api.patch<Project>(`/api/v1/projects/${rowAction.project.id}`, {
+          name: rowAction.value.trim(),
+        })
+        setProjects(prev => prev.map(p => p.id === data.id ? data : p))
+      } else {
+        const { data } = await api.post<Project>(`/api/v1/projects/${rowAction.project.id}/duplicate`, {
+          name: rowAction.value.trim(),
+        })
+        setProjects(prev => [...prev, data])
+      }
+      setRowAction(null)
+    } catch {
+      setRowActionError(rowAction.mode === 'rename' ? 'Failed to rename project' : 'Failed to duplicate project')
+    } finally {
+      setRowActionBusy(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -108,7 +155,7 @@ export function ProjectSelector() {
       <div className="w-full max-w-2xl">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-gray-900">Select a project</h1>
-          <p className="text-gray-500 text-sm mt-1">Choose a project to continue into ProsotaPMO</p>
+          <p className="text-gray-500 text-sm mt-1">Choose a project to continue into Prosota</p>
         </div>
 
         {error && (
@@ -157,35 +204,81 @@ export function ProjectSelector() {
         )}
 
         <div className="space-y-3 mb-6">
-          {projects.map(project => (
-            <div
-              key={project.id}
-              className="w-full flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
-            >
-              <input
-                type="checkbox"
-                checked={selectedIds.has(project.id)}
-                onChange={() => toggleSelected(project.id)}
-                onClick={e => e.stopPropagation()}
-                className="shrink-0"
-              />
-              <button onClick={() => handleSelect(project)} className="flex-1 text-left flex items-center justify-between min-w-0">
-                <div className="min-w-0">
-                  <p className="font-medium text-gray-900 group-hover:text-blue-600 truncate">{project.name}</p>
-                  {project.client_name && (
-                    <p className="text-sm text-gray-500 mt-0.5 truncate">{project.client_name}</p>
-                  )}
-                </div>
-                <span className={`shrink-0 ml-3 text-xs px-2 py-1 rounded-full font-medium ${
-                  project.status === 'active'
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-gray-100 text-gray-500'
-                }`}>
-                  {project.status}
-                </span>
-              </button>
-            </div>
-          ))}
+          {projects.map(project => {
+            const activeAction = rowAction?.project.id === project.id ? rowAction : null
+            return (
+              <div
+                key={project.id}
+                className="w-full flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
+              >
+                {activeAction ? (
+                  <div className="flex-1 flex items-center gap-2 min-w-0">
+                    <input
+                      autoFocus
+                      value={activeAction.value}
+                      onChange={e => setRowAction({ ...activeAction, value: e.target.value })}
+                      onKeyDown={e => { if (e.key === 'Enter') confirmRowAction(); if (e.key === 'Escape') cancelRowAction() }}
+                      className="flex-1 min-w-0 border border-blue-400 rounded-md px-3 py-1.5 text-sm focus:outline-none"
+                    />
+                    <button
+                      onClick={confirmRowAction}
+                      disabled={rowActionBusy || !activeAction.value.trim()}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {rowActionBusy ? (activeAction.mode === 'duplicate' ? 'Duplicating…' : 'Saving…') : activeAction.mode === 'duplicate' ? 'Duplicate' : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelRowAction}
+                      disabled={rowActionBusy}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    {rowActionError && <span className="shrink-0 text-xs text-red-600">{rowActionError}</span>}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(project.id)}
+                      onChange={() => toggleSelected(project.id)}
+                      onClick={e => e.stopPropagation()}
+                      className="shrink-0"
+                    />
+                    <button onClick={() => handleSelect(project)} className="flex-1 text-left flex items-center justify-between min-w-0">
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-900 group-hover:text-blue-600 truncate">{project.name}</p>
+                        {project.client_name && (
+                          <p className="text-sm text-gray-500 mt-0.5 truncate">{project.client_name}</p>
+                        )}
+                      </div>
+                      <span className={`shrink-0 ml-3 text-xs px-2 py-1 rounded-full font-medium ${
+                        project.status === 'active'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {project.status}
+                      </span>
+                    </button>
+                    <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={e => { e.stopPropagation(); startRename(project) }}
+                        className="text-xs text-gray-400 hover:text-blue-600 font-medium"
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); startDuplicate(project) }}
+                        className="text-xs text-gray-400 hover:text-blue-600 font-medium"
+                      >
+                        Duplicate
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
 
           {projects.length === 0 && !creating && !error && (
             <p className="text-gray-400 text-sm text-center py-8">

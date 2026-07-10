@@ -11,7 +11,8 @@ from app.database import get_db
 from app.models.activity import Activity
 from app.models.project import Project
 from app.models.resource_assignment import ResourceAssignment
-from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectDuplicateRequest, ProjectResponse, ProjectUpdate
+from app.services import project as project_svc
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -67,6 +68,23 @@ async def update_project(
     await db.commit()
     await db.refresh(project)
     return project
+
+
+@router.post("/{project_id}/duplicate", response_model=ProjectResponse, status_code=201)
+async def duplicate_project(
+    project_id: uuid.UUID,
+    data: ProjectDuplicateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_db_user),
+):
+    """A full, independent deep copy — see app/services/project.py:duplicate_project
+    for exactly what's cloned (2026-07-06, per Maro: "in switch projects,
+    allow me to duplicate a project")."""
+    original = await db.get(Project, project_id)
+    if original is None or original.org_id != current_user.org_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+    new_name = data.name.strip() if data.name and data.name.strip() else f"{original.name} (Copy)"
+    return await project_svc.duplicate_project(db, project_id, new_name)
 
 
 @router.delete("/{project_id}", status_code=204)

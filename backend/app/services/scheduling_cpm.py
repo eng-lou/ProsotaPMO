@@ -12,9 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
+from app.models.schedule_subproject import ScheduleSubproject
+from app.schemas.activity import is_milestone_type
 from app.services import calendar as calendar_service
-from app.services.calendar_time import compute_hours_per_day, day_windows, minutes_between
+from app.services.calendar_time import compute_hours_per_day, day_windows
 
 # Safety bound for the day-by-day walks below (snap/add/subtract/working-hours) — a
 # calendar with genuinely zero working time ever (e.g. every weekday unchecked) would
@@ -22,7 +25,7 @@ from app.services.calendar_time import compute_hours_per_day, day_windows, minut
 _MAX_DAY_STEPS = 3650
 
 
-def data_date_for_period(period: Period) -> date:
+def data_date_for_period(period: SchedulePeriod) -> date:
     """The schedule's "data date" — the anchor the forward pass schedules from
     (below), and the same reference point Planned Value prorates against (see
     app/services/cost_element.py:_schedule_evm). Reschedule
@@ -33,7 +36,7 @@ def data_date_for_period(period: Period) -> date:
     return period.start_date or date.today()
 
 
-def data_date_time_for_period(period: Period, default_day_start: time) -> datetime:
+def data_date_time_for_period(period: SchedulePeriod, default_day_start: time) -> datetime:
     """Full datetime version of data_date_for_period, for the (now
     hour-precision — see elapsed_duration_fraction) Duration % Complete / PV
     proration callers. period.start_time is the exact instant Reschedule's
@@ -92,6 +95,27 @@ def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, d
     return Decimal(elapsed_seconds) / Decimal(total_seconds)
 
 
+def _exclude_suspend_window(
+    interval_start: datetime, interval_end: datetime,
+    suspend_date: datetime | None, resume_date: datetime | None,
+) -> list[tuple[datetime, datetime]]:
+    """Splits [interval_start, interval_end) around an activity's own
+    suspend/resume gap (docs/SCHEDULING_GAPS_PLAN.md Phase 11 follow-up,
+    2026-07-07, per Maro: "the remaining duration and planned finish need to
+    regenerate skipping that period of inactivity") — the gap consumes no
+    duration even if it falls on an otherwise-working calendar window.
+    Returns the interval unchanged if there's no overlap, or with the gap
+    carved out (as 0-2 sub-intervals) if there is."""
+    if suspend_date is None or resume_date is None or interval_end <= suspend_date or interval_start >= resume_date:
+        return [(interval_start, interval_end)]
+    pieces: list[tuple[datetime, datetime]] = []
+    if interval_start < suspend_date:
+        pieces.append((interval_start, suspend_date))
+    if interval_end > resume_date:
+        pieces.append((resume_date, interval_end))
+    return pieces
+
+
 class _CalendarLookup:
     """Resolves an activity's effective calendar (its own override, or the project's
     default) and answers hour-precision working-time questions against it — Phase 10
@@ -112,11 +136,21 @@ class _CalendarLookup:
         self._window_cache: dict[tuple[uuid.UUID, date], list[tuple[time, time]]] = {}
 
     def resolve(self, activity: Activity) -> Calendar:
-        if activity.calendar_id is not None and activity.calendar_id in self._by_id:
-            return self._by_id[activity.calendar_id]
+        return self.resolve_calendar_id(activity.calendar_id)
+
+    def resolve_calendar_id(self, calendar_id: uuid.UUID | None) -> Calendar:
+        """Same fallback-to-project-default resolution as resolve(), just not
+        tied to an Activity — used by Resource Tracking (app/services/
+        resource_assignment_spread.py) to resolve a *Resource's* own optional
+        calendar the same way."""
+        if calendar_id is not None and calendar_id in self._by_id:
+            return self._by_id[calendar_id]
         if self._default is not None:
             return self._default
         raise HTTPException(status_code=422, detail="Project has no default calendar")
+
+    def is_working_day(self, calendar: Calendar, d: date) -> bool:
+        return bool(self._windows(calendar, d))
 
     def hours_per_day(self, calendar: Calendar) -> Decimal:
         return compute_hours_per_day(calendar.day_start_time, calendar.day_end_time, self._breaks.get(calendar.id, []))
@@ -161,9 +195,43 @@ class _CalendarLookup:
             dt = datetime.combine(dt.date() - timedelta(days=1), time(23, 59))
         raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
 
-    def add_duration(self, calendar: Calendar, start: datetime, duration_hours: Decimal) -> datetime:
+    def finish_from_start(
+        self, calendar: Calendar, es: datetime, duration_hours: Decimal,
+        suspend_date: datetime | None = None, resume_date: datetime | None = None,
+    ) -> datetime:
+        """An activity's own EF given its own ES and duration — distinct from
+        add_duration itself specifically for the zero-duration (milestone)
+        case: add_duration always snap_forwards its start first (needed when
+        duration_hours is a real lag/lead being applied to a *start*-type
+        anchor, add_duration's other caller via offset_hours), but a
+        milestone consumes no time at all, so its ES — however it was
+        derived, including possibly landing exactly at a working day's close
+        via an FF/SF relationship — IS its EF, with no re-snap. Re-snapping
+        it as add_duration(es, 0) would do could bump a Finish Milestone a
+        full day later than its own driving predecessor's real finish (found
+        2026-07-07, per Maro — see _relationship_es_candidate's own FF
+        comment for the matching forward-pass half of this same bug).
+
+        suspend_date/resume_date (docs/SCHEDULING_GAPS_PLAN.md Phase 11
+        follow-up, 2026-07-07, per Maro: "the remaining duration and planned
+        finish need to regenerate skipping that period of inactivity") — see
+        add_duration."""
+        if duration_hours <= 0:
+            return es
+        return self.add_duration(calendar, es, duration_hours, suspend_date, resume_date)
+
+    def add_duration(
+        self, calendar: Calendar, start: datetime, duration_hours: Decimal,
+        suspend_date: datetime | None = None, resume_date: datetime | None = None,
+    ) -> datetime:
         """The instant duration_hours of working time after start (used both for a
-        task's own EF-from-ES, and — via offset_hours — for applying a lag/lead)."""
+        task's own EF-from-ES, and — via offset_hours — for applying a lag/lead).
+
+        suspend_date/resume_date carve that window out of the walk entirely —
+        no duration is consumed inside it even on an otherwise-working day, so
+        an activity suspended mid-flight has its Finish pushed out by the full
+        gap once it resumes, rather than the gap silently overlapping its
+        planned working time."""
         cur = self.snap_forward(calendar, start)
         if duration_hours <= 0:
             return cur
@@ -174,18 +242,24 @@ class _CalendarLookup:
             for s, e in windows:
                 if t >= e:
                     continue
-                window_start = max(t, s)
-                avail_minutes = minutes_between(window_start, e)
-                if avail_minutes >= remaining_minutes:
-                    finish_minutes = window_start.hour * 60 + window_start.minute + remaining_minutes
-                    return datetime.combine(cur.date(), time(finish_minutes // 60, finish_minutes % 60))
-                remaining_minutes -= avail_minutes
+                window_start_dt = datetime.combine(cur.date(), max(t, s))
+                window_end_dt = datetime.combine(cur.date(), e)
+                for sub_start, sub_end in _exclude_suspend_window(window_start_dt, window_end_dt, suspend_date, resume_date):
+                    avail_minutes = int((sub_end - sub_start).total_seconds() // 60)
+                    if avail_minutes <= 0:
+                        continue
+                    if avail_minutes >= remaining_minutes:
+                        return sub_start + timedelta(minutes=remaining_minutes)
+                    remaining_minutes -= avail_minutes
             cur = datetime.combine(cur.date() + timedelta(days=1), time.min)
         raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
 
-    def subtract_duration(self, calendar: Calendar, finish: datetime, duration_hours: Decimal) -> datetime:
+    def subtract_duration(
+        self, calendar: Calendar, finish: datetime, duration_hours: Decimal,
+        suspend_date: datetime | None = None, resume_date: datetime | None = None,
+    ) -> datetime:
         """The instant duration_hours of working time before finish (the backward-pass
-        mirror of add_duration)."""
+        mirror of add_duration) — same suspend_date/resume_date carve-out."""
         cur = self.snap_backward(calendar, finish)
         if duration_hours <= 0:
             return cur
@@ -196,12 +270,15 @@ class _CalendarLookup:
             for s, e in reversed(windows):
                 if t <= s:
                     continue
-                window_end = min(t, e)
-                avail_minutes = minutes_between(s, window_end)
-                if avail_minutes >= remaining_minutes:
-                    start_minutes = window_end.hour * 60 + window_end.minute - remaining_minutes
-                    return datetime.combine(cur.date(), time(start_minutes // 60, start_minutes % 60))
-                remaining_minutes -= avail_minutes
+                window_start_dt = datetime.combine(cur.date(), s)
+                window_end_dt = datetime.combine(cur.date(), min(t, e))
+                for sub_start, sub_end in reversed(_exclude_suspend_window(window_start_dt, window_end_dt, suspend_date, resume_date)):
+                    avail_minutes = int((sub_end - sub_start).total_seconds() // 60)
+                    if avail_minutes <= 0:
+                        continue
+                    if avail_minutes >= remaining_minutes:
+                        return sub_end - timedelta(minutes=remaining_minutes)
+                    remaining_minutes -= avail_minutes
             cur = datetime.combine(cur.date() - timedelta(days=1), time(23, 59))
         raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
 
@@ -255,14 +332,14 @@ def _cpm_participants(activities: list[Activity]) -> list[Activity]:
     # per Maro's archive system) are parked/done and forced to 100% complete —
     # also excluded, the same way, rather than let a dead task keep driving or
     # being driven by the live network's critical path.
-    return [a for a in activities if a.activity_type in ("task", "milestone") and not a.is_archived]
+    return [a for a in activities if (a.activity_type == "task" or is_milestone_type(a.activity_type)) and not a.is_archived]
 
 
-async def get_project_finish(db: AsyncSession, period_id: uuid.UUID) -> datetime | None:
+async def get_project_finish(db: AsyncSession, schedule_period_id: uuid.UUID) -> datetime | None:
     """The project finish date is, by definition, the latest computed finish among
     the CPM network's participants — used by app/services/scheduling_reschedule.py
     for a real before/after impact figure rather than a mocked-up number."""
-    result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
     participants = _cpm_participants(list(result.scalars().all()))
     finishes = [a.finish for a in participants if a.finish is not None]
     return max(finishes) if finishes else None
@@ -291,14 +368,14 @@ def _find_cycle(edges: list[tuple[uuid.UUID, uuid.UUID]], node_ids: set[uuid.UUI
 
 
 async def would_create_cycle(
-    db: AsyncSession, period_id: uuid.UUID, predecessor_id: uuid.UUID, successor_id: uuid.UUID
+    db: AsyncSession, schedule_period_id: uuid.UUID, predecessor_id: uuid.UUID, successor_id: uuid.UUID
 ) -> bool:
     """Full multi-hop check used at relationship-creation time — Phase 3 only rejected
     the direct reverse of an existing link; this catches longer cycles (A->B->C->A)."""
     result = await db.execute(
         select(ActivityRelationship)
         .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.period_id == period_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
     )
     edges = [(r.predecessor_id, r.successor_id) for r in result.scalars().all()]
     edges.append((predecessor_id, successor_id))
@@ -337,15 +414,29 @@ def _topological_order(activities: list[Activity], edges: list[tuple[uuid.UUID, 
 def _relationship_es_candidate(
     lookup: _CalendarLookup, calendar: Calendar, rel_type: str, lag_hours: Decimal,
     pred_es: datetime, pred_ef: datetime, duration_hours: Decimal,
+    suspend_date: datetime | None = None, resume_date: datetime | None = None,
 ) -> datetime:
     if rel_type == "SS":
         return lookup.offset_hours(calendar, pred_es, lag_hours)
     if rel_type == "FF":
-        required_ef = lookup.offset_hours(calendar, pred_ef, lag_hours)
-        return lookup.subtract_duration(calendar, required_ef, duration_hours)
+        # At zero lag, the successor's required finish is simply pred_ef
+        # itself — routing that through offset_hours (as every other branch
+        # here does) would be wrong specifically for FF: pred_ef can
+        # legitimately sit exactly at a working day's close (e.g. 17:00),
+        # which offset_hours' snap-forward (built for turning a *finish* into
+        # the next *start* instant, per its own docstring — exactly what FS
+        # below wants) would incorrectly bump to the next working day, one
+        # full day later than the predecessor actually finished (found
+        # 2026-07-07, per Maro: a Finish Milestone linked FF was showing a
+        # day later than its later-finishing FF predecessor). A genuine
+        # nonzero lag does need to walk forward that many working hours from
+        # pred_ef, which legitimately starts counting from the next working
+        # instant if pred_ef itself has none left in its own day.
+        required_ef = pred_ef if lag_hours == 0 else lookup.offset_hours(calendar, pred_ef, lag_hours)
+        return lookup.subtract_duration(calendar, required_ef, duration_hours, suspend_date, resume_date)
     if rel_type == "SF":
         required_ef = lookup.offset_hours(calendar, pred_es, lag_hours)
-        return lookup.subtract_duration(calendar, required_ef, duration_hours)
+        return lookup.subtract_duration(calendar, required_ef, duration_hours, suspend_date, resume_date)
     # FS (default/most common, per PMBOK7 Ch.8): successor can start the moment the
     # predecessor finishes (no artificial "+1 day" — Phase 10's hour precision makes
     # that day-granularity proxy unnecessary; if the finish instant itself isn't
@@ -357,15 +448,21 @@ def _relationship_es_candidate(
 def _relationship_lf_candidate(
     lookup: _CalendarLookup, calendar: Calendar, rel_type: str, lag_hours: Decimal,
     succ_ls: datetime, succ_lf: datetime, duration_hours: Decimal,
+    suspend_date: datetime | None = None, resume_date: datetime | None = None,
 ) -> datetime:
     if rel_type == "SS":
         required_ls = lookup.offset_hours(calendar, succ_ls, -lag_hours)
-        return lookup.add_duration(calendar, required_ls, duration_hours)
+        return lookup.add_duration(calendar, required_ls, duration_hours, suspend_date, resume_date)
     if rel_type == "FF":
-        return lookup.offset_hours(calendar, succ_lf, -lag_hours)
+        # Same zero-lag asymmetry as the forward pass's own FF branch above,
+        # mirrored: succ_lf is a finish-type value that can legitimately sit
+        # exactly at a working day's close, so it must not be routed through
+        # offset_hours' snap-forward at zero lag (offset_hours(-0) still
+        # takes the ">=0" add_duration branch, since -Decimal("0.00") == 0).
+        return succ_lf if lag_hours == 0 else lookup.offset_hours(calendar, succ_lf, -lag_hours)
     if rel_type == "SF":
-        required_ls = lookup.offset_hours(calendar, succ_lf, -lag_hours)
-        return lookup.add_duration(calendar, required_ls, duration_hours)
+        required_ls = succ_lf if lag_hours == 0 else lookup.offset_hours(calendar, succ_lf, -lag_hours)
+        return lookup.add_duration(calendar, required_ls, duration_hours, suspend_date, resume_date)
     return lookup.offset_hours(calendar, succ_ls, -lag_hours)
 
 
@@ -405,7 +502,233 @@ async def compute_duration_for_finish(db: AsyncSession, activity: Activity, targ
     return lookup.working_hours_between(calendar, activity.start, target_finish)
 
 
-async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
+async def _recompute_subproject_floats(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    all_activities: list[Activity],
+    relationships: list[ActivityRelationship],
+    lookup: _CalendarLookup,
+    anchor: datetime,
+    master_dirty_ids: set[uuid.UUID],
+    force_all: bool = False,
+) -> set[uuid.UUID]:
+    """Second, additional float calculation per PM-tagged sub-project branch
+    (2026-07-05, per Maro — docs/SUBPROJECT_FLOAT_PLAN.md, private docs repo).
+    Never touches start/finish/total_float_hours/is_critical — those stay the
+    master pass's alone. Writes only sub_total_float_hours/sub_is_critical,
+    reusing the exact same forward/backward algorithm and calendar-aware
+    arithmetic as the master pass above, just re-run on a smaller
+    activity/relationship set per branch.
+
+    Runs one lightweight query (below) even for a project that has never
+    used this feature — everything after that is a pure in-memory no-op in
+    that case (see the empty-`subprojects` early return), not an extra
+    per-project-forever cost worth avoiding further.
+
+    Returns the set of activity ids this function itself wrote to (cleared
+    or freshly computed) — NOT derived from a second `db.is_modified()`
+    sweep in the caller, because the `db.execute()` below autoflushes the
+    master pass's own pending changes, which resets SQLAlchemy's dirty
+    tracking for them; a later `is_modified()` check would then wrongly
+    see the master pass's changes as already-clean and skip refreshing
+    them, leaving expired attributes that blow up on response
+    serialization. The caller unions this return value with the
+    `master_dirty_ids` it captured *before* calling this function instead.
+    """
+    touched: set[uuid.UUID] = set()
+    subprojects_result = await db.execute(
+        select(ScheduleSubproject).where(ScheduleSubproject.project_id == project_id)
+    )
+    subprojects = list(subprojects_result.scalars().all())
+
+    by_id = {a.id: a for a in all_activities}
+    children: dict[uuid.UUID, list[Activity]] = defaultdict(list)
+    for a in all_activities:
+        if a.parent_id is not None:
+            children[a.parent_id].append(a)
+
+    def subtree_ids(root_id: uuid.UUID) -> set[uuid.UUID]:
+        ids = {root_id}
+
+        def visit(node_id: uuid.UUID) -> None:
+            for child in children.get(node_id, []):
+                ids.add(child.id)
+                visit(child.id)
+
+        visit(root_id)
+        return ids
+
+    # Every activity anywhere under any tagged branch, regardless of nesting —
+    # anything *outside* all of these must have its sub-float cleared (covers
+    # untagging, or an activity being moved out of a branch entirely). This
+    # sweep is cheap (a set-membership check per activity, no DB/CPM work) and
+    # runs even with zero subprojects, specifically so untagging the very last
+    # one still clears its branch's stale numbers rather than leaving them
+    # frozen at whatever they last were.
+    all_branch_ids: set[uuid.UUID] = set()
+    for sp in subprojects:
+        all_branch_ids |= subtree_ids(sp.root_wbs_id)
+    for a in all_activities:
+        if a.id not in all_branch_ids and (a.sub_total_float_hours is not None or a.sub_is_critical is not None):
+            a.sub_total_float_hours = None
+            a.sub_is_critical = None
+            touched.add(a.id)
+
+    if not subprojects:
+        return touched
+
+    root_ids = {sp.root_wbs_id for sp in subprojects}
+
+    def nearest_owner(activity: Activity) -> uuid.UUID | None:
+        # Walks up parent_id to the *first* (nearest) ancestor that's itself
+        # some sub-project's root — the branch that "owns" this activity's
+        # stored sub-float when branches nest (docs/SUBPROJECT_FLOAT_PLAN.md
+        # §D.1: a sub-project can sit inside another sub-project's own
+        # subtree, e.g. individual delivery packages nested inside a larger
+        # "Enabling Works" package).
+        current = activity
+        while current.parent_id is not None:
+            if current.parent_id in root_ids:
+                return current.parent_id
+            parent = by_id.get(current.parent_id)
+            if parent is None:
+                return None
+            current = parent
+        return None
+
+    owner_of: dict[uuid.UUID, uuid.UUID | None] = {}
+
+    # Anything this specific call touched — a branch whose activities/
+    # relationships are all untouched can't have a different scoped float
+    # than it already has, so its pass is skipped entirely. Bounds the added
+    # cost to "how many tagged ancestors does the edited activity have"
+    # (small — a handful of nesting levels at most), not "how many
+    # sub-projects exist in the whole project" (potentially many unrelated
+    # packages) — see the plan doc's §D.2.
+    touched_ids = set(master_dirty_ids)
+    for obj in db.new | db.deleted:
+        if isinstance(obj, ActivityRelationship):
+            touched_ids.add(obj.predecessor_id)
+            touched_ids.add(obj.successor_id)
+
+    for sp in subprojects:
+        branch_ids = subtree_ids(sp.root_wbs_id)
+        if not force_all and branch_ids.isdisjoint(touched_ids):
+            continue
+
+        branch_participants = _cpm_participants([a for a in all_activities if a.id in branch_ids])
+        if not branch_participants:
+            continue
+        branch_participant_ids = {a.id for a in branch_participants}
+        # Internal relationships only — a link crossing the branch's own
+        # boundary is dropped entirely, not partially honoured (§B/§D of the
+        # plan doc: this is a structural, in-isolation float, not "how much
+        # of the master schedule's slack this branch was actually given").
+        branch_relationships = [
+            r for r in relationships
+            if r.predecessor_id in branch_participant_ids and r.successor_id in branch_participant_ids
+        ]
+        branch_edges = [(r.predecessor_id, r.successor_id) for r in branch_relationships]
+
+        branch_predecessors_of: dict[uuid.UUID, list[ActivityRelationship]] = defaultdict(list)
+        branch_successors_of: dict[uuid.UUID, list[ActivityRelationship]] = defaultdict(list)
+        for r in branch_relationships:
+            branch_predecessors_of[r.successor_id].append(r)
+            branch_successors_of[r.predecessor_id].append(r)
+
+        branch_order = _topological_order(branch_participants, branch_edges)
+
+        b_es: dict[uuid.UUID, datetime] = {}
+        b_ef: dict[uuid.UUID, datetime] = {}
+        for a in branch_order:
+            calendar = lookup.resolve(a)
+            duration = a.duration_hours or Decimal(0)
+            preds = branch_predecessors_of.get(a.id, [])
+            if preds:
+                candidate = max(
+                    _relationship_es_candidate(
+                        lookup, calendar, r.relationship_type, r.lag_hours,
+                        b_es[r.predecessor_id], b_ef[r.predecessor_id], duration,
+                        a.suspend_date, a.resume_date,
+                    )
+                    for r in preds
+                )
+            else:
+                candidate = lookup.snap_forward(calendar, anchor)
+            candidate = max(candidate, lookup.snap_forward(calendar, anchor))
+            # mf (Mandatory Finish, 2026-07-07) pins EF exactly, ignoring
+            # predecessor logic entirely — the finish-side mirror of ms
+            # (Mandatory Start) just below, which already does the same to
+            # ES. ES is then derived backward from the pinned EF, same
+            # direction the rest of this loop derives EF forward from ES.
+            if a.constraint_type == "mf" and a.constraint_date is not None:
+                activity_ef = a.constraint_date
+                activity_es = lookup.subtract_duration(calendar, activity_ef, duration, a.suspend_date, a.resume_date)
+            else:
+                if a.constraint_type == "ms" and a.constraint_date is not None:
+                    activity_es = a.constraint_date
+                elif a.constraint_type == "snet" and a.constraint_date is not None:
+                    activity_es = max(candidate, a.constraint_date)
+                else:
+                    activity_es = candidate
+                activity_ef = lookup.finish_from_start(calendar, activity_es, duration, a.suspend_date, a.resume_date)
+                # fnet — see the master pass's own comment on this same check.
+                if a.constraint_type == "fnet" and a.constraint_date is not None:
+                    activity_ef = max(activity_ef, a.constraint_date)
+            b_es[a.id] = activity_es
+            b_ef[a.id] = activity_ef
+
+        # Same "latest-finishing activity in the network" anchor logic the
+        # master pass uses (line ~531 above), just scoped down to this
+        # branch — no separate anchor concept invented (plan doc §D step 5).
+        branch_finish = max(b_ef.values())
+
+        b_ls: dict[uuid.UUID, datetime] = {}
+        b_lf: dict[uuid.UUID, datetime] = {}
+        for a in reversed(branch_order):
+            calendar = lookup.resolve(a)
+            duration = a.duration_hours or Decimal(0)
+            succs = branch_successors_of.get(a.id, [])
+            if succs:
+                candidate = min(
+                    _relationship_lf_candidate(
+                        lookup, calendar, r.relationship_type, r.lag_hours,
+                        b_ls[r.successor_id], b_lf[r.successor_id], duration,
+                        a.suspend_date, a.resume_date,
+                    )
+                    for r in succs
+                )
+            else:
+                candidate = branch_finish
+            if a.constraint_type == "fnlt" and a.constraint_date is not None:
+                activity_lf = min(candidate, a.constraint_date)
+            else:
+                activity_lf = candidate
+            b_lf[a.id] = activity_lf
+            branch_ls = lookup.subtract_duration(calendar, activity_lf, duration, a.suspend_date, a.resume_date)
+            # snlt — see the master pass's own comment on this same check.
+            if a.constraint_type == "snlt" and a.constraint_date is not None:
+                branch_ls = min(branch_ls, a.constraint_date)
+            b_ls[a.id] = branch_ls
+
+        for a in branch_participants:
+            if a.id not in owner_of:
+                owner_of[a.id] = nearest_owner(a)
+            if owner_of[a.id] != sp.root_wbs_id:
+                # A more deeply nested sub-project owns this activity's
+                # stored sub-float instead — this pass still needed to run
+                # over it (above) for *this* branch's own internal network
+                # to be correct, it just doesn't get to write here.
+                continue
+            calendar = lookup.resolve(a)
+            a.sub_total_float_hours = lookup.working_hours_between(calendar, b_es[a.id], b_ls[a.id])
+            a.sub_is_critical = a.sub_total_float_hours <= 0
+            touched.add(a.id)
+
+    return touched
+
+
+async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *, force_all_subprojects: bool = False) -> None:
     """Forward/backward pass (PMBOK7/Rita Mulcahy Ch.8) over a period's activities.
 
     Writes back start/finish/duration_days/total_float_hours/free_float_hours/
@@ -414,13 +737,20 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
     (docs/SCHEDULING_MODULE_PLAN.md Phase 5, retrofitted to hour precision in Phase
     10). Runs on-demand after any activity/relationship mutation rather than on
     every read.
+
+    force_all_subprojects: set by app/services/schedule_subproject.py after
+    tagging/retagging a branch — that action alone doesn't dirty any Activity
+    or ActivityRelationship row, so the normal touched-set skip in
+    _recompute_subproject_floats (§D.2) would otherwise wrongly skip the very
+    branch that just needs its first-ever (or nesting-changed) scoped pass.
     """
-    period = await db.get(Period, period_id)
+    period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
         return
-    project_id = period.project_id
+    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
+    project_id = variant.project_id
 
-    activities_result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
     all_activities = list(activities_result.scalars().all())
     participants = _cpm_participants(all_activities)
     participant_ids = {a.id for a in participants}
@@ -430,6 +760,8 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
             a.total_float_hours = None
             a.free_float_hours = None
             a.is_critical = None
+            a.sub_total_float_hours = None
+            a.sub_is_critical = None
 
     if not participants:
         await db.commit()
@@ -440,7 +772,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
     rel_result = await db.execute(
         select(ActivityRelationship)
         .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.period_id == period_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
     )
     relationships = [
         r for r in rel_result.scalars().all()
@@ -497,7 +829,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
             if a.actual_finish is not None:
                 activity_ef = a.actual_finish
             else:
-                activity_ef = lookup.add_duration(calendar, activity_es, duration)
+                activity_ef = lookup.finish_from_start(calendar, activity_es, duration, a.suspend_date, a.resume_date)
         else:
             preds = predecessors_of.get(a.id, [])
             if preds:
@@ -505,6 +837,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
                     _relationship_es_candidate(
                         lookup, calendar, r.relationship_type, r.lag_hours,
                         es[r.predecessor_id], ef[r.predecessor_id], duration,
+                        a.suspend_date, a.resume_date,
                     )
                     for r in preds
                 )
@@ -517,13 +850,33 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
             # scheduled behind where the project has actually reached.
             candidate = max(candidate, lookup.snap_forward(calendar, anchor))
 
-            if a.constraint_type == "ms" and a.constraint_date is not None:
-                activity_es = a.constraint_date
-            elif a.constraint_type == "snet" and a.constraint_date is not None:
-                activity_es = max(candidate, a.constraint_date)
+            # mf (Mandatory Finish, 2026-07-07) pins EF exactly, ignoring
+            # predecessor logic entirely — the finish-side mirror of ms
+            # (Mandatory Start) below, which already does the same to ES. ES
+            # is then derived backward from the pinned EF, same direction the
+            # rest of this branch derives EF forward from ES.
+            if a.constraint_type == "mf" and a.constraint_date is not None:
+                activity_ef = a.constraint_date
+                activity_es = lookup.subtract_duration(calendar, activity_ef, duration, a.suspend_date, a.resume_date)
             else:
-                activity_es = candidate
-            activity_ef = lookup.add_duration(calendar, activity_es, duration)
+                if a.constraint_type == "ms" and a.constraint_date is not None:
+                    activity_es = a.constraint_date
+                elif a.constraint_type == "snet" and a.constraint_date is not None:
+                    activity_es = max(candidate, a.constraint_date)
+                else:
+                    activity_es = candidate
+                activity_ef = lookup.finish_from_start(calendar, activity_es, duration, a.suspend_date, a.resume_date)
+                # fnet (Finish On or After, 2026-07-07) floors EF at the
+                # constraint date without re-deriving ES backward from it
+                # (unlike mf, which *pins* EF and re-derives ES) — ES stays
+                # exactly where predecessor logic put it; this only says
+                # "can't be considered finished before this date even if the
+                # duration alone would land earlier," the finish-side mirror
+                # of snet flooring ES above. A real forward push, same
+                # category as snet/ms, not a float generator (see snlt below
+                # for that half).
+                if a.constraint_type == "fnet" and a.constraint_date is not None:
+                    activity_ef = max(activity_ef, a.constraint_date)
 
         es[a.id] = activity_es
         ef[a.id] = activity_ef
@@ -543,6 +896,7 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
                 _relationship_lf_candidate(
                     lookup, calendar, r.relationship_type, r.lag_hours,
                     ls[r.successor_id], lf[r.successor_id], duration,
+                    a.suspend_date, a.resume_date,
                 )
                 for r in succs
             )
@@ -555,12 +909,38 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
             activity_lf = candidate
 
         lf[a.id] = activity_lf
-        ls[a.id] = lookup.subtract_duration(calendar, activity_lf, duration)
+        activity_ls = lookup.subtract_duration(calendar, activity_lf, duration, a.suspend_date, a.resume_date)
+        # snlt (Start On or Before, 2026-07-07) caps LS at the constraint
+        # date — the start-side mirror of fnlt capping LF above. A soft
+        # ceiling that can create negative float (if the forward-pass ES
+        # this activity actually needs, from real predecessor logic, is
+        # already later than the deadline) rather than moving anything —
+        # the forward pass (es/ef, computed above) is untouched by it,
+        # exactly as fnlt leaves the forward pass untouched.
+        if a.constraint_type == "snlt" and a.constraint_date is not None:
+            activity_ls = min(activity_ls, a.constraint_date)
+        ls[a.id] = activity_ls
 
     for a in participants:
         calendar = lookup.resolve(a)
-        a.start = es[a.id]
-        a.finish = ef[a.id]
+        # alap (As Late As Possible, 2026-07-07) displays the activity at its
+        # own Late Start/Late Finish instead of Early Start/Early Finish — no
+        # re-solve of the network needed: total float (LS-ES) is defined
+        # precisely as "how far this activity can slip without delaying
+        # anything downstream," so every successor's own ES/EF (already
+        # computed above, against this activity's ES/EF) remains valid
+        # exactly as-is once this activity moves anywhere inside that slack,
+        # including all the way to LS/LF. Skipped once progress exists (%
+        # Complete > 0) — a started activity's Start is a recorded fact, not
+        # a placement choice (same precedent the has_progress branch above
+        # already applies to every other constraint type).
+        has_progress = a.pct_complete is not None and a.pct_complete > 0
+        if a.constraint_type == "alap" and not has_progress:
+            a.start = ls[a.id]
+            a.finish = lf[a.id]
+        else:
+            a.start = es[a.id]
+            a.finish = ef[a.id]
         hours_per_day = lookup.hours_per_day(calendar)
         # Quantized for the same reason working_hours_between is (above) — a
         # plain division can produce a long repeating decimal that only ever
@@ -597,6 +977,17 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
         # here too since CPM is what just set (possibly changed) this activity's finish.
         a.variance_days = (a.finish - a.bl_finish).days if a.bl_finish is not None else None
 
+    # Master pass's own dirty set, captured *before* the sub-project passes
+    # below add their own writes — used only to decide which sub-project
+    # branches actually need recomputing (a branch untouched by this specific
+    # change can't have a different scoped float than it already has). The
+    # master pass itself is completely unchanged above this line.
+    master_dirty_ids = {a.id for a in all_activities if db.is_modified(a)}
+    subproject_dirty_ids = await _recompute_subproject_floats(
+        db, project_id, all_activities, relationships, lookup, anchor, master_dirty_ids,
+        force_all=force_all_subprojects,
+    )
+
     # Refresh only the rows this pass actually changed — captured before commit
     # clears SQLAlchemy's dirty-tracking. Same fix as app/services/activity.py:
     # _recompute_hierarchy — unconditionally refreshing *every* activity in the
@@ -607,7 +998,12 @@ async def recompute_schedule(db: AsyncSession, period_id: uuid.UUID) -> None:
     # shift anyone's computed dates, so this now refreshes close to nothing;
     # a duration/logic change that cascades still correctly refreshes everyone
     # it actually moved.
-    dirty_ids = {a.id for a in all_activities if db.is_modified(a)}
+    #
+    # dirty_ids is the union captured *before* _recompute_subproject_floats
+    # ran, not a fresh `is_modified()` sweep here — that function's own query
+    # autoflushes the master pass's pending changes, which would make a
+    # second `is_modified()` check here wrongly see them as already-clean.
+    dirty_ids = master_dirty_ids | subproject_dirty_ids
     await db.commit()
     for a in all_activities:
         if a.id in dirty_ids:

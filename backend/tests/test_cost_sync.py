@@ -3,11 +3,12 @@ from __future__ import annotations
 from httpx import AsyncClient
 
 from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
 
 
-async def _create_activity(client: AsyncClient, project: Project, period: Period, task_name: str, **overrides) -> dict:
-    payload = {"project_id": str(project.id), "period_id": str(period.id), "task_name": task_name}
+async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, task_name: str, **overrides) -> dict:
+    payload = {"project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": task_name}
     payload.update(overrides)
     resp = await client.post("/api/v1/activities/", json=payload)
     assert resp.status_code == 201, resp.text
@@ -29,8 +30,8 @@ async def _linked_element(client: AsyncClient, project: Project, period: Period)
     return linked[0] if linked else None
 
 
-async def test_first_assignment_creates_linked_cost_element(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=40)  # 5 days
+async def test_first_assignment_creates_linked_cost_element(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=40)  # 5 days
     resource = await _create_resource(client, project, rate="45")
 
     await client.post("/api/v1/resource-assignments/", json={
@@ -46,12 +47,12 @@ async def test_first_assignment_creates_linked_cost_element(client: AsyncClient,
 
 async def test_pct_complete_syncs_from_activity_to_linked_element(
     client: AsyncClient, project: Project, live_period: Period
-):
+, live_schedule_period: SchedulePeriod):
     """% Complete is set once, on the activity — a schedule-linked Cost Element
     must never carry its own separate, independently-editable progress figure,
     else Scheduling's and Cost Plan's EVM for the same line silently diverge
     (see app/services/cost_sync.py:sync_cost_element_pct_complete)."""
-    activity = await _create_activity(client, project, live_period, "Piling", pct_complete="30")
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", pct_complete="30")
     resource = await _create_resource(client, project, rate="45")
 
     # First assignment (element created fresh): should pick up the activity's
@@ -71,8 +72,8 @@ async def test_pct_complete_syncs_from_activity_to_linked_element(
 
 async def test_second_assignment_updates_budget_and_rate_lines(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=40)  # 5 days
+, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=40)  # 5 days
     labour = await _create_resource(client, project, rate="45")
     material = await _create_resource(client, project, resource_type="material", name="Piles", unit="nr", rate="800")
 
@@ -93,8 +94,8 @@ async def test_second_assignment_updates_budget_and_rate_lines(
 
 async def test_removing_last_assignment_deletes_linked_element(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity = await _create_activity(client, project, live_period, "Piling")
+, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling")
     resource = await _create_resource(client, project)
     create = await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"],
@@ -106,8 +107,8 @@ async def test_removing_last_assignment_deletes_linked_element(
     assert await _linked_element(client, project, live_period) is None
 
 
-async def test_editing_budget_directly_unlinks_element(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=40)
+async def test_editing_budget_directly_unlinks_element(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=40)
     resource = await _create_resource(client, project, rate="45")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
@@ -129,8 +130,8 @@ async def test_editing_budget_directly_unlinks_element(client: AsyncClient, proj
     assert resp.json()["source"] == "manual"
 
 
-async def test_metadata_only_edit_does_not_unlink(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Piling")
+async def test_metadata_only_edit_does_not_unlink(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling")
     resource = await _create_resource(client, project)
     await client.post("/api/v1/resource-assignments/", json={"activity_id": activity["id"], "resource_id": resource["id"]})
     element = await _linked_element(client, project, live_period)
@@ -141,8 +142,8 @@ async def test_metadata_only_edit_does_not_unlink(client: AsyncClient, project: 
     assert resp.json()["cost_owner"] == "QS Team"
 
 
-async def test_editing_rate_line_directly_unlinks_element(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=40)
+async def test_editing_rate_line_directly_unlinks_element(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=40)
     resource = await _create_resource(client, project, rate="45")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
@@ -160,8 +161,8 @@ async def test_editing_rate_line_directly_unlinks_element(client: AsyncClient, p
 
 async def test_deleting_activity_removes_linked_cost_element(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity = await _create_activity(client, project, live_period, "Piling")
+, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling")
     resource = await _create_resource(client, project)
     await client.post("/api/v1/resource-assignments/", json={"activity_id": activity["id"], "resource_id": resource["id"]})
     element = await _linked_element(client, project, live_period)
@@ -174,7 +175,7 @@ async def test_deleting_activity_removes_linked_cost_element(
     assert resp.status_code == 404
 
 
-async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, db, project: Project, live_period: Period):
+async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, db, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
     """PV is prorated against the activity's own live start/finish, not a
     captured baseline — available as soon as the activity is scheduled, per
     Maro's confirmed P6 domain correction (Session 16): "Set Baseline" drives
@@ -184,7 +185,7 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
 
     from app.models.activity import Activity
 
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=80)  # 10 days
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     resource = await _create_resource(client, project, rate="1000")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
@@ -219,8 +220,8 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
 
 async def test_deleting_activity_leaves_unlinked_element_in_place(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity = await _create_activity(client, project, live_period, "Piling")
+, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling")
     resource = await _create_resource(client, project)
     await client.post("/api/v1/resource-assignments/", json={"activity_id": activity["id"], "resource_id": resource["id"]})
     element = await _linked_element(client, project, live_period)

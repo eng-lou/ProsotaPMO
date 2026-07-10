@@ -18,10 +18,10 @@ router = APIRouter(prefix="/activity-relationships", tags=["activity-relationshi
 
 @router.get("/", response_model=list[ActivityRelationshipResponse])
 async def list_relationships(
-    period_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list:
-    return await svc.list_relationships(db, period_id)
+    return await svc.list_relationships(db, schedule_period_id)
 
 
 @router.post("/", response_model=ActivityRelationshipResponse, status_code=201)

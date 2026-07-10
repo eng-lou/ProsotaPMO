@@ -7,14 +7,14 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
 
 
-async def test_create_activity(client: AsyncClient, project: Project, live_period: Period):
+async def test_create_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Excavation works",
     })
     assert resp.status_code == 201
@@ -37,11 +37,11 @@ async def test_create_activity(client: AsyncClient, project: Project, live_perio
 
 
 async def test_create_activity_ignores_computed_fields(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Piling",
         "is_critical": False,
         "total_float_hours": 99,
@@ -60,40 +60,40 @@ async def test_create_activity_ignores_computed_fields(
     assert data["bl_finish"] is None
 
 
-async def test_milestone_forces_zero_duration(client: AsyncClient, project: Project, live_period: Period):
+async def test_milestone_forces_zero_duration(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Practical Completion",
-        "activity_type": "milestone",
+        "activity_type": "finish_milestone",
     })
     assert resp.status_code == 201
     assert float(resp.json()["duration_days"]) == 0.0
 
 
-async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: Project, live_period: Period):
+async def test_milestone_rejects_nonzero_duration(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Bad milestone",
-        "activity_type": "milestone",
+        "activity_type": "finish_milestone",
         "duration_hours": 5,
     })
     assert resp.status_code == 422
 
 
 async def test_variance_days_computed_from_finish_vs_baseline(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
     from datetime import date, datetime
 
     # A Monday anchor + a 5-day (Mon-Fri) duration keeps the CPM-computed finish
     # deterministic without needing to replicate working-day-skipping arithmetic here.
-    live_period.start_date = date(2025, 6, 2)
+    live_schedule_period.start_date = date(2025, 6, 2)
     await db.commit()
 
     create = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id),
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Piling", "duration_hours": 40,
     })
     assert create.status_code == 201
@@ -109,11 +109,11 @@ async def test_variance_days_computed_from_finish_vs_baseline(
     assert resp.json()["variance_days"] == 7
 
 
-async def test_list_activities_by_project(client: AsyncClient, project: Project, live_period: Period):
+async def test_list_activities_by_project(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     for name in ["Piling", "Groundworks"]:
         await client.post("/api/v1/activities/", json={
             "project_id": str(project.id),
-            "period_id": str(live_period.id),
+            "schedule_period_id": str(live_schedule_period.id),
             "task_name": name,
         })
 
@@ -123,11 +123,11 @@ async def test_list_activities_by_project(client: AsyncClient, project: Project,
 
 
 async def test_list_activities_excludes_other_projects(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period, org
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod, org
 ):
     await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Belongs to project A",
     })
 
@@ -142,33 +142,34 @@ async def test_list_activities_excludes_other_projects(
 
 
 async def test_list_activities_filter_by_period(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period, frozen_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, schedule_variant,
+    live_schedule_period: SchedulePeriod, frozen_schedule_period: SchedulePeriod,
 ):
     await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "In live period",
     })
     # Insert directly to frozen period (bypassing API freeze check)
     frozen_activity = Activity(
-        project_id=project.id, period_id=frozen_period.id, task_name="In frozen period", code="ACT-9001"
+        project_id=project.id, schedule_variant_id=schedule_variant.id, schedule_period_id=frozen_schedule_period.id, task_name="In frozen period", code="ACT-9001"
     )
     db.add(frozen_activity)
     await db.commit()
 
     resp = await client.get("/api/v1/activities/", params={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
     })
     assert resp.status_code == 200
     names = [a["task_name"] for a in resp.json()]
     assert names == ["In live period"]
 
 
-async def test_get_activity(client: AsyncClient, project: Project, live_period: Period):
+async def test_get_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Steel erection",
     })
     activity_id = create.json()["id"]
@@ -183,10 +184,10 @@ async def test_get_activity_not_found(client: AsyncClient):
     assert resp.status_code == 404
 
 
-async def test_update_activity(client: AsyncClient, project: Project, live_period: Period):
+async def test_update_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Original name",
         "pct_complete": "25.00",
     })
@@ -202,9 +203,9 @@ async def test_update_activity(client: AsyncClient, project: Project, live_perio
     assert float(data["pct_complete"]) == 75.0
 
 
-async def test_update_code_to_unique_value(client: AsyncClient, project: Project, live_period: Period):
+async def test_update_code_to_unique_value(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     create = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Piling",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Piling",
     })
     activity_id = create.json()["id"]
 
@@ -213,22 +214,22 @@ async def test_update_code_to_unique_value(client: AsyncClient, project: Project
     assert resp.json()["code"] == "PILE-01"
 
 
-async def test_update_code_rejects_duplicate(client: AsyncClient, project: Project, live_period: Period):
+async def test_update_code_rejects_duplicate(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     a = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Excavation",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Excavation",
     })
     b = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Piling",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Piling",
     })
     resp = await client.patch(f"/api/v1/activities/{b.json()['id']}", json={"code": a.json()["code"]})
     assert resp.status_code == 422
     assert "already in use" in resp.json()["detail"].lower()
 
 
-async def test_update_activity_partial(client: AsyncClient, project: Project, live_period: Period):
+async def test_update_activity_partial(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Original",
         "duration_hours": 80,
     })
@@ -242,10 +243,10 @@ async def test_update_activity_partial(client: AsyncClient, project: Project, li
     assert float(data["duration_days"]) == 15.0      # computed display (120h / 8h per day)
 
 
-async def test_delete_activity(client: AsyncClient, project: Project, live_period: Period):
+async def test_delete_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     create = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
         "task_name": "To be deleted",
     })
     activity_id = create.json()["id"]
@@ -258,10 +259,10 @@ async def test_delete_activity(client: AsyncClient, project: Project, live_perio
     assert resp.status_code == 404
 
 
-async def test_create_rejects_frozen_period(client: AsyncClient, project: Project, frozen_period: Period):
+async def test_create_rejects_frozen_period(client: AsyncClient, project: Project, frozen_schedule_period: SchedulePeriod):
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(frozen_period.id),
+        "schedule_period_id": str(frozen_schedule_period.id),
         "task_name": "Should be rejected",
     })
     assert resp.status_code == 422
@@ -269,10 +270,10 @@ async def test_create_rejects_frozen_period(client: AsyncClient, project: Projec
 
 
 async def test_update_rejects_frozen_period(
-    client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, schedule_variant, frozen_schedule_period: SchedulePeriod
 ):
     activity = Activity(
-        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9002"
+        project_id=project.id, schedule_variant_id=schedule_variant.id, schedule_period_id=frozen_schedule_period.id, task_name="Frozen activity", code="ACT-9002"
     )
     db.add(activity)
     await db.commit()
@@ -283,10 +284,10 @@ async def test_update_rejects_frozen_period(
 
 
 async def test_delete_rejects_frozen_period(
-    client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, schedule_variant, frozen_schedule_period: SchedulePeriod
 ):
     activity = Activity(
-        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9002"
+        project_id=project.id, schedule_variant_id=schedule_variant.id, schedule_period_id=frozen_schedule_period.id, task_name="Frozen activity", code="ACT-9002"
     )
     db.add(activity)
     await db.commit()
@@ -298,8 +299,8 @@ async def test_delete_rejects_frozen_period(
 
 # --- WBS hierarchy (Phase 2) -------------------------------------------------
 
-async def _create(client: AsyncClient, project: Project, period: Period, **overrides) -> dict:
-    payload = {"project_id": str(project.id), "period_id": str(period.id), "task_name": "Activity"}
+async def _create(client: AsyncClient, project: Project, period: SchedulePeriod, **overrides) -> dict:
+    payload = {"project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": "Activity"}
     payload.update(overrides)
     resp = await client.post("/api/v1/activities/", json=payload)
     assert resp.status_code == 201, resp.text
@@ -307,22 +308,22 @@ async def _create(client: AsyncClient, project: Project, period: Period, **overr
 
 
 async def test_wbs_path_assigned_from_outline_position(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    a = await _create(client, project, live_period, task_name="Phase 1")
-    b = await _create(client, project, live_period, task_name="Phase 2")
+    a = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    b = await _create(client, project, live_schedule_period, task_name="Phase 2")
     assert a["wbs_path"] == "1"
     assert b["wbs_path"] == "2"
 
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=a["id"])
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=a["id"])
     assert child["wbs_path"] == "1.1"
 
 
 # --- Move up/down (reorder among siblings, independent of hierarchy level) --
 
-async def test_move_down_swaps_with_next_sibling(client: AsyncClient, project: Project, live_period: Period):
-    a = await _create(client, project, live_period, task_name="Phase 1")
-    b = await _create(client, project, live_period, task_name="Phase 2")
+async def test_move_down_swaps_with_next_sibling(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    a = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    b = await _create(client, project, live_schedule_period, task_name="Phase 2")
 
     resp = await client.post(f"/api/v1/activities/{a['id']}/move", json={"direction": "down"})
     assert resp.status_code == 200
@@ -335,10 +336,10 @@ async def test_move_down_swaps_with_next_sibling(client: AsyncClient, project: P
     assert by_name["Phase 1"]["wbs_path"] == "2"
 
 
-async def test_move_up_swaps_with_previous_sibling(client: AsyncClient, project: Project, live_period: Period):
-    a = await _create(client, project, live_period, task_name="Phase 1")
-    await _create(client, project, live_period, task_name="Phase 2")
-    c = await _create(client, project, live_period, task_name="Phase 3")
+async def test_move_up_swaps_with_previous_sibling(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    a = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    await _create(client, project, live_schedule_period, task_name="Phase 2")
+    c = await _create(client, project, live_schedule_period, task_name="Phase 3")
 
     resp = await client.post(f"/api/v1/activities/{c['id']}/move", json={"direction": "up"})
     assert resp.status_code == 200
@@ -348,9 +349,9 @@ async def test_move_up_swaps_with_previous_sibling(client: AsyncClient, project:
     _ = a
 
 
-async def test_move_up_at_top_is_a_noop(client: AsyncClient, project: Project, live_period: Period):
-    a = await _create(client, project, live_period, task_name="Phase 1")
-    await _create(client, project, live_period, task_name="Phase 2")
+async def test_move_up_at_top_is_a_noop(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    a = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    await _create(client, project, live_schedule_period, task_name="Phase 2")
 
     resp = await client.post(f"/api/v1/activities/{a['id']}/move", json={"direction": "up"})
     assert resp.status_code == 200
@@ -359,9 +360,9 @@ async def test_move_up_at_top_is_a_noop(client: AsyncClient, project: Project, l
     assert [x["task_name"] for x in listing] == ["Phase 1", "Phase 2"]
 
 
-async def test_move_down_at_bottom_is_a_noop(client: AsyncClient, project: Project, live_period: Period):
-    await _create(client, project, live_period, task_name="Phase 1")
-    b = await _create(client, project, live_period, task_name="Phase 2")
+async def test_move_down_at_bottom_is_a_noop(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    await _create(client, project, live_schedule_period, task_name="Phase 1")
+    b = await _create(client, project, live_schedule_period, task_name="Phase 2")
 
     resp = await client.post(f"/api/v1/activities/{b['id']}/move", json={"direction": "down"})
     assert resp.status_code == 200
@@ -370,10 +371,10 @@ async def test_move_down_at_bottom_is_a_noop(client: AsyncClient, project: Proje
     assert [x["task_name"] for x in listing] == ["Phase 1", "Phase 2"]
 
 
-async def test_move_only_reorders_within_same_parent(client: AsyncClient, project: Project, live_period: Period):
-    parent1 = await _create(client, project, live_period, task_name="Phase 1")
-    parent2 = await _create(client, project, live_period, task_name="Phase 2")
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent1["id"])
+async def test_move_only_reorders_within_same_parent(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    parent1 = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    parent2 = await _create(client, project, live_schedule_period, task_name="Phase 2")
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent1["id"])
 
     # Only one child under Phase 1 — moving it down (no sibling to swap with under
     # the same parent) must not reach across into Phase 2's children.
@@ -388,10 +389,10 @@ async def test_move_only_reorders_within_same_parent(client: AsyncClient, projec
 
 
 async def test_move_rejects_frozen_period(
-    client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, schedule_variant, frozen_schedule_period: SchedulePeriod
 ):
     activity = Activity(
-        project_id=project.id, period_id=frozen_period.id, task_name="Frozen activity", code="ACT-9003"
+        project_id=project.id, schedule_variant_id=schedule_variant.id, schedule_period_id=frozen_schedule_period.id, task_name="Frozen activity", code="ACT-9003"
     )
     db.add(activity)
     await db.commit()
@@ -402,20 +403,20 @@ async def test_move_rejects_frozen_period(
 
 
 async def test_indent_promotes_parent_to_wbs_summary(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    parent = await _create(client, project, live_period, task_name="Phase 1")
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
     assert parent["activity_type"] == "task"
 
-    await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+    await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.get(f"/api/v1/activities/{parent['id']}")
     assert resp.json()["activity_type"] == "wbs_summary"
 
 
-async def test_outdent_demotes_back_to_task(client: AsyncClient, project: Project, live_period: Period):
-    parent = await _create(client, project, live_period, task_name="Phase 1")
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+async def test_outdent_demotes_back_to_task(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.patch(f"/api/v1/activities/{child['id']}", json={"parent_id": None})
     assert resp.status_code == 200
@@ -424,9 +425,9 @@ async def test_outdent_demotes_back_to_task(client: AsyncClient, project: Projec
     assert resp.json()["activity_type"] == "task"
 
 
-async def test_reparent_rejects_cycle(client: AsyncClient, project: Project, live_period: Period):
-    grandparent = await _create(client, project, live_period, task_name="Phase 1")
-    parent = await _create(client, project, live_period, task_name="Sub-phase", parent_id=grandparent["id"])
+async def test_reparent_rejects_cycle(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    grandparent = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    parent = await _create(client, project, live_schedule_period, task_name="Sub-phase", parent_id=grandparent["id"])
 
     # Attempt to make the grandparent a child of its own descendant.
     resp = await client.patch(f"/api/v1/activities/{grandparent['id']}", json={"parent_id": parent["id"]})
@@ -434,24 +435,24 @@ async def test_reparent_rejects_cycle(client: AsyncClient, project: Project, liv
     assert "cycle" in resp.json()["detail"].lower()
 
 
-async def test_reparent_to_self_rejected(client: AsyncClient, project: Project, live_period: Period):
-    a = await _create(client, project, live_period, task_name="Solo")
+async def test_reparent_to_self_rejected(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    a = await _create(client, project, live_schedule_period, task_name="Solo")
     resp = await client.patch(f"/api/v1/activities/{a['id']}", json={"parent_id": a["id"]})
     assert resp.status_code == 422
 
 
-async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Project, live_period: Period):
+async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     # Dates are CPM-computed (Phase 5) rather than typed in, so this asserts the
     # rollup formula against whatever the two children actually compute to, linked
     # FS so child2 genuinely starts after child1 (exercising min-start/max-finish
     # rather than two independent, potentially-identical-start activities).
-    parent = await _create(client, project, live_period, task_name="Phase 1")
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
     child1 = await _create(
-        client, project, live_period, task_name="Piling", parent_id=parent["id"],
+        client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"],
         duration_hours=80, pct_complete=100,
     )
     child2 = await _create(
-        client, project, live_period, task_name="Pile caps", parent_id=parent["id"],
+        client, project, live_schedule_period, task_name="Pile caps", parent_id=parent["id"],
         duration_hours=40, pct_complete=0,
     )
     await client.post("/api/v1/activity-relationships/", json={
@@ -469,11 +470,42 @@ async def test_wbs_summary_rollup_from_children(client: AsyncClient, project: Pr
     assert 66 < float(data["pct_complete"]) < 67
 
 
-async def test_delete_summary_cascades_to_children(
-    client: AsyncClient, project: Project, live_period: Period
+async def test_wbs_summary_duration_matches_working_days_not_calendar_days(
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
-    parent = await _create(client, project, live_period, task_name="Phase 1")
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+    """Regression (2026-07-06, per Maro): a WBS summary's own Duration must be
+    expressed in the same "working days" unit its children's own duration_days
+    already is (duration_hours / the resolved calendar's net hours/day) —
+    not a raw calendar-day span between the rolled-up Start/Finish, which
+    silently mixes two different units in the same column and can show a much
+    larger number the moment the span crosses a weekend (found in the real
+    app: a summary reading 239 against its one child's own 171, despite
+    matching Start/Finish)."""
+    from datetime import date
+    live_schedule_period.start_date = date(2025, 6, 2)  # a Monday
+    await db.commit()
+
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    child = await _create(
+        client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"], duration_hours=80,
+    )
+
+    child = (await client.get(f"/api/v1/activities/{child['id']}")).json()
+    resp = await client.get(f"/api/v1/activities/{parent['id']}")
+    data = resp.json()
+
+    assert data["start"] == child["start"]
+    assert data["finish"] == child["finish"]
+    # Same start/finish, same calendar -> same working-day duration as its
+    # one and only child, not some larger calendar-day span.
+    assert data["duration_days"] == child["duration_days"]
+
+
+async def test_delete_summary_cascades_to_children(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}")
     assert resp.status_code == 200
@@ -483,11 +515,11 @@ async def test_delete_summary_cascades_to_children(
 
 
 async def test_delete_without_cascade_promotes_children(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    grandparent = await _create(client, project, live_period, task_name="Project")
-    parent = await _create(client, project, live_period, task_name="Phase 1", parent_id=grandparent["id"])
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+    grandparent = await _create(client, project, live_schedule_period, task_name="Project")
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1", parent_id=grandparent["id"])
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
     assert resp.status_code == 200
@@ -503,10 +535,10 @@ async def test_delete_without_cascade_promotes_children(
 
 
 async def test_delete_without_cascade_promotes_children_to_root(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    parent = await _create(client, project, live_period, task_name="Phase 1")
-    child = await _create(client, project, live_period, task_name="Piling", parent_id=parent["id"])
+    parent = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=parent["id"])
 
     resp = await client.delete(f"/api/v1/activities/{parent['id']}", params={"cascade": "false"})
     assert resp.status_code == 200
@@ -519,11 +551,11 @@ async def test_delete_without_cascade_promotes_children_to_root(
 
 
 async def test_list_activities_returns_outline_order(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    phase1 = await _create(client, project, live_period, task_name="Phase 1")
-    await _create(client, project, live_period, task_name="Phase 2")
-    await _create(client, project, live_period, task_name="Piling", parent_id=phase1["id"])
+    phase1 = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    await _create(client, project, live_schedule_period, task_name="Phase 2")
+    await _create(client, project, live_schedule_period, task_name="Piling", parent_id=phase1["id"])
 
     resp = await client.get("/api/v1/activities/", params={"project_id": str(project.id)})
     names = [a["task_name"] for a in resp.json()]
@@ -533,8 +565,8 @@ async def test_list_activities_returns_outline_order(
 
 # --- Reassessment log (Phase 8, reusing the shared polymorphic pattern) ------
 
-async def test_log_reassessment_against_activity(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=40)
+async def test_log_reassessment_against_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    activity = await _create(client, project, live_schedule_period, task_name="Piling", duration_hours=40)
 
     resp = await client.post("/api/v1/reassessments/", json={
         "record_type": "activity", "record_id": activity["id"],
@@ -553,7 +585,7 @@ async def test_log_reassessment_against_activity(client: AsyncClient, project: P
 # --- Finish stays anchored to the full plan regardless of progress ----------
 
 async def test_partial_progress_does_not_shrink_finish(
-    client: AsyncClient, project: Project, live_period: Period
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
     """Per Maro's correction: Finish stays anchored to the full planned
     duration regardless of progress — logging progress isn't evidence of
@@ -562,7 +594,7 @@ async def test_partial_progress_does_not_shrink_finish(
     once actual_finish got set, the CPM engine treats it as a permanent hard
     override, which froze Finish and stopped responding to later duration or
     progress edits entirely — not what was wanted."""
-    activity = await _create(client, project, live_period, task_name="Piling", duration_hours=80)
+    activity = await _create(client, project, live_schedule_period, task_name="Piling", duration_hours=80)
     planned_finish = activity["finish"]
 
     resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={"pct_complete": "50"})

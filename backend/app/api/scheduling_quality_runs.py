@@ -18,10 +18,10 @@ router = APIRouter(prefix="/scheduling-quality-runs", tags=["scheduling-quality-
 
 @router.get("/", response_model=list[SchedulingQualityRunSummary])
 async def list_runs(
-    period_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list:
-    return await svc.list_runs(db, period_id)
+    return await svc.list_runs(db, schedule_period_id)
 
 
 @router.post("/", response_model=SchedulingQualityRunResponse, status_code=201)

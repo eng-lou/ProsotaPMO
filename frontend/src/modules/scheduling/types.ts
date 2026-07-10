@@ -1,6 +1,16 @@
-export type ActivityType = 'task' | 'milestone' | 'wbs_summary'
+// milestone split into start_milestone/finish_milestone 2026-07-07, per Maro
+// — a Start Milestone only has a meaningful Start (its own Finish stays
+// populated equal to Start internally, since CPM needs a concrete instant to
+// schedule from, but the UI shows/edits only Start); a Finish Milestone is
+// the mirror. Which relationship types can target one as a successor is
+// restricted accordingly (see app/services/activity_relationship.py).
+export type ActivityType = 'task' | 'start_milestone' | 'finish_milestone' | 'wbs_summary'
 
-export const ACTIVITY_TYPES: ActivityType[] = ['task', 'milestone', 'wbs_summary']
+export const ACTIVITY_TYPES: ActivityType[] = ['task', 'start_milestone', 'finish_milestone', 'wbs_summary']
+
+export function isMilestoneType(t: ActivityType): boolean {
+  return t === 'start_milestone' || t === 'finish_milestone'
+}
 
 // Fields that, if changed, prompt for a reassessment note — same user-prompted
 // pattern as Risk/ICD/Cost (frontend/src/components/ReassessmentLog.tsx). start/
@@ -10,11 +20,40 @@ export const REASSESSMENT_TRIGGER_FIELDS = [
   'duration_days', 'pct_complete', 'constraint_type', 'constraint_date',
 ] as const
 
+// Which schedule (docs/SCHEDULE_VARIANTS_PLAN.md, private docs repo) — a
+// project can have more than one (Working Schedule, Recovery Schedule, ...),
+// exactly one flagged is_master at a time. No variant picker yet (that's a
+// later frontend phase); frontend/src/lib/useScheduleVariant.ts always
+// resolves to the project's master.
+export interface ScheduleVariant {
+  id: string
+  project_id: string
+  name: string
+  variant_type: string | null
+  is_master: boolean
+  created_at: string
+  updated_at: string
+}
+
+// Scheduling's own period concept — a field-for-field mirror of the shared
+// Period (frontend/src/lib/types.ts) used by Risk/Cost/ICD, but scoped to a
+// ScheduleVariant instead of a project, since a schedule variant needs its
+// own live/frozen reporting history independent of Risk/Cost/ICD's.
+export interface SchedulePeriod {
+  id: string
+  schedule_variant_id: string
+  period_label: string
+  freeze_status: string
+  start_date: string | null
+  start_time: string | null
+}
+
 export interface Activity {
   id: string
   code: string
   project_id: string
-  period_id: string
+  schedule_variant_id: string
+  schedule_period_id: string
   task_name: string
   activity_type: ActivityType
   // Self-referencing outline hierarchy (MS Project style — no separate WBS-dictionary
@@ -36,6 +75,12 @@ export interface Activity {
   finish: string | null
   actual_start: string | null
   actual_finish: string | null
+  // P6's suspend/resume actuals (docs/SCHEDULING_GAPS_PLAN.md Phase 11) —
+  // distinct from actual_start/actual_finish above: an activity can start,
+  // get suspended mid-flight, then resume later. Plain user-entered facts,
+  // no CPM interaction for this first cut.
+  suspend_date: string | null
+  resume_date: string | null
   // Computed server-side (Session 16 fix, per Maro): duration_hours x (1 -
   // pct_complete/100) — never sent as input. See
   // app/services/activity.py:_apply_computed_fields.
@@ -51,6 +96,13 @@ export interface Activity {
   total_float_hours: number | null
   free_float_hours: number | null
   is_critical: boolean | null
+  // A second, scoped float calculated only within a PM-tagged sub-project's
+  // own branch (docs/SUBPROJECT_FLOAT_PLAN.md, private docs repo) — null for
+  // any activity outside every tagged sub-project. Never accepted as input,
+  // written only by the backend's own scoped CPM pass. When nested inside
+  // another tagged sub-project, reflects the *nearest* tagged ancestor.
+  sub_total_float_hours: number | null
+  sub_is_critical: boolean | null
   pct_complete: string | null
   commentary: string | null
   constraint_type: ConstraintType | null
@@ -109,18 +161,50 @@ export const CODE_HISTORY_REASON_LABELS: Record<ActivityCodeHistory['reason'], s
   manual_edit: 'Manually renamed',
 }
 
-export type ConstraintType = 'asap' | 'snet' | 'ms' | 'fnlt'
+// alap and mf added 2026-07-07, per Maro — mf is ms's exact/hard-pin
+// counterpart on the finish side ("Mandatory Start and Mandatory Finish," his
+// own pairing, not P6's separate "Start On"/"Finish On"). alap needs no date
+// at all — a relative positioning directive, not an exact one. snlt/fnet
+// added 2026-07-07 (Phase 8, docs/SCHEDULING_GAPS_PLAN.md) — the remaining
+// "on or before"/"on or after" pair completing the set (snet/fnlt already
+// existed): snlt caps Late Start (can create negative float, same mechanism
+// as fnlt capping Late Finish); fnet floors Early Finish (a real forward
+// push, same mechanism as snet flooring Early Start).
+export type ConstraintType = 'asap' | 'alap' | 'snet' | 'snlt' | 'ms' | 'mf' | 'fnlt' | 'fnet'
 
 export const CONSTRAINT_TYPES: { value: ConstraintType; label: string }[] = [
   { value: 'asap', label: 'As Soon As Possible' },
+  { value: 'alap', label: 'As Late As Possible' },
   { value: 'snet', label: 'Start On or After' },
+  { value: 'snlt', label: 'Start On or Before' },
   { value: 'ms', label: 'Mandatory Start' },
+  { value: 'mf', label: 'Mandatory Finish' },
   { value: 'fnlt', label: 'Finish On or Before' },
+  { value: 'fnet', label: 'Finish On or After' },
 ]
 
 export type RelationshipType = 'FS' | 'SS' | 'FF' | 'SF'
 
 export const RELATIONSHIP_TYPES: RelationshipType[] = ['FS', 'SS', 'FF', 'SF']
+
+// A milestone (either kind) has zero duration, so a relationship type's
+// *second* letter (which successor end is nominally driven) is
+// mathematically inert for it — only the *first* letter (which predecessor
+// end is referenced) actually changes the computed date. A Start Milestone
+// is only meaningfully driven by the predecessor's own Start (SS/SF); a
+// Finish Milestone only by the predecessor's Finish (FS/FF) — mirrors
+// app/services/activity_relationship.py's own validation on the backend, so
+// the UI can disable the invalid options up front instead of round-tripping
+// to find out (2026-07-07, per Maro).
+const VALID_RELATIONSHIP_TYPES_FOR_MILESTONE: Partial<Record<ActivityType, RelationshipType[]>> = {
+  start_milestone: ['SS', 'SF'],
+  finish_milestone: ['FS', 'FF'],
+}
+
+export function validRelationshipTypesFor(successorType: ActivityType | undefined): RelationshipType[] {
+  if (!successorType) return RELATIONSHIP_TYPES
+  return VALID_RELATIONSHIP_TYPES_FOR_MILESTONE[successorType] ?? RELATIONSHIP_TYPES
+}
 
 export interface ActivityRelationship {
   id: string
@@ -190,6 +274,24 @@ export interface CalendarException {
   updated_at: string
 }
 
+// A PM-tagged sub-project — see docs/SUBPROJECT_FLOAT_PLAN.md (private docs
+// repo). Tagging a nested WBS summary's root_wbs_id here gives its whole
+// branch its own scoped float calculation (sub_total_float_hours/
+// sub_is_critical on Activity), independent of the master critical path.
+export interface ScheduleSubproject {
+  id: string
+  project_id: string
+  name: string
+  // Deferred (§G/§H of the plan) — no owning-party picker in the widget yet,
+  // since `organisations` is this app's single-tenant-per-account model, not
+  // a per-project roster of external delivery parties/subcontractors. Always
+  // null until that's actually built.
+  owning_party_org_id: string | null
+  root_wbs_id: string
+  created_at: string
+  updated_at: string
+}
+
 export type QualityCheckStatus = 'pass' | 'warn' | 'fail' | 'na'
 
 export interface QualityCheck {
@@ -205,12 +307,17 @@ export interface QualityCheck {
 }
 
 export interface QualityReport {
-  period_id: string
+  schedule_period_id: string
   activity_count: number
   // null when activity_count is 0 — no activities means nothing to score,
   // not a 0%.
   logic_score: number | null
   checks: QualityCheck[]
+  // Sub-project scope (2026-07-06, per Maro) — null = whole schedule
+  // (default). Set = restricted to one tagged sub-project's own subtree,
+  // with checks 6/7/12 reading sub_total_float_hours/sub_is_critical.
+  scope_subproject_id: string | null
+  scope_name: string | null
 }
 
 // A project-editable DCMA threshold (checks 1-11 only — check 12 has no
@@ -229,17 +336,19 @@ export interface SchedulingQualityCriterion {
 // SchedulingQualityRunResponse returns it.
 export interface SchedulingQualityRunSummary {
   id: string
-  period_id: string
+  schedule_period_id: string
   name: string
   created_at: string
   logic_score: number | null
   failing_count: number
   warning_count: number
+  scope_subproject_id: string | null
+  scope_name: string | null
 }
 
 export interface SchedulingQualityRunResponse {
   id: string
-  period_id: string
+  schedule_period_id: string
   name: string
   created_at: string
   report: QualityReport
@@ -248,21 +357,34 @@ export interface SchedulingQualityRunResponse {
 // Resources module (2026-07-02) — a project-scoped resource pool + per-activity
 // assignments. No calendar of its own: a resource runs on whichever calendar(s)
 // its assigned activities already use (docs/RESOURCES_MODULE_PLAN.md).
-export type ResourceType = 'labour' | 'equipment' | 'material' | 'subcontractor'
+// cost/crew added 2026-07-08, per Maro (scoped down from a much larger external
+// schema proposal — see project memory) — cost covers non-work-driven costs
+// (fees, permits, prelims); crew occupies activity time the same way
+// labour/equipment does.
+export type ResourceType = 'labour' | 'equipment' | 'material' | 'subcontractor' | 'cost' | 'crew'
 
-export const RESOURCE_TYPES: ResourceType[] = ['labour', 'equipment', 'material', 'subcontractor']
+export const RESOURCE_TYPES: ResourceType[] = ['labour', 'equipment', 'material', 'subcontractor', 'cost', 'crew']
 export const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   labour: 'Labour',
   equipment: 'Equipment/Plant',
   material: 'Material',
   subcontractor: 'Subcontractor',
+  cost: 'Cost',
+  crew: 'Crew',
 }
+
+export type ResourceCostType = 'fixed' | 'recurring'
 
 export interface Resource {
   id: string
   project_id: string
   resource_type: ResourceType
   name: string
+  // Optional default/primary role (e.g. "Trades", "Foreman") — distinct from
+  // a specific assignment's own role override (ResourceAssignment.role
+  // below). Drives the Resource Usage Profile's own Role column
+  // (2026-07-07, per Maro).
+  role: string | null
   // Free-choice only for material (e.g. "m3", "nr"). For labour/equipment this is
   // always "day" (rate is a day rate); for subcontractor always "lump sum" —
   // frontend-enforced, not user-editable for those two types.
@@ -272,6 +394,18 @@ export interface Resource {
   // meaningful for labour/equipment; informational, not a cost multiplier (an
   // assignment's utilisation_pct already expresses "how much of the day").
   max_hours_per_day: string
+  // Optional own calendar (2026-07-07, per Maro) — null means no calendar of
+  // its own, the original default; storage/display only for now, the CPM
+  // engine still schedules purely off each activity's own calendar.
+  calendar_id: string | null
+  // Classification fields (2026-07-08, per Maro) — free text, shown/used per
+  // resource_type by the form only; none feed the budget formula.
+  discipline: string | null
+  company: string | null
+  skill_level: string | null
+  category: string | null
+  cost_type: ResourceCostType | null
+  members: string | null
   created_at: string
   updated_at: string
 }
@@ -307,7 +441,7 @@ export interface ResourceAssignment {
 // baseline last had that happen — at most one per period.
 export interface ScheduleBaseline {
   id: string
-  period_id: string
+  schedule_period_id: string
   name: string
   baseline_date: string
   is_active: boolean
@@ -331,7 +465,8 @@ export type FilterFieldKey =
   | 'is_critical' | 'is_archived'
   | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
   | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
-  | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'pct_complete' | 'duration_pct_complete'
+  | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'sub_total_float_hours' | 'sub_is_critical'
+  | 'pct_complete' | 'duration_pct_complete'
   | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
 export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
@@ -343,6 +478,19 @@ export interface FilterCondition {
 }
 
 export interface SchedulingFilter {
+  id: string
+  project_id: string
+  name: string
+  match_mode: 'all' | 'any'
+  conditions: FilterCondition[]
+  created_at: string
+  updated_at: string
+}
+
+// Same shape as SchedulingFilter — a highlight rule is built from the same
+// conditions, just tinting a matching row instead of narrowing the list
+// (2026-07-06, per Maro: "works exactly like the filter").
+export interface SchedulingHighlight {
   id: string
   project_id: string
   name: string
@@ -412,6 +560,8 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'variance_days', label: 'Variance (d)', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'total_float_hours', label: 'Total Float (h)', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'free_float_hours', label: 'Free Float (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'sub_total_float_hours', label: 'Sub Total Float (h)', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'sub_is_critical', label: 'Sub Critical', type: 'boolean', operators: BOOLEAN_OPERATORS },
   { key: 'pct_complete', label: '% Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'duration_pct_complete', label: 'Duration % Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'bac', label: 'BAC', type: 'number', operators: NUMBER_OPERATORS },
@@ -425,3 +575,73 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'eac', label: 'EAC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'etc', label: 'ETC', type: 'number', operators: NUMBER_OPERATORS },
 ]
+
+// User Defined Fields (2026-07-07, per Maro — P6's own UDF dialog:
+// docs/SCHEDULING_GAPS_PLAN.md Phase 9). "cost_element" matches the
+// backend's own model/table name, not "cost". Mirrors
+// app/schemas/user_defined_field.py exactly.
+export type UdfEntityType = 'activity' | 'resource' | 'cost_element'
+export type UdfDataType = 'text' | 'number' | 'integer' | 'cost' | 'start_date' | 'finish_date' | 'indicator'
+
+export const UDF_DATA_TYPES: { value: UdfDataType; label: string }[] = [
+  { value: 'text', label: 'Text' },
+  { value: 'number', label: 'Number' },
+  { value: 'integer', label: 'Integer' },
+  { value: 'cost', label: 'Cost' },
+  { value: 'start_date', label: 'Start Date' },
+  { value: 'finish_date', label: 'Finish Date' },
+  { value: 'indicator', label: 'Indicator' },
+]
+
+// Fixed 8-state icon/colour set for the "indicator" data type — exact set
+// and colours per Maro's own P6 reference screenshot, 2026-07-07.
+export type IndicatorValue =
+  'none' | 'in_progress' | 'delayed' | 'at_risk' | 'problem' | 'paused' | 'cancelled' | 'completed'
+
+export const INDICATOR_OPTIONS: { value: IndicatorValue; label: string; icon: string; color: string }[] = [
+  { value: 'none', label: 'None', icon: '–', color: '#9ca3af' },
+  { value: 'in_progress', label: 'In Progress', icon: '◐', color: '#22d3ee' },
+  { value: 'delayed', label: 'Delayed', icon: '◆', color: '#f97316' },
+  { value: 'at_risk', label: 'At risk', icon: '▲', color: '#eab308' },
+  { value: 'problem', label: 'Problem', icon: '●', color: '#ef4444' },
+  { value: 'paused', label: 'Paused', icon: '❚❚', color: '#3b82f6' },
+  { value: 'cancelled', label: 'Cancelled', icon: '✕', color: '#6b7280' },
+  { value: 'completed', label: 'Completed', icon: '✓', color: '#22c55e' },
+]
+
+export function indicatorOption(value: string | null | undefined) {
+  return INDICATOR_OPTIONS.find(o => o.value === value) ?? INDICATOR_OPTIONS[0]
+}
+
+export interface UserDefinedFieldDefinition {
+  id: string
+  project_id: string
+  entity_type: UdfEntityType
+  name: string
+  data_type: UdfDataType
+  created_at: string
+  updated_at: string
+}
+
+export interface UserDefinedFieldValue {
+  id: string
+  field_definition_id: string
+  record_id: string
+  value_text: string | null
+  value_number: string | null
+  value_date: string | null
+  value_indicator: string | null
+}
+
+// P6's per-activity ordered checklist (docs/SCHEDULING_GAPS_PLAN.md Phase
+// 10) — name + boolean complete + manual ordering only. Mirrors
+// app/schemas/activity_step.py exactly.
+export interface ActivityStep {
+  id: string
+  activity_id: string
+  name: string
+  is_complete: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}

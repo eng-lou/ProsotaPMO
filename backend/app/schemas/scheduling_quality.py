@@ -23,9 +23,19 @@ class QualityCheck(BaseModel):
 
 
 class QualityReport(BaseModel):
-    period_id: uuid.UUID
+    schedule_period_id: uuid.UUID
     activity_count: int
     # None when activity_count is 0 — "no activities" isn't a 0% logic score,
     # it's not a meaningful score at all (2026-07-03, per Maro).
     logic_score: float | None
     checks: list[QualityCheck]
+    # Scope (2026-07-06, per Maro — docs/SUBPROJECT_FLOAT_PLAN.md §F): null =
+    # whole schedule (default, unchanged behaviour). Set = restricted to one
+    # tagged sub-project's own subtree (including any further-nested
+    # sub-projects' activities), with checks 6/7/12 reading each activity's
+    # sub_total_float_hours/sub_is_critical instead of the master fields.
+    # scope_name is denormalized here purely for display (the sub-project
+    # could be renamed or untagged later) — same "snapshot what was actually
+    # analyzed" reasoning as everything else this report captures.
+    scope_subproject_id: uuid.UUID | None = None
+    scope_name: str | None = None

@@ -5,6 +5,7 @@ import uuid
 from httpx import AsyncClient
 
 from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
 
 
@@ -12,10 +13,10 @@ from app.models.project import Project
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _make_activity(client: AsyncClient, project: Project, period: Period, name: str) -> str:
+async def _make_activity(client: AsyncClient, project: Project, period: SchedulePeriod, name: str) -> str:
     resp = await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
-        "period_id": str(period.id),
+        "schedule_period_id": str(period.id),
         "task_name": name,
     })
     assert resp.status_code == 201
@@ -38,8 +39,8 @@ async def _make_risk(client: AsyncClient, project: Project, period: Period, titl
 
 async def test_activity_risk_link_queryable_from_both_sides(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity_id = await _make_activity(client, project, live_period, "Excavation works")
+, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Excavation works")
     risk_id = await _make_risk(client, project, live_period, "Ground stability risk")
 
     # Create the typed link: activity causes risk
@@ -92,8 +93,8 @@ async def test_activity_risk_link_queryable_from_both_sides(
 
 async def test_record_can_have_multiple_links(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity_id = await _make_activity(client, project, live_period, "Piling works")
+, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Piling works")
     risk_a = await _make_risk(client, project, live_period, "Vibration risk")
     risk_b = await _make_risk(client, project, live_period, "Noise risk")
 
@@ -122,8 +123,8 @@ async def test_record_can_have_multiple_links(
 
 async def test_link_created_as_target_appears_in_source_query(
     client: AsyncClient, project: Project, live_period: Period
-):
-    activity_id = await _make_activity(client, project, live_period, "Steel erection")
+, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Steel erection")
     risk_id = await _make_risk(client, project, live_period, "Working at height")
 
     # Link created with risk as source this time
@@ -148,8 +149,8 @@ async def test_link_created_as_target_appears_in_source_query(
 # Get by ID, delete
 # ---------------------------------------------------------------------------
 
-async def test_get_link_by_id(client: AsyncClient, project: Project, live_period: Period):
-    activity_id = await _make_activity(client, project, live_period, "Formwork")
+async def test_get_link_by_id(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Formwork")
     risk_id = await _make_risk(client, project, live_period, "Collapse risk")
 
     created = (await client.post("/api/v1/record-links/", json={
@@ -170,8 +171,8 @@ async def test_get_link_not_found(client: AsyncClient):
     assert resp.status_code == 404
 
 
-async def test_delete_link(client: AsyncClient, project: Project, live_period: Period):
-    activity_id = await _make_activity(client, project, live_period, "Cladding")
+async def test_delete_link(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Cladding")
     risk_id = await _make_risk(client, project, live_period, "Weather risk")
 
     created = (await client.post("/api/v1/record-links/", json={
@@ -199,8 +200,8 @@ async def test_delete_link(client: AsyncClient, project: Project, live_period: P
 # Validation
 # ---------------------------------------------------------------------------
 
-async def test_invalid_link_type_rejected(client: AsyncClient, project: Project, live_period: Period):
-    activity_id = await _make_activity(client, project, live_period, "Activity X")
+async def test_invalid_link_type_rejected(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Activity X")
     risk_id = await _make_risk(client, project, live_period, "Risk X")
 
     resp = await client.post("/api/v1/record-links/", json={
@@ -224,8 +225,8 @@ async def test_invalid_record_type_rejected(client: AsyncClient):
     assert resp.status_code == 422
 
 
-async def test_self_link_rejected(client: AsyncClient, project: Project, live_period: Period):
-    activity_id = await _make_activity(client, project, live_period, "Self-referencing activity")
+async def test_self_link_rejected(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+    activity_id = await _make_activity(client, project, live_schedule_period, "Self-referencing activity")
 
     resp = await client.post("/api/v1/record-links/", json={
         "source_type": "activity",

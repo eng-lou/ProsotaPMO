@@ -35,6 +35,47 @@ async def test_create_calendar(client: AsyncClient, project: Project):
     assert float(data["hours_per_day"]) == 10.0
 
 
+async def test_duplicate_calendar_clones_breaks_and_exceptions(client: AsyncClient, project: Project):
+    original = await client.post("/api/v1/calendars/", json={
+        "project_id": str(project.id), "name": "Weekend Working", "works_saturday": True,
+        "day_start_time": "07:00:00", "day_end_time": "18:00:00",
+    })
+    calendar_id = original.json()["id"]
+
+    await client.post("/api/v1/calendar-breaks/", json={
+        "calendar_id": calendar_id, "label": "Lunch", "start_time": "12:00:00", "end_time": "12:30:00",
+    })
+    await client.post("/api/v1/calendar-exceptions/", json={
+        "calendar_id": calendar_id, "label": "Christmas Shutdown",
+        "start_date": "2026-12-24", "end_date": "2027-01-02", "is_working": False,
+    })
+
+    resp = await client.post(f"/api/v1/calendars/{calendar_id}/duplicate")
+    assert resp.status_code == 201
+    clone = resp.json()
+    assert clone["id"] != calendar_id
+    assert clone["name"] == "Weekend Working (copy)"
+    assert clone["is_project_default"] is False
+    assert clone["works_saturday"] is True
+    assert clone["day_start_time"] == "07:00:00"
+    # 07:00-18:00 (11h) minus the cloned 30-min lunch break = 10.5h.
+    assert float(clone["hours_per_day"]) == 10.5
+
+    breaks = await client.get("/api/v1/calendar-breaks/", params={"calendar_id": clone["id"]})
+    assert len(breaks.json()) == 1
+    assert breaks.json()[0]["label"] == "Lunch"
+
+    exceptions = await client.get("/api/v1/calendar-exceptions/", params={"calendar_id": clone["id"]})
+    assert len(exceptions.json()) == 1
+    assert exceptions.json()[0]["label"] == "Christmas Shutdown"
+
+    # Editing the original afterwards must never touch the clone.
+    await client.patch(f"/api/v1/calendars/{calendar_id}", json={"name": "Renamed"})
+    clone_after = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    clone_row = next(c for c in clone_after.json() if c["id"] == clone["id"])
+    assert clone_row["name"] == "Weekend Working (copy)"
+
+
 async def test_create_calendar_rejects_end_before_start(client: AsyncClient, project: Project):
     resp = await client.post("/api/v1/calendars/", json={
         "project_id": str(project.id), "name": "Bad Calendar",
@@ -85,14 +126,14 @@ async def test_delete_non_default_calendar(client: AsyncClient, project: Project
     assert resp.status_code == 204
 
 
-async def test_activity_calendar_override(client: AsyncClient, project: Project, live_period):
+async def test_activity_calendar_override(client: AsyncClient, project: Project, live_schedule_period):
     create = await client.post("/api/v1/calendars/", json={
         "project_id": str(project.id), "name": "Saturday Working", "works_saturday": True,
     })
     calendar_id = create.json()["id"]
 
     resp = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Excavation",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Excavation",
         "calendar_id": calendar_id,
     })
     assert resp.status_code == 201
@@ -100,7 +141,7 @@ async def test_activity_calendar_override(client: AsyncClient, project: Project,
 
 
 async def test_activity_calendar_must_be_in_same_project(
-    client: AsyncClient, db, project: Project, live_period, org
+    client: AsyncClient, db, project: Project, live_schedule_period, org
 ):
     from app.models.project import Project as ProjectModel
 
@@ -115,14 +156,14 @@ async def test_activity_calendar_must_be_in_same_project(
     calendar_id = create.json()["id"]
 
     resp = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Excavation",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Excavation",
         "calendar_id": calendar_id,
     })
     assert resp.status_code == 404
 
 
 async def test_deleting_calendar_reverts_activities_to_default(
-    client: AsyncClient, db, project: Project, live_period
+    client: AsyncClient, db, project: Project, live_schedule_period
 ):
     from app.models.activity import Activity
 
@@ -132,7 +173,7 @@ async def test_deleting_calendar_reverts_activities_to_default(
     calendar_id = create.json()["id"]
 
     activity_resp = await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Excavation",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Excavation",
         "calendar_id": calendar_id,
     })
     activity_id = activity_resp.json()["id"]
@@ -164,7 +205,7 @@ async def test_create_calendar_exception(client: AsyncClient, project: Project):
 
 
 async def test_adding_exception_immediately_recomputes_affected_activities(
-    client: AsyncClient, db, project: Project, live_period
+    client: AsyncClient, db, project: Project, live_schedule_period
 ):
     """Regression test: adding a non-working exception used to save fine but
     never trigger a recompute — an activity's dates only shifted around it
@@ -172,14 +213,14 @@ async def test_adding_exception_immediately_recomputes_affected_activities(
     making the exception look like it silently did nothing (2026-07-04, per
     Maro: "add exception isn't working")."""
     from datetime import date
-    live_period.start_date = date(2025, 6, 2)  # a Monday
+    live_schedule_period.start_date = date(2025, 6, 2)  # a Monday
     await db.commit()
 
     calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
     calendar_id = calendars.json()[0]["id"]
 
     activity = (await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id),
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
         "task_name": "Excavation", "duration_hours": 8,
     })).json()
     assert activity["start"].startswith("2025-06-02")  # scheduled on the Monday, as expected
@@ -195,6 +236,49 @@ async def test_adding_exception_immediately_recomputes_affected_activities(
     refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
     assert not refreshed["start"].startswith("2025-06-02")
     assert refreshed["start"].startswith("2025-06-03")  # pushed to the Tuesday
+
+
+async def test_editing_an_existing_exception_recomputes_and_moves_the_date(
+    client: AsyncClient, db, project: Project, live_schedule_period
+):
+    """Same regression as above, but for the Edit path added 2026-07-06 —
+    moving an already-saved exception to a different date must genuinely
+    move the affected activity's computed dates, not just save silently."""
+    from datetime import date
+    live_schedule_period.start_date = date(2025, 6, 2)  # a Monday
+    await db.commit()
+
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    calendar_id = calendars.json()[0]["id"]
+
+    activity = (await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "task_name": "Excavation", "duration_hours": 8,
+    })).json()
+    assert activity["start"].startswith("2025-06-02")
+
+    create_resp = await client.post("/api/v1/calendar-exceptions/", json={
+        "calendar_id": calendar_id, "label": "Site Closure", "start_date": "2025-06-03", "end_date": "2025-06-03",
+        "is_working": False,
+    })
+    assert create_resp.status_code == 201
+    exception_id = create_resp.json()["id"]
+
+    # Closing Tuesday doesn't touch a Monday-only activity — confirms the
+    # baseline before the edit is the one actually being tested below.
+    unaffected = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert unaffected["start"].startswith("2025-06-02")
+
+    # Edit the exception onto the Monday instead — this is the activity's
+    # actual working day, so it must move off it purely from this edit.
+    patch_resp = await client.patch(f"/api/v1/calendar-exceptions/{exception_id}", json={
+        "start_date": "2025-06-02", "end_date": "2025-06-02",
+    })
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    refreshed = (await client.get(f"/api/v1/activities/{activity['id']}")).json()
+    assert not refreshed["start"].startswith("2025-06-02")
+    assert refreshed["start"].startswith("2025-06-03")
 
 
 async def test_exception_end_before_start_rejected(client: AsyncClient, project: Project):

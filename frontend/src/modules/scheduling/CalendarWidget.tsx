@@ -9,6 +9,54 @@ function apiErrorDetail(err: unknown): string | undefined {
   return axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
 }
 
+// Shared by the "+ Add Calendar" and "Edit" forms below — both edit the exact
+// same fields (working days + day envelope), so the inputs themselves only
+// need to exist once (2026-07-06, per Maro: calendars previously couldn't be
+// edited after creation at all).
+function CalendarEnvelopeFields({
+  values, onChange,
+}: {
+  values: NewCalendarValues
+  onChange: (updater: (v: NewCalendarValues) => NewCalendarValues) => void
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-3 flex-wrap">
+        {WEEKDAY_FIELDS.map(w => (
+          <label key={w.key} className="flex items-center gap-1 text-xs text-gray-600">
+            <input
+              type="checkbox"
+              checked={values[w.key]}
+              onChange={e => onChange(v => ({ ...v, [w.key]: e.target.checked }))}
+            />
+            {w.label}
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-1 text-xs text-gray-600">
+          Day starts
+          <input
+            type="time"
+            value={values.day_start_time}
+            onChange={e => onChange(v => ({ ...v, day_start_time: e.target.value }))}
+            className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+          />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-gray-600">
+          Day ends
+          <input
+            type="time"
+            value={values.day_end_time}
+            onChange={e => onChange(v => ({ ...v, day_end_time: e.target.value }))}
+            className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+          />
+        </label>
+      </div>
+    </>
+  )
+}
+
 interface Props {
   projectId: string
   calendars: Calendar[]
@@ -45,6 +93,9 @@ const BLANK_NEW_CALENDAR: NewCalendarValues = {
 export function CalendarWidget({ projectId, calendars, onChange, onClose }: Props) {
   const [creating, setCreating] = useState(false)
   const [newCalendar, setNewCalendar] = useState<NewCalendarValues>(BLANK_NEW_CALENDAR)
+  const [editingCalendarId, setEditingCalendarId] = useState<string | null>(null)
+  const [editCalendar, setEditCalendar] = useState<NewCalendarValues>(BLANK_NEW_CALENDAR)
+  const [editCalendarError, setEditCalendarError] = useState<string | null>(null)
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null)
   const [breaks, setBreaks] = useState<CalendarBreak[]>([])
   const [exceptions, setExceptions] = useState<CalendarException[]>([])
@@ -52,12 +103,14 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const [addingBreak, setAddingBreak] = useState(false)
+  const [editingBreakId, setEditingBreakId] = useState<string | null>(null)
   const [breakLabel, setBreakLabel] = useState('')
   const [breakStart, setBreakStart] = useState('12:00')
   const [breakEnd, setBreakEnd] = useState('13:00')
   const [breakError, setBreakError] = useState<string | null>(null)
 
   const [addingException, setAddingException] = useState(false)
+  const [editingExceptionId, setEditingExceptionId] = useState<string | null>(null)
   const [exceptionLabel, setExceptionLabel] = useState('')
   const [exceptionStart, setExceptionStart] = useState('')
   const [exceptionEnd, setExceptionEnd] = useState('')
@@ -114,6 +167,48 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     })
     setCreating(false)
     setNewCalendar(BLANK_NEW_CALENDAR)
+    await onChange()
+  }
+
+  const handleStartEditCalendar = (c: Calendar) => {
+    setCreating(false)
+    setEditingCalendarId(c.id)
+    setEditCalendarError(null)
+    setEditCalendar({
+      name: c.name,
+      day_start_time: c.day_start_time.slice(0, 5),
+      day_end_time: c.day_end_time.slice(0, 5),
+      works_monday: c.works_monday,
+      works_tuesday: c.works_tuesday,
+      works_wednesday: c.works_wednesday,
+      works_thursday: c.works_thursday,
+      works_friday: c.works_friday,
+      works_saturday: c.works_saturday,
+      works_sunday: c.works_sunday,
+    })
+  }
+
+  const handleSaveEditCalendar = async () => {
+    if (!editingCalendarId || !editCalendar.name.trim()) return
+    setEditCalendarError(null)
+    try {
+      await api.patch(`/api/v1/calendars/${editingCalendarId}`, {
+        name: editCalendar.name,
+        day_start_time: editCalendar.day_start_time,
+        day_end_time: editCalendar.day_end_time,
+        works_monday: editCalendar.works_monday,
+        works_tuesday: editCalendar.works_tuesday,
+        works_wednesday: editCalendar.works_wednesday,
+        works_thursday: editCalendar.works_thursday,
+        works_friday: editCalendar.works_friday,
+        works_saturday: editCalendar.works_saturday,
+        works_sunday: editCalendar.works_sunday,
+      })
+    } catch (err) {
+      setEditCalendarError(apiErrorDetail(err) ?? 'Could not save that calendar — check your connection and try again.')
+      return
+    }
+    setEditingCalendarId(null)
     await onChange()
   }
 
@@ -193,20 +288,46 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
     await onChange()
   }
 
-  const handleAddBreak = async () => {
+  // Clones the calendar's own day envelope/working-day pattern plus its
+  // breaks and exceptions into a brand new, independent calendar — never the
+  // project default (2026-07-07, per Maro: "calendar inheritance exists...
+  // include ability to duplicate calendar" — confirmed this satisfies that,
+  // rather than a true parent-child calendar relationship).
+  const handleDuplicateCalendar = async (calendar: Calendar) => {
+    await api.post(`/api/v1/calendars/${calendar.id}/duplicate`)
+    await onChange()
+  }
+
+  const handleStartEditBreak = (b: CalendarBreak) => {
+    setAddingBreak(true)
+    setEditingBreakId(b.id)
+    setBreakError(null)
+    setBreakLabel(b.label)
+    setBreakStart(b.start_time.slice(0, 5))
+    setBreakEnd(b.end_time.slice(0, 5))
+  }
+
+  const handleSaveBreak = async () => {
     if (!selectedCalendarId || !breakLabel.trim() || !breakStart || !breakEnd) return
     setBreakError(null)
     try {
-      await api.post('/api/v1/calendar-breaks/', {
-        calendar_id: selectedCalendarId, label: breakLabel, start_time: breakStart, end_time: breakEnd,
-      })
+      if (editingBreakId) {
+        await api.patch(`/api/v1/calendar-breaks/${editingBreakId}`, {
+          label: breakLabel, start_time: breakStart, end_time: breakEnd,
+        })
+      } else {
+        await api.post('/api/v1/calendar-breaks/', {
+          calendar_id: selectedCalendarId, label: breakLabel, start_time: breakStart, end_time: breakEnd,
+        })
+      }
     } catch (err) {
       // Previously swallowed silently — a validation error (e.g. end before
       // start) looked exactly like the button doing nothing at all.
-      setBreakError(apiErrorDetail(err) ?? 'Could not add that break — check your connection and try again.')
+      setBreakError(apiErrorDetail(err) ?? 'Could not save that break — check your connection and try again.')
       return
     }
     setAddingBreak(false)
+    setEditingBreakId(null)
     setBreakLabel('')
     setBreakStart('12:00')
     setBreakEnd('13:00')
@@ -216,30 +337,49 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
 
   const handleDeleteBreak = async (id: string) => {
     await api.delete(`/api/v1/calendar-breaks/${id}`)
+    if (editingBreakId === id) { setAddingBreak(false); setEditingBreakId(null) }
     await refreshBreaks()
     await onChange()
   }
 
-  const handleAddException = async () => {
+  const handleStartEditException = (ex: CalendarException) => {
+    setAddingException(true)
+    setEditingExceptionId(ex.id)
+    setExceptionError(null)
+    setExceptionLabel(ex.label)
+    setExceptionStart(ex.start_date)
+    setExceptionEnd(ex.end_date)
+    setExceptionIsWorking(ex.is_working)
+    setExceptionPartialDay(ex.start_time !== null && ex.end_time !== null)
+    setExceptionStartTime(ex.start_time?.slice(0, 5) ?? '08:00')
+    setExceptionEndTime(ex.end_time?.slice(0, 5) ?? '09:00')
+  }
+
+  const handleSaveException = async () => {
     if (!selectedCalendarId || !exceptionLabel.trim() || !exceptionStart || !exceptionEnd) return
     setExceptionError(null)
+    const payload = {
+      label: exceptionLabel,
+      start_date: exceptionStart,
+      end_date: exceptionEnd,
+      is_working: exceptionIsWorking,
+      start_time: exceptionPartialDay ? exceptionStartTime : null,
+      end_time: exceptionPartialDay ? exceptionEndTime : null,
+    }
     try {
-      await api.post('/api/v1/calendar-exceptions/', {
-        calendar_id: selectedCalendarId,
-        label: exceptionLabel,
-        start_date: exceptionStart,
-        end_date: exceptionEnd,
-        is_working: exceptionIsWorking,
-        start_time: exceptionPartialDay ? exceptionStartTime : null,
-        end_time: exceptionPartialDay ? exceptionEndTime : null,
-      })
+      if (editingExceptionId) {
+        await api.patch(`/api/v1/calendar-exceptions/${editingExceptionId}`, payload)
+      } else {
+        await api.post('/api/v1/calendar-exceptions/', { calendar_id: selectedCalendarId, ...payload })
+      }
     } catch (err) {
       // Previously swallowed silently — a validation error (e.g. end date
       // before start) looked exactly like the button doing nothing at all.
-      setExceptionError(apiErrorDetail(err) ?? 'Could not add that exception — check your connection and try again.')
+      setExceptionError(apiErrorDetail(err) ?? 'Could not save that exception — check your connection and try again.')
       return
     }
     setAddingException(false)
+    setEditingExceptionId(null)
     setExceptionLabel('')
     setExceptionStart('')
     setExceptionEnd('')
@@ -254,6 +394,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
 
   const handleDeleteException = async (id: string) => {
     await api.delete(`/api/v1/calendar-exceptions/${id}`)
+    if (editingExceptionId === id) { setAddingException(false); setEditingExceptionId(null) }
     await refreshExceptions()
   }
 
@@ -305,8 +446,18 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                         Set default
                       </button>
                     )}
+                    <button onClick={e => { e.stopPropagation(); handleStartEditCalendar(c) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                      Edit
+                    </button>
                     <button onClick={e => { e.stopPropagation(); handleExportCalendar(c) }} className="text-blue-600 hover:text-blue-700 mr-2">
                       Export
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleDuplicateCalendar(c) }}
+                      title="Clone this calendar's pattern, breaks, and exceptions into a new, independent calendar"
+                      className="text-blue-600 hover:text-blue-700 mr-2"
+                    >
+                      Duplicate
                     </button>
                     {!c.is_project_default && (
                       <button onClick={e => { e.stopPropagation(); handleDeleteCalendar(c) }} className="text-gray-400 hover:text-red-600">
@@ -319,7 +470,22 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
             </tbody>
           </table>
 
-          {creating ? (
+          {editingCalendarId ? (
+            <div className="border border-blue-200 rounded p-3 space-y-2 bg-blue-50/30">
+              <input
+                value={editCalendar.name}
+                onChange={e => setEditCalendar(v => ({ ...v, name: e.target.value }))}
+                placeholder="Calendar name"
+                className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+              />
+              <CalendarEnvelopeFields values={editCalendar} onChange={setEditCalendar} />
+              {editCalendarError && <p className="text-xs text-red-600">{editCalendarError}</p>}
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setEditingCalendarId(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                <button onClick={handleSaveEditCalendar} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Save Changes</button>
+              </div>
+            </div>
+          ) : creating ? (
             <div className="border border-gray-200 rounded p-3 space-y-2">
               <input
                 value={newCalendar.name}
@@ -327,38 +493,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                 placeholder="Calendar name"
                 className="w-full text-xs border border-gray-300 rounded px-2 py-1"
               />
-              <div className="flex items-center gap-3 flex-wrap">
-                {WEEKDAY_FIELDS.map(w => (
-                  <label key={w.key} className="flex items-center gap-1 text-xs text-gray-600">
-                    <input
-                      type="checkbox"
-                      checked={newCalendar[w.key]}
-                      onChange={e => setNewCalendar(v => ({ ...v, [w.key]: e.target.checked }))}
-                    />
-                    {w.label}
-                  </label>
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="flex items-center gap-1 text-xs text-gray-600">
-                  Day starts
-                  <input
-                    type="time"
-                    value={newCalendar.day_start_time}
-                    onChange={e => setNewCalendar(v => ({ ...v, day_start_time: e.target.value }))}
-                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
-                  />
-                </label>
-                <label className="flex items-center gap-1 text-xs text-gray-600">
-                  Day ends
-                  <input
-                    type="time"
-                    value={newCalendar.day_end_time}
-                    onChange={e => setNewCalendar(v => ({ ...v, day_end_time: e.target.value }))}
-                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
-                  />
-                </label>
-              </div>
+              <CalendarEnvelopeFields values={newCalendar} onChange={setNewCalendar} />
               <div className="text-[10px] text-gray-400">
                 Net working hours/day is derived from this envelope minus any breaks you add after creating the
                 calendar — not typed in directly.
@@ -409,7 +544,8 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                         <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
                           {b.start_time.slice(0, 5)}–{b.end_time.slice(0, 5)}
                         </td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">
+                        <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
+                          <button onClick={() => handleStartEditBreak(b)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
                           <button onClick={() => handleDeleteBreak(b.id)} className="text-gray-400 hover:text-red-600">✕</button>
                         </td>
                       </tr>
@@ -421,7 +557,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                 </table>
 
                 {addingBreak ? (
-                  <div className="border border-gray-200 rounded p-3 space-y-2">
+                  <div className={`border rounded p-3 space-y-2 ${editingBreakId ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200'}`}>
                     <input
                       value={breakLabel}
                       onChange={e => setBreakLabel(e.target.value)}
@@ -435,14 +571,14 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                     </div>
                     {breakError && <p className="text-xs text-red-600">{breakError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => { setAddingBreak(false); setBreakError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={() => { setAddingBreak(false); setEditingBreakId(null); setBreakError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
                       <button
-                        onClick={handleAddBreak}
+                        onClick={handleSaveBreak}
                         disabled={!breakLabel.trim() || !breakStart || !breakEnd}
                         title={!breakLabel.trim() ? 'Enter a label first' : undefined}
                         className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
-                        Add Break
+                        {editingBreakId ? 'Save Break' : 'Add Break'}
                       </button>
                     </div>
                   </div>
@@ -483,7 +619,8 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                             {ex.is_working ? 'Working' : 'Non-Working'}
                           </span>
                         </td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">
+                        <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
+                          <button onClick={() => handleStartEditException(ex)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
                           <button onClick={() => handleDeleteException(ex.id)} className="text-gray-400 hover:text-red-600">✕</button>
                         </td>
                       </tr>
@@ -495,7 +632,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                 </table>
 
                 {addingException ? (
-                  <div className="border border-gray-200 rounded p-3 space-y-2">
+                  <div className={`border rounded p-3 space-y-2 ${editingExceptionId ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200'}`}>
                     <input
                       value={exceptionLabel}
                       onChange={e => setExceptionLabel(e.target.value)}
@@ -524,14 +661,14 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
                     )}
                     {exceptionError && <p className="text-xs text-red-600">{exceptionError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => { setAddingException(false); setExceptionError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={() => { setAddingException(false); setEditingExceptionId(null); setExceptionError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
                       <button
-                        onClick={handleAddException}
+                        onClick={handleSaveException}
                         disabled={!exceptionLabel.trim() || !exceptionStart || !exceptionEnd}
                         title={!exceptionLabel.trim() ? 'Enter a label first' : (!exceptionStart || !exceptionEnd) ? 'Pick a start and end date first' : undefined}
                         className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
-                        Add Exception
+                        {editingExceptionId ? 'Save Exception' : 'Add Exception'}
                       </button>
                     </div>
                   </div>

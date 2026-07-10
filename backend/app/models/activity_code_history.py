@@ -31,5 +31,7 @@ class ActivityCodeHistory(Base, TimestampMixin):
     old_code: Mapped[str | None] = mapped_column(String(20))
     new_code: Mapped[str] = mapped_column(String(20), nullable=False)
     # promoted_to_wbs | demoted_to_task | wbs_reparented (P<->W, top-level status
-    # changed but still a WBS summary either way) | manual_edit
+    # changed but still a WBS summary either way) | manual_edit | tagged_subproject
+    # (W -> SP) | untagged_subproject (SP -> SP, no code change — logged purely as
+    # an audit trail entry, see app/services/schedule_subproject.py, 2026-07-06)
     reason: Mapped[str] = mapped_column(String(30), nullable=False)

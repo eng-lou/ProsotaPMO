@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { DEFAULT_GANTT_STYLE, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
+import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttFontFamily, type GanttStyle } from '@/lib/ganttLayout'
 
 // Explains the Gantt chart's symbols (colour, shape) on the printed page —
 // swatches mirror GanttChart.tsx's actual rendering (including whichever
@@ -9,6 +9,15 @@ import { DEFAULT_GANTT_STYLE, wbsLevelColor, withAlpha, type GanttStyle } from '
 // ganttLegend prop.
 function buildItems(style: GanttStyle): { swatch: ReactNode; label: string }[] {
   return [
+    ...(style.show_sub_critical ? [{
+      swatch: (
+        <div
+          className="w-6 h-3 rounded-sm border-2 overflow-hidden"
+          style={{ borderColor: style.non_critical_color, backgroundColor: withAlpha(style.non_critical_color, 0.25), boxShadow: `0 0 0 2px ${style.sub_critical_color}` }}
+        />
+      ),
+      label: 'Critical within its own sub-project',
+    }] : []),
     {
       swatch: (
         <div className="w-6 h-3 rounded-sm border-2 overflow-hidden" style={{ borderColor: style.critical_color, backgroundColor: withAlpha(style.critical_color, 0.25) }}>
@@ -66,11 +75,16 @@ function buildItems(style: GanttStyle): { swatch: ReactNode; label: string }[] {
   ]
 }
 
-export function GanttLegend({ style = DEFAULT_GANTT_STYLE }: { style?: GanttStyle }) {
+// fontSize defaults to the pre-existing hardcoded 9px (`text-[9px]`) so a
+// project that's never customized it renders unchanged — 2026-07-07, per
+// Maro: "that gantt legend (add a size for this one too)" — see
+// ProjectLetterhead.gantt_legend_font_size (the only print-only font size
+// this component had no control for until now).
+export function GanttLegend({ style = DEFAULT_GANTT_STYLE, fontSize = 9, fontFamily = 'sans' }: { style?: GanttStyle; fontSize?: number; fontFamily?: GanttFontFamily }) {
   const items = buildItems(style)
   return (
-    <div className="flex items-center gap-4 flex-wrap text-[9px] text-gray-500">
-      <span className="font-semibold text-gray-600 uppercase tracking-wide text-[9px]">Legend</span>
+    <div className="flex items-center gap-4 flex-wrap text-gray-500" style={{ fontSize, fontFamily: FONT_FAMILY_CSS[fontFamily] }}>
+      <span className="font-semibold text-gray-600 uppercase tracking-wide" style={{ fontSize }}>Legend</span>
       {items.map(item => (
         <span key={item.label} className="inline-flex items-center gap-1.5">
           {item.swatch}

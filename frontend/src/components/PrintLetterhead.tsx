@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { DEFAULT_GANTT_STYLE, type GanttStyle } from '@/lib/ganttLayout'
+import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, type GanttStyle } from '@/lib/ganttLayout'
 import type { LetterheadTokens, LetterheadZone, ProjectLetterhead } from '@/lib/letterhead'
 import { applyLetterheadTokens } from '@/lib/letterhead'
 import { GanttLegend } from './GanttLegend'
@@ -9,6 +9,7 @@ function zoneStyle(zone: LetterheadZone): CSSProperties {
     fontWeight: zone.bold ? 700 : 400,
     fontStyle: zone.italic ? 'italic' : 'normal',
     fontSize: zone.font_size,
+    fontFamily: FONT_FAMILY_CSS[zone.font_family],
     textAlign: zone.align,
     whiteSpace: 'pre-line',
   }
@@ -61,18 +62,27 @@ export function PrintLetterheadHeader({ letterhead, tokens }: { letterhead: Proj
 // preset switched on.
 // `preview` drops the print-only/fixed positioning so LetterheadEditorWidget
 // can show the same markup inline, on-screen, while editing.
+// `noHorizontalPadding` drops the body's own left/right inset — used only by
+// SchedulingPrintView.tsx's <tfoot> (2026-07-06, per Maro), whose spanning
+// <td> already sits inside the table's own edges (themselves already inset
+// by .print-only's page padding); the usual px-8 stacked on top of that
+// would indent the footer ~28px further right than the table's own columns
+// above it, rather than lining up with them the way position:fixed's footer
+// happened to (fixed positioning ignores ancestor padding entirely, so its
+// own px-8 was the *only* inset applied — this tfoot has no such shortcut).
 export function PrintLetterheadFooter({
-  letterhead, tokens, ganttLegend = false, ganttStyle = DEFAULT_GANTT_STYLE, preview = false,
+  letterhead, tokens, ganttLegend = false, ganttStyle = DEFAULT_GANTT_STYLE, preview = false, noHorizontalPadding = false,
 }: {
   letterhead: ProjectLetterhead; tokens: LetterheadTokens; ganttLegend?: boolean; ganttStyle?: GanttStyle; preview?: boolean
+  noHorizontalPadding?: boolean
 }) {
   const showLegend = ganttLegend && letterhead.show_gantt_legend
   const hasContent = [letterhead.footer_left, letterhead.footer_center, letterhead.footer_right].some(z => z.text.trim() !== '')
   if (!hasContent && !showLegend && !preview) return null
 
   const body = (
-    <div className="border-t border-gray-300 px-8 pt-2 pb-3">
-      {showLegend && <div className="mb-1.5"><GanttLegend style={ganttStyle} /></div>}
+    <div className={`border-t border-gray-300 pt-2 pb-3 ${noHorizontalPadding ? '' : 'px-8'}`}>
+      {showLegend && <div className="mb-1.5"><GanttLegend style={ganttStyle} fontSize={letterhead.gantt_legend_font_size} fontFamily={letterhead.gantt_legend_font_family} /></div>}
       <div className="grid grid-cols-3 gap-3 items-center">
         <div className="text-left"><Zone zone={letterhead.footer_left} tokens={tokens} /></div>
         <div className="text-center"><Zone zone={letterhead.footer_center} tokens={tokens} /></div>

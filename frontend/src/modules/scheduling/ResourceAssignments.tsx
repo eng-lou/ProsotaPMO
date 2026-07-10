@@ -22,6 +22,36 @@ function isTimeBased(type: ResourceType): boolean {
   return type === 'labour' || type === 'equipment'
 }
 
+function singleTimeBasedAssignment(assignments: ResourceAssignment[]): ResourceAssignment | null {
+  const timeBased = assignments.filter(a => isTimeBased(a.resource_type))
+  return timeBased.length === 1 ? timeBased[0] : null
+}
+
+// Converts the stored £ actual (Activity.ac) into whichever unit the toggle
+// is currently showing, for display — Cost is a pass-through; Hours/Days
+// derive from the one Labour/Equipment assignment's own rate (a day rate)
+// and max_hours_per_day (see actualsToCost for the inverse).
+function actualsFromCost(ac: string | null, unit: 'cost' | 'hours' | 'days', assignments: ResourceAssignment[]): string {
+  if (ac === null || ac.trim() === '') return ''
+  if (unit === 'cost') return ac
+  const assignment = singleTimeBasedAssignment(assignments)
+  const rate = assignment ? Number(assignment.rate) : 0
+  if (!assignment || rate <= 0) return ac
+  const days = Number(ac) / rate
+  const value = unit === 'days' ? days : days * Number(assignment.max_hours_per_day)
+  return value.toFixed(2)
+}
+
+// The inverse — whatever's typed in the current unit, converted to the £
+// total that's actually PATCHed/stored (Activity.ac never changes shape).
+function actualsToCost(value: string, unit: 'cost' | 'hours' | 'days', assignments: ResourceAssignment[]): string {
+  if (unit === 'cost') return value
+  const assignment = singleTimeBasedAssignment(assignments)
+  if (!assignment) return value
+  const days = unit === 'days' ? Number(value) : Number(value) / Number(assignment.max_hours_per_day)
+  return (days * Number(assignment.rate)).toFixed(2)
+}
+
 export function ResourceAssignments({ activity, resources, onChange }: Props) {
   const [assignments, setAssignments] = useState<ResourceAssignment[]>([])
   const [loading, setLoading] = useState(true)
@@ -34,15 +64,23 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
   const [editValues, setEditValues] = useState<EditValues>({ role: '', quantity: '', utilisationPct: '100' })
   const [actualsInput, setActualsInput] = useState(activity.ac ?? '')
   const [savingActuals, setSavingActuals] = useState(false)
+  // Cost/Hours/Days entry (2026-07-07, per Maro) — Actual Cost is still the
+  // only thing actually stored (Activity.ac, a flat £ total, unchanged);
+  // Hours/Days just convert through the activity's one Labour/Equipment
+  // resource assignment's own rate (a day rate) and max_hours_per_day, same
+  // formula app/services/resource_costing.py uses for budget. Only offered
+  // when there's exactly one such assignment — with two or more, whose
+  // rate/day-length to convert against is ambiguous, so it falls back to
+  // Cost-only entry, unchanged from before this existed.
+  const [actualsUnit, setActualsUnit] = useState<'cost' | 'hours' | 'days'>('cost')
 
-  useEffect(() => { setActualsInput(activity.ac ?? '') }, [activity.ac])
+  useEffect(() => { setActualsInput(actualsFromCost(activity.ac, actualsUnit, assignments)) }, [activity.ac, actualsUnit, assignments])
 
   const handleSaveActuals = async () => {
     setSavingActuals(true)
     try {
-      await api.patch(`/api/v1/activities/${activity.id}/actuals`, {
-        actuals: actualsInput.trim() === '' ? null : actualsInput,
-      })
+      const actuals = actualsInput.trim() === '' ? null : actualsToCost(actualsInput, actualsUnit, assignments)
+      await api.patch(`/api/v1/activities/${activity.id}/actuals`, { actuals })
       await onChange()
     } finally {
       setSavingActuals(false)
@@ -114,6 +152,12 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
   if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading resources…</p>
 
   const totalBudget = assignments.reduce((sum, a) => sum + Number(a.budget), 0)
+  // A WBS/Project summary row isn't real work — the backend rejects assigning
+  // a resource to one outright (2026-07-06, per Maro), so only the "add" path
+  // is blocked here. Any assignments left over from before this row gained
+  // children (and got promoted to a summary) still display and can still be
+  // edited/removed, same as anywhere else — nothing retroactively hidden.
+  const isParent = activity.activity_type === 'wbs_summary'
 
   return (
     <div className="px-4 py-4 bg-gray-50 border-t border-gray-100 text-xs">
@@ -200,12 +244,28 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
             </tr>
             <tr className="bg-white">
               <td className="py-1 px-1 text-gray-500" colSpan={3}>
-                Actual Cost
+                Actual {actualsUnit === 'cost' ? 'Cost' : actualsUnit === 'hours' ? 'Hours' : 'Days'}
                 <span className="text-gray-400"> — synced to the linked Cost Plan line</span>
               </td>
               <td className="py-1 px-1 text-right" colSpan={2}>
-                <span className="inline-flex items-center gap-1 justify-end w-full">
-                  £<input
+                <span className="inline-flex items-center gap-1.5 justify-end w-full">
+                  {singleTimeBasedAssignment(assignments) && (
+                    <span className="inline-flex items-center border border-gray-300 rounded overflow-hidden">
+                      {(['cost', 'hours', 'days'] as const).map(u => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setActualsUnit(u)}
+                          title={u === 'cost' ? 'Enter the actual cost directly' : `Enter actual ${u} worked — converted to cost via this activity's one time-based resource's rate`}
+                          className={`px-1.5 py-0.5 text-[10px] ${actualsUnit === u ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+                        >
+                          {u === 'cost' ? '£' : u === 'hours' ? 'h' : 'd'}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                  {actualsUnit === 'cost' && '£'}
+                  <input
                     type="number" min={0} step={0.01}
                     value={actualsInput}
                     onChange={e => setActualsInput(e.target.value)}
@@ -213,7 +273,7 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
                     onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                     disabled={savingActuals}
                     placeholder="0.00"
-                    className="w-24 border border-gray-300 rounded px-1 py-0.5 text-xs text-right disabled:opacity-50"
+                    className="w-20 border border-gray-300 rounded px-1 py-0.5 text-xs text-right disabled:opacity-50"
                   />
                 </span>
               </td>
@@ -222,7 +282,9 @@ export function ResourceAssignments({ activity, resources, onChange }: Props) {
         </table>
       )}
 
-      {adding ? (
+      {isParent ? (
+        <div className="text-[11px] text-gray-400">Not applicable to a WBS/Project summary — assign resources to its individual tasks/milestones instead.</div>
+      ) : adding ? (
         <div className="flex items-center gap-2 mb-2 flex-wrap">
           <select value={resourceId} onChange={e => setResourceId(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1">
             <option value="">Select resource…</option>

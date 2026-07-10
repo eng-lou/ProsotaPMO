@@ -10,6 +10,18 @@ class Settings(BaseSettings):
     environment: str = "development"
     auth0_domain: str = ""
     auth0_audience: str = ""
+    # Where imported IFC/GLTF/OBJ/FBX files persist across a hard refresh
+    # (2026-07-09, per Maro: "keep the models... similar to the persistent
+    # data in Schedule") — this app's first real binary-file upload, so
+    # there's no established S3/blob-storage precedent to follow yet (the
+    # only prior file-ish thing, project_letterhead.py's logo, is a small
+    # base64 string in a DB column — nowhere near workable for a
+    # multi-hundred-MB IFC file). Local disk on the backend server is the
+    # deliberate, explicitly-scoped-for-now choice (per Maro, choosing this
+    # over cloud object storage) — relative to the backend process's own
+    # working directory unless overridden, mirroring database_url's own
+    # env-var-overridable-with-a-sane-default pattern above.
+    model3d_storage_dir: str = "uploads/model3d"
 
 
 settings = Settings()

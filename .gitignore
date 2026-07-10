@@ -26,3 +26,7 @@ Thumbs.db
 
 # Copyrighted reference materials (large, not ours to redistribute — see docs/RISK_MODULE_PLAN.md)
 docs/*.pdf
+
+# Persisted 3D/IFC uploads (backend/app/core/config.py's model3d_storage_dir) —
+# local-disk-per-server, not meant to be committed
+backend/uploads/

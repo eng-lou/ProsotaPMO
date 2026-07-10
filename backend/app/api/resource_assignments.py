@@ -15,17 +15,17 @@ router = APIRouter(prefix="/resource-assignments", tags=["resource-assignments"]
 @router.get("/", response_model=list[ResourceAssignmentResponse])
 async def list_assignments(
     activity_id: uuid.UUID | None = None,
-    period_id: uuid.UUID | None = None,
+    schedule_period_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> list:
-    # period_id bulk-loads every assignment across the period in one call (e.g. for
-    # the Scheduling table's Resources column) — same pattern as
-    # activity-relationships' own period_id filter.
+    # schedule_period_id bulk-loads every assignment across the schedule period in
+    # one call (e.g. for the Scheduling table's Resources column) — same pattern as
+    # activity-relationships' own schedule_period_id filter.
     if activity_id is not None:
         return await svc.list_assignments(db, activity_id)
-    if period_id is not None:
-        return await svc.list_assignments_for_period(db, period_id)
-    raise HTTPException(status_code=422, detail="activity_id or period_id is required")
+    if schedule_period_id is not None:
+        return await svc.list_assignments_for_period(db, schedule_period_id)
+    raise HTTPException(status_code=422, detail="activity_id or schedule_period_id is required")
 
 
 @router.post("/", response_model=ResourceAssignmentResponse, status_code=201)

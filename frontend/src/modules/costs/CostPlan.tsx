@@ -4,9 +4,15 @@ import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
+import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { resourceLabelForActivity } from '@/lib/resourceLabel'
+import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
+import { UdfCell } from '@/modules/scheduling/UdfCell'
+import { UserDefinedFieldsWidget } from '@/modules/scheduling/UserDefinedFieldsWidget'
+import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { CostCommitments } from './CostCommitments'
 import { CostForm, toCostElementPayload, type CostFormValues } from './CostForm'
 import { downloadCostElementsCsv } from './exportCostElements'
@@ -33,6 +39,7 @@ const GROUP_OPTIONS = [
   { value: 'element_group', label: 'Group' },
   { value: 'status', label: 'Status' },
   { value: 'element_type', label: 'Type' },
+  { value: 'resource', label: 'Resource' },
 ] as const
 type GroupByField = (typeof GROUP_OPTIONS)[number]['value']
 
@@ -86,18 +93,33 @@ function uniqueGroups(elements: CostElement[]): string[] {
 export function CostPlan() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  // Scheduling's own schedule-variant/period pair (distinct from `period`
+  // above — Risk/Cost/ICD's shared Period) — needed to fetch resource
+  // assignments/activities for "Group by Resource" and the Rate Card's
+  // child-activity rollup (2026-07-10, per Maro). Same hook Scheduling.tsx
+  // itself uses, so it resolves to the exact same live schedule.
+  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [elements, setElements] = useState<CostElement[]>([])
   const [risks, setRisks] = useState<RiskSummary[]>([])
   const [criteria, setCriteria] = useState<CostVarianceCriterion[]>([])
   const [projectDetails, setProjectDetails] = useState<ProjectDetails | null>(null)
+  const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
+  const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingElement, setEditingElement] = useState<CostElement | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [reassessmentRefreshKey, setReassessmentRefreshKey] = useState(0)
+
+  const {
+    definitions: udfDefinitions, loading: udfDefinitionsLoading,
+    create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
+  } = useUserDefinedFieldDefinitions(selectedProject?.id, 'cost_element')
+  const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(udfDefinitions, elements.map(e => e.id))
+  const [udfWidgetOpen, setUdfWidgetOpen] = useState(false)
 
   // Search / Filters / Group — client-side, matching the Risk/ICD toolbar pattern.
   const [searchQuery, setSearchQuery] = useState('')
@@ -141,6 +163,27 @@ export function CostPlan() {
     return () => { cancelled = true }
   }, [selectedProject, period])
 
+  // Resource assignments + activities for "Group by Resource" and the Rate
+  // Card's child-activity rollup (2026-07-10, per Maro) — loaded separately
+  // from the main Cost Plan fetch above since they come from Scheduling's own
+  // schedule-variant/period, which resolves independently (and later, since
+  // it bootstraps its own variant on first load).
+  useEffect(() => {
+    if (!selectedProject || !schedulePeriod) return
+    let cancelled = false
+    async function loadScheduleData() {
+      const [assignmentsRes, activitiesRes] = await Promise.all([
+        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
+        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
+      ])
+      if (cancelled) return
+      setResourceAssignments(assignmentsRes.data)
+      setScheduleActivities(activitiesRes.data)
+    }
+    loadScheduleData()
+    return () => { cancelled = true }
+  }, [selectedProject, schedulePeriod])
+
   // Fires window.print() only after printMode has committed to the DOM.
   useEffect(() => {
     if (printTrigger > 0) window.print()
@@ -173,12 +216,39 @@ export function CostPlan() {
     if (groupBy === 'none') return [['', visibleElements]]
     const map = new Map<string, CostElement[]>()
     for (const el of visibleElements) {
-      const raw = groupBy === 'status' ? (el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : null) : el[groupBy]
+      const raw = groupBy === 'status' ? (el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : null)
+        : groupBy === 'resource' ? resourceLabelForActivity(el.linked_activity_id, resourceAssignments)
+        : el[groupBy]
       const key = raw ?? '(none)'
       map.set(key, [...(map.get(key) ?? []), el])
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [visibleElements, groupBy])
+  }, [visibleElements, groupBy, resourceAssignments])
+
+  // Rate Card child-activity rollup (2026-07-10, per Maro: "resource
+  // description should be indentable per line... so I can collapse or expand
+  // and see the granular detail") — a cost element linked to a WBS Summary
+  // can expand into its direct children's own linked cost elements, each
+  // recursively drillable the same way. Purely presentational: there's no
+  // WBS-tree rollup in the cost data itself (every activity's cost element
+  // stays independent, see app/services/resource_assignment.py's own
+  // 2026-07-08 note) — this just surfaces the ones that already exist.
+  const elementByActivityId = useMemo(() => {
+    const map = new Map<string, CostElement>()
+    for (const el of elements) {
+      if (el.linked_activity_id) map.set(el.linked_activity_id, el)
+    }
+    return map
+  }, [elements])
+
+  const childRowsFor = (activityId: string): { activityId: string; label: string; costElementId: string }[] =>
+    scheduleActivities
+      .filter(a => a.parent_id === activityId)
+      .map(a => {
+        const childElement = elementByActivityId.get(a.id)
+        return childElement ? { activityId: a.id, label: `${a.code}: ${a.task_name}`, costElementId: childElement.id } : null
+      })
+      .filter((row): row is { activityId: string; label: string; costElementId: string } => row !== null)
 
   if (!selectedProject) return null
 
@@ -287,6 +357,9 @@ export function CostPlan() {
           </td>
           <td className="px-4 py-2.5 text-gray-600">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>
           <td className="px-4 py-2.5 text-gray-600">{formatRatio(el.cpi)}</td>
+          {udfDefinitions.map(d => (
+            <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, el.id)} onSave={payload => setUdfValue(d.id, el.id, payload)} />
+          ))}
           <td className="px-4 py-2.5 text-right whitespace-nowrap">
             <button onClick={() => setEditingElement(el)} className="text-xs text-blue-600 hover:text-blue-700 mr-3">
               Edit
@@ -298,7 +371,7 @@ export function CostPlan() {
         </tr>
         {expandedId === el.id && (
           <tr>
-            <td colSpan={15} className="p-0">
+            <td colSpan={15 + udfDefinitions.length} className="p-0">
               {el.last_reviewed_date && (
                 <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex gap-6 flex-wrap text-xs text-gray-500">
                   <span>Last reviewed: <span className="text-gray-700">{el.last_reviewed_date}</span></span>
@@ -342,7 +415,12 @@ export function CostPlan() {
                   )}
                 </div>
               )}
-              <CostRateLines costElementId={el.id} isScheduleLinked={el.source === 'schedule'} />
+              <CostRateLines
+                costElementId={el.id}
+                isScheduleLinked={el.source === 'schedule'}
+                childRows={el.linked_activity_id ? childRowsFor(el.linked_activity_id) : []}
+                childRowsFor={childRowsFor}
+              />
               <CostCommitments costElementId={el.id} />
               <ReassessmentLog
                 recordType="cost_element"
@@ -457,9 +535,31 @@ export function CostPlan() {
             letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          🎨 Letterhead
+          📄 Page Setup
+        </button>
+        <button
+          onClick={() => setUdfWidgetOpen(o => !o)}
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🏷️ Fields
         </button>
       </div>
+
+      {udfWidgetOpen && (
+        <UserDefinedFieldsWidget
+          entityType="cost_element"
+          availableEntityTypes={['cost_element']}
+          onEntityTypeChange={() => {}}
+          definitions={udfDefinitions}
+          loading={udfDefinitionsLoading}
+          onCreate={createUdfDefinition}
+          onUpdate={updateUdfDefinition}
+          onDelete={removeUdfDefinition}
+          onClose={() => setUdfWidgetOpen(false)}
+        />
+      )}
 
       {letterheadWidgetOpen && letterhead && (
         <LetterheadEditorWidget
@@ -550,6 +650,9 @@ export function CostPlan() {
                 <th className="px-4 py-2.5" title="Forecast vs Budget">Variance</th>
                 <th className="px-4 py-2.5">% Complete</th>
                 <th className="px-4 py-2.5">CPI</th>
+                {udfDefinitions.map(d => (
+                  <th key={d.id} className="px-4 py-2.5" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
+                ))}
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
@@ -558,7 +661,7 @@ export function CostPlan() {
                 <Fragment key={groupKey || 'all'}>
                   {groupBy !== 'none' && (
                     <tr>
-                      <td colSpan={15} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      <td colSpan={15 + udfDefinitions.length} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                         {groupKey} <span className="font-normal normal-case text-gray-400">({groupElements.length})</span>
                       </td>
                     </tr>
@@ -569,7 +672,7 @@ export function CostPlan() {
 
               {visibleElements.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td colSpan={15 + udfDefinitions.length} className="px-4 py-10 text-center text-gray-400 text-sm">
                     {elements.length === 0 ? 'No cost elements yet for this period. Add the first one above.' : 'No cost elements match your search/filters.'}
                   </td>
                 </tr>

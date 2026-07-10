@@ -2,11 +2,18 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadQualityReportCsv } from './exportQualityReport'
-import type { QualityCheckStatus, QualityReport, SchedulingQualityCriterion, SchedulingQualityRunSummary } from './types'
+import type {
+  QualityCheckStatus, QualityReport, ScheduleSubproject, SchedulingQualityCriterion, SchedulingQualityRunSummary,
+} from './types'
 
 interface Props {
   projectId: string
   periodId: string
+  // For the scope selector (2026-07-06, per Maro — docs/SUBPROJECT_FLOAT_PLAN.md
+  // §F) — "Whole Schedule" (default) or one of the project's tagged
+  // sub-projects, restricting the analysis to that branch and reading its
+  // scoped float/critical fields for checks 6/7/12.
+  subprojects: ScheduleSubproject[]
   onClose: () => void
   // Whatever report is currently on screen (live or a viewed saved run) —
   // Scheduling.tsx holds onto this purely so the Print button can hand the
@@ -30,13 +37,16 @@ const STATUS_LABELS: Record<QualityCheckStatus, string> = {
   na: 'N/A',
 }
 
-export function SchedulingQualityWidget({ projectId, periodId, onClose, onReportForPrint, onPrint }: Props) {
+export function SchedulingQualityWidget({ projectId, periodId, subprojects, onClose, onReportForPrint, onPrint }: Props) {
   const [liveReport, setLiveReport] = useState<QualityReport | null>(null)
   const [criteria, setCriteria] = useState<SchedulingQualityCriterion[]>([])
   const [runs, setRuns] = useState<SchedulingQualityRunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [editingThresholds, setEditingThresholds] = useState(false)
   const [resetting, setResetting] = useState(false)
+  // '' = whole schedule (default) — matches the native <select>'s own
+  // empty-string convention rather than inventing a sentinel value.
+  const [scopeSubprojectId, setScopeSubprojectId] = useState('')
 
   // Viewing a saved run swaps the displayed report for a frozen snapshot —
   // thresholds aren't editable and Save isn't offered while viewing one,
@@ -52,8 +62,10 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
 
   const report = viewingRun ? viewingReport : liveReport
 
-  const loadLive = async () => {
-    const { data } = await api.get<QualityReport>('/api/v1/scheduling-quality/', { params: { period_id: periodId } })
+  const loadLive = async (scopeId?: string) => {
+    const { data } = await api.get<QualityReport>('/api/v1/scheduling-quality/', {
+      params: { schedule_period_id: periodId, scope_subproject_id: (scopeId ?? scopeSubprojectId) || undefined },
+    })
     setLiveReport(data)
     return data
   }
@@ -64,7 +76,7 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
   }
 
   const loadRuns = async () => {
-    const { data } = await api.get<SchedulingQualityRunSummary[]>('/api/v1/scheduling-quality-runs/', { params: { period_id: periodId } })
+    const { data } = await api.get<SchedulingQualityRunSummary[]>('/api/v1/scheduling-quality-runs/', { params: { schedule_period_id: periodId } })
     setRuns(data)
   }
 
@@ -106,13 +118,20 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
     if (!saveName.trim()) return
     setSaving(true)
     try {
-      await api.post('/api/v1/scheduling-quality-runs/', { period_id: periodId, name: saveName.trim() })
+      await api.post('/api/v1/scheduling-quality-runs/', {
+        schedule_period_id: periodId, name: saveName.trim(), scope_subproject_id: scopeSubprojectId || null,
+      })
       setSaveName('')
       setShowSaveForm(false)
       await loadRuns()
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleScopeChange = async (newScopeId: string) => {
+    setScopeSubprojectId(newScopeId)
+    await loadLive(newScopeId)
   }
 
   const handleViewRun = async (run: SchedulingQualityRunSummary) => {
@@ -144,6 +163,20 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
         <span className="text-lg">🔬</span>
         <div className="font-bold text-sm">Schedule Quality Analysis</div>
         <div className="text-xs text-gray-400">DCMA 14-Point checks 1–12</div>
+
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          Scope
+          <select
+            value={scopeSubprojectId}
+            disabled={!!viewingRun}
+            onChange={e => handleScopeChange(e.target.value)}
+            title="Restrict this analysis to one tagged sub-project's own subtree, reading its scoped float/critical fields for checks 6/7/12"
+            className="border border-gray-300 rounded px-1.5 py-1 text-xs disabled:opacity-40"
+          >
+            <option value="">Whole Schedule</option>
+            {subprojects.map(sp => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+          </select>
+        </label>
 
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -204,6 +237,7 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
                 <tr key={r.id} className={viewingRun?.id === r.id ? 'bg-blue-50/50' : undefined}>
                   <td className="py-1 pr-2 font-medium">{r.name}</td>
                   <td className="py-1 pr-2 text-gray-400 whitespace-nowrap">{new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">{r.scope_name ?? 'Whole Schedule'}</td>
                   <td className="py-1 pr-2 text-gray-500">{r.logic_score ?? '—'}% score</td>
                   <td className="py-1 pr-2 text-red-600">{r.failing_count} fail</td>
                   <td className="py-1 pr-2 text-amber-600">{r.warning_count} warn</td>
@@ -220,7 +254,10 @@ export function SchedulingQualityWidget({ projectId, periodId, onClose, onReport
 
       {viewingRun && (
         <div className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-3">
-          <span>Viewing saved analysis <strong>{viewingRun.name}</strong> from {new Date(viewingRun.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+          <span>
+            Viewing saved analysis <strong>{viewingRun.name}</strong> from {new Date(viewingRun.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+            {viewingRun.scope_name && <> — scoped to <strong>{viewingRun.scope_name}</strong></>}
+          </span>
           <button onClick={handleBackToLive} className="ml-auto text-blue-600 hover:text-blue-700 font-medium">← Back to live</button>
         </div>
       )}

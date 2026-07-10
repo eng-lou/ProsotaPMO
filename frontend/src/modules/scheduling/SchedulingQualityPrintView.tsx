@@ -33,6 +33,7 @@ export function SchedulingQualityPrintView({ report, projectName, letterhead, ru
       {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
       <p className="text-sm text-gray-500 mb-4">
         DCMA 14-Point checks 1–12{runName ? ` — saved analysis "${runName}"` : ''}
+        {report.scope_name ? ` — scoped to "${report.scope_name}"` : ''}
       </p>
 
       <div className="grid grid-cols-3 gap-3 mb-4">

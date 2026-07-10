@@ -9,7 +9,7 @@ async def test_create_and_list_filter(client: AsyncClient, project: Project):
     resp = await client.post("/api/v1/scheduling-filters/", json={
         "project_id": str(project.id), "name": "Behind schedule milestones", "match_mode": "all",
         "conditions": [
-            {"field": "activity_type", "operator": "eq", "value": "milestone"},
+            {"field": "activity_type", "operator": "eq", "value": "finish_milestone"},
             {"field": "variance_days", "operator": "gt", "value": "0"},
         ],
     })
@@ -47,6 +47,22 @@ async def test_create_accepts_wbs_and_date_conditions(client: AsyncClient, proje
     created = resp.json()
     assert created["conditions"][0]["field"] == "wbs_path"
     assert created["conditions"][1]["operator"] == "lt"
+
+
+async def test_create_accepts_sub_project_float_conditions(client: AsyncClient, project: Project):
+    # docs/SUBPROJECT_FLOAT_PLAN.md §G — added 2026-07-06 alongside the rest
+    # of the sub-project float feature.
+    resp = await client.post("/api/v1/scheduling-filters/", json={
+        "project_id": str(project.id), "name": "Sub-critical but not master-critical", "match_mode": "all",
+        "conditions": [
+            {"field": "sub_is_critical", "operator": "is_true", "value": ""},
+            {"field": "sub_total_float_hours", "operator": "lte", "value": "0"},
+        ],
+    })
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["conditions"][0]["field"] == "sub_is_critical"
+    assert created["conditions"][1]["field"] == "sub_total_float_hours"
 
 
 async def test_create_rejects_unknown_field(client: AsyncClient, project: Project):

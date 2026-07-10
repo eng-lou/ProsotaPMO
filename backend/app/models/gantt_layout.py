@@ -25,6 +25,16 @@ DEFAULT_STYLE = {
     "baseline_thickness": 7,
     "table_font_color": "#111827",
     "table_font_family": "sans",
+    # Pixel font sizes for the activity table/Gantt column, screen only —
+    # print's own equivalents live on ProjectLetterhead now (2026-07-07) — see
+    # app/schemas/gantt_layout.py:GanttStyle for what these control.
+    "table_font_size": 14,
+    "header_font_size": 12,
+    "header_font_family": "sans",
+    "gantt_font_size": 10,
+    # Independent font type for the Gantt column/header row — see
+    # app/schemas/gantt_layout.py:GanttStyle.
+    "gantt_font_family": "sans",
     # Row background tints in the activity table (2026-07-03, per Maro — a
     # second thought after first asking for bold/uppercase WBS rows: a shade
     # reads better and generalises to activity/milestone rows too). Critical-
@@ -45,6 +55,13 @@ DEFAULT_STYLE = {
     "show_label_name": False,
     "show_label_resource": False,
     "show_label_finish": False,
+    # Sub-project float secondary indicator (2026-07-06, per Maro) — see
+    # app/schemas/gantt_layout.py:GanttStyle for what this controls.
+    "sub_critical_color": "#f97316",
+    "show_sub_critical": True,
+    # Row tint for the Highlight widget (2026-07-06, per Maro) — see
+    # app/schemas/gantt_layout.py:GanttStyle for what this controls.
+    "highlight_color": "#ef4444",
 }
 
 

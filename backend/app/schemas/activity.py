@@ -8,15 +8,90 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ActivityType = Literal["task", "milestone", "wbs_summary"]
-ConstraintType = Literal["asap", "snet", "ms", "fnlt"]
+# milestone split into start_milestone/finish_milestone 2026-07-07, per Maro
+# — a Start Milestone only has a meaningful Start, a Finish Milestone only a
+# meaningful Finish (CPM math unchanged — both fields stay populated equal to
+# each other internally, since CPM needs a concrete instant either way; only
+# which one the frontend shows/edits differs). Which relationship types can
+# target one as a successor is restricted accordingly — see
+# app/services/activity_relationship.py.
+ActivityType = Literal["task", "start_milestone", "finish_milestone", "wbs_summary"]
+
+
+def is_milestone_type(activity_type: str) -> bool:
+    return activity_type in ("start_milestone", "finish_milestone")
+
+
+# A milestone (either kind) has zero duration, so its ES always equals its EF
+# — meaning a relationship type's *second* letter (which successor end is
+# nominally driven) is mathematically inert for it: SS and SF compute the
+# *identical* result (both anchor off the predecessor's Start —
+# app/services/scheduling_cpm.py:_relationship_es_candidate), and FS/FF
+# likewise both compute the identical result (both anchor off the
+# predecessor's Finish). Only the *first* letter — which predecessor end is
+# referenced — actually changes the number, which is the real basis for
+# "start" vs "finish" milestone (2026-07-07, per Maro, confirmed against the
+# CPM engine's own math — docs/SCHEDULING_GAPS_PLAN.md Phase 5): a Start
+# Milestone is synced to the predecessor's own Start (SS/SF), a Finish
+# Milestone to the predecessor's Finish (FS/FF). No restriction when a
+# milestone is the *predecessor* side of a link, or when the successor is a
+# plain task — either end means the same instant for a milestone predecessor,
+# and a task's own date isn't restricted to any particular anchor.
+#
+# Lives here (not app/services/activity_relationship.py, where it originated)
+# because app/services/activity.py:update_activity also needs it — to warn/
+# amend existing relationships when an activity's own type changes into or
+# out of a milestone kind — and activity_relationship.py already imports
+# *from* activity.py, so activity.py importing back from there would be
+# circular. Both service modules import this shared copy instead.
+_VALID_RELATIONSHIP_TYPES_FOR_MILESTONE_SUCCESSOR: dict[str, tuple[str, ...]] = {
+    "start_milestone": ("SS", "SF"),
+    "finish_milestone": ("FS", "FF"),
+}
+
+
+def valid_relationship_types_for_successor(successor_activity_type: str) -> tuple[str, ...] | None:
+    """None means unrestricted (task/wbs_summary successor) — a tuple means
+    only those 2-letter codes make sense targeting this milestone."""
+    return _VALID_RELATIONSHIP_TYPES_FOR_MILESTONE_SUCCESSOR.get(successor_activity_type)
+
+
+def amended_relationship_type(old_type: str, new_successor_activity_type: str) -> str:
+    """When a successor's own activity_type changes to/from start_milestone/
+    finish_milestone, an existing relationship whose first letter no longer
+    matches the new type's required predecessor-anchor gets just that one
+    letter flipped — e.g. FS becomes SS when its successor changes from a
+    Finish Milestone to a Start Milestone. The second letter is left as-is
+    since it's mathematically inert for a zero-duration successor either way
+    (see the module docstring above). A no-op if old_type is already valid,
+    or if the new type has no restriction at all."""
+    valid = valid_relationship_types_for_successor(new_successor_activity_type)
+    if valid is None or old_type in valid:
+        return old_type
+    required_first_letter = valid[0][0]
+    return required_first_letter + old_type[1]
+# alap (As Late As Possible) and mf (Mandatory Finish) added 2026-07-07, per
+# Maro — docs/SCHEDULING_GAPS_PLAN.md Phase 4. mf is ms's exact/hard-pin
+# counterpart on the finish side (Maro's own pairing: "Mandatory Start and
+# Mandatory Finish," not P6's separate "Start On"/"Finish On"). alap needs no
+# date at all — it's a relative positioning directive, not an exact one (see
+# app/services/scheduling_cpm.py for the backward-pass mechanics).
+ConstraintType = Literal["asap", "alap", "snet", "snlt", "ms", "mf", "fnlt", "fnet"]
 
 
 def _validate_constraint(constraint_type: ConstraintType | None, constraint_date: datetime | None) -> None:
-    if constraint_type in (None, "asap") and constraint_date is not None:
+    if constraint_type in (None, "asap", "alap") and constraint_date is not None:
         raise ValueError("constraint_date must be null unless a constraint type requiring a date is set")
-    if constraint_type not in (None, "asap") and constraint_date is None:
+    if constraint_type not in (None, "asap", "alap") and constraint_date is None:
         raise ValueError(f"constraint_date is required for constraint_type '{constraint_type}'")
+
+
+# P6's suspend/resume actuals (docs/SCHEDULING_GAPS_PLAN.md Phase 11) — plain
+# user-entered facts, no CPM interaction for this first cut. The only rule:
+# if both are set, resume can't be before suspend.
+def _validate_suspend_resume(suspend_date: datetime | None, resume_date: datetime | None) -> None:
+    if suspend_date is not None and resume_date is not None and resume_date < suspend_date:
+        raise ValueError("resume_date can't be before suspend_date")
 
 
 class ActivityBase(BaseModel):
@@ -33,6 +108,11 @@ class ActivityBase(BaseModel):
     duration_hours: Decimal | None = Field(default=None, ge=0)
     actual_start: datetime | None = None
     actual_finish: datetime | None = None
+    # P6's suspend/resume actuals (docs/SCHEDULING_GAPS_PLAN.md Phase 11) —
+    # distinct from actual_start/actual_finish above; see
+    # _validate_suspend_resume.
+    suspend_date: datetime | None = None
+    resume_date: datetime | None = None
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
@@ -43,7 +123,7 @@ class ActivityBase(BaseModel):
 
     @model_validator(mode="after")
     def milestones_have_zero_duration(self) -> "ActivityBase":
-        if self.activity_type == "milestone":
+        if is_milestone_type(self.activity_type):
             if self.duration_hours not in (None, 0):
                 raise ValueError("milestones have zero duration")
             self.duration_hours = Decimal("0")
@@ -54,10 +134,15 @@ class ActivityBase(BaseModel):
         _validate_constraint(self.constraint_type, self.constraint_date)
         return self
 
+    @model_validator(mode="after")
+    def resume_not_before_suspend(self) -> "ActivityBase":
+        _validate_suspend_resume(self.suspend_date, self.resume_date)
+        return self
+
 
 class ActivityCreate(ActivityBase):
     project_id: uuid.UUID
-    period_id: uuid.UUID
+    schedule_period_id: uuid.UUID
     # Positioning hint only, not a stored column — when set, the new activity
     # lands immediately after this sibling (same parent_id) instead of
     # appended at the end of the group (2026-07-04, per Maro: Duplicate should
@@ -83,12 +168,22 @@ class ActivityUpdate(BaseModel):
     finish: datetime | None = None
     actual_start: datetime | None = None
     actual_finish: datetime | None = None
+    suspend_date: datetime | None = None
+    resume_date: datetime | None = None
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
     constraint_date: datetime | None = None
     calendar_id: uuid.UUID | None = None
     last_reviewed_date: date | None = None
+    # Not a column — a one-shot confirmation flag (2026-07-07, per Maro).
+    # Changing activity_type to/from a milestone kind can leave existing
+    # incoming relationships invalid (see valid_relationship_types_for_successor
+    # above); the first PATCH attempt without this set to true is rejected
+    # with a 409 listing what would need to change, and the caller resubmits
+    # the same PATCH with this set to actually perform the amendment. See
+    # app/services/activity.py:update_activity.
+    amend_relationships: bool = False
 
 
 class ActivityActualsUpdate(BaseModel):
@@ -119,7 +214,8 @@ class ActivityResponse(ActivityBase):
     id: uuid.UUID
     code: str
     project_id: uuid.UUID
-    period_id: uuid.UUID
+    schedule_variant_id: uuid.UUID
+    schedule_period_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
     # start/finish are computed by app/services/scheduling_cpm.py (forward/backward
@@ -144,6 +240,12 @@ class ActivityResponse(ActivityBase):
     total_float_hours: Decimal | None = None
     free_float_hours: Decimal | None = None
     is_critical: bool | None = None
+    # Scoped, secondary float calculated only within a PM-tagged sub-project
+    # branch (docs/SUBPROJECT_FLOAT_PLAN.md, private docs repo) — null unless
+    # this activity sits under a tagged branch. Never accepted as API input,
+    # written only by app/services/scheduling_cpm.py's own scoped pass.
+    sub_total_float_hours: Decimal | None = None
+    sub_is_critical: bool | None = None
     # Server-managed outline position — see app/services/activity.py:_recompute_hierarchy.
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.
     wbs_path: str | None = None

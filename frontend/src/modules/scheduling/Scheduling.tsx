@@ -1,22 +1,27 @@
 import axios from 'axios'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
-import { FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
+import { resourceLabelForActivity } from '@/lib/resourceLabel'
+import { activityRowBackground, FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, type GanttFontFamily, type GanttStyle } from '@/lib/ganttLayout'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { evaluateFilter, useSchedulingFilters } from '@/lib/schedulingFilters'
-import { useActivePeriod } from '@/lib/usePeriod'
+import { useSchedulingHighlights } from '@/lib/schedulingHighlights'
+import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
+import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
+import { ActivityStepsWidget } from './ActivityStepsWidget'
 import { BaselineWidget } from './BaselineWidget'
 import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
 import { CalendarWidget } from './CalendarWidget'
 import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
-import { resolveHoursPerDay } from './durationDisplay'
+import { formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { GanttChart, GANTT_ROW_HEIGHT, HEADER_HEIGHT, type GanttChartHandle } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
@@ -24,11 +29,31 @@ import { LayoutWidget } from './LayoutWidget'
 import { PasteFieldsWidget } from './PasteFieldsWidget'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
+import { ResourceTrackingWidget } from './ResourceTrackingWidget'
+import { RESOURCE_USAGE_COLORS, ResourceUsageProfileWidget } from './ResourceUsageProfileWidget'
+import { ResourcesPrintView } from './ResourcesPrintView'
+import type { PrintResourceGroup } from './ResourceTrackingPrintView'
+import {
+  ALL_RESOURCES_PRINT_TABLES, DEFAULT_RESOURCES_LAYOUT, DEFAULT_RESOURCES_PRINT_FONTS, loadResourcesLayout,
+  loadResourcesPrintFonts, loadResourcesPrintTables, RESOURCES_PRINT_TABLE_LABELS, saveResourcesLayout,
+  saveResourcesPrintFonts, saveResourcesPrintTables, type ResourcesLayoutPrefs, type ResourcesPrintTable,
+} from './resourcesLayout'
 import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingPrintView } from './SchedulingPrintView'
 import { SchedulingFiltersWidget } from './SchedulingFiltersWidget'
+import { SchedulingHighlightsWidget } from './SchedulingHighlightsWidget'
 import { SchedulingQualityPrintView } from './SchedulingQualityPrintView'
 import { SchedulingQualityWidget } from './SchedulingQualityWidget'
+import { ScheduleVariantWidget } from './ScheduleVariantWidget'
+import { SubProjectsWidget } from './SubProjectsWidget'
+import { UdfCell } from './UdfCell'
+import { UserDefinedFieldsWidget } from './UserDefinedFieldsWidget'
+import { downloadResourcesExcel } from './exportResourcesExcel'
+import {
+  findNextOverallocatedTarget, levelTarget,
+  type LevelingGranularity, type LevelingMode, type LevelingTarget,
+} from './resourceLeveling'
+import { computeUsageProfileBars, eachDate, indexSpread, usageUnitFactor, useResourcesTabData } from './useResourcesTabData'
 import {
   ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type QualityReport, type Resource, type ResourceAssignment,
   type SchedulingFilter,
@@ -38,10 +63,10 @@ const PANE_MAX_HEIGHT = 600
 
 export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
-  | 'variance' | 'float' | 'free_float' | 'pct_complete' | 'resources'
+  | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical' | 'pct_complete' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
-const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
+export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
   { key: 'code', label: 'Code', width: 'w-24' },
   { key: 'wbs', label: 'WBS', width: 'w-16' },
   { key: 'type', label: 'Type', width: 'w-24' },
@@ -51,8 +76,11 @@ const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: strin
   { key: 'finish', label: 'Finish', width: 'w-24' },
   { key: 'bl_finish', label: 'BL Finish', width: 'w-24', title: 'Baseline finish — captured by whichever baseline is assigned, the plan this activity is measured against' },
   { key: 'variance', label: 'Fin. Var (d)', width: 'w-16', title: 'Current Finish vs Baseline Finish, in days. Positive = running later than the baseline plan. Blank until a baseline exists.' },
-  { key: 'float', label: 'Total Float', width: 'w-20', title: 'How much this activity could slip without delaying the whole project (hours)' },
-  { key: 'free_float', label: 'Free Float', width: 'w-20', title: 'How much this activity could slip without delaying its own successors (hours) — always ≤ Total Float' },
+  { key: 'float', label: 'Total Float (d)', width: 'w-20', title: 'How much this activity could slip without delaying the whole project — stored/computed in hours, shown rounded to whole days here, same as Duration' },
+  { key: 'critical', label: 'Critical', width: 'w-16', title: 'On the master critical path — zero (or negative) Total Float. The whole schedule\'s longest, most schedule-driving chain.' },
+  { key: 'free_float', label: 'Free Float (d)', width: 'w-20', title: 'How much this activity could slip without delaying its own successors — always ≤ Total Float. Stored/computed in hours, shown rounded to whole days here, same as Duration' },
+  { key: 'sub_float', label: 'Sub Total Float (d)', width: 'w-24', title: 'Total Float within its own tagged sub-project\'s branch, calculated in isolation from the rest of the schedule — blank for anything outside a tagged sub-project. See the 🏗️ Sub-Projects widget.' },
+  { key: 'sub_critical', label: 'Sub Critical', width: 'w-20', title: 'Critical within its own tagged sub-project\'s branch, even if not critical on the master schedule — the whole point of tagging a sub-project. Blank for anything outside a tagged sub-project.' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
@@ -79,11 +107,48 @@ function loadVisibleColumns(): Set<ColumnKey> {
   return new Set(ALL_COLUMNS.map(c => c.key))
 }
 
+// User Defined Fields (docs/SCHEDULING_GAPS_PLAN.md Phase 9) — unlike the
+// built-in columns above, a brand new UDF is off by default (empty set), not
+// on: a project may accumulate several custom fields over time that not
+// every planner wants cluttering their own grid.
+const VISIBLE_UDF_FIELDS_STORAGE_KEY = 'prosota_scheduling_visible_udf_fields'
+
+function loadVisibleUdfFields(): Set<string> {
+  try {
+    const raw = localStorage.getItem(VISIBLE_UDF_FIELDS_STORAGE_KEY)
+    if (raw) return new Set(JSON.parse(raw) as string[])
+  } catch {
+    // fall through to default
+  }
+  return new Set()
+}
+
 // Resizable columns — 'activity' (always visible) isn't in ALL_COLUMNS (that's only
 // the toggleable ones) but is still user-resizable, so it gets an entry here too.
 // The old trailing 'actions' icon column is gone — those tools now live in the
 // toolbar and act on the checkbox selection instead of one row at a time.
-type ResizableColumnKey = ColumnKey | 'activity'
+export type ResizableColumnKey = ColumnKey | 'activity'
+
+// Print gets its own column widths, independent of the on-screen resized
+// ones (2026-07-07, per Maro — reusing on-screen widths directly gave a
+// truncated "DUR (..." header in print, since a width tuned for on-screen's
+// narrow numbers doesn't leave room for print's own uppercase, tracking-wide
+// header font; the Activity/UDF columns also came out far wider in print
+// than intended). Saved project-wide as part of Page Setup (letterhead.
+// print_column_widths/print_udf_column_width — "let that be inside the page
+// setup, like the way print timescale is in there," per Maro), not per-
+// browser localStorage — these are the fallback defaults for any column
+// whose width hasn't been explicitly set there yet, exported so both
+// Scheduling.tsx and LetterheadEditorWidget.tsx (its own editor, under
+// Page Setup) share exactly one copy.
+export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
+  activity: 220, code: 70, wbs: 56, type: 90, duration: 70,
+  start: 120, bl_start: 120, finish: 120, bl_finish: 120,
+  variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
+  pct_complete: 70, resources: 130,
+  bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
+}
+export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
 
 // Column sort (2026-07-05, per Maro). Sorts within each WBS parent's sibling
 // group rather than flattening the whole tree — matches P6's "sort within
@@ -103,7 +168,10 @@ function sortValue(a: Activity, key: SortKey, resourceAssignments: ResourceAssig
     case 'bl_finish': return a.bl_finish ? new Date(a.bl_finish).getTime() : null
     case 'variance': return a.variance_days
     case 'float': return a.total_float_hours
+    case 'critical': return a.is_critical === null ? null : a.is_critical ? 1 : 0
     case 'free_float': return a.free_float_hours
+    case 'sub_float': return a.sub_total_float_hours
+    case 'sub_critical': return a.sub_is_critical === null ? null : a.sub_is_critical ? 1 : 0
     case 'pct_complete': return a.pct_complete !== null ? Number(a.pct_complete) : null
     case 'resources': {
       const names = resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name)
@@ -135,9 +203,37 @@ function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'as
   return direction === 'asc' ? cmp : -cmp
 }
 
+// Group By (2026-07-10, per Maro) — same GROUP_OPTIONS/GroupByField/single-
+// select pattern as CostPlan.tsx/RiskRegister.tsx/IcdTracker.tsx.
+const GROUP_OPTIONS = [
+  { value: 'none', label: 'No grouping' },
+  { value: 'resource', label: 'Resource' },
+  { value: 'type', label: 'Type' },
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'critical', label: 'Critical' },
+] as const
+type GroupByField = (typeof GROUP_OPTIONS)[number]['value']
+
+const GROUP_TYPE_LABELS: Record<Activity['activity_type'], string> = {
+  task: 'Task', start_milestone: 'Start Milestone', finish_milestone: 'Finish Milestone', wbs_summary: 'WBS Summary',
+}
+
+function groupKeyFor(
+  a: Activity, groupBy: GroupByField, resourceAssignments: ResourceAssignment[], calendars: Calendar[]
+): string {
+  switch (groupBy) {
+    case 'resource': return resourceLabelForActivity(a.id, resourceAssignments)
+    case 'type': return GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type
+    case 'calendar': return a.calendar_id ? (calendars.find(c => c.id === a.calendar_id)?.name ?? '(none)') : '(project default)'
+    case 'critical': return a.is_critical === null ? '(n/a)' : a.is_critical ? 'Critical' : 'Not Critical'
+    default: return ''
+  }
+}
+
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
-  finish: 96, bl_finish: 96, variance: 80, float: 80, free_float: 80, pct_complete: 80,
+  finish: 96, bl_finish: 96, variance: 80, float: 80, critical: 72, free_float: 80, sub_float: 96, sub_critical: 80,
+  pct_complete: 80,
   resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
 }
@@ -238,6 +334,19 @@ export function formatDuration(value: number | string | null): string {
 // commitEdit below and backend app/services/scheduling_cpm.py:compute_duration_for_finish.
 type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish'
 
+// Mirrors the backend's own lockdown (app/services/activity.py:update_activity —
+// Duration/Finish/% Complete/Constraint/Type/Calendar are rejected outright,
+// 422, while a WBS/Project summary row still has children) — these are
+// rollups from its children, not something to type in. 'start' is included
+// because double-clicking it doesn't set Start directly at all; it applies a
+// Start On or After *constraint*, which is one of the locked fields. Without
+// this, double-clicking any of them on a summary row opened a real inline
+// editor whose commit then 422'd, surfacing as a jarring window.alert() —
+// "flashes the warning" — instead of the cell simply not being editable in
+// the first place, the same way the detail panel (ActivityForm.tsx) already
+// disables them (2026-07-06, per Maro).
+const LOCKED_ON_WBS_SUMMARY: readonly EditableField[] = ['activity_type', 'duration_hours', 'start', 'finish', 'pct_complete']
+
 // Copy/paste is checkbox-driven (2026-07-04, per Maro): copying a row grabs a
 // full snapshot, and pasting lets you pick exactly which of these fields
 // actually get applied — see PasteFieldsWidget below. defaultChecked mirrors
@@ -270,7 +379,11 @@ const PASTE_FIELD_OPTIONS: PasteFieldOption[] = [
 
 export function Scheduling() {
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
+  const {
+    variant: activeVariant, variants: scheduleVariants, period, loading: periodLoading, error: periodError,
+    refetch: refetchPeriod, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
+    promoteBaselineToVariant,
+  } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead, refetch: refetchLetterhead } = useProjectLetterhead(selectedProject?.id)
   const { style: ganttStyle, refetch: refetchGanttStyle } = useActiveGanttStyle(selectedProject?.id)
   const {
@@ -279,6 +392,12 @@ export function Scheduling() {
   const {
     filters: customFilters, create: createSchedulingFilter, update: updateSchedulingFilter, remove: removeSchedulingFilter,
   } = useSchedulingFilters(selectedProject?.id)
+  const {
+    highlights: customHighlights, create: createSchedulingHighlight, update: updateSchedulingHighlight, remove: removeSchedulingHighlight,
+  } = useSchedulingHighlights(selectedProject?.id)
+  const {
+    subprojects, create: createSubproject, update: updateSubproject, remove: removeSubproject,
+  } = useScheduleSubprojects(selectedProject?.id)
   // Applying/resetting also changes the live letterhead server-side (a saved
   // snapshot gets pushed in, or the row is cleared) — refresh both so the
   // toolbar and print view immediately reflect it, not just on next reload.
@@ -370,6 +489,280 @@ export function Scheduling() {
     return false
   }
 
+  // Resources tab: checking one or more resource rows in Resource Pool scopes
+  // Resource Tracking/Profile below to just those (2026-07-07, per Maro) —
+  // same "select rows here, scope something else" shape as Cost Plan's own
+  // selectedForPrint. Empty means "show everything," unchanged from today.
+  const [selectedResourceIds, setSelectedResourceIds] = useState<Set<string>>(new Set())
+  const toggleResourceSelected = (id: string) => {
+    setSelectedResourceIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Resource Tracking's own tree (resource -> its assigned activities) —
+  // same collapse/expand shape as collapsedIds above, just not persisted (a
+  // much shallower 2-level tree, less need to remember across reloads).
+  const [collapsedResourceIds, setCollapsedResourceIds] = useState<Set<string>>(new Set())
+  const toggleResourceCollapsed = (id: string) => {
+    setCollapsedResourceIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const handleCollapseAllResources = () => {
+    setCollapsedResourceIds(new Set(
+      resources
+        .filter(r => (r.resource_type === 'labour' || r.resource_type === 'equipment' || r.resource_type === 'crew') && resourceAssignments.some(a => a.resource_id === r.id))
+        .map(r => r.id)
+    ))
+  }
+  const handleExpandAllResources = () => setCollapsedResourceIds(new Set())
+
+  // "select an activity in the tracking, I want to see the usage profile
+  // reflected... full interactivity" (2026-07-08, per Maro) — shared with
+  // selectedResourceIds above; Resource Tracking's own activity-row
+  // checkboxes write here, Resource Usage Profile's chart reads it.
+  const [selectedActivityIds, setSelectedActivityIds] = useState<Set<string>>(new Set())
+  const toggleActivitySelected = (id: string) => {
+    setSelectedActivityIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // One shared toolbar (zoom/unit/date-range/layout/page-setup/print) above
+  // all three Resources-tab tables (2026-07-08, per Maro: "I want all the
+  // toolbars in the same area... I want this looking neat") instead of each
+  // table owning its own. useResourcesTabData does the actual data
+  // fetching/derivation once, shared by Tracking, Profile, and Print/Export.
+  const [resourcesZoom, setResourcesZoom] = useState<GanttZoom>(loadGanttZoom)
+  const [resourcesUnit, setResourcesUnit] = useState<'hours' | 'days' | 'cost'>('hours')
+  const [resourcesRangeStartOverride, setResourcesRangeStartOverride] = useState<Date | null>(null)
+  const [resourcesRangeEndOverride, setResourcesRangeEndOverride] = useState<Date | null>(null)
+  const [resourcesLayoutPrefs, setResourcesLayoutPrefsState] = useState<ResourcesLayoutPrefs>(loadResourcesLayout)
+  const saveResourcesLayoutPrefs = (next: ResourcesLayoutPrefs) => {
+    setResourcesLayoutPrefsState(next)
+    saveResourcesLayout(next)
+  }
+  const [resourcesLayoutOpen, setResourcesLayoutOpen] = useState(false)
+  const [resourcesPrintFonts, setResourcesPrintFontsState] = useState(loadResourcesPrintFonts)
+  const saveResourcesPrintFontsPrefs = (next: typeof resourcesPrintFonts) => {
+    setResourcesPrintFontsState(next)
+    saveResourcesPrintFonts(next)
+  }
+  const [resourcesPrintTables, setResourcesPrintTablesState] = useState<Set<ResourcesPrintTable>>(loadResourcesPrintTables)
+  const toggleResourcesPrintTable = (table: ResourcesPrintTable) => {
+    setResourcesPrintTablesState(prev => {
+      const next = new Set(prev)
+      if (next.has(table)) next.delete(table)
+      else next.add(table)
+      saveResourcesPrintTables(next)
+      return next
+    })
+  }
+  const [resourcesPageSetupOpen, setResourcesPageSetupOpen] = useState(false)
+  const [resourcesPrintTrigger, setResourcesPrintTrigger] = useState(0)
+
+  // Keeps Resource Tracking's and Resource Usage Profile's tree/timeline
+  // dividers lined up, and their timeline scroll positions mirrored both
+  // ways (2026-07-09, per Maro) — owned here since these are two sibling
+  // widgets. 516 = Tracking's own default 4 fixed columns + checkbox column,
+  // before Tracking's own effect reports its real current width on mount.
+  const [resourcesLeftPaneWidth, setResourcesLeftPaneWidth] = useState(516)
+  const [resourcesScrollLeft, setResourcesScrollLeft] = useState(0)
+
+  const resourcesTabData = useResourcesTabData(
+    resources, resourceAssignments, activities, selectedResourceIds,
+    resourcesZoom, resourcesRangeStartOverride, resourcesRangeEndOverride,
+  )
+
+  useEffect(() => {
+    if (resourcesPrintTrigger > 0) window.print()
+  }, [resourcesPrintTrigger])
+
+  // Print/export scope, driven by whatever's checked anywhere in Resource
+  // Pool/Tracking/Profile (2026-07-10, per Maro: "if nothing checked then
+  // print all... if a resource is checked... print based on that resource
+  // across all tables... if i check a single activity then that's what i
+  // want"). Checking a resource scopes all three tables to it directly;
+  // checking only an activity (no resource) derives the owning resource(s)
+  // from it — same precedent as Level Resources' own scope logic just above.
+  // null = no filter (nothing checked anywhere = print everything).
+  const printScopedResourceIds = useMemo(() => {
+    if (selectedResourceIds.size > 0) return selectedResourceIds
+    if (selectedActivityIds.size > 0) {
+      const ids = new Set<string>()
+      for (const a of resourceAssignments) {
+        if (selectedActivityIds.has(a.activity_id)) ids.add(a.resource_id)
+      }
+      return ids
+    }
+    return null
+  }, [selectedResourceIds, selectedActivityIds, resourceAssignments])
+
+  // Resource Pool print/export shows every resource type (material/
+  // subcontractor included), unlike resourcesTabData.trackedResources
+  // (labour/equipment with assignments only) — scoped independently here.
+  const printScopedResources = useMemo(
+    () => printScopedResourceIds ? resources.filter(r => printScopedResourceIds.has(r.id)) : resources,
+    [resources, printScopedResourceIds]
+  )
+
+  const printScopedTrackedResources = useMemo(
+    () => printScopedResourceIds
+      ? resourcesTabData.trackedResources.filter(r => printScopedResourceIds.has(r.id))
+      : resourcesTabData.trackedResources,
+    [resourcesTabData.trackedResources, printScopedResourceIds]
+  )
+
+  // Pre-computed once here (not inside ResourceTrackingWidget any more) so
+  // both the on-screen widget and the unified print/export can share it —
+  // print/export additionally scope by printScopedResourceIds/
+  // selectedActivityIds; the on-screen widget (which reads resourcesTabData
+  // directly, not this) intentionally keeps showing everything while you're
+  // still working, only print narrows down to the current selection.
+  const resourcesPrintGroups: PrintResourceGroup[] = useMemo(() => printScopedTrackedResources.map(resource => {
+    const allRows = resourcesTabData.assignmentsByResource.get(resource.id) ?? []
+    const rows = selectedActivityIds.size > 0 ? allRows.filter(row => selectedActivityIds.has(row.activity.id)) : allRows
+    const spread = resourcesTabData.spreadByResource.get(resource.id)
+    const { hoursByAssignmentDate } = indexSpread(spread)
+    // Print/export mirror whatever unit is currently selected on screen
+    // (2026-07-10, per Maro) — same per-resource factor as the screen
+    // widget's own toDisplay/computeUsageProfileBars.
+    const factor = usageUnitFactor(resource, resourcesUnit)
+    const bucketHoursFor = (assignmentId: string) => resourcesTabData.buckets.map(bucket => {
+      let hours = 0
+      for (const d of eachDate(bucket.start, bucket.end)) {
+        hours += hoursByAssignmentDate.get(`${assignmentId}:${d}`)?.hours ?? 0
+      }
+      return hours * factor
+    })
+    const rollup = resourcesTabData.buckets.map((_, i) => rows.reduce((sum, row) => sum + bucketHoursFor(row.assignment.id)[i], 0))
+    return {
+      resourceName: resource.name,
+      bucketHours: rollup,
+      rows: rows.map(row => ({
+        code: row.activity.code, name: row.activity.task_name,
+        start: row.activity.start ? formatDateTime(row.activity.start, false) : null,
+        finish: row.activity.finish ? formatDateTime(row.activity.finish, false) : null,
+        bucketHours: bucketHoursFor(row.assignment.id),
+      })),
+    }
+  }).filter(group => group.rows.length > 0), [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit])
+
+  const resourcesProfileBars = useMemo(
+    () => computeUsageProfileBars(
+      printScopedTrackedResources, resourcesTabData.assignmentsByResource, resourcesTabData.buckets,
+      resourcesTabData.spreadByResource, selectedActivityIds, resourcesUnit,
+    ),
+    [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit]
+  )
+
+  const handleResourcesExport = async () => {
+    await downloadResourcesExcel({
+      tables: resourcesPrintTables, projectName: selectedProject?.name ?? 'Project',
+      resources: printScopedResources, calendars,
+      printGroups: resourcesPrintGroups, bucketLabels: resourcesTabData.buckets.map(b => b.label),
+      profileBarValues: resourcesProfileBars.barValues, profileLimit: resourcesProfileBars.limitValue,
+      unit: resourcesUnit,
+    })
+  }
+
+  // Real leveling vs smoothing (2026-07-09, per Maro's own definitions) —
+  // a manual "find the next overallocated resource/activity, then level it"
+  // loop, not a one-shot bulk pass. See resourceLeveling.ts for exactly what
+  // each mode does to activity dates.
+  const [levelPanelOpen, setLevelPanelOpen] = useState(false)
+  const [levelAllAtOnce, setLevelAllAtOnce] = useState(true)
+  const [levelGranularity, setLevelGranularity] = useState<LevelingGranularity>('resource')
+  const [levelMode, setLevelMode] = useState<LevelingMode>('level')
+  const [levelExcludeIds, setLevelExcludeIds] = useState<Set<string>>(new Set())
+  const [levelFoundTarget, setLevelFoundTarget] = useState<LevelingTarget | null>(null)
+  const [levelExhausted, setLevelExhausted] = useState(false)
+  const [levelSearching, setLevelSearching] = useState(false)
+  const [leveling, setLeveling] = useState(false)
+  const [levelResultMessage, setLevelResultMessage] = useState<string | null>(null)
+
+  const resetLevelSearch = () => {
+    setLevelExcludeIds(new Set())
+    setLevelFoundTarget(null)
+    setLevelExhausted(false)
+    setLevelResultMessage(null)
+  }
+
+  // Re-scoping (checking/unchecking a resource or activity while "Level all
+  // at once" is off) invalidates whatever was already found — a stale
+  // target from the old scope shouldn't still be levelable.
+  useEffect(() => {
+    if (!levelAllAtOnce) resetLevelSearch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedResourceIds, selectedActivityIds])
+
+  const levelScopeResources = (): Resource[] => {
+    if (levelAllAtOnce) return resourcesTabData.trackedResources
+    if (selectedResourceIds.size > 0) return resourcesTabData.trackedResources.filter(r => selectedResourceIds.has(r.id))
+    const ids = new Set<string>()
+    for (const r of resourcesTabData.trackedResources) {
+      const rows = resourcesTabData.assignmentsByResource.get(r.id) ?? []
+      if (rows.some(row => selectedActivityIds.has(row.activity.id))) ids.add(r.id)
+    }
+    return resourcesTabData.trackedResources.filter(r => ids.has(r.id))
+  }
+
+  const handleFindNextOverallocated = () => {
+    setLevelSearching(true)
+    setLevelResultMessage(null)
+    try {
+      const target = findNextOverallocatedTarget(
+        levelScopeResources(), levelGranularity, resourcesTabData.assignmentsByResource,
+        resourcesTabData.buckets, resourcesTabData.spreadByResource, levelExcludeIds,
+      )
+      setLevelFoundTarget(target)
+      if (!target) setLevelExhausted(true)
+    } finally {
+      setLevelSearching(false)
+    }
+  }
+
+  const handleLevelFoundTarget = async () => {
+    if (!levelFoundTarget || !period || !selectedProject) return
+    const isSmooth = levelMode === 'smooth'
+    const warning = isSmooth
+      ? `Apply resource smoothing to "${levelFoundTarget.label}"? This only shifts work within its own available float, so the project end date and critical path stay fixed — if there isn't enough float to fully clear the overallocation, it may be left partially unresolved.`
+      : `Apply resource leveling to "${levelFoundTarget.label}"? This delays activities to resolve the overallocation and can push activity dates beyond their current float — the project end date and/or critical path may change as a result.`
+    if (!(await confirmWithDontAsk(isSmooth ? 'scheduling.resource-smooth' : 'scheduling.resource-level', warning))) return
+    setLeveling(true)
+    setLevelResultMessage(null)
+    try {
+      const result = await levelTarget(
+        levelFoundTarget, levelMode, selectedProject.id, period.id, calendars,
+        resourcesTabData.rangeStart, resourcesTabData.rangeEnd, resourcesTabData.buckets,
+      )
+      await refresh()
+      await resourcesTabData.refetchResource(levelFoundTarget.resourceId)
+      setLevelExcludeIds(prev => new Set(prev).add(levelFoundTarget.id))
+      setLevelFoundTarget(null)
+      const movedCount = result.movedActivityIds.length
+      setLevelResultMessage(
+        result.fullyResolved
+          ? `Resolved — moved ${movedCount} activit${movedCount === 1 ? 'y' : 'ies'}.`
+          : result.blockedByFloat
+            ? `Moved ${movedCount} activit${movedCount === 1 ? 'y' : 'ies'}, but ran out of available float — switch to Leveling for a full fix.`
+            : `Moved ${movedCount} activit${movedCount === 1 ? 'y' : 'ies'}; some overallocation may remain.`
+      )
+    } finally {
+      setLeveling(false)
+    }
+  }
+
   // Row DOM nodes, keyed by activity id — populated by each row's own ref
   // callback below, used only to scroll a specific row into view (not a
   // measurement/positioning dependency the way earlier ref-map attempts in
@@ -408,8 +801,13 @@ export function Scheduling() {
     })
   }
 
+  // Schedule vs Resources tab (docs/SCHEDULING_GAPS_PLAN.md Phase 7, per Maro
+  // — "add a second tab dedicated for resources, move current resource
+  // widget in there"). Assign-resources-to-an-activity stays in the bottom
+  // detail panel (ResourceAssignments, below) — only the resource *pool*
+  // definitions move.
+  const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>('schedule')
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
-  const [resourcePoolWidgetOpen, setResourcePoolWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [layoutWidgetOpen, setLayoutWidgetOpen] = useState(false)
@@ -422,6 +820,8 @@ export function Scheduling() {
     saveGanttZoom(zoom)
   }
   const [qualityWidgetOpen, setQualityWidgetOpen] = useState(false)
+  const [subProjectsWidgetOpen, setSubProjectsWidgetOpen] = useState(false)
+  const [scheduleVariantWidgetOpen, setScheduleVariantWidgetOpen] = useState(false)
   // Two independently-printable views share this page (the schedule
   // table+Gantt, and the Quality Analysis) — only one .print-only block may
   // be shown at a time, so printTarget picks which. qualityPrintReport is
@@ -467,12 +867,26 @@ export function Scheduling() {
     })
   }
 
-  // Search / Filters — client-side, matching the prototype's toolbar row. No separate
-  // Group-by control: unlike Risk/ICD/Cost (flat lists needing an artificial grouping
-  // mechanism), activities are already organised by the WBS outline hierarchy
-  // (Phase 2) — a second grouping layer would duplicate it, and would also break the
-  // Gantt's fixed per-row index alignment the same way an inline-expanding row did
-  // (see the Logic panel's history in this file).
+  // Search / Filters — client-side, matching the prototype's toolbar row.
+  //
+  // Group-by (2026-07-10, per Maro — reverses the original decision here: a
+  // second grouping layer would duplicate the WBS outline hierarchy and break
+  // the Gantt's fixed per-row index alignment, same way an inline-expanding
+  // row once did). Resolved by making grouping its own alternate flat view —
+  // when active, it replaces the WBS tree + Gantt entirely (Gantt hidden,
+  // since its row-index math assumes WBS tree order) with a flat grouped
+  // list, same shape as Cost Plan/Risk/ICD's own Group By. "No grouping"
+  // restores today's exact WBS tree + Gantt view, untouched.
+  const [groupBy, setGroupBy] = useState<GroupByField>('none')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const toggleGroupCollapsed = (key: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
   const [searchQuery, setSearchQuery] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filterCritical, setFilterCritical] = useState(false)
@@ -529,6 +943,54 @@ export function Scheduling() {
     localStorage.removeItem('prosota_scheduling_custom_filter_modes')
   }
 
+  // Highlight widget (2026-07-06, per Maro: "works exactly like the filter" —
+  // same built-in/custom two-tier shape as the Filters above, but tints
+  // matching rows instead of narrowing the list; see activityRowBackground's
+  // isHighlighted). "Critical" replaces what used to be an always-on,
+  // automatic row tint — off by default, same as every other opt-in toggle
+  // here, until explicitly turned on.
+  const [highlightsWidgetOpen, setHighlightsWidgetOpen] = useState(false)
+  const [highlightCritical, setHighlightCritical] = useState(() => localStorage.getItem('prosota_scheduling_highlight_critical') === 'true')
+  const handleHighlightCriticalChange = (v: boolean) => {
+    setHighlightCritical(v)
+    localStorage.setItem('prosota_scheduling_highlight_critical', String(v))
+  }
+  const [enabledHighlightIds, setEnabledHighlightIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('prosota_scheduling_enabled_highlight_ids')
+      return saved ? new Set(JSON.parse(saved)) : new Set()
+    } catch {
+      return new Set()
+    }
+  })
+  const handleToggleHighlight = (highlightId: string, enabled: boolean) => {
+    setEnabledHighlightIds(prev => {
+      const next = new Set(prev)
+      if (enabled) next.add(highlightId)
+      else next.delete(highlightId)
+      localStorage.setItem('prosota_scheduling_enabled_highlight_ids', JSON.stringify([...next]))
+      return next
+    })
+  }
+  const handleClearAllHighlights = () => {
+    handleHighlightCriticalChange(false)
+    setEnabledHighlightIds(new Set())
+    localStorage.removeItem('prosota_scheduling_enabled_highlight_ids')
+  }
+  // Union, not the Filters' configurable All/Any — each enabled highlight
+  // (built-in Critical + any custom rule) is independently "a reason to
+  // flag this row", so an activity is highlighted if it matches *any* one
+  // of them, not only when every enabled highlight matches simultaneously.
+  const highlightedActivityIds = useMemo(() => {
+    const ids = new Set<string>()
+    const enabledCustomHighlights = customHighlights.filter(h => enabledHighlightIds.has(h.id))
+    for (const a of activities) {
+      if (highlightCritical && a.is_critical === true) { ids.add(a.id); continue }
+      if (enabledCustomHighlights.some(h => evaluateFilter(a, h))) ids.add(a.id)
+    }
+    return ids
+  }, [activities, highlightCritical, customHighlights, enabledHighlightIds])
+
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
   // a reload. Activity name + checkbox columns are always shown (not toggleable).
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(loadVisibleColumns)
@@ -562,6 +1024,41 @@ export function Scheduling() {
       return next
     })
   }
+
+  // User Defined Fields (docs/SCHEDULING_GAPS_PLAN.md Phase 9) — same
+  // show/hide-and-persist shape as the built-in columns above, just for a
+  // per-project, dynamic set of custom fields instead of a fixed union.
+  // Values are fetched further below, once visibleActivities exists.
+  const {
+    definitions: udfDefinitions, loading: udfDefinitionsLoading,
+    create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
+  } = useUserDefinedFieldDefinitions(selectedProject?.id, 'activity')
+  const [visibleUdfFieldIds, setVisibleUdfFieldIds] = useState<Set<string>>(loadVisibleUdfFields)
+  const isUdfColumnVisible = (id: string) => visibleUdfFieldIds.has(id)
+  const toggleUdfColumn = (id: string) => {
+    setVisibleUdfFieldIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      localStorage.setItem(VISIBLE_UDF_FIELDS_STORAGE_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
+  const visibleUdfDefinitions = udfDefinitions.filter(d => isUdfColumnVisible(d.id))
+  const [udfWidgetOpen, setUdfWidgetOpen] = useState(false)
+
+  // Print Preview (2026-07-07, per Maro: "I need controls and a way to
+  // review before going to print") — a live, on-screen rendering of the
+  // exact same SchedulingPrintView component instead of only via @media
+  // print. Column widths themselves are edited in Page Setup (letterhead.
+  // print_column_widths/print_udf_column_width — "let that be inside the
+  // page setup, like the way print timescale is in there"), not here; this
+  // just derives the effective widths (an explicit save, falling back to
+  // PRINT_COLUMN_DEFAULTS for anything never customized) for the preview and
+  // the real print to both read.
+  const printColumnWidths: Record<ResizableColumnKey, number> = { ...PRINT_COLUMN_DEFAULTS, ...(letterhead?.print_column_widths ?? {}) }
+  const printUdfColumnWidth = letterhead?.print_udf_column_width ?? PRINT_UDF_COLUMN_DEFAULT_WIDTH
+  const [printPreviewOpen, setPrintPreviewOpen] = useState(false)
 
   // Resizable columns + the pane divider — both drag-to-resize with the same
   // "attach document listeners on mousedown, detach on mouseup, persist on
@@ -729,10 +1226,10 @@ export function Scheduling() {
         setLoading(true)
         const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes] = await Promise.all([
           api.get<Activity[]>('/api/v1/activities/', {
-            params: { project_id: selectedProject!.id, period_id: period!.id },
+            params: { project_id: selectedProject!.id, schedule_period_id: period!.id },
           }),
           api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
-            params: { period_id: period!.id },
+            params: { schedule_period_id: period!.id },
           }),
           api.get<Calendar[]>('/api/v1/calendars/', {
             params: { project_id: selectedProject!.id },
@@ -741,7 +1238,7 @@ export function Scheduling() {
             params: { project_id: selectedProject!.id },
           }),
           api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
-            params: { period_id: period!.id },
+            params: { schedule_period_id: period!.id },
           }),
         ])
         if (!cancelled) {
@@ -837,16 +1334,33 @@ export function Scheduling() {
     customFilters, customFilterModes, filterMatchMode,
   ])
 
+  const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(
+    visibleUdfDefinitions, visibleActivities.map(a => a.id)
+  )
+
+  // Flat groups over the same already-filtered visibleActivities every other
+  // feature here reads from — empty when groupBy is 'none' (tree+Gantt render
+  // path used instead, see the JSX below).
+  const groupedActivities = useMemo((): [string, Activity[]][] => {
+    if (groupBy === 'none') return []
+    const map = new Map<string, Activity[]>()
+    for (const a of visibleActivities) {
+      const key = groupKeyFor(a, groupBy, resourceAssignments, calendars)
+      map.set(key, [...(map.get(key) ?? []), a])
+    }
+    return [...map.entries()].sort(([x], [y]) => x.localeCompare(y))
+  }, [visibleActivities, groupBy, resourceAssignments, calendars])
+
   if (!selectedProject) return null
 
   const refresh = async () => {
     if (!period) return
     const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes] = await Promise.all([
       api.get<Activity[]>('/api/v1/activities/', {
-        params: { project_id: selectedProject.id, period_id: period.id },
+        params: { project_id: selectedProject.id, schedule_period_id: period.id },
       }),
       api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
-        params: { period_id: period.id },
+        params: { schedule_period_id: period.id },
       }),
       api.get<Calendar[]>('/api/v1/calendars/', {
         params: { project_id: selectedProject.id },
@@ -855,7 +1369,7 @@ export function Scheduling() {
         params: { project_id: selectedProject.id },
       }),
       api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
-        params: { period_id: period.id },
+        params: { schedule_period_id: period.id },
       }),
     ])
     setActivities(activitiesRes.data)
@@ -863,6 +1377,22 @@ export function Scheduling() {
     setCalendars(calendarsRes.data)
     setResources(resourcesRes.data)
     setResourceAssignments(assignmentsRes.data)
+  }
+
+  // Tagging/untagging changes the affected activities' codes (SP-####) and
+  // sub_total_float_hours/sub_is_critical — refresh the activity list too,
+  // not just the subprojects list itself (2026-07-06, per Maro).
+  const handleCreateSubproject = async (name: string, rootWbsId: string) => {
+    await createSubproject(name, rootWbsId)
+    await refresh()
+  }
+  const handleUpdateSubproject = async (id: string, name: string, rootWbsId: string) => {
+    await updateSubproject(id, name, rootWbsId)
+    await refresh()
+  }
+  const handleDeleteSubproject = async (id: string) => {
+    await removeSubproject(id)
+    await refresh()
   }
 
   // Just adds a blank row (2026-07-03, per Maro) — the old modal form was
@@ -877,14 +1407,33 @@ export function Scheduling() {
     // created, rather than 0% at the start of its first working day
     // (2026-07-03, per Maro).
     const { data } = await api.post<Activity>('/api/v1/activities/', {
-      task_name: 'New Activity', project_id: selectedProject.id, period_id: period.id, duration_hours: 8,
+      task_name: 'New Activity', project_id: selectedProject.id, schedule_period_id: period.id, duration_hours: 8,
     })
     await refresh()
     setExpandedId(data.id)
   }
 
-  const handleUpdate = async (activity: Activity, values: ActivityFormValues, reassessmentNote: string | null) => {
-    await api.patch(`/api/v1/activities/${activity.id}`, toActivityPayload(values, calendars))
+  const handleUpdate = async (
+    activity: Activity, values: ActivityFormValues, reassessmentNote: string | null, amendRelationships = false
+  ) => {
+    const payload = toActivityPayload(values, calendars, activity.activity_type === 'wbs_summary')
+    try {
+      await api.patch(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
+    } catch (err) {
+      // Changing activity_type to/from a Start/Finish Milestone can leave
+      // existing relationships invalid — the backend flags this as a 409
+      // (distinct from an ordinary 422 validation error) listing what would
+      // need to change, rather than silently rejecting or silently fixing
+      // it (2026-07-07, per Maro: warn, then amend on confirmation).
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        const detail = (err.response.data as { detail?: string } | undefined)?.detail ?? 'This change conflicts with existing relationships.'
+        if (window.confirm(`${detail}\n\nAmend them automatically and proceed?`)) {
+          return handleUpdate(activity, values, reassessmentNote, true)
+        }
+        return
+      }
+      throw err
+    }
     if (reassessmentNote) {
       await api.post('/api/v1/reassessments/', {
         record_type: 'activity', record_id: activity.id, note: reassessmentNote,
@@ -968,6 +1517,13 @@ export function Scheduling() {
   }
 
   const startEdit = (a: Activity, field: EditableField) => {
+    if (a.activity_type === 'wbs_summary' && LOCKED_ON_WBS_SUMMARY.includes(field)) return
+    // A Finish Milestone's Start (and a Start Milestone's Finish) isn't a
+    // meaningful, separately-editable date — it's just populated equal to
+    // the other one internally, since CPM needs a concrete instant either
+    // way (2026-07-07, per Maro).
+    if (a.activity_type === 'finish_milestone' && field === 'start') return
+    if (a.activity_type === 'start_milestone' && field === 'finish') return
     setEditingCell({ id: a.id, field })
     setEditingValue(
       field === 'task_name' ? a.task_name
@@ -1037,20 +1593,21 @@ export function Scheduling() {
   const expandedActivity = activities.find(a => a.id === expandedId) ?? null
 
   // Row shade signifies type (2026-07-03, per Maro — replaces an earlier
-  // bold/uppercase idea): critical status takes priority over type, then WBS
-  // summary (shaded progressively lighter per nesting level — see
+  // bold/uppercase idea): an enabled Highlight takes priority over type
+  // (2026-07-06, per Maro — replaces the old always-on automatic critical
+  // tint; see highlightedActivityIds above and SchedulingHighlightsWidget),
+  // then WBS summary (shaded progressively lighter per nesting level — see
   // wbsRowBackground), then milestone, else the flat "normal activity" tint
-  // (white by default, i.e. invisible, until a Layout changes it).
-  const rowBackground = (a: Activity): string | undefined => {
-    // Archived rows read as parked/done regardless of anything else — a flat
-    // grey rather than any live-schedule colour (critical, WBS, milestone),
-    // since they're no longer part of the live network at all.
-    if (a.is_archived || a.is_archive_container) return '#f3f4f6'
-    if (a.is_critical) return withAlpha(ganttStyle.critical_color, 0.12)
-    if (a.activity_type === 'wbs_summary') return wbsRowBackground(ganttStyle, depthOf(a))
-    if (a.activity_type === 'milestone') return withAlpha(ganttStyle.milestone_row_color, 0.15)
-    return ganttStyle.activity_row_color === '#ffffff' ? undefined : withAlpha(ganttStyle.activity_row_color, 1)
-  }
+  // (white by default, i.e. invisible, until a Layout changes it). isCritical
+  // is always passed false here — it still exists in activityRowBackground
+  // for ActivityPicker's own, separate use.
+  const rowBackground = (a: Activity): string | undefined => activityRowBackground(ganttStyle, {
+    isArchived: a.is_archived || a.is_archive_container,
+    isCritical: false,
+    isHighlighted: highlightedActivityIds.has(a.id),
+    activityType: a.activity_type,
+    depth: depthOf(a),
+  })
 
   // True siblings (same parent_id), not the filtered/searched visibleActivities —
   // move up/down talks to the backend's real sibling group regardless of what a
@@ -1138,7 +1695,7 @@ export function Scheduling() {
     for (const a of selectedActivities) {
       await api.post('/api/v1/activities/', {
         project_id: selectedProject.id,
-        period_id: period.id,
+        schedule_period_id: period.id,
         parent_id: a.parent_id,
         // Lands right after the source, not appended at the end of the group
         // (2026-07-04, per Maro — that "end" could otherwise be past the
@@ -1237,16 +1794,337 @@ export function Scheduling() {
           </span>
         )}
       </div>
-      <p className="text-gray-500 text-sm mb-6">
-        Activities for {selectedProject.name}. Start/finish dates, float, and the critical path are computed from
-        duration + logic + calendars — set duration and link activities to see them.
-        See <span className="font-mono text-xs">docs/SCHEDULING_MODULE_PLAN.md</span> for the staged rollout.
-      </p>
 
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
       )}
 
+      <div className="mb-5 flex items-center gap-1 border-b border-gray-200 no-print">
+        <button
+          onClick={() => setActiveTab('schedule')}
+          className={`text-sm px-4 py-2 font-medium border-b-2 -mb-px ${
+            activeTab === 'schedule' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          Activities
+        </button>
+        <button
+          onClick={() => setActiveTab('resources')}
+          className={`text-sm px-4 py-2 font-medium border-b-2 -mb-px ${
+            activeTab === 'resources' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          Resources
+        </button>
+      </div>
+
+      {activeTab === 'resources' && (
+        <>
+          {/* One shared toolbar above all three tables (2026-07-08, per Maro:
+              "I want all the toolbars in the same area... looking neat") —
+              Pool/Tracking/Profile keep only their own table-specific Columns
+              menu, everything else lives here. */}
+          <div className="mb-3 flex items-center gap-1 flex-wrap no-print">
+            <button
+              onClick={handleCollapseAllResources}
+              title="Collapse every resource's activity list"
+              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+            ><CollapseIcon expanded={false} /> Collapse All</button>
+            <button
+              onClick={handleExpandAllResources}
+              title="Expand every resource's activity list"
+              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+            ><CollapseIcon expanded /> Expand All</button>
+            <div className="w-px h-4 bg-gray-200 mx-1" />
+            <label className="text-xs text-gray-500 flex items-center gap-1">
+              From
+              <input
+                type="date"
+                value={toDatetimeLocalValue(resourcesTabData.rangeStart.toISOString()).slice(0, 10)}
+                onChange={e => setResourcesRangeStartOverride(e.target.value ? new Date(e.target.value) : null)}
+                className="border border-gray-300 rounded px-1.5 py-1 text-xs"
+              />
+            </label>
+            <label className="text-xs text-gray-500 flex items-center gap-1">
+              To
+              <input
+                type="date"
+                value={toDatetimeLocalValue(resourcesTabData.rangeEnd.toISOString()).slice(0, 10)}
+                onChange={e => setResourcesRangeEndOverride(e.target.value ? new Date(e.target.value) : null)}
+                className="border border-gray-300 rounded px-1.5 py-1 text-xs"
+              />
+            </label>
+            {(resourcesRangeStartOverride || resourcesRangeEndOverride) && (
+              <button
+                onClick={() => { setResourcesRangeStartOverride(null); setResourcesRangeEndOverride(null) }}
+                className="text-[10px] text-gray-400 hover:text-gray-600"
+              >Reset</button>
+            )}
+            <select
+              value={resourcesZoom}
+              onChange={e => setResourcesZoom(e.target.value as GanttZoom)}
+              className="text-xs border border-gray-300 rounded px-2 py-1"
+            >
+              {ZOOM_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <div className="flex items-center border border-gray-300 rounded overflow-hidden text-xs">
+              <button
+                onClick={() => setResourcesUnit('hours')}
+                className={`px-2 py-1 ${resourcesUnit === 'hours' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >Hours</button>
+              <button
+                onClick={() => setResourcesUnit('days')}
+                className={`px-2 py-1 ${resourcesUnit === 'days' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >Days</button>
+              <button
+                onClick={() => setResourcesUnit('cost')}
+                title="Shows £ — resource.rate/max_hours_per_day, so make sure rates are populated in Resource Pool"
+                className={`px-2 py-1 ${resourcesUnit === 'cost' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >Cost</button>
+            </div>
+            <div className="ml-auto flex items-center gap-1">
+              <div className="relative">
+                <button
+                  onClick={() => setLevelPanelOpen(o => !o)}
+                  className={`text-xs px-2 py-1 rounded border ${levelPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                >Level Resources</button>
+                {levelPanelOpen && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-80 space-y-2.5">
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox" checked={levelAllAtOnce}
+                        onChange={e => { setLevelAllAtOnce(e.target.checked); resetLevelSearch() }}
+                      />
+                      Level all resources at once
+                    </label>
+                    {!levelAllAtOnce && (
+                      <div className="text-[10px] text-gray-400 -mt-1">
+                        Uses whatever's checked in Resource Pool, Tracking, or Profile below.
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Find by</span>
+                      <div className="flex items-center border border-gray-300 rounded overflow-hidden">
+                        <button
+                          onClick={() => { setLevelGranularity('resource'); resetLevelSearch() }}
+                          className={`px-2 py-1 ${levelGranularity === 'resource' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                        >Resource</button>
+                        <button
+                          onClick={() => { setLevelGranularity('activity'); resetLevelSearch() }}
+                          className={`px-2 py-1 ${levelGranularity === 'activity' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                        >Activity</button>
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox" checked={levelMode === 'smooth'}
+                        onChange={e => { setLevelMode(e.target.checked ? 'smooth' : 'level'); resetLevelSearch() }}
+                      />
+                      Apply resource smoothing
+                    </label>
+                    <div className="text-[10px] text-gray-400 leading-snug border-t border-gray-100 pt-2">
+                      {levelMode === 'smooth'
+                        ? 'Smoothing redistributes work within each activity\'s own float — the project end date and critical path stay fixed. Overallocation may not fully resolve if float runs out.'
+                        : 'Leveling delays overallocated activities to resolve the conflict — it can push out the project end date and change the critical path.'}
+                    </div>
+                    <div className="border-t border-gray-100 pt-2 space-y-1.5">
+                      <button
+                        onClick={handleFindNextOverallocated}
+                        disabled={levelSearching || levelExhausted}
+                        className="w-full text-xs px-2 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >{levelExhausted ? 'No more overallocation in scope' : levelSearching ? 'Searching…' : 'Find Next Overallocated'}</button>
+                      {levelFoundTarget && (
+                        <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                          Found: {levelFoundTarget.label}
+                        </div>
+                      )}
+                      <button
+                        onClick={handleLevelFoundTarget}
+                        disabled={!levelFoundTarget || leveling}
+                        className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >{leveling ? 'Applying…' : levelMode === 'smooth' ? 'Smooth' : 'Level'}</button>
+                      {levelResultMessage && <div className="text-[11px] text-gray-500">{levelResultMessage}</div>}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative">
+                <button
+                  onClick={() => setResourcesLayoutOpen(o => !o)}
+                  className={`text-xs px-2 py-1 rounded border ${resourcesLayoutOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                >Layout</button>
+                {resourcesLayoutOpen && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-56 space-y-2">
+                    <div className="text-[10px] text-gray-400">Applies to Resource Pool, Tracking, and Usage Profile on screen.</div>
+                    <label className="flex items-center justify-between gap-2">
+                      Font
+                      <select
+                        value={resourcesLayoutPrefs.fontFamily}
+                        onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, fontFamily: e.target.value as GanttFontFamily })}
+                        className="border border-gray-300 rounded px-1.5 py-0.5"
+                      >
+                        <option value="sans">Sans-serif</option>
+                        <option value="serif">Serif</option>
+                        <option value="mono">Monospace</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center justify-between gap-2">
+                      Font size
+                      <input
+                        type="number" min={9} max={16} value={resourcesLayoutPrefs.fontSize}
+                        onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, fontSize: Number(e.target.value) || DEFAULT_RESOURCES_LAYOUT.fontSize })}
+                        className="w-14 border border-gray-300 rounded px-1.5 py-0.5"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2">
+                      Header colour
+                      <input
+                        type="color" value={resourcesLayoutPrefs.headerColor}
+                        onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, headerColor: e.target.value })}
+                        className="w-10 h-6 border border-gray-300 rounded"
+                      />
+                    </label>
+                    <button onClick={() => saveResourcesLayoutPrefs(DEFAULT_RESOURCES_LAYOUT)} className="text-[10px] text-gray-400 hover:text-gray-600">
+                      Reset to defaults
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setResourcesPageSetupOpen(o => !o)}
+                title="Shared logo/header/footer, print font, and which table(s) to include when printing/exporting"
+                className={`text-xs px-2 py-1 rounded border ${resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+              >Page Setup</button>
+              <button onClick={handleResourcesExport} className="text-xs px-2 py-1 rounded border bg-white text-gray-600 border-gray-300 hover:bg-gray-50">
+                Export
+              </button>
+            </div>
+          </div>
+
+          {resourcesPageSetupOpen && letterhead && (
+            <div className="no-print mb-3 space-y-3">
+              <LetterheadEditorWidget
+                letterhead={letterhead}
+                previewTokens={{
+                  project: selectedProject.name, module: 'Resources',
+                  count: `${printScopedTrackedResources.length} resource${printScopedTrackedResources.length === 1 ? '' : 's'}`,
+                  printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+                }}
+                onSave={saveLetterhead}
+                onClose={() => setResourcesPageSetupOpen(false)}
+                onPrint={() => setResourcesPrintTrigger(t => t + 1)}
+              />
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Print Options</div>
+                <div className="text-[11px] text-gray-500 mb-3">
+                  {selectedResourceIds.size === 0 && selectedActivityIds.size === 0
+                    ? 'Nothing checked below — printing/exporting all resources.'
+                    : selectedActivityIds.size > 0
+                      ? `Scoped to ${selectedActivityIds.size} checked activit${selectedActivityIds.size === 1 ? 'y' : 'ies'} (and its resource${printScopedResources.length === 1 ? '' : 's'}).`
+                      : `Scoped to ${selectedResourceIds.size} checked resource${selectedResourceIds.size === 1 ? '' : 's'}.`}
+                </div>
+                <div className="flex items-center gap-4 flex-wrap mb-3">
+                  {ALL_RESOURCES_PRINT_TABLES.map(table => (
+                    <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input type="checkbox" checked={resourcesPrintTables.has(table)} onChange={() => toggleResourcesPrintTable(table)} />
+                      {RESOURCES_PRINT_TABLE_LABELS[table]}
+                    </label>
+                  ))}
+                </div>
+                {resourcesPrintTables.has('profile') && (
+                  <div className="flex items-center gap-3 flex-wrap mb-3 text-[11px] text-gray-500">
+                    <span className="text-gray-400">Usage Profile legend:</span>
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-4 flex-wrap mb-3">
+                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                    Print font
+                    <select
+                      value={resourcesPrintFonts.fontFamily}
+                      onChange={e => saveResourcesPrintFontsPrefs({ ...resourcesPrintFonts, fontFamily: e.target.value as GanttFontFamily })}
+                      className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                    >
+                      <option value="sans">Sans-serif</option>
+                      <option value="serif">Serif</option>
+                      <option value="mono">Monospace</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                    Print font size
+                    <input
+                      type="number" min={6} max={14} value={resourcesPrintFonts.fontSize}
+                      onChange={e => saveResourcesPrintFontsPrefs({ ...resourcesPrintFonts, fontSize: Number(e.target.value) || DEFAULT_RESOURCES_PRINT_FONTS.fontSize })}
+                      className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                    />
+                  </label>
+                  <button onClick={() => saveResourcesPrintFontsPrefs(DEFAULT_RESOURCES_PRINT_FONTS)} className="text-[10px] text-gray-400 hover:text-gray-600">
+                    Reset to defaults
+                  </button>
+                </div>
+                <button
+                  onClick={() => setResourcesPrintTrigger(t => t + 1)}
+                  className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  🖨️ Print selected table(s)
+                </button>
+              </div>
+            </div>
+          )}
+
+          <ResourcePoolWidget
+            projectId={selectedProject.id}
+            resources={resources}
+            calendars={calendars}
+            onChange={refresh}
+            selectedIds={selectedResourceIds}
+            onToggleSelected={toggleResourceSelected}
+            layoutPrefs={resourcesLayoutPrefs}
+          />
+          <ResourceTrackingWidget
+            calendars={calendars}
+            trackedResources={resourcesTabData.trackedResources}
+            assignmentsByResource={resourcesTabData.assignmentsByResource}
+            buckets={resourcesTabData.buckets}
+            spreadByResource={resourcesTabData.spreadByResource}
+            loading={resourcesTabData.loading}
+            onRefetchResource={resourcesTabData.refetchResource}
+            unit={resourcesUnit}
+            layoutPrefs={resourcesLayoutPrefs}
+            selectedResourceIds={selectedResourceIds}
+            onToggleResourceSelected={toggleResourceSelected}
+            selectedActivityIds={selectedActivityIds}
+            onToggleActivitySelected={toggleActivitySelected}
+            collapsedIds={collapsedResourceIds}
+            onToggleCollapsed={toggleResourceCollapsed}
+            onLeftPaneWidthChange={setResourcesLeftPaneWidth}
+            scrollLeft={resourcesScrollLeft}
+            onScrollLeftChange={setResourcesScrollLeft}
+          />
+          <ResourceUsageProfileWidget
+            calendars={calendars}
+            trackedResources={resourcesTabData.trackedResources}
+            assignmentsByResource={resourcesTabData.assignmentsByResource}
+            buckets={resourcesTabData.buckets}
+            spreadByResource={resourcesTabData.spreadByResource}
+            loading={resourcesTabData.loading}
+            layoutPrefs={resourcesLayoutPrefs}
+            unit={resourcesUnit}
+            selectedResourceIds={selectedResourceIds}
+            onToggleResourceSelected={toggleResourceSelected}
+            selectedActivityIds={selectedActivityIds}
+            leftPaneWidth={resourcesLeftPaneWidth}
+            scrollLeft={resourcesScrollLeft}
+            onScrollLeftChange={setResourcesScrollLeft}
+          />
+        </>
+      )}
+
+      {activeTab === 'schedule' && (
+      <>
       {calendarWidgetOpen && (
         <div className="no-print">
           <CalendarWidget
@@ -1258,23 +2136,58 @@ export function Scheduling() {
         </div>
       )}
 
-      {resourcePoolWidgetOpen && (
-        <div className="no-print">
-          <ResourcePoolWidget
-            projectId={selectedProject.id}
-            resources={resources}
-            onChange={refresh}
-            onClose={() => setResourcePoolWidgetOpen(false)}
-          />
-        </div>
-      )}
-
       {baselineWidgetOpen && period && (
         <div className="no-print">
           <BaselineWidget
             periodId={period.id}
+            otherVariants={scheduleVariants.filter(v => v.id !== activeVariant?.id)}
             onChange={refresh}
+            onPromote={promoteBaselineToVariant}
             onClose={() => setBaselineWidgetOpen(false)}
+          />
+        </div>
+      )}
+
+      {scheduleVariantWidgetOpen && (
+        <div className="no-print">
+          <ScheduleVariantWidget
+            variants={scheduleVariants}
+            activeVariantId={activeVariant?.id}
+            onSelect={selectVariant}
+            onCreate={createVariant}
+            onRename={renameVariant}
+            onDelete={deleteVariant}
+            onPromote={promoteVariant}
+            onClose={() => setScheduleVariantWidgetOpen(false)}
+          />
+        </div>
+      )}
+
+      {udfWidgetOpen && (
+        <div className="no-print">
+          <UserDefinedFieldsWidget
+            entityType="activity"
+            availableEntityTypes={['activity']}
+            onEntityTypeChange={() => {}}
+            definitions={udfDefinitions}
+            loading={udfDefinitionsLoading}
+            onCreate={createUdfDefinition}
+            onUpdate={updateUdfDefinition}
+            onDelete={removeUdfDefinition}
+            onClose={() => setUdfWidgetOpen(false)}
+          />
+        </div>
+      )}
+
+      {subProjectsWidgetOpen && (
+        <div className="no-print">
+          <SubProjectsWidget
+            activities={activities}
+            subprojects={subprojects}
+            onCreate={handleCreateSubproject}
+            onUpdate={handleUpdateSubproject}
+            onDelete={handleDeleteSubproject}
+            onClose={() => setSubProjectsWidgetOpen(false)}
           />
         </div>
       )}
@@ -1284,6 +2197,7 @@ export function Scheduling() {
           <SchedulingQualityWidget
             projectId={selectedProject.id}
             periodId={period.id}
+            subprojects={subprojects}
             onClose={() => setQualityWidgetOpen(false)}
             onReportForPrint={(report, runName) => { setQualityPrintReport(report); setQualityPrintRunName(runName) }}
             onPrint={printQuality}
@@ -1306,6 +2220,15 @@ export function Scheduling() {
             + Add Activity
           </button>
           <button
+            onClick={() => setScheduleVariantWidgetOpen(o => !o)}
+            title="More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ..."
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+              scheduleVariantWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            🗂️ {activeVariant ? activeVariant.name : 'Schedules'}
+          </button>
+          <button
             onClick={() => setCalendarWidgetOpen(o => !o)}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
               calendarWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -1314,12 +2237,23 @@ export function Scheduling() {
             📆 Calendar
           </button>
           <button
-            onClick={() => setResourcePoolWidgetOpen(o => !o)}
+            onClick={() => setUdfWidgetOpen(o => !o)}
+            title="Define custom fields, then add them as columns from the Columns menu"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              resourcePoolWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
             }`}
           >
-            👷 Resources
+            🏷️ Custom Fields
+          </button>
+          <button
+            onClick={() => setSubProjectsWidgetOpen(o => !o)}
+            disabled={activities.length === 0}
+            title="Give a WBS branch its own scoped critical path, independent of the master schedule"
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
+              subProjectsWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            🏗️ Sub-Projects
           </button>
           <button
             onClick={() => setBaselineWidgetOpen(o => !o)}
@@ -1381,6 +2315,17 @@ export function Scheduling() {
           ⚙ Filters{[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length + Object.keys(customFilterModes).length > 0
             ? ` (${[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length + Object.keys(customFilterModes).length})` : ''}
         </button>
+        <button
+          onClick={() => setHighlightsWidgetOpen(o => !o)}
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            highlightsWidgetOpen || highlightCritical || enabledHighlightIds.size > 0
+              ? 'bg-gray-900 text-white border-gray-900'
+              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🖍 Highlight{(highlightCritical ? 1 : 0) + enabledHighlightIds.size > 0
+            ? ` (${(highlightCritical ? 1 : 0) + enabledHighlightIds.size})` : ''}
+        </button>
         <div className="relative">
           <button
             onClick={() => setColumnsMenuOpen(o => !o)}
@@ -1398,6 +2343,17 @@ export function Scheduling() {
                   {col.label}
                 </label>
               ))}
+              {udfDefinitions.length > 0 && (
+                <>
+                  <div className="border-t border-gray-100 my-1.5 pt-1.5 text-[10px] uppercase tracking-wide text-gray-400">Custom Fields</div>
+                  {udfDefinitions.map(d => (
+                    <label key={d.id} className="flex items-center gap-1.5 text-xs text-gray-600 py-1">
+                      <input type="checkbox" checked={isUdfColumnVisible(d.id)} onChange={() => toggleUdfColumn(d.id)} />
+                      {d.name} (UDF)
+                    </label>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1409,20 +2365,20 @@ export function Scheduling() {
           ⇩ Export ({visibleActivities.length})
         </button>
         <button
-          onClick={printSchedule}
+          onClick={() => setPrintPreviewOpen(true)}
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
-          title="Print the activity list exactly as currently shown (respecting search/filters)."
+          title="Review column widths/layout before printing the activity list (respecting search/filters)."
         >
           🖨️ Print
         </button>
         <button
           onClick={() => setLetterheadWidgetOpen(o => !o)}
-          title="Edit the shared logo/header/footer used on every module's printed reports for this project"
+          title="Edit the shared logo/header/footer and print timescale used for this project's printed reports"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
             letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          🎨 Letterhead
+          📄 Page Setup
         </button>
         <button
           onClick={() => setLayoutWidgetOpen(o => !o)}
@@ -1479,7 +2435,7 @@ export function Scheduling() {
             <button
               onClick={() => setBulkAssignMenuOpen(o => !o)}
               disabled={selectedActivities.length === 0}
-              title="Assign a common predecessor/successor/calendar/resource to all selected"
+              title="Assign a common predecessor/successor/calendar/resource to all selected, or move them to a new parent"
               className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
             >
               🔗 Assign ▾
@@ -1489,6 +2445,8 @@ export function Scheduling() {
                 {([
                   ['predecessor', 'Predecessor…'], ['successor', 'Successor…'],
                   ['calendar', 'Calendar…'], ['resource', 'Resource…'],
+                  ['unassign-resource', 'Unassign Resource…'],
+                  ['move', 'Move to…'],
                 ] as [BulkAssignMode, string][]).map(([m, label]) => (
                   <button
                     key={m}
@@ -1522,6 +2480,14 @@ export function Scheduling() {
             title="Expand every WBS summary"
             className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
           ><CollapseIcon expanded /> Expand All</button>
+          <select
+            value={groupBy}
+            onChange={e => { setGroupBy(e.target.value as GroupByField); setCollapsedGroups(new Set()) }}
+            title="Group activities into a flat list by this field, instead of the WBS tree — hides the Gantt while grouped"
+            className="text-xs border border-gray-300 rounded-md px-2 py-1 ml-1"
+          >
+            {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
+          </select>
         </div>
 
         <div className="flex items-center gap-1 ml-auto">
@@ -1549,8 +2515,10 @@ export function Scheduling() {
             allActivities={activities}
             calendars={calendars}
             resources={resources}
+            resourceAssignments={resourceAssignments}
             onApplied={refresh}
             onClose={() => setBulkAssignMode(null)}
+            ganttStyle={ganttStyle}
           />
         </div>
       )}
@@ -1572,12 +2540,19 @@ export function Scheduling() {
           <LetterheadEditorWidget
             letterhead={letterhead}
             previewTokens={{
-              project: selectedProject.name, module: 'Schedule',
+              project: selectedProject.name, module: 'Activities',
               count: `${visibleActivities.length} activit${visibleActivities.length === 1 ? 'y' : 'ies'}`,
               printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
             }}
             onSave={saveLetterhead}
             onClose={() => setLetterheadWidgetOpen(false)}
+            showGanttOptions
+            onPrint={printSchedule}
+            schedulePreview={{
+              activities: visibleActivities, relationships, resourceAssignments, calendars,
+              visibleColumns, udfDefinitions: visibleUdfDefinitions, getUdfValue,
+              ganttStyle, ganttZoom, onGanttZoomChange: handleZoomChange, dataDate: period?.start_date ?? null,
+            }}
           />
         </div>
       )}
@@ -1615,6 +2590,22 @@ export function Scheduling() {
         </div>
       )}
 
+      {highlightsWidgetOpen && (
+        <div className="no-print">
+          <SchedulingHighlightsWidget
+            highlights={customHighlights}
+            onCreate={createSchedulingHighlight}
+            onUpdate={updateSchedulingHighlight}
+            onDelete={removeSchedulingHighlight}
+            onClose={() => setHighlightsWidgetOpen(false)}
+            highlightCritical={highlightCritical} onHighlightCriticalChange={handleHighlightCriticalChange}
+            enabledHighlightIds={enabledHighlightIds} onToggleHighlight={handleToggleHighlight}
+            onClearAll={handleClearAllHighlights}
+          />
+        </div>
+      )}
+
+      {groupBy === 'none' && (
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
@@ -1628,7 +2619,7 @@ export function Scheduling() {
         >
           <table
             className="scheduling-grid text-sm border-collapse table-fixed"
-            style={{ color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family] }}
+            style={{ color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family], fontSize: ganttStyle.table_font_size }}
           >
             <colgroup>
               <col style={{ width: 32 }} />
@@ -1643,7 +2634,10 @@ export function Scheduling() {
               {isColumnVisible('bl_finish') && <col style={{ width: columnWidths.bl_finish }} />}
               {isColumnVisible('variance') && <col style={{ width: columnWidths.variance }} />}
               {isColumnVisible('float') && <col style={{ width: columnWidths.float }} />}
+              {isColumnVisible('critical') && <col style={{ width: columnWidths.critical }} />}
               {isColumnVisible('free_float') && <col style={{ width: columnWidths.free_float }} />}
+              {isColumnVisible('sub_float') && <col style={{ width: columnWidths.sub_float }} />}
+              {isColumnVisible('sub_critical') && <col style={{ width: columnWidths.sub_critical }} />}
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
               {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
@@ -1656,11 +2650,12 @@ export function Scheduling() {
               {isColumnVisible('spi') && <col style={{ width: columnWidths.spi }} />}
               {isColumnVisible('eac') && <col style={{ width: columnWidths.eac }} />}
               {isColumnVisible('etc') && <col style={{ width: columnWidths.etc }} />}
+              {visibleUdfDefinitions.map(d => <col key={d.id} style={{ width: '9rem' }} />)}
             </colgroup>
             <thead>
               <tr
-                style={{ height: 36 }}
-                className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide sticky top-0"
+                style={{ height: 36, fontSize: ganttStyle.header_font_size, fontFamily: FONT_FAMILY_CSS[ganttStyle.header_font_family] }}
+                className="bg-gray-50 border-b border-gray-200 text-left text-gray-500 font-medium uppercase tracking-wide sticky top-0"
               >
                 <th className="px-2 py-2.5 no-print">
                   <input
@@ -1688,8 +2683,11 @@ export function Scheduling() {
                     Fin. Var (d)
                   </ResizableTh>
                 )}
-                {isColumnVisible('float') && <ResizableTh width={columnWidths.float} onResizeStart={startColumnResize('float')} {...sortHeader('float')} title="Slip this activity can absorb without delaying the whole project (hours)">Total Float</ResizableTh>}
-                {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} {...sortHeader('free_float')} title="Slip this activity can absorb without delaying its own successors (hours)">Free Float</ResizableTh>}
+                {isColumnVisible('float') && <ResizableTh width={columnWidths.float} onResizeStart={startColumnResize('float')} {...sortHeader('float')} title="Slip this activity can absorb without delaying the whole project — stored in hours, shown in whole days">Total Float (d)</ResizableTh>}
+                {isColumnVisible('critical') && <ResizableTh width={columnWidths.critical} onResizeStart={startColumnResize('critical')} {...sortHeader('critical')} title="On the master critical path — zero (or negative) Total Float">Critical</ResizableTh>}
+                {isColumnVisible('free_float') && <ResizableTh width={columnWidths.free_float} onResizeStart={startColumnResize('free_float')} {...sortHeader('free_float')} title="Slip this activity can absorb without delaying its own successors — stored in hours, shown in whole days">Free Float (d)</ResizableTh>}
+                {isColumnVisible('sub_float') && <ResizableTh width={columnWidths.sub_float} onResizeStart={startColumnResize('sub_float')} {...sortHeader('sub_float')} title="Total Float within its own tagged sub-project's branch, calculated in isolation — blank outside any tagged sub-project">Sub Total Float (d)</ResizableTh>}
+                {isColumnVisible('sub_critical') && <ResizableTh width={columnWidths.sub_critical} onResizeStart={startColumnResize('sub_critical')} {...sortHeader('sub_critical')} title="Critical within its own tagged sub-project's branch, even if not critical on the master schedule — blank outside any tagged sub-project">Sub Critical</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} {...sortHeader('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
@@ -1702,6 +2700,9 @@ export function Scheduling() {
                 {isColumnVisible('spi') && <ResizableTh width={columnWidths.spi} onResizeStart={startColumnResize('spi')} {...sortHeader('spi')} title="Schedule Performance Index — EV ÷ PV">SPI</ResizableTh>}
                 {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} {...sortHeader('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
                 {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} {...sortHeader('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
+                {visibleUdfDefinitions.map(d => (
+                  <th key={d.id} className="px-3 py-2.5 whitespace-nowrap" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -1718,7 +2719,7 @@ export function Scheduling() {
                     <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
                   </td>
                   {isColumnVisible('code') && (
-                    <td className="px-3 py-1 text-gray-500 font-mono text-xs whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
+                    <td className="px-3 py-1 text-gray-500 whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
                       {editingField === 'code' ? (
                         <input
                           autoFocus
@@ -1726,12 +2727,12 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={commitEdit}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs font-mono"
+                          className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
                       ) : a.code}
                     </td>
                   )}
-                  {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 font-mono text-xs whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
+                  {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
                   <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
                     {editingField === 'task_name' ? (
                       <input
@@ -1775,7 +2776,11 @@ export function Scheduling() {
                     )}
                   </td>
                   {isColumnVisible('type') && (
-                    <td className="px-3 py-1 text-gray-600 text-xs capitalize" onDoubleClick={() => startEdit(a, 'activity_type')}>
+                    <td
+                      className="px-3 py-1 text-gray-600"
+                      onDoubleClick={() => startEdit(a, 'activity_type')}
+                      title={a.activity_type === 'wbs_summary' ? 'Computed automatically from its children — remove/outdent them to change this' : undefined}
+                    >
                       {editingField === 'activity_type' ? (
                         <select
                           autoFocus
@@ -1785,13 +2790,19 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         >
-                          {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                          {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ').toUpperCase()}</option>)}
                         </select>
-                      ) : a.activity_type.replace('_', ' ')}
+                      ) : a.activity_type.replace('_', ' ').toUpperCase()}
                     </td>
                   )}
                   {isColumnVisible('duration') && (
-                    <td className="px-3 py-1 text-gray-600" onDoubleClick={() => startEdit(a, 'duration_hours')} title={a.duration_hours !== null ? `${a.duration_hours}h` : undefined}>
+                    <td
+                      className="px-3 py-1 text-gray-600"
+                      onDoubleClick={() => startEdit(a, 'duration_hours')}
+                      title={a.activity_type === 'wbs_summary'
+                        ? 'Computed from its children — remove or outdent them to edit directly'
+                        : (a.duration_days !== null ? `${a.duration_days}d` : undefined)}
+                    >
                       {editingField === 'duration_hours' ? (
                         <input
                           autoFocus
@@ -1809,9 +2820,13 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('start') && (
                     <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap"
+                      className="px-3 py-1 whitespace-nowrap text-gray-600"
                       onDoubleClick={() => startEdit(a, 'start')}
-                      title={a.constraint_type === 'snet' ? 'Start On or After constraint applied' : 'Double-click to set a Start On or After constraint'}
+                      title={a.activity_type === 'wbs_summary'
+                        ? 'Computed from its children — remove or outdent them to edit directly'
+                        : a.activity_type === 'finish_milestone'
+                        ? 'Not a meaningful date for a Finish Milestone — see its Finish instead'
+                        : (a.constraint_type === 'snet' ? 'Start On or After constraint applied' : 'Double-click to set a Start On or After constraint')}
                     >
                       {editingField === 'start' ? (
                         <input
@@ -1823,15 +2838,19 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
-                      ) : formatDateTime(a.start, ganttStyle.show_time_of_day)}
+                      ) : a.activity_type === 'finish_milestone' ? '—' : formatDateTime(a.start, ganttStyle.show_time_of_day)}
                     </td>
                   )}
                   {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_start, ganttStyle.show_time_of_day)}</td>}
                   {isColumnVisible('finish') && (
                     <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap"
+                      className="px-3 py-1 whitespace-nowrap text-gray-600"
                       onDoubleClick={() => startEdit(a, 'finish')}
-                      title="Double-click to change duration by setting a new finish"
+                      title={a.activity_type === 'wbs_summary'
+                        ? 'Computed from its children — remove or outdent them to edit directly'
+                        : a.activity_type === 'start_milestone'
+                        ? 'Not a meaningful date for a Start Milestone — see its Start instead'
+                        : 'Double-click to change duration by setting a new finish'}
                     >
                       {editingField === 'finish' ? (
                         <input
@@ -1843,7 +2862,7 @@ export function Scheduling() {
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
-                      ) : formatDateTime(a.finish, ganttStyle.show_time_of_day)}
+                      ) : a.activity_type === 'start_milestone' ? '—' : formatDateTime(a.finish, ganttStyle.show_time_of_day)}
                     </td>
                   )}
                   {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_finish, ganttStyle.show_time_of_day)}</td>}
@@ -1854,16 +2873,35 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('float') && (
                     <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-                      {a.total_float_hours ?? '—'}{a.total_float_hours !== null ? 'h' : ''}
+                      {formatFloatDays(a.total_float_hours, a, calendars)}
+                    </td>
+                  )}
+                  {isColumnVisible('critical') && (
+                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                      {a.is_critical === null ? '—' : a.is_critical ? 'Yes' : 'No'}
                     </td>
                   )}
                   {isColumnVisible('free_float') && (
                     <td className="px-3 py-1 text-gray-600">
-                      {a.free_float_hours ?? '—'}{a.free_float_hours !== null ? 'h' : ''}
+                      {formatFloatDays(a.free_float_hours, a, calendars)}
+                    </td>
+                  )}
+                  {isColumnVisible('sub_float') && (
+                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
+                      {formatFloatDays(a.sub_total_float_hours, a, calendars)}
+                    </td>
+                  )}
+                  {isColumnVisible('sub_critical') && (
+                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
+                      {a.sub_is_critical === null ? '—' : a.sub_is_critical ? 'Yes' : 'No'}
                     </td>
                   )}
                   {isColumnVisible('pct_complete') && (
-                    <td className="px-3 py-1 text-gray-600" onDoubleClick={() => startEdit(a, 'pct_complete')}>
+                    <td
+                      className="px-3 py-1 text-gray-600"
+                      onDoubleClick={() => startEdit(a, 'pct_complete')}
+                      title={a.activity_type === 'wbs_summary' ? 'Computed (duration-weighted average of its children) — not directly editable' : undefined}
+                    >
                       {editingField === 'pct_complete' ? (
                         <input
                           autoFocus
@@ -1904,13 +2942,21 @@ export function Scheduling() {
                   {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.spi)}</td>}
                   {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.eac)}</td>}
                   {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.etc)}</td>}
+                  {visibleUdfDefinitions.map(d => (
+                    <UdfCell
+                      key={d.id}
+                      definition={d}
+                      value={getUdfValue(d.id, a.id)}
+                      onSave={payload => setUdfValue(d.id, a.id, payload)}
+                    />
+                  ))}
                 </tr>
                 )
               })}
               {visibleActivities.length === 0 && (
                 <tr>
                   <td
-                    colSpan={visibleColumns.size + 2}
+                    colSpan={visibleColumns.size + visibleUdfDefinitions.length + 2}
                     className="px-4 py-10 text-center text-gray-400 text-sm"
                     // Overrides .scheduling-grid tbody td's row-height cap (index.css)
                     // — that's sized for a real activity row, not this placeholder message.
@@ -1947,6 +2993,82 @@ export function Scheduling() {
           />
         </div>
       </div>
+      )}
+
+      {/* Flat grouped view (2026-07-10, per Maro) — replaces the WBS tree +
+          Gantt entirely while a grouping is active; read-only cells (no
+          inline editing here, click the name to open the same detail panel
+          the tree view uses for that). "No grouping" restores the block
+          above, untouched. */}
+      {groupBy !== 'none' && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-gray-50 text-left text-gray-500 border-b border-gray-200">
+                <th className="px-2 py-1.5 w-8"></th>
+                <th className="px-3 py-1.5">Code</th>
+                <th className="px-3 py-1.5">Activity</th>
+                <th className="px-3 py-1.5">Type</th>
+                <th className="px-3 py-1.5">Start</th>
+                <th className="px-3 py-1.5">Finish</th>
+                <th className="px-3 py-1.5 text-right">Dur (d)</th>
+                <th className="px-3 py-1.5">Resources</th>
+                <th className="px-3 py-1.5">Critical</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupedActivities.map(([key, acts]) => {
+                const collapsed = collapsedGroups.has(key)
+                return (
+                  <Fragment key={key || '(none)'}>
+                    <tr className="bg-gray-100 border-b border-gray-200 cursor-pointer" onClick={() => toggleGroupCollapsed(key)}>
+                      <td className="px-2 py-1.5" colSpan={9}>
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700 text-xs">
+                          <CollapseIcon expanded={!collapsed} /> {key || '(none)'}
+                          <span className="text-gray-400 font-normal">({acts.length})</span>
+                        </span>
+                      </td>
+                    </tr>
+                    {!collapsed && acts.map(a => (
+                      <tr
+                        key={a.id}
+                        style={{ height: GANTT_ROW_HEIGHT, backgroundColor: rowBackground(a) }}
+                        className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                      >
+                        <td className="px-2 py-1.5">
+                          <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
+                        </td>
+                        <td className="px-3 py-1.5 text-gray-500 font-mono text-xs">{a.code}</td>
+                        <td className="px-3 py-1.5">
+                          <button
+                            onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
+                            className="text-left font-medium text-gray-900 hover:text-blue-600"
+                          >
+                            {a.task_name}
+                          </button>
+                        </td>
+                        <td className="px-3 py-1.5 text-gray-500">{GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{a.start ? formatDateTime(a.start, false) : '—'}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-500">{formatDuration(a.duration_days)}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, resourceAssignments)}</td>
+                        <td className="px-3 py-1.5">
+                          {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Critical</span>}
+                          {a.is_critical === false && <span className="text-gray-300 text-xs">—</span>}
+                          {a.is_critical === null && <span className="text-gray-300 text-xs">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                )
+              })}
+              {groupedActivities.length === 0 && (
+                <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">No activities match the current filters</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {(expandedActivity || panelPinned) && (
         <div
@@ -1985,8 +3107,8 @@ export function Scheduling() {
               </div>
               <div className="col-span-2 divide-y divide-gray-100 overflow-y-auto" style={{ maxHeight: 420 }}>
                 <ActivityLogic
-                  activity={expandedActivity} activities={activities} relationships={relationships} onChange={refresh}
-                  onFocusActivity={handleFocusActivity}
+                  activity={expandedActivity} activities={activities} relationships={relationships} calendars={calendars}
+                  onChange={refresh} onFocusActivity={handleFocusActivity} ganttStyle={ganttStyle}
                 />
                 <ResourceAssignments activity={expandedActivity} resources={resources} onChange={refresh} />
                 <ReassessmentLog
@@ -1995,6 +3117,7 @@ export function Scheduling() {
                   refreshKey={reassessmentRefreshKey}
                   onLogged={() => refresh()}
                 />
+                <ActivityStepsWidget activityId={expandedActivity.id} />
                 <CodeHistory activityId={expandedActivity.id} code={expandedActivity.code} />
               </div>
             </div>
@@ -2003,18 +3126,40 @@ export function Scheduling() {
           )}
         </div>
       )}
+      </>
+      )}
     </div>
-    {printTarget === 'schedule' && (
+    {/* Top-level siblings of the "no-print" content div above, not nested
+        inside it (2026-07-09 fix, per Maro: "print is printing an empty
+        page") — .no-print's display:none hides all descendants regardless
+        of their own class, so these three must sit outside it, same as
+        SchedulingPrintView/SchedulingQualityPrintView already do. */}
+    {activeTab === 'resources' && (
+      <ResourcesPrintView
+        tables={resourcesPrintTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
+        resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
+        trackedResources={printScopedTrackedResources} assignmentsByResource={resourcesTabData.assignmentsByResource}
+        buckets={resourcesTabData.buckets} spreadByResource={resourcesTabData.spreadByResource} selectedActivityIds={selectedActivityIds}
+        unit={resourcesUnit}
+      />
+    )}
+    {printTarget === 'schedule' && activeTab === 'schedule' && (
       <SchedulingPrintView
         activities={visibleActivities}
         relationships={relationships}
         resourceAssignments={resourceAssignments}
+        calendars={calendars}
         visibleColumns={visibleColumns}
-        columnWidths={columnWidths}
+        columnWidths={printColumnWidths}
+        udfDefinitions={visibleUdfDefinitions}
+        getUdfValue={getUdfValue}
+        udfColumnWidth={printUdfColumnWidth}
         projectName={selectedProject.name}
         letterhead={letterhead}
         ganttStyle={ganttStyle}
         ganttZoom={ganttZoom}
+        highlightedActivityIds={highlightedActivityIds}
+        dataDate={period?.start_date ?? null}
       />
     )}
     {printTarget === 'quality' && qualityPrintReport && (
@@ -2024,6 +3169,61 @@ export function Scheduling() {
         letterhead={letterhead}
         runName={qualityPrintRunName}
       />
+    )}
+    {printPreviewOpen && (
+      <div
+        className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 no-print"
+        onClick={() => setPrintPreviewOpen(false)}
+      >
+        <div
+          className="bg-gray-100 rounded-lg shadow-2xl w-full h-full max-w-[96vw] max-h-[94vh] flex overflow-hidden"
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-200 font-bold text-sm">Print Preview</div>
+            <div className="flex-1 overflow-y-auto p-3 text-xs text-gray-500">
+              This is exactly what will print, at the column widths currently set in Page Setup. Not quite right? Adjust them there — this preview updates the moment you save.
+            </div>
+            <div className="p-3 border-t border-gray-200 flex flex-col gap-2">
+              <button
+                onClick={() => { setPrintPreviewOpen(false); setLetterheadWidgetOpen(true) }}
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium text-left"
+              >
+                ⚙ Edit column widths in Page Setup
+              </button>
+              <button
+                onClick={() => { setPrintPreviewOpen(false); printSchedule() }}
+                className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 font-medium"
+              >
+                🖨️ Print
+              </button>
+              <button onClick={() => setPrintPreviewOpen(false)} className="text-xs text-gray-400 hover:text-gray-600">
+                Close
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-6">
+            <SchedulingPrintView
+              preview
+              activities={visibleActivities}
+              relationships={relationships}
+              resourceAssignments={resourceAssignments}
+              calendars={calendars}
+              visibleColumns={visibleColumns}
+              columnWidths={printColumnWidths}
+              udfDefinitions={visibleUdfDefinitions}
+              getUdfValue={getUdfValue}
+              udfColumnWidth={printUdfColumnWidth}
+              projectName={selectedProject.name}
+              letterhead={letterhead}
+              ganttStyle={ganttStyle}
+              ganttZoom={ganttZoom}
+              highlightedActivityIds={highlightedActivityIds}
+              dataDate={period?.start_date ?? null}
+            />
+          </div>
+        </div>
+      </div>
     )}
     </>
   )

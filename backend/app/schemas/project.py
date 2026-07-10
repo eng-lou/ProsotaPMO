@@ -23,6 +23,12 @@ class ProjectUpdate(BaseModel):
     space_count: int | None = None
 
 
+class ProjectDuplicateRequest(BaseModel):
+    # Optional — app/api/projects.py falls back to f"{original.name} (Copy)"
+    # when omitted, matching the frontend's own default suggestion.
+    name: str | None = None
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

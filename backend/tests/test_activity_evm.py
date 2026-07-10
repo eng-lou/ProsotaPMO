@@ -7,11 +7,12 @@ from httpx import AsyncClient
 
 from app.models.activity import Activity
 from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
 
 
-async def _create_activity(client: AsyncClient, project: Project, period: Period, task_name: str, **overrides) -> dict:
-    payload = {"project_id": str(project.id), "period_id": str(period.id), "task_name": task_name}
+async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, task_name: str, **overrides) -> dict:
+    payload = {"project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": task_name}
     payload.update(overrides)
     resp = await client.post("/api/v1/activities/", json=payload)
     assert resp.status_code == 201, resp.text
@@ -33,8 +34,8 @@ async def _linked_element(client: AsyncClient, project: Project, period: Period)
     return linked[0] if linked else None
 
 
-async def test_activity_with_no_resources_has_null_evm(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Unresourced task")
+async def test_activity_with_no_resources_has_null_evm(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Unresourced task")
     resp = await client.get(f"/api/v1/activities/{activity['id']}")
     assert resp.status_code == 200
     data = resp.json()
@@ -43,14 +44,14 @@ async def test_activity_with_no_resources_has_null_evm(client: AsyncClient, proj
 
 
 async def test_activity_evm_mirrors_linked_cost_element(
-    client: AsyncClient, db, project: Project, live_period: Period
+    client: AsyncClient, db, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
 ):
     """Scheduling's EVM columns must show exactly what Cost Plan shows for the
     same resourced activity — same numbers, same source of truth, never a second
     independently-derived set (see app/services/activity.py:_attach_evm_fields).
     PV is prorated against the activity's own live start/finish, not a captured
     baseline (Maro's confirmed P6 correction, Session 16)."""
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=80)  # 10 days
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     resource = await _create_resource(client, project, rate="1000")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
@@ -116,15 +117,15 @@ async def test_activity_evm_mirrors_linked_cost_element(
 
 
 async def test_pv_tracks_period_data_date_not_wall_clock(
-    client: AsyncClient, db, project: Project, live_period: Period
+    client: AsyncClient, db, project: Project, live_schedule_period: SchedulePeriod
 ):
-    """PV must prorate against the period's own data date
+    """PV must prorate against the schedule period's own data date
     (scheduling_cpm.data_date_for_period, moved by Reschedule) rather than the
     real wall-clock date — caught by Maro testing Reschedule and seeing PV not
     move. Isolates the data-date plumbing itself: start/finish are forced
     directly (not via CPM/Reschedule) so this doesn't depend on whether a given
     activity's own dates happen to shift when the anchor does."""
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=80)  # 10 days
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     resource = await _create_resource(client, project, rate="1000")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
@@ -145,7 +146,7 @@ async def test_pv_tracks_period_data_date_not_wall_clock(
     resp = await client.get(f"/api/v1/activities/{activity['id']}")
     assert float(resp.json()["pv"]) == 0.0  # data date defaults to today == start -> 0% elapsed
 
-    db_period = await db.get(Period, live_period.id)
+    db_period = await db.get(SchedulePeriod, live_schedule_period.id)
     db_period.start_date = today + timedelta(days=5)  # data date moved 5 days forward, e.g. via Reschedule
     await db.commit()
     await db.refresh(db_period)
@@ -156,13 +157,12 @@ async def test_pv_tracks_period_data_date_not_wall_clock(
 
 
 async def test_duration_pct_complete_is_independent_of_resources(
-    client: AsyncClient, db, project: Project, live_period: Period
-):
+    client: AsyncClient, db, project: Project, live_schedule_period: SchedulePeriod):
     """Duration % Complete (how far along its own schedule an activity should
     be by the data date) needs no resources/BAC — a pure schedule figure,
     distinct from the resource-gated EVM fields. Requested by Maro as a
     transparency aid showing exactly what PV is prorated from."""
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=80)  # 10 days
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     # Set at the default calendar's day start (08:00), matching the actual
     # instant "today" resolves to as a data date (2026-07-03 fix — see
     # test_pv_tracks_period_data_date_not_wall_clock's own comment).
@@ -181,8 +181,7 @@ async def test_duration_pct_complete_is_independent_of_resources(
 
 
 async def test_duration_pct_complete_is_zero_for_brand_new_same_day_activity(
-    client: AsyncClient, project: Project, live_period: Period
-):
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     """Regression (Maro, 2026-07-03): a freshly-created 1-day activity
     starting "now" read as 100% Duration % Complete the instant it was
     created, since its start and finish both fell on the same calendar date
@@ -190,20 +189,20 @@ async def test_duration_pct_complete_is_zero_for_brand_new_same_day_activity(
     true from hour zero. A brand-new activity anchored to today should read
     0% — it's just starting, not finished — matching the fix in
     app/services/scheduling_cpm.py:elapsed_duration_fraction."""
-    activity = await _create_activity(client, project, live_period, "New Activity", duration_hours=8)  # 1 day
+    activity = await _create_activity(client, project, live_schedule_period, "New Activity", duration_hours=8)  # 1 day
     assert activity["start"][:10] == activity["finish"][:10]  # same calendar day, the exact case that broke
     assert float(activity["duration_pct_complete"]) == 0.0
 
 
-async def test_activity_list_includes_evm(client: AsyncClient, project: Project, live_period: Period):
-    activity = await _create_activity(client, project, live_period, "Piling", duration_hours=8)
+async def test_activity_list_includes_evm(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
     resource = await _create_resource(client, project, rate="100")
     await client.post("/api/v1/resource-assignments/", json={
         "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
     })  # budget = 1 day * 100% * 100 = 100
 
     resp = await client.get("/api/v1/activities/", params={
-        "project_id": str(project.id), "period_id": str(live_period.id),
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
     })
     assert resp.status_code == 200
     row = next(a for a in resp.json() if a["id"] == activity["id"])

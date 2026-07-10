@@ -29,6 +29,22 @@
   overflow: hidden;
 }
 
+/* Resource Tracking's header/timeline panes (ResourceTrackingWidget.tsx) —
+   both panes' own native horizontal scrollbars are hidden so neither can
+   take up a different amount of space than the (never-scrollbarred) tree
+   pane beside it, which was throwing rows out of alignment (2026-07-07, per
+   Maro). The one real, visible, draggable scrollbar instead lives in its own
+   dedicated strip below everything ("I want the scroll wheel at the
+   bottom") — outside the row-height-critical area entirely, kept in sync
+   with both panes via JS scrollLeft. */
+.rt-hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.rt-hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @media print {
   .no-print {
     display: none !important;
@@ -37,9 +53,25 @@
     display: block !important;
   }
   /* Landscape maximizes the width available to the table+Gantt side-by-side
-     layout — most browsers honor this as a default/hint in the print dialog. */
+     layout — most browsers honor this as a default/hint in the print dialog.
+     margin-bottom reserves room for PrintLetterheadFooter's `position: fixed;
+     bottom: 0` footer, still used as-is by Risk/ICD/Cost Plan's print views
+     (2026-07-06, per Maro: their footer text was overlapping the last row of
+     table content) — Chrome/Edge position a fixed element in print relative
+     to the page box itself, so without this the page's *content* box ran all
+     the way to the bottom edge, right underneath where the footer draws.
+     Sized generously (one footer text row at up to LetterheadZone's own 32px
+     font-size cap, see app/schemas/project_letterhead.py) rather than
+     measured, since print has no way to read the footer's real rendered
+     height back before laying out the page. Scheduling's own print view no
+     longer relies on this at all — its Gantt legend + footer moved to a real
+     <tfoot> (SchedulingPrintView.tsx), which reserves its own space natively
+     per page and isn't subject to position:fixed's page-boundary
+     unreliability across a long, many-page table (2026-07-06, per Maro: the
+     legend was still overlapping content past page 1 with this margin alone). */
   @page {
     size: landscape;
+    margin-bottom: 1.3in;
   }
   /* Browsers drop CSS background-color by default when printing (only borders
      survive) — that's what turned the Gantt's solid critical-path bars into bare

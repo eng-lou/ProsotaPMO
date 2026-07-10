@@ -32,7 +32,34 @@ export interface GanttStyle {
   baseline_color: string
   baseline_thickness: number
   table_font_color: string
+  // Activity table only — see gantt_font_family below for the Gantt
+  // column's own independent font-type control.
   table_font_family: GanttFontFamily
+  // Pixel font size for the on-screen activity table — 14 matches the
+  // pre-existing hardcoded `text-sm` Tailwind class, so an unset/default
+  // layout renders identically to before this field existed (2026-07-06, per
+  // Maro: "in layout i want to be able to increase the font size").
+  table_font_size: number
+  // The activity table's own header row (Code/WBS/Type/... column labels),
+  // screen only — print's own equivalent moved to ProjectLetterhead
+  // (2026-07-07, per Maro: "move the font parameters relating to print from
+  // the layout" — see frontend/src/lib/letterhead.ts's print_font_size/
+  // header_print_font_size/gantt_print_font_size, previewed together with
+  // Page Setup's other print-only controls instead of here).
+  header_font_size: number
+  header_font_family: GanttFontFamily
+  // Gantt-column text, screen only (timeline header marks + the optional
+  // name/resource/finish bar label trio) — independent of table_font_size
+  // since this text sits inside the Gantt column, not the data columns
+  // (2026-07-06, per Maro: "i want the option for the gantt fonts including
+  // the gantt timeline header fonts").
+  gantt_font_size: number
+  // Font type for that same Gantt-column text, independent of
+  // table_font_family (2026-07-07, per Maro: "font type parameters not just
+  // the size... affecting gantt and activity table content") — until now
+  // there was only one shared font family for both, even though size
+  // already had this same table-vs-gantt split.
+  gantt_font_family: GanttFontFamily
   wbs_level_colors: string[]
   activity_row_color: string
   milestone_row_color: string
@@ -53,6 +80,19 @@ export interface GanttStyle {
   show_label_name: boolean
   show_label_resource: boolean
   show_label_finish: boolean
+  // Sub-project float secondary indicator (2026-07-06, per Maro —
+  // docs/SUBPROJECT_FLOAT_PLAN.md §G, private docs repo). Shown only when an
+  // activity is critical within its own tagged sub-project's scoped pass
+  // (sub_is_critical) but not on the master critical path (is_critical) —
+  // the master critical path itself never changes. On by default.
+  sub_critical_color: string
+  show_sub_critical: boolean
+  // Row tint for the activity-table Highlight widget (2026-07-06, per Maro
+  // — "works exactly like the filter", "allow me to set the highlight
+  // colour in the layout"). One shared colour for every enabled highlight
+  // (built-in "Critical" + any saved custom rules) — see
+  // SchedulingHighlightsWidget.tsx/Scheduling.tsx's highlightedActivityIds.
+  highlight_color: string
 }
 
 export const DEFAULT_GANTT_STYLE: GanttStyle = {
@@ -64,6 +104,11 @@ export const DEFAULT_GANTT_STYLE: GanttStyle = {
   baseline_thickness: 7,
   table_font_color: '#111827',
   table_font_family: 'sans',
+  table_font_size: 14,
+  header_font_size: 12,
+  header_font_family: 'sans',
+  gantt_font_size: 10,
+  gantt_font_family: 'sans',
   wbs_level_colors: [...DEFAULT_WBS_LEVEL_COLORS],
   activity_row_color: '#ffffff',
   milestone_row_color: '#a855f7',
@@ -72,6 +117,9 @@ export const DEFAULT_GANTT_STYLE: GanttStyle = {
   show_label_name: false,
   show_label_resource: false,
   show_label_finish: false,
+  sub_critical_color: '#f97316',
+  show_sub_critical: true,
+  highlight_color: '#ef4444',
 }
 
 // Appends an alpha channel to a "#rrggbb" colour — used throughout for
@@ -96,6 +144,45 @@ export function wbsLevelColor(style: GanttStyle, depth: number): string {
 // carries the level distinction, not a compounding alpha fade).
 export function wbsRowBackground(style: GanttStyle, depth: number): string {
   return withAlpha(wbsLevelColor(style, depth), 0.18)
+}
+
+// The same per-type row tint the main activity table uses (Scheduling.tsx),
+// extracted so anywhere else showing a flat list of activities — the
+// predecessor/successor picker (ActivityPicker.tsx), 2026-07-06 per Maro —
+// can give the same visual cues (critical, WBS summary by nesting level,
+// milestone, archived) instead of an undifferentiated list of names. Takes
+// plain fields rather than a whole Activity object so this file doesn't need
+// to depend on the scheduling module's own types.
+//
+// isHighlighted (2026-07-06, per Maro) takes priority over isCritical — it's
+// the Highlight widget's own deliberate opt-in tint (SchedulingHighlightsWidget.tsx),
+// and should win even over a row the picker is separately flagging as
+// critical for its own, unrelated "which of these can I actually link"
+// purpose. isCritical itself is kept exactly as before (still drives
+// ActivityPicker's own critical cue) — only Scheduling.tsx's main table
+// stopped passing it automatically, now that critical-row tinting there is
+// opt-in via the "Critical" built-in highlight rather than always-on.
+// Otherwise unchanged: WBS summary shaded per nesting level, then milestone,
+// else the flat default — archived overrides all of it, same as before.
+export function activityRowBackground(style: GanttStyle, opts: {
+  isArchived: boolean
+  isCritical: boolean
+  isHighlighted?: boolean
+  activityType: string
+  depth: number
+}): string | undefined {
+  if (opts.isArchived) return '#f3f4f6'
+  if (opts.isHighlighted) return withAlpha(style.highlight_color, 0.18)
+  if (opts.isCritical) return withAlpha(style.critical_color, 0.12)
+  if (opts.activityType === 'wbs_summary') return wbsRowBackground(style, opts.depth)
+  // start_milestone/finish_milestone (2026-07-07, per Maro) — both still get
+  // the same milestone row tint; this file deliberately takes a plain string
+  // rather than importing the scheduling module's own ActivityType, so the
+  // check stays inline instead of using types.ts's isMilestoneType helper.
+  if (opts.activityType === 'start_milestone' || opts.activityType === 'finish_milestone') {
+    return withAlpha(style.milestone_row_color, 0.15)
+  }
+  return style.activity_row_color === '#ffffff' ? undefined : withAlpha(style.activity_row_color, 1)
 }
 
 export interface GanttLayout {

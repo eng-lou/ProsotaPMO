@@ -430,7 +430,7 @@ export function IcdTracker() {
             letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          🎨 Letterhead
+          📄 Page Setup
         </button>
       </div>
 

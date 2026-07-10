@@ -56,7 +56,9 @@ async def test_delete_project(client: AsyncClient):
     assert (await client.get(f"/api/v1/projects/{p['id']}")).status_code == 404
 
 
-async def test_delete_project_with_real_data_cascades_cleanly(client: AsyncClient, project: Project, live_period):
+async def test_delete_project_with_real_data_cascades_cleanly(
+    client: AsyncClient, project: Project, live_period, live_schedule_period
+):
     """Regression test: a project with real cross-module data used to throw a
     Postgres IntegrityError on delete, since most tables referencing projects
     had no ON DELETE CASCADE. Covers the resource-assignment RESTRICT edge case
@@ -64,7 +66,8 @@ async def test_delete_project_with_real_data_cascades_cleanly(client: AsyncClien
     app/models/resource_assignment.py), so the delete endpoint must clear
     assignments explicitly before the project-level cascade runs."""
     activity_resp = await client.post("/api/v1/activities/", json={
-        "project_id": project.id.__str__(), "period_id": live_period.id.__str__(), "task_name": "Piling",
+        "project_id": project.id.__str__(), "schedule_period_id": live_schedule_period.id.__str__(),
+        "task_name": "Piling",
     })
     assert activity_resp.status_code == 201
     activity = activity_resp.json()

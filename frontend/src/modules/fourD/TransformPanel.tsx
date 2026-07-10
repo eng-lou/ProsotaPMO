@@ -1,0 +1,243 @@
+import { useState } from 'react'
+import * as THREE from 'three'
+import { ResettableNumberInput } from './ResettableNumberInput'
+import { resolveDisplayAxis, type UpAxis } from './upAxis'
+import { getBaseline } from './elementBaseline'
+import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
+
+export type GizmoMode = 'translate' | 'rotate' | 'scale'
+
+// Manual keyframing support for the active object (2026-07-08, per Maro:
+// "the blender way with the keyframes as long as you have 3d/ifc object in
+// the scene") — null when keying isn't available at all right now: no
+// timeline date yet (nothing to key *at*), or the active object is IFC
+// (whole-model selection there doesn't share identity with IFC's per-sub-
+// element links — see ElementKeyframe's own docstring's v1 scope note).
+// keyframesByField is pre-filtered to just this one object's own tracks.
+export interface KeyframeSupport {
+  currentDate: Date
+  keyframesByField: Partial<Record<KeyframeField, ElementKeyframe[]>>
+  onToggle: (field: KeyframeField, currentValue: number) => void
+}
+
+interface Props {
+  object: THREE.Object3D
+  mode: GizmoMode
+  onModeChange: (mode: GizmoMode) => void
+  upAxis: UpAxis
+  keyframes: KeyframeSupport | null
+  // Forces a re-render after a field edit (2026-07-08 fix, per Maro: typed
+  // 10 into a Location field, the model moved, but the field itself
+  // reverted to showing 0) — every Field's onChange mutates `object`
+  // directly with zero React state change; dragging the gizmo instead goes
+  // through Viewport3D's TransformControls onChange, which already causes
+  // one. Without this, nothing tells the input to re-read the fresh value,
+  // so the *next* unrelated re-render snaps it back to whatever it showed
+  // last time React actually rendered this component.
+  onFieldChange: () => void
+}
+
+const RAD_TO_DEG = 180 / Math.PI
+const DEG_TO_RAD = Math.PI / 180
+const AXES = ['x', 'y', 'z'] as const
+
+function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+function SectionLabel({ label }: { label: string }) {
+  return <div className="px-3 pt-2 pb-0.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide">{label}</div>
+}
+
+// Three states, mirroring Blender's own diamond marker: 'exact' (a keyframe
+// sits on this exact date — filled), 'other' (this field is keyed
+// somewhere else, just not here — hollow), 'none' (never keyed — empty).
+function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChange, onToggleLock, onToggleKey }: {
+  axisLabel: string; value: number; resetValue: number; suffix: string; locked: boolean
+  keyState: 'exact' | 'other' | 'none' | 'disabled'
+  onChange: (v: number) => void; onToggleLock: () => void; onToggleKey: (() => void) | null
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-0.5">
+      <span className="w-3 text-[11px] text-gray-400 shrink-0">{axisLabel}</span>
+      <ResettableNumberInput
+        step={0.1}
+        value={Number.isFinite(value) ? Number(value.toFixed(3)) : 0}
+        defaultValue={resetValue}
+        disabled={locked}
+        onChange={onChange}
+        className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right disabled:bg-gray-50 disabled:text-gray-400"
+      />
+      <span className="w-4 text-[10px] text-gray-400 shrink-0">{suffix}</span>
+      <button
+        onClick={onToggleLock}
+        title={locked ? 'Unlock this field' : 'Lock this field'}
+        className={`shrink-0 text-xs ${locked ? 'text-gray-700' : 'text-gray-300 hover:text-gray-500'}`}
+      >
+        {locked ? '🔒' : '🔓'}
+      </button>
+      <button
+        onClick={onToggleKey ?? undefined}
+        disabled={!onToggleKey}
+        title={
+          keyState === 'disabled'
+            ? 'Keyframing needs the Animation Timeline open (for a current date) and only supports plain 3D imports, not IFC'
+            : keyState === 'exact' ? 'Keyframed here — click to remove'
+            : keyState === 'other' ? 'Keyframed elsewhere — click to add one here too'
+            : 'Click to keyframe this field at the current timeline date'
+        }
+        className={`shrink-0 w-2.5 h-2.5 rounded-full border disabled:cursor-not-allowed disabled:opacity-40 ${
+          keyState === 'exact' ? 'bg-amber-500 border-amber-600'
+          : keyState === 'other' ? 'bg-white border-amber-500'
+          : 'border-gray-300 hover:border-gray-500'
+        }`}
+      />
+    </div>
+  )
+}
+
+// Blender-style Object Mode Transform fields (2026-07-11, per Maro: "see and
+// manipulate the object in 3d space like in blender... transform details").
+// Originally a floating card over the viewport; moved into the "3D View
+// Properties" panel (PropertiesPanel.tsx) as a contextual section whenever
+// a scene object is active (2026-07-11, per Maro: "move the contextual
+// transform panel... in the 3d view properties... so if i select an
+// object, 3d or ifc, i can see and change them there") — content-only now,
+// PropertiesPanel owns the section header/label with the object's name.
+// The gizmo itself (TransformControls, the actual drag handles in the
+// viewport) is unaffected by this move — it's a separate element in
+// Viewport3D.tsx, only the number-input panel relocated.
+//
+// Reads/writes the live THREE.Object3D directly instead of mirroring it
+// into React state: the object is also the thing TransformControls is
+// dragging, and Viewport3D.tsx already forces a re-render on every drag
+// frame (its TransformControls onChange), so a second, separate copy of
+// the same numbers would only invite drift between "what the gizmo did"
+// and "what the panel shows."
+//
+// Lock icons are panel-only — they disable a field's input so a stray
+// click can't nudge it, but deliberately don't touch TransformControls'
+// own showX/Y/Z (that hides a whole axis's handle across every mode at
+// once, too coarse to express "lock Rotation X but not Position X").
+//
+// The dot per field is a real keyframe toggle (2026-07-08, per Maro: "the
+// blender way with the keyframes") — filled when this field is keyed on the
+// exact current timeline date, hollow when it's keyed somewhere else, empty
+// when it's never been keyed at all (see Field's own keyState prop/header).
+// Disabled entirely (via the `keyframes` prop being null) when there's no
+// current timeline date yet or the active object is IFC — see this file's
+// own KeyframeSupport doc comment.
+//
+// Each field is a ResettableNumberInput — hover it (no click needed) and
+// press Backspace to snap it back to resetValue, which is this object's own
+// *original imported* value for that field (2026-07-09 fix, per Maro: "if I
+// change [a wall's Z] to 300... I dont want it to go to zero I would want it
+// to go [back to its own] 200 z") — previously a flat 0 (Location/Rotation)
+// or 1 (Scale) for every field regardless of the object, which is only
+// actually right for a freshly imported whole mesh/IFC group; any
+// individual IFC sub-element has a real, usually non-zero, baked-in
+// placement. See elementBaseline.ts for exactly where/how that snapshot is
+// captured (at import time, and re-captured by Apply Transform after a
+// bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
+export function TransformPanel({ object, mode, onModeChange, upAxis, keyframes, onFieldChange }: Props) {
+  const [locked, setLocked] = useState<Record<string, boolean>>({})
+  const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
+
+  const baseline = getBaseline(object)
+  const baselineEuler = new THREE.Euler().setFromQuaternion(baseline.quaternion, object.rotation.order)
+
+  const keyState = (field: KeyframeField): 'exact' | 'other' | 'none' | 'disabled' => {
+    if (!keyframes) return 'disabled'
+    const points = keyframes.keyframesByField[field]
+    if (!points || points.length === 0) return 'none'
+    return points.some(p => sameDay(new Date(p.date), keyframes.currentDate)) ? 'exact' : 'other'
+  }
+  const toggleKey = (field: KeyframeField, currentValue: number) => (
+    keyframes ? () => keyframes.onToggle(field, currentValue) : null
+  )
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 px-3 py-1.5">
+        {(['translate', 'rotate', 'scale'] as GizmoMode[]).map(m => (
+          <button
+            key={m}
+            onClick={() => onModeChange(m)}
+            className={`flex-1 text-[11px] px-1.5 py-1 rounded border font-medium ${
+              mode === m ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {m === 'translate' ? 'Move' : m === 'rotate' ? 'Rotate' : 'Scale'}
+          </button>
+        ))}
+      </div>
+
+      {/* Fields always read X/Y/Z in that order; resolveDisplayAxis (upAxis.ts)
+          is what actually points "Y"/"Z" at object.position.z/.y (Blender-
+          style) instead of three.js's native .y/.z when upAxis is 'z'. */}
+      <SectionLabel label="Location" />
+      {AXES.map(axis => {
+        const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'position')
+        const field = `pos_${axis}` as KeyframeField
+        const displayValue = sign * object.position[localAxis]
+        return (
+          <Field
+            key={`pos-${axis}`}
+            axisLabel={axis.toUpperCase()}
+            value={displayValue}
+            resetValue={sign * baseline.position[localAxis]}
+            suffix="m"
+            locked={!!locked[`pos-${axis}`]}
+            keyState={keyState(field)}
+            onChange={v => { object.position[localAxis] = sign * v; onFieldChange() }}
+            onToggleLock={() => toggleLocked(`pos-${axis}`)}
+            onToggleKey={toggleKey(field, displayValue)}
+          />
+        )
+      })}
+
+      <SectionLabel label="Rotation" />
+      {AXES.map(axis => {
+        const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'rotation')
+        const field = `rot_${axis}` as KeyframeField
+        const displayValue = sign * object.rotation[localAxis] * RAD_TO_DEG
+        return (
+          <Field
+            key={`rot-${axis}`}
+            axisLabel={axis.toUpperCase()}
+            value={displayValue}
+            resetValue={sign * baselineEuler[localAxis] * RAD_TO_DEG}
+            suffix="°"
+            locked={!!locked[`rot-${axis}`]}
+            keyState={keyState(field)}
+            onChange={v => { object.rotation[localAxis] = sign * v * DEG_TO_RAD; onFieldChange() }}
+            onToggleLock={() => toggleLocked(`rot-${axis}`)}
+            onToggleKey={toggleKey(field, displayValue)}
+          />
+        )
+      })}
+
+      <SectionLabel label="Scale" />
+      {AXES.map(axis => {
+        const { localAxis } = resolveDisplayAxis(axis, upAxis, 'scale')
+        const field = `scale_${axis}` as KeyframeField
+        const displayValue = object.scale[localAxis]
+        return (
+          <Field
+            key={`scale-${axis}`}
+            axisLabel={axis.toUpperCase()}
+            value={displayValue}
+            resetValue={baseline.scale[localAxis]}
+            suffix=""
+            locked={!!locked[`scale-${axis}`]}
+            keyState={keyState(field)}
+            onChange={v => { object.scale[localAxis] = v; onFieldChange() }}
+            onToggleLock={() => toggleLocked(`scale-${axis}`)}
+            onToggleKey={toggleKey(field, displayValue)}
+          />
+        )
+      })}
+      <div className="h-2" />
+    </div>
+  )
+}

@@ -25,7 +25,40 @@ class GanttStyle(BaseModel):
     baseline_color: str = Field(default="#eab308", pattern=_HEX_PATTERN)
     baseline_thickness: int = Field(default=7, ge=2, le=20)
     table_font_color: str = Field(default="#111827", pattern=_HEX_PATTERN)
+    # Activity table only — see gantt_font_family below for the Gantt
+    # column's own independent font-type control.
     table_font_family: FontFamily = "sans"
+    # Pixel font size for the on-screen activity table — 14 matches the
+    # pre-existing hardcoded `text-sm` Tailwind class, so an unset/default
+    # layout renders identically to before this field existed (2026-07-06, per
+    # Maro: "in layout i want to be able to increase the font size").
+    table_font_size: int = Field(default=14, ge=10, le=24)
+    # The activity table's own header row (Code/WBS/Type/... column labels),
+    # screen only — see header_font_size's own history below.
+    header_font_size: int = Field(default=12, ge=6, le=24)
+    header_font_family: FontFamily = "sans"
+    # Gantt-column text, screen only (timeline header marks + the optional
+    # name/resource/finish bar label trio) — independent of table_font_size
+    # since this text sits inside the Gantt column, not the data columns
+    # (2026-07-06, per Maro: "i want the option for the gantt fonts including
+    # the gantt timeline header fonts"). Default matches the pre-existing
+    # hardcoded screen size (`text-[10px]`) so an unset/default layout renders
+    # identically to before this field existed.
+    #
+    # print_font_size/header_print_font_size/gantt_print_font_size (added
+    # 2026-07-06 alongside these) moved to ProjectLetterhead (2026-07-07, per
+    # Maro: "move the font parameters relating to print from the layout") —
+    # a Layout is a named, switchable *screen theme*; print settings live
+    # with Page Setup's other print-only controls (Print Column Widths/
+    # Timescale) instead, so they're set/previewed in one place. See
+    # app/schemas/project_letterhead.py.
+    gantt_font_size: int = Field(default=10, ge=6, le=24)
+    # Font type for that same Gantt-column text, independent of
+    # table_font_family (2026-07-07, per Maro: "font type parameters not
+    # just the size... affecting gantt and activity table content") — until
+    # now there was only one shared font family for both, even though size
+    # already had this same table-vs-gantt split.
+    gantt_font_family: FontFamily = "sans"
     # One colour per WBS nesting level (Gantt jagged line + activity table row
     # shade both draw from this same palette, so a level's colour identity
     # matches in both places) — replaces the old single wbs_summary_color/
@@ -49,6 +82,26 @@ class GanttStyle(BaseModel):
     show_label_name: bool = False
     show_label_resource: bool = False
     show_label_finish: bool = False
+    # Sub-project float secondary indicator (2026-07-06, per Maro —
+    # docs/SUBPROJECT_FLOAT_PLAN.md §G). Master critical path renders exactly
+    # as today, unchanged — this is a second, distinct marker shown only when
+    # an activity is critical *within its own tagged sub-project's* scoped
+    # pass (sub_is_critical) but not on the master critical path (is_critical)
+    # — surfacing a package quietly eating its own internal float before it
+    # ever reaches the master critical path. On by default, same as the
+    # master critical colour always being visible.
+    sub_critical_color: str = Field(default="#f97316", pattern=_HEX_PATTERN)
+    show_sub_critical: bool = True
+    # Row tint for the activity-table Highlight widget (2026-07-06, per Maro
+    # — "works exactly like the filter", "allow me to set the highlight
+    # colour in the layout"). One shared colour for every enabled highlight
+    # (built-in "Critical" + any saved custom rules), same as critical_color
+    # is one shared colour for the master critical path everywhere else.
+    # Replaces the old *automatic, always-on* critical-row tint that used to
+    # be baked into the table (that was critical_color itself, still used
+    # unchanged for Gantt bars/other cues) — highlighting a row is now always
+    # an explicit opt-in via SchedulingHighlightsWidget, off by default.
+    highlight_color: str = Field(default="#ef4444", pattern=_HEX_PATTERN)
 
     @field_validator("wbs_level_colors")
     @classmethod

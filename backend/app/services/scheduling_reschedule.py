@@ -6,13 +6,13 @@ from datetime import date, time, timedelta
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.services import scheduling_cpm
-from app.services.activity import _require_live_period
+from app.services.activity import _require_live_schedule_period
 
 
-async def reschedule(db: AsyncSession, period_id: uuid.UUID, shift_days: int) -> dict:
-    """Shift the period's schedule anchor by shift_days (positive = later, negative =
+async def reschedule(db: AsyncSession, schedule_period_id: uuid.UUID, shift_days: int) -> dict:
+    """Shift the schedule period's anchor by shift_days (positive = later, negative =
     earlier) and re-run the CPM engine.
 
     This is the only honest lever left once Phase 5 made start/finish fully computed:
@@ -32,18 +32,18 @@ async def reschedule(db: AsyncSession, period_id: uuid.UUID, shift_days: int) ->
     number of days has no opinion about time-of-day. See set_data_date below for
     the action that can change it.
     """
-    period = await db.get(Period, period_id)
+    period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
-        raise HTTPException(status_code=404, detail="Period not found")
-    await _require_live_period(db, period_id)
+        raise HTTPException(status_code=404, detail="Schedule period not found")
+    await _require_live_schedule_period(db, schedule_period_id)
 
-    old_finish = await scheduling_cpm.get_project_finish(db, period_id)
+    old_finish = await scheduling_cpm.get_project_finish(db, schedule_period_id)
     anchor = period.start_date or date.today()
     period.start_date = anchor + timedelta(days=shift_days)
     await db.commit()
 
-    await scheduling_cpm.recompute_schedule(db, period_id)
-    new_finish = await scheduling_cpm.get_project_finish(db, period_id)
+    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+    new_finish = await scheduling_cpm.get_project_finish(db, schedule_period_id)
 
     return {
         "shift_days": shift_days,
@@ -54,7 +54,9 @@ async def reschedule(db: AsyncSession, period_id: uuid.UUID, shift_days: int) ->
     }
 
 
-async def set_data_date(db: AsyncSession, period_id: uuid.UUID, new_date: date, new_time: time | None) -> dict:
+async def set_data_date(
+    db: AsyncSession, schedule_period_id: uuid.UUID, new_date: date, new_time: time | None
+) -> dict:
     """Pins the data date to an exact date and (optionally) time-of-day — the
     "set data date directly" mode of Reschedule, distinct from reschedule()'s
     relative day-shift. new_time=None reverts to "the calendar's day start"
@@ -62,18 +64,18 @@ async def set_data_date(db: AsyncSession, period_id: uuid.UUID, new_date: date, 
     Maro: new activities should anchor to "the current day and time depending
     on the default calendar assigned" — this is the action that sets that).
     """
-    period = await db.get(Period, period_id)
+    period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
-        raise HTTPException(status_code=404, detail="Period not found")
-    await _require_live_period(db, period_id)
+        raise HTTPException(status_code=404, detail="Schedule period not found")
+    await _require_live_schedule_period(db, schedule_period_id)
 
-    old_finish = await scheduling_cpm.get_project_finish(db, period_id)
+    old_finish = await scheduling_cpm.get_project_finish(db, schedule_period_id)
     period.start_date = new_date
     period.start_time = new_time
     await db.commit()
 
-    await scheduling_cpm.recompute_schedule(db, period_id)
-    new_finish = await scheduling_cpm.get_project_finish(db, period_id)
+    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+    new_finish = await scheduling_cpm.get_project_finish(db, schedule_period_id)
 
     return {
         "shift_days": None,

@@ -25,10 +25,10 @@ router = APIRouter(prefix="/activities", tags=["activities"])
 @router.get("/", response_model=list[ActivityResponse])
 async def list_activities(
     project_id: uuid.UUID,
-    period_id: uuid.UUID | None = None,
+    schedule_period_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> list:
-    return await svc.list_activities(db, project_id, period_id)
+    return await svc.list_activities(db, project_id, schedule_period_id)
 
 
 @router.post("/", response_model=ActivityResponse, status_code=201)
@@ -45,20 +45,20 @@ async def create_activity(
 # not a single overwriteable slot.
 @router.post("/reschedule")
 async def reschedule(
-    period_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
     shift_days: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    return await scheduling_reschedule.reschedule(db, period_id, shift_days)
+    return await scheduling_reschedule.reschedule(db, schedule_period_id, shift_days)
 
 
 @router.post("/set-data-date")
 async def set_data_date(
-    period_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
     data: SetDataDateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    return await scheduling_reschedule.set_data_date(db, period_id, data.date, data.time)
+    return await scheduling_reschedule.set_data_date(db, schedule_period_id, data.date, data.time)
 
 
 @router.get("/{activity_id}", response_model=ActivityResponse)

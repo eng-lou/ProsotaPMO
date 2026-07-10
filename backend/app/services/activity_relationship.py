@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
+from app.schemas.activity import valid_relationship_types_for_successor
 from app.schemas.activity_relationship import ActivityRelationshipCreate, ActivityRelationshipUpdate
 from app.services import scheduling_cpm
-from app.services.activity import _recompute_hierarchy, _require_live_period
+from app.services.activity import _recompute_hierarchy, _require_live_schedule_period
 
 
 async def _get_activity_in_period(db: AsyncSession, activity_id: uuid.UUID) -> Activity:
@@ -20,21 +21,37 @@ async def _get_activity_in_period(db: AsyncSession, activity_id: uuid.UUID) -> A
     return activity
 
 
-async def _recompute_period(db: AsyncSession, period_id: uuid.UUID) -> None:
+def _validate_relationship_type_for_milestone(successor: Activity, relationship_type: str) -> None:
+    # See app/schemas/activity.py:valid_relationship_types_for_successor for
+    # the reasoning (only the relationship type's first letter — which
+    # predecessor end is referenced — actually matters for a zero-duration
+    # successor).
+    valid = valid_relationship_types_for_successor(successor.activity_type)
+    if valid is not None and relationship_type not in valid:
+        kind = "Start Milestone" if successor.activity_type == "start_milestone" else "Finish Milestone"
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{successor.task_name}' is a {kind} — only {' or '.join(valid)} relationships can target it, "
+                   f"since those are the only ones that drive its own meaningful date.",
+        )
+
+
+async def _recompute_period(db: AsyncSession, schedule_period_id: uuid.UUID) -> None:
     # CPM first (sets task/milestone dates from the now-changed logic), then the WBS
     # rollup (app/services/activity.py:_recompute_hierarchy) — summary rows roll up
     # from children's dates, so they'd go stale if rolled up before CPM runs.
-    await scheduling_cpm.recompute_schedule(db, period_id)
-    await _recompute_hierarchy(db, period_id)
+    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+    await _recompute_hierarchy(db, schedule_period_id)
 
 
-async def list_relationships(db: AsyncSession, period_id: uuid.UUID) -> list[ActivityRelationship]:
-    # Both ends of a link always share a period (enforced at create) so joining via
-    # either predecessor or successor's period_id is equivalent — predecessor is used.
+async def list_relationships(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[ActivityRelationship]:
+    # Both ends of a link always share a schedule period (enforced at create) so
+    # joining via either predecessor or successor's schedule_period_id is
+    # equivalent — predecessor is used.
     result = await db.execute(
         select(ActivityRelationship)
         .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.period_id == period_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
     )
     return list(result.scalars().all())
 
@@ -54,9 +71,24 @@ async def create_relationship(
 
     predecessor = await _get_activity_in_period(db, data.predecessor_id)
     successor = await _get_activity_in_period(db, data.successor_id)
-    if predecessor.period_id != successor.period_id:
-        raise HTTPException(status_code=422, detail="Predecessor and successor must be in the same period")
-    await _require_live_period(db, predecessor.period_id)
+    if predecessor.schedule_period_id != successor.schedule_period_id:
+        raise HTTPException(status_code=422, detail="Predecessor and successor must be in the same schedule period")
+    await _require_live_schedule_period(db, predecessor.schedule_period_id)
+
+    # WBS/Project summary rows are rollups from their children (app/services/
+    # activity.py:_recompute_hierarchy), not real CPM participants (see
+    # scheduling_cpm.py:_cpm_participants) — a link to/from one would silently
+    # do nothing, which is worse than rejecting it outright (2026-07-06, per
+    # Maro: parents should have their sequencing computed from children, not
+    # separately linkable, unless demoted to a plain task by removing them).
+    for role, activity in (("predecessor", predecessor), ("successor", successor)):
+        if activity.activity_type == "wbs_summary":
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{activity.task_name}' is a WBS/Project summary — its sequencing is derived from its "
+                       f"children, so it can't be used as a {role}. Link its individual tasks/milestones instead.",
+            )
+    _validate_relationship_type_for_milestone(successor, data.relationship_type)
 
     # Exact duplicate pair (same ordered predecessor/successor) is also a DB-level
     # unique constraint (uq_activity_relationship_pair) — checked explicitly first so
@@ -87,7 +119,9 @@ async def create_relationship(
             status_code=422,
             detail="The reverse relationship already exists between these two activities",
         )
-    if await scheduling_cpm.would_create_cycle(db, predecessor.period_id, data.predecessor_id, data.successor_id):
+    if await scheduling_cpm.would_create_cycle(
+        db, predecessor.schedule_period_id, data.predecessor_id, data.successor_id
+    ):
         raise HTTPException(status_code=422, detail="This relationship would create a circular dependency")
 
     rel = ActivityRelationship(**data.model_dump())
@@ -95,7 +129,7 @@ async def create_relationship(
     await db.commit()
     await db.refresh(rel)
 
-    await _recompute_period(db, predecessor.period_id)
+    await _recompute_period(db, predecessor.schedule_period_id)
     return rel
 
 
@@ -104,21 +138,25 @@ async def update_relationship(
 ) -> ActivityRelationship:
     rel = await get_relationship(db, relationship_id)
     predecessor = await _get_activity_in_period(db, rel.predecessor_id)
-    await _require_live_period(db, predecessor.period_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    await _require_live_schedule_period(db, predecessor.schedule_period_id)
+    updates = data.model_dump(exclude_unset=True)
+    if "relationship_type" in updates and updates["relationship_type"] is not None:
+        successor = await _get_activity_in_period(db, rel.successor_id)
+        _validate_relationship_type_for_milestone(successor, updates["relationship_type"])
+    for field, value in updates.items():
         setattr(rel, field, value)
     await db.commit()
     await db.refresh(rel)
 
-    await _recompute_period(db, predecessor.period_id)
+    await _recompute_period(db, predecessor.schedule_period_id)
     return rel
 
 
 async def delete_relationship(db: AsyncSession, relationship_id: uuid.UUID) -> None:
     rel = await get_relationship(db, relationship_id)
     predecessor = await _get_activity_in_period(db, rel.predecessor_id)
-    await _require_live_period(db, predecessor.period_id)
+    await _require_live_schedule_period(db, predecessor.schedule_period_id)
     await db.delete(rel)
     await db.commit()
 
-    await _recompute_period(db, predecessor.period_id)
+    await _recompute_period(db, predecessor.schedule_period_id)

@@ -37,6 +37,14 @@ async def update_calendar(
     return await svc.update_calendar(db, calendar_id, data)
 
 
+@router.post("/{calendar_id}/duplicate", response_model=CalendarResponse, status_code=201)
+async def duplicate_calendar(
+    calendar_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await svc.duplicate_calendar(db, calendar_id)
+
+
 @router.delete("/{calendar_id}", status_code=204)
 async def delete_calendar(
     calendar_id: uuid.UUID,

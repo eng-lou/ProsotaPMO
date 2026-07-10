@@ -13,25 +13,43 @@ from app.models.base import Base, TimestampMixin
 
 class Activity(Base, TimestampMixin):
     __tablename__ = "activities"
-    __table_args__ = (UniqueConstraint("project_id", "code", name="uq_activities_project_code"),)
+    # Scoped per schedule variant, not per project (2026-07-07, per Maro —
+    # docs/SCHEDULE_VARIANTS_PLAN.md §D.6) — deliberately allows two schedule
+    # variants in the same project to each have their own "T-0042," which is
+    # exactly what forking a variant needs to preserve (an activity's code is
+    # what makes it recognisably "the same activity, more mature" across a
+    # Working Schedule and a Recovery Schedule forked from it).
+    __table_args__ = (UniqueConstraint("schedule_variant_id", "code", name="uq_activities_schedule_variant_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(20), nullable=False)
-    # P (top-level WBS summary) | W (nested WBS summary) | T (task) | M (milestone) —
-    # the structural role `code`'s prefix is meant to reflect, tracked independently
-    # of the code string itself (2026-07-04, per Maro's P/W/T/M scheme). Kept as its
-    # own column rather than parsed from `code` on every check, because `code` is
-    # also manually editable (inline editing) — a user renaming T-0001 to something
-    # of their own choosing must not be mistaken for a real hierarchy-driven role
-    # change the next time app/services/activity.py:_recompute_hierarchy runs.
-    # Never accepted as API input; auto-maintained by _recompute_hierarchy alongside
-    # activity_type.
-    wbs_role: Mapped[str] = mapped_column(String(1), nullable=False, default="T")
+    # P (top-level WBS summary) | W (nested WBS summary) | T (task) | M (milestone)
+    # | SP (a nested WBS tagged as a sub-project's root, 2026-07-06 — see
+    # docs/SUBPROJECT_FLOAT_PLAN.md §E) — the structural role `code`'s prefix is
+    # meant to reflect, tracked independently of the code string itself
+    # (2026-07-04, per Maro's P/W/T/M scheme). Kept as its own column rather than
+    # parsed from `code` on every check, because `code` is also manually editable
+    # (inline editing) — a user renaming T-0001 to something of their own choosing
+    # must not be mistaken for a real hierarchy-driven role change the next time
+    # app/services/activity.py:_recompute_hierarchy runs. Never accepted as API
+    # input; auto-maintained by _recompute_hierarchy alongside activity_type.
+    wbs_role: Mapped[str] = mapped_column(String(2), nullable=False, default="T")
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+    # Which schedule this activity belongs to (2026-07-07, per Maro —
+    # docs/SCHEDULE_VARIANTS_PLAN.md). Denormalised alongside schedule_period_id
+    # (rather than derived via a join every time) specifically so the code-
+    # uniqueness constraint above can be a real DB constraint.
+    schedule_variant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule_variants.id", ondelete="CASCADE"), nullable=False
+    )
+    # Was `period_id` (FK to the shared `periods` table Risk/Cost/ICD still use)
+    # until the schedule-variants split — see SchedulePeriod's own docstring for
+    # why this needed to become a genuinely separate table, not just a renamed
+    # column pointing at the same one.
+    schedule_period_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False
     )
     task_name: Mapped[str] = mapped_column(String(500), nullable=False)
     # task | milestone | wbs_summary. Milestones always have zero duration; wbs_summary
@@ -69,6 +87,13 @@ class Activity(Base, TimestampMixin):
     finish: Mapped[datetime | None] = mapped_column(DateTime)
     actual_start: Mapped[datetime | None] = mapped_column(DateTime)
     actual_finish: Mapped[datetime | None] = mapped_column(DateTime)
+    # P6's suspend/resume actuals (docs/SCHEDULING_GAPS_PLAN.md Phase 11) —
+    # distinct from actual_start/actual_finish: an activity can start, get
+    # suspended mid-flight, then resume later, and the gap between suspend
+    # and resume isn't worked time. Plain user-entered facts for this first
+    # cut — no CPM interaction (see app/services/activity.py:_validate_suspend_resume).
+    suspend_date: Mapped[datetime | None] = mapped_column(DateTime)
+    resume_date: Mapped[datetime | None] = mapped_column(DateTime)
     remaining_duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     # bl_start/bl_finish/bl_duration_hours/variance_days/total_float_hours/
     # free_float_hours/is_critical are never accepted as API input (see
@@ -131,3 +156,18 @@ class Activity(Base, TimestampMixin):
     # promote/demote logic, and can't itself be deleted, archived, or used as an
     # indent/outdent target.
     is_archive_container: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Sub-project float (2026-07-05, per Maro — docs/SUBPROJECT_FLOAT_PLAN.md in
+    # the private docs repo). owning_party_org_id is PM-assigned only, purely
+    # informational, no cascading from a schedule_subproject's own
+    # owning_party_org_id (deliberately deferred — see the plan doc's §G).
+    # sub_total_float_hours/sub_is_critical mirror total_float_hours/is_critical's
+    # own shape exactly (same precision, same threshold convention) but come from
+    # a second, additional CPM pass scoped to whichever tagged ScheduleSubproject
+    # branch this activity's nearest tagged ancestor belongs to (see
+    # app/services/scheduling_cpm.py) — null for any activity outside every
+    # tagged branch, same as the master fields are null for wbs_summary rows.
+    owning_party_org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organisations.id", ondelete="SET NULL")
+    )
+    sub_total_float_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    sub_is_critical: Mapped[bool | None] = mapped_column(Boolean)

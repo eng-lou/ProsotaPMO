@@ -5,19 +5,19 @@ from datetime import date
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
 
 _MONDAY = date(2025, 6, 2)
 
 
-async def _anchor(db: AsyncSession, period: Period) -> None:
+async def _anchor(db: AsyncSession, period: SchedulePeriod) -> None:
     period.start_date = _MONDAY
     await db.commit()
 
 
-async def _create_activity(client: AsyncClient, project: Project, period: Period, task_name: str, **overrides) -> dict:
-    payload = {"project_id": str(project.id), "period_id": str(period.id), "task_name": task_name}
+async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, task_name: str, **overrides) -> dict:
+    payload = {"project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": task_name}
     payload.update(overrides)
     resp = await client.post("/api/v1/activities/", json=payload)
     assert resp.status_code == 201, resp.text
@@ -25,15 +25,15 @@ async def _create_activity(client: AsyncClient, project: Project, period: Period
 
 
 async def test_reschedule_shifts_unconstrained_activities(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
-    await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
+    await _anchor(db, live_schedule_period)
+    a = await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=40)
     assert a["start"] == "2025-06-02T08:00:00"
     assert a["finish"] == "2025-06-06T17:00:00"
 
     resp = await client.post("/api/v1/activities/reschedule", params={
-        "period_id": str(live_period.id), "shift_days": 7,
+        "schedule_period_id": str(live_schedule_period.id), "shift_days": 7,
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -46,30 +46,30 @@ async def test_reschedule_shifts_unconstrained_activities(
 
 
 async def test_reschedule_can_pull_earlier(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
-    await _anchor(db, live_period)
-    await _create_activity(client, project, live_period, "Excavation", duration_hours=40)
+    await _anchor(db, live_schedule_period)
+    await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=40)
 
     resp = await client.post("/api/v1/activities/reschedule", params={
-        "period_id": str(live_period.id), "shift_days": -2,
+        "schedule_period_id": str(live_schedule_period.id), "shift_days": -2,
     })
     assert resp.status_code == 200
     assert resp.json()["new_anchor_date"] == "2025-05-31"
 
 
 async def test_reschedule_respects_hard_constraint(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
-    await _anchor(db, live_period)
+    await _anchor(db, live_schedule_period)
     a = await _create_activity(
-        client, project, live_period, "Design freeze", activity_type="milestone",
+        client, project, live_schedule_period, "Design freeze", activity_type="finish_milestone",
         constraint_type="ms", constraint_date="2025-06-20T08:00:00",
     )
     assert a["start"] == "2025-06-20T08:00:00"
 
     await client.post("/api/v1/activities/reschedule", params={
-        "period_id": str(live_period.id), "shift_days": 10,
+        "schedule_period_id": str(live_schedule_period.id), "shift_days": 10,
     })
 
     refreshed = await client.get(f"/api/v1/activities/{a['id']}")
@@ -79,7 +79,7 @@ async def test_reschedule_respects_hard_constraint(
 
 
 async def test_reschedule_pins_start_of_in_progress_activity(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
     """Per Maro's confirmed correction: once an activity has progress
     (% Complete > 0), its Start is a recorded fact, not a forecast — Reschedule
@@ -89,8 +89,8 @@ async def test_reschedule_pins_start_of_in_progress_activity(
     moment any progress was logged; remaining_duration_hours is now purely an
     informational display figure (app/services/activity.py), never a
     scheduling input."""
-    await _anchor(db, live_period)
-    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=80)  # 10 days
+    await _anchor(db, live_schedule_period)
+    a = await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=80)  # 10 days
     assert a["start"] == "2025-06-02T08:00:00"
     assert a["finish"] == "2025-06-13T17:00:00"  # 10 working days from Monday
 
@@ -100,7 +100,7 @@ async def test_reschedule_pins_start_of_in_progress_activity(
     assert resp.json()["finish"] == "2025-06-13T17:00:00"  # unchanged by progress
 
     await client.post("/api/v1/activities/reschedule", params={
-        "period_id": str(live_period.id), "shift_days": 7,
+        "schedule_period_id": str(live_schedule_period.id), "shift_days": 7,
     })
 
     refreshed = await client.get(f"/api/v1/activities/{a['id']}")
@@ -110,46 +110,46 @@ async def test_reschedule_pins_start_of_in_progress_activity(
 
 
 async def test_reschedule_rejects_frozen_period(
-    client: AsyncClient, db: AsyncSession, project: Project, frozen_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, frozen_schedule_period: SchedulePeriod
 ):
     resp = await client.post("/api/v1/activities/reschedule", params={
-        "period_id": str(frozen_period.id), "shift_days": 5,
+        "schedule_period_id": str(frozen_schedule_period.id), "shift_days": 5,
     })
     assert resp.status_code == 422
 
 
 async def test_set_data_date_with_explicit_time_anchors_new_activities(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
     resp = await client.post(
         "/api/v1/activities/set-data-date",
         json={"date": "2025-06-02", "time": "10:30:00"},
-        params={"period_id": str(live_period.id)},
+        params={"schedule_period_id": str(live_schedule_period.id)},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["new_anchor_date"] == "2025-06-02"
     assert data["new_anchor_time"] == "10:30:00"
 
-    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=8)
+    a = await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=8)
     assert a["start"] == "2025-06-02T10:30:00"
 
 
 async def test_set_data_date_null_time_reverts_to_calendar_default(
-    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
     await client.post(
         "/api/v1/activities/set-data-date",
         json={"date": "2025-06-02", "time": "10:30:00"},
-        params={"period_id": str(live_period.id)},
+        params={"schedule_period_id": str(live_schedule_period.id)},
     )
     resp = await client.post(
         "/api/v1/activities/set-data-date",
         json={"date": "2025-06-02", "time": None},
-        params={"period_id": str(live_period.id)},
+        params={"schedule_period_id": str(live_schedule_period.id)},
     )
     assert resp.status_code == 200
     assert resp.json()["new_anchor_time"] is None
 
-    a = await _create_activity(client, project, live_period, "Excavation", duration_hours=8)
+    a = await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=8)
     assert a["start"] == "2025-06-02T08:00:00"  # back to the default calendar's day start

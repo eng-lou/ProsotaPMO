@@ -19,6 +19,28 @@ async def test_create_resource(client: AsyncClient, project: Project):
     assert float(data["rate"]) == 45.0
 
 
+async def test_create_and_update_resource_role(client: AsyncClient, project: Project):
+    create = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies",
+        "role": "Trades", "unit": "day", "rate": "220",
+    })
+    assert create.status_code == 201, create.text
+    data = create.json()
+    assert data["role"] == "Trades"
+
+    resp = await client.patch(f"/api/v1/resources/{data['id']}", json={"role": "Foreman"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["role"] == "Foreman"
+
+
+async def test_resource_role_defaults_to_null(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies", "unit": "day", "rate": "220",
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["role"] is None
+
+
 async def test_list_resources_by_project(client: AsyncClient, project: Project):
     for name, rtype in [("J. Davies", "labour"), ("360 Excavator", "equipment")]:
         await client.post("/api/v1/resources/", json={
@@ -56,3 +78,89 @@ async def test_get_resource_not_found(client: AsyncClient):
     resp = await client.get("/api/v1/resources/", params={"project_id": str(uuid.uuid4())})
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+async def test_create_resource_with_calendar(client: AsyncClient, project: Project):
+    calendar = await client.post("/api/v1/calendars/", json={
+        "project_id": str(project.id), "name": "Subcontractor Weekend Crew", "works_saturday": True, "works_sunday": True,
+    })
+    calendar_id = calendar.json()["id"]
+
+    resp = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "subcontractor", "name": "Weekend Groundworks Crew",
+        "unit": "lump sum", "rate": "5000", "calendar_id": calendar_id,
+    })
+    assert resp.status_code == 201
+    assert resp.json()["calendar_id"] == calendar_id
+
+
+async def test_update_resource_calendar(client: AsyncClient, project: Project):
+    create = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "Steel Fixers", "unit": "day", "rate": "220",
+    })
+    resource_id = create.json()["id"]
+    assert create.json()["calendar_id"] is None
+
+    calendar = await client.post("/api/v1/calendars/", json={"project_id": str(project.id), "name": "Night Shift"})
+    calendar_id = calendar.json()["id"]
+
+    resp = await client.patch(f"/api/v1/resources/{resource_id}", json={"calendar_id": calendar_id})
+    assert resp.status_code == 200
+    assert resp.json()["calendar_id"] == calendar_id
+
+    # Clearing it back to null (no calendar of its own) must also work.
+    resp = await client.patch(f"/api/v1/resources/{resource_id}", json={"calendar_id": None})
+    assert resp.status_code == 200
+    assert resp.json()["calendar_id"] is None
+
+
+async def test_create_resource_rejects_calendar_from_another_project(client: AsyncClient, project: Project):
+    other_project = await client.post("/api/v1/projects/", json={"name": "Other Project", "client_name": "X"})
+    other_calendar = await client.post("/api/v1/calendars/", json={"project_id": other_project.json()["id"], "name": "Foreign Calendar"})
+
+    resp = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies",
+        "unit": "day", "rate": "220", "calendar_id": other_calendar.json()["id"],
+    })
+    assert resp.status_code == 404
+
+
+async def test_create_cost_resource(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "cost", "name": "Planning Permission Fee",
+        "unit": "lump sum", "rate": "18750.00", "cost_type": "fixed",
+    })
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["resource_type"] == "cost"
+    assert data["cost_type"] == "fixed"
+
+
+async def test_create_crew_resource(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "crew", "name": "Excavation Crew",
+        "unit": "day", "rate": "2480.00", "members": "1x Excavator, 2x Labourers",
+    })
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["resource_type"] == "crew"
+    assert data["members"] == "1x Excavator, 2x Labourers"
+
+
+async def test_classification_fields_round_trip(client: AsyncClient, project: Project):
+    create = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies",
+        "unit": "day", "rate": "220", "discipline": "Structural Engineering", "company": "ABC Civil Engineering Ltd",
+        "skill_level": "Skilled",
+    })
+    assert create.status_code == 201, create.text
+    data = create.json()
+    assert data["discipline"] == "Structural Engineering"
+    assert data["company"] == "ABC Civil Engineering Ltd"
+    assert data["skill_level"] == "Skilled"
+    assert data["category"] is None
+    assert data["members"] is None
+
+    resp = await client.patch(f"/api/v1/resources/{data['id']}", json={"category": "Concrete"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["category"] == "Concrete"

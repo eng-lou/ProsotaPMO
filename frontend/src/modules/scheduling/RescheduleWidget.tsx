@@ -2,11 +2,11 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
-import type { Period } from '@/lib/types'
+import type { SchedulePeriod } from './types'
 import { formatDateTime } from './dateTime'
 
 interface Props {
-  period: Period
+  period: SchedulePeriod
   onApplied: () => Promise<void>
   onClose: () => void
 }
@@ -98,12 +98,12 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
     try {
       const { data } = mode === 'shift'
         ? await api.post<RescheduleResult>('/api/v1/activities/reschedule', null, {
-            params: { period_id: period.id, shift_days: shiftDays },
+            params: { schedule_period_id: period.id, shift_days: shiftDays },
           })
         : await api.post<RescheduleResult>(
             '/api/v1/activities/set-data-date',
             { date: targetDate, time: targetTime ? `${targetTime}:00` : null },
-            { params: { period_id: period.id } },
+            { params: { schedule_period_id: period.id } },
           )
       setResult(data)
       setPreviousDataDate(currentDataDate)

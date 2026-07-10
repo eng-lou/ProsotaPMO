@@ -22,6 +22,8 @@ from app.models.base import Base
 from app.models.organisation import Organisation
 from app.models.period import Period
 from app.models.project import Project
+from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
 from app.models.user import User
 
 _DEFAULT_URL = "postgresql+psycopg://postgres:password@localhost:5432/prosotapmo_test"
@@ -130,6 +132,37 @@ async def live_period(db: AsyncSession, project: Project) -> Period:
 @pytest_asyncio.fixture
 async def frozen_period(db: AsyncSession, project: Project) -> Period:
     p = Period(project_id=project.id, period_label="Period 0", freeze_status="frozen")
+    db.add(p)
+    await db.commit()
+    await db.refresh(p)
+    return p
+
+
+@pytest_asyncio.fixture
+async def schedule_variant(db: AsyncSession, project: Project) -> ScheduleVariant:
+    """The project's master schedule — Activity and its schedule-side
+    siblings live under this (and its SchedulePeriods below), unrelated to
+    Risk/Cost/ICD's own `live_period`/`frozen_period` above (see
+    docs/SCHEDULE_VARIANTS_PLAN.md, private docs repo)."""
+    v = ScheduleVariant(project_id=project.id, name="Working Schedule", is_master=True)
+    db.add(v)
+    await db.commit()
+    await db.refresh(v)
+    return v
+
+
+@pytest_asyncio.fixture
+async def live_schedule_period(db: AsyncSession, schedule_variant: ScheduleVariant) -> SchedulePeriod:
+    p = SchedulePeriod(schedule_variant_id=schedule_variant.id, period_label="Period 1", freeze_status="live")
+    db.add(p)
+    await db.commit()
+    await db.refresh(p)
+    return p
+
+
+@pytest_asyncio.fixture
+async def frozen_schedule_period(db: AsyncSession, schedule_variant: ScheduleVariant) -> SchedulePeriod:
+    p = SchedulePeriod(schedule_variant_id=schedule_variant.id, period_label="Period 0", freeze_status="frozen")
     db.add(p)
     await db.commit()
     await db.refresh(p)

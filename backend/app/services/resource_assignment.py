@@ -11,7 +11,7 @@ from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.schemas.resource import ResourceAssignmentCreate, ResourceAssignmentUpdate
 from app.services import cost_sync
-from app.services.activity import _require_live_period
+from app.services.activity import _require_live_schedule_period
 from app.services.resource_costing import compute_assignment_budget
 
 
@@ -61,14 +61,15 @@ async def list_assignments(db: AsyncSession, activity_id: uuid.UUID) -> list[Res
     return assignments
 
 
-async def list_assignments_for_period(db: AsyncSession, period_id: uuid.UUID) -> list[ResourceAssignment]:
-    """Every assignment across a period in one call — e.g. the Scheduling table's
-    Resources column, which needs to show real assigned-resource names per row
-    without an N+1 fetch. Same pattern as activity_relationship.py:list_relationships."""
+async def list_assignments_for_period(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[ResourceAssignment]:
+    """Every assignment across a schedule period in one call — e.g. the
+    Scheduling table's Resources column, which needs to show real
+    assigned-resource names per row without an N+1 fetch. Same pattern as
+    activity_relationship.py:list_relationships."""
     result = await db.execute(
         select(ResourceAssignment)
         .join(Activity, Activity.id == ResourceAssignment.activity_id)
-        .where(Activity.period_id == period_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
     )
     assignments = list(result.scalars().all())
     await _attach_resource_fields(db, assignments)
@@ -84,8 +85,17 @@ async def get_assignment(db: AsyncSession, assignment_id: uuid.UUID) -> Resource
 
 async def create_assignment(db: AsyncSession, data: ResourceAssignmentCreate) -> ResourceAssignment:
     activity = await _get_activity(db, data.activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
 
+    # WBS/Project summary rows CAN be resourced directly (2026-07-08, per Maro —
+    # reverses the 2026-07-06 decision that only their children could carry
+    # resourcing) — e.g. a prelims/overhead-style `cost` resource attached to a
+    # whole package rather than one task. Their own linked CostElement
+    # (app/services/cost_sync.py) is just one more independent line item in Cost
+    # Plan, no double-counting against their children's own elements — Cost Plan
+    # has no WBS-tree rollup today. A summary's start/finish/duration_hours are
+    # already populated (rolled up from children), so resource_costing.py's
+    # duration-driven formulas work unchanged.
     resource = await db.get(Resource, data.resource_id)
     if resource is None or resource.project_id != activity.project_id:
         raise HTTPException(status_code=404, detail="Resource not found in this project")
@@ -105,7 +115,7 @@ async def update_assignment(
 ) -> ResourceAssignment:
     assignment = await get_assignment(db, assignment_id)
     activity = await _get_activity(db, assignment.activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(assignment, field, value)
@@ -119,7 +129,7 @@ async def update_assignment(
 async def delete_assignment(db: AsyncSession, assignment_id: uuid.UUID) -> None:
     assignment = await get_assignment(db, assignment_id)
     activity = await _get_activity(db, assignment.activity_id)
-    await _require_live_period(db, activity.period_id)
+    await _require_live_schedule_period(db, activity.schedule_period_id)
 
     await db.delete(assignment)
     await db.commit()

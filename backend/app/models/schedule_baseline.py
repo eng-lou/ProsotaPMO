@@ -40,8 +40,11 @@ class ScheduleBaseline(Base, TimestampMixin):
     __tablename__ = "schedule_baselines"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+    # Was `period_id` until the schedule-variants split (2026-07-07, per Maro —
+    # docs/SCHEDULE_VARIANTS_PLAN.md) — a baseline belongs to a schedule, not a
+    # reporting cycle, so it moves with Activity onto SchedulePeriod.
+    schedule_period_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -76,3 +79,43 @@ class ScheduleBaselineActivity(Base):
     start: Mapped[datetime | None] = mapped_column(DateTime)
     finish: Mapped[datetime | None] = mapped_column(DateTime)
     duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+
+
+class ScheduleBaselineRelationship(Base):
+    """One activity-relationship link as it existed at the moment its
+    ScheduleBaseline was captured (2026-07-07, per Maro —
+    docs/SCHEDULE_VARIANTS_PLAN.md/SCHEDULING_GAPS_PLAN.md Phase 6: baselines
+    should capture a *full* schedule, not just dates/durations, so a
+    baseline can genuinely be opened as an independent working copy later —
+    see app/services/schedule_baseline.py:promote_baseline_to_variant).
+
+    Mirrors ActivityRelationship's own shape exactly (predecessor/successor
+    activity ids, type, lag) rather than denormalizing to codes — both FKs
+    reference the *live* Activity row, same "activity_id is the stable
+    reference, code is just what it was called then" precedent
+    ScheduleBaselineActivity already sets. ON DELETE CASCADE on all three
+    FKs, same reasoning as ScheduleBaselineActivity: this is a historical
+    snapshot, not a thing anyone edits directly, so it cascades away
+    cleanly with whichever of the baseline/activities it references stops
+    existing.
+
+    Baselines captured *before* this field existed have no rows here at
+    all — promote_baseline_to_variant falls back to the *current live*
+    relationships for those, clearly caveated in its own response, rather
+    than silently presenting an incomplete snapshot as equivalent to a full
+    one."""
+
+    __tablename__ = "schedule_baseline_relationships"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    baseline_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule_baselines.id", ondelete="CASCADE"), nullable=False
+    )
+    predecessor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
+    )
+    successor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
+    )
+    relationship_type: Mapped[str] = mapped_column(String(2), nullable=False, default="FS")
+    lag_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False, default=0)

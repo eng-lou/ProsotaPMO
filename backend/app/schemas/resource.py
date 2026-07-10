@@ -7,15 +7,29 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ResourceType = Literal["labour", "equipment", "material", "subcontractor"]
+ResourceType = Literal["labour", "equipment", "material", "subcontractor", "cost", "crew"]
+# Informational only this pass — see app/models/resource.py's resource_type comment.
+ResourceCostType = Literal["fixed", "recurring"]
 
 
 class ResourceBase(BaseModel):
     resource_type: ResourceType
     name: str
+    # Optional default/primary role (e.g. "Trades", "Foreman") — see
+    # app/models/resource.py.
+    role: str | None = None
     unit: str
     rate: Decimal = Field(ge=0)
     max_hours_per_day: Decimal = Field(default=Decimal("8"), gt=0, le=24)
+    # Optional own calendar (2026-07-07, per Maro) — see app/models/resource.py.
+    calendar_id: uuid.UUID | None = None
+    # Classification fields (2026-07-08, per Maro) — see app/models/resource.py.
+    discipline: str | None = None
+    company: str | None = None
+    skill_level: str | None = None
+    category: str | None = None
+    cost_type: ResourceCostType | None = None
+    members: str | None = None
 
 
 class ResourceCreate(ResourceBase):
@@ -25,9 +39,17 @@ class ResourceCreate(ResourceBase):
 class ResourceUpdate(BaseModel):
     resource_type: ResourceType | None = None
     name: str | None = None
+    role: str | None = None
     unit: str | None = None
     rate: Decimal | None = Field(default=None, ge=0)
     max_hours_per_day: Decimal | None = Field(default=None, gt=0, le=24)
+    calendar_id: uuid.UUID | None = None
+    discipline: str | None = None
+    company: str | None = None
+    skill_level: str | None = None
+    category: str | None = None
+    cost_type: ResourceCostType | None = None
+    members: str | None = None
 
 
 class ResourceResponse(ResourceBase):

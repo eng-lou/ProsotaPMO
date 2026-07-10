@@ -15,7 +15,7 @@ async def test_list_seeds_defaults(client: AsyncClient, project: Project):
     assert float(check1["threshold"]) == 5.0
 
 
-async def test_update_criterion_changes_live_report(client: AsyncClient, project: Project, live_period):
+async def test_update_criterion_changes_live_report(client: AsyncClient, project: Project, live_schedule_period):
     rows = (await client.get("/api/v1/scheduling-quality-criteria/", params={"project_id": str(project.id)})).json()
     check1_id = next(r["id"] for r in rows if r["check_number"] == 1)
 
@@ -27,9 +27,9 @@ async def test_update_criterion_changes_live_report(client: AsyncClient, project
     # threshold raised to 50%, DCMA #1 should now warn instead of fail
     # (>threshold but <=2x threshold).
     await client.post("/api/v1/activities/", json={
-        "project_id": str(project.id), "period_id": str(live_period.id), "task_name": "Solo",
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Solo",
     })
-    report = (await client.get("/api/v1/scheduling-quality/", params={"period_id": str(live_period.id)})).json()
+    report = (await client.get("/api/v1/scheduling-quality/", params={"schedule_period_id": str(live_schedule_period.id)})).json()
     check1 = next(c for c in report["checks"] if c["number"] == 1)
     assert check1["threshold_label"] == "<50%"
     assert check1["status"] == "warn"

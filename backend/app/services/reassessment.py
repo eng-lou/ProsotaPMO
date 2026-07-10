@@ -16,8 +16,11 @@ from app.schemas.reassessment import ReassessmentCreate, ReassessmentUpdate
 from app.services.period_guard import require_live_period
 
 # Registry of every parent type allowed to carry a reassessment log. Each
-# parent model has both `period_id` (for the freeze check) and
-# `last_reviewed_date` (auto-bumped on every new entry).
+# parent model has a `last_reviewed_date` (auto-bumped on every new entry)
+# plus a freeze check — risk/icd_item/cost_element still key off the shared
+# Period table via `period_id`; activity moved onto its own SchedulePeriod in
+# the schedule-variants split (docs/SCHEDULE_VARIANTS_PLAN.md), so it's
+# checked separately below rather than through the generic period_id lookup.
 _PARENT_MODELS: dict[str, type] = {
     "risk": Risk,
     "icd_item": IcdItem,
@@ -34,6 +37,18 @@ async def _get_parent(db: AsyncSession, record_type: str, record_id: uuid.UUID):
     if parent is None:
         raise HTTPException(status_code=404, detail=f"{record_type} not found")
     return parent
+
+
+async def _require_parent_live(db: AsyncSession, record_type: str, parent) -> None:
+    if record_type == "activity":
+        # Local import: avoids a module-load-time circular import between
+        # activity.py (imports create_reassessment for archive_activity's own
+        # audit entry) and this module.
+        from app.services.activity import _require_live_schedule_period
+
+        await _require_live_schedule_period(db, parent.schedule_period_id)
+    else:
+        await require_live_period(db, parent.period_id)
 
 
 async def list_reassessments(db: AsyncSession, record_type: str, record_id: uuid.UUID) -> list[Reassessment]:
@@ -57,7 +72,7 @@ async def create_reassessment(db: AsyncSession, data: ReassessmentCreate) -> Rea
     parent's last_reviewed_date — per PMBOK7/Rita Mulcahy's Monitor Risks/Costs
     concept of ongoing reassessment, distinct from a one-off narrative field."""
     parent = await _get_parent(db, data.record_type, data.record_id)
-    await require_live_period(db, parent.period_id)
+    await _require_parent_live(db, data.record_type, parent)
 
     entry = Reassessment(record_type=data.record_type, record_id=data.record_id, note=data.note)
     db.add(entry)
@@ -72,7 +87,7 @@ async def update_reassessment(
 ) -> Reassessment:
     entry = await get_reassessment(db, reassessment_id)
     parent = await _get_parent(db, entry.record_type, entry.record_id)
-    await require_live_period(db, parent.period_id)
+    await _require_parent_live(db, entry.record_type, parent)
     entry.note = data.note
     await db.commit()
     await db.refresh(entry)
@@ -82,6 +97,6 @@ async def update_reassessment(
 async def delete_reassessment(db: AsyncSession, reassessment_id: uuid.UUID) -> None:
     entry = await get_reassessment(db, reassessment_id)
     parent = await _get_parent(db, entry.record_type, entry.record_id)
-    await require_live_period(db, parent.period_id)
+    await _require_parent_live(db, entry.record_type, parent)
     await db.delete(entry)
     await db.commit()

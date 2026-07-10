@@ -6,9 +6,16 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.calendar import Calendar
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.schemas.resource import ResourceCreate, ResourceUpdate
+
+
+async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    calendar = await db.get(Calendar, calendar_id)
+    if calendar is None or calendar.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Calendar not found in this project")
 
 
 async def list_resources(db: AsyncSession, project_id: uuid.UUID) -> list[Resource]:
@@ -24,6 +31,8 @@ async def get_resource(db: AsyncSession, resource_id: uuid.UUID) -> Resource:
 
 
 async def create_resource(db: AsyncSession, data: ResourceCreate) -> Resource:
+    if data.calendar_id is not None:
+        await _validate_calendar_in_project(db, data.calendar_id, data.project_id)
     resource = Resource(**data.model_dump())
     db.add(resource)
     await db.commit()
@@ -33,7 +42,10 @@ async def create_resource(db: AsyncSession, data: ResourceCreate) -> Resource:
 
 async def update_resource(db: AsyncSession, resource_id: uuid.UUID, data: ResourceUpdate) -> Resource:
     resource = await get_resource(db, resource_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    if updates.get("calendar_id") is not None:
+        await _validate_calendar_in_project(db, updates["calendar_id"], resource.project_id)
+    for field, value in updates.items():
         setattr(resource, field, value)
     await db.commit()
     await db.refresh(resource)

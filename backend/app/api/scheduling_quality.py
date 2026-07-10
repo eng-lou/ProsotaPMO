@@ -14,7 +14,8 @@ router = APIRouter(prefix="/scheduling-quality", tags=["scheduling-quality"])
 
 @router.get("/", response_model=QualityReport)
 async def get_quality(
-    period_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
+    scope_subproject_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await svc.compute_quality(db, period_id)
+    return await svc.compute_quality(db, schedule_period_id, scope_subproject_id)

@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
 from app.schemas.calendar import (
     CalendarBreakCreate,
     CalendarBreakUpdate,
@@ -30,19 +31,23 @@ async def _recompute_all_live_periods_for_project(db: AsyncSession, project_id: 
     nothing re-ran the CPM engine until some unrelated activity edit happened
     to trigger it (found 2026-07-04, per Maro: "add exception isn't working").
 
-    Recomputes every *live* period in the project — frozen ones are
-    deliberately skipped, since a calendar edit retroactively changing a
-    frozen period's dates would break the "frozen = immutable" trust
-    guarantee (ARCHITECTURE.md §3). Local import to avoid a circular
-    dependency: scheduling_cpm already imports this module for calendar
-    lookups."""
+    Calendars are project-wide, shared across every schedule variant
+    (docs/SCHEDULE_VARIANTS_PLAN.md §D.3) — so a calendar edit recomputes the
+    *live* schedule period of every variant in the project, not just the
+    master's. Frozen schedule periods are deliberately skipped, since a
+    calendar edit retroactively changing a frozen period's dates would break
+    the "frozen = immutable" trust guarantee (ARCHITECTURE.md §3). Local
+    import to avoid a circular dependency: scheduling_cpm already imports
+    this module for calendar lookups."""
     from app.services import scheduling_cpm
 
     result = await db.execute(
-        select(Period.id).where(Period.project_id == project_id, Period.freeze_status == "live")
+        select(SchedulePeriod.id)
+        .join(ScheduleVariant, ScheduleVariant.id == SchedulePeriod.schedule_variant_id)
+        .where(ScheduleVariant.project_id == project_id, SchedulePeriod.freeze_status == "live")
     )
-    for period_id in result.scalars().all():
-        await scheduling_cpm.recompute_schedule(db, period_id)
+    for schedule_period_id in result.scalars().all():
+        await scheduling_cpm.recompute_schedule(db, schedule_period_id)
 
 
 async def _attach_hours_per_day(db: AsyncSession, calendars: list[Calendar]) -> None:
@@ -127,6 +132,52 @@ async def update_calendar(db: AsyncSession, calendar_id: uuid.UUID, data: Calend
     await _attach_hours_per_day(db, [calendar])
     await _recompute_all_live_periods_for_project(db, calendar.project_id)
     return calendar
+
+
+async def duplicate_calendar(db: AsyncSession, calendar_id: uuid.UUID) -> Calendar:
+    """Clones a calendar's own day envelope/working-day pattern plus its breaks
+    and exceptions into a brand new, independent calendar — never the project
+    default (2026-07-07, per Maro: "calendar inheritance exists... include
+    ability to duplicate calendar" — this is what he confirmed satisfies that,
+    rather than a true parent-child calendar relationship). The clone starts
+    completely independent: editing the original afterwards never touches it,
+    same as editing the clone never touches the original.
+
+    No recompute needed — a brand new calendar isn't assigned to any
+    activity/resource yet, so nothing's schedule can have changed."""
+    source = await _get_calendar(db, calendar_id)
+    clone = Calendar(
+        project_id=source.project_id,
+        name=f"{source.name} (copy)",
+        is_project_default=False,
+        day_start_time=source.day_start_time,
+        day_end_time=source.day_end_time,
+        works_monday=source.works_monday,
+        works_tuesday=source.works_tuesday,
+        works_wednesday=source.works_wednesday,
+        works_thursday=source.works_thursday,
+        works_friday=source.works_friday,
+        works_saturday=source.works_saturday,
+        works_sunday=source.works_sunday,
+    )
+    db.add(clone)
+    await db.commit()
+    await db.refresh(clone)
+
+    breaks = (await db.execute(select(CalendarBreak).where(CalendarBreak.calendar_id == calendar_id))).scalars().all()
+    for b in breaks:
+        db.add(CalendarBreak(calendar_id=clone.id, label=b.label, start_time=b.start_time, end_time=b.end_time))
+
+    exceptions = (await db.execute(select(CalendarException).where(CalendarException.calendar_id == calendar_id))).scalars().all()
+    for e in exceptions:
+        db.add(CalendarException(
+            calendar_id=clone.id, label=e.label, start_date=e.start_date, end_date=e.end_date,
+            is_working=e.is_working, start_time=e.start_time, end_time=e.end_time,
+        ))
+    await db.commit()
+
+    await _attach_hours_per_day(db, [clone])
+    return clone
 
 
 async def delete_calendar(db: AsyncSession, calendar_id: uuid.UUID) -> None:

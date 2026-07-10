@@ -18,10 +18,15 @@ def compute_assignment_budget(
 ) -> Decimal:
     rate = Decimal(str(resource.rate))
 
-    if resource.resource_type == "subcontractor":
+    # subcontractor/cost: both price as a flat lump sum (2026-07-08, per Maro —
+    # cost_type on a "cost" resource is informational only this pass, not a real
+    # per-period recurring calc).
+    if resource.resource_type in ("subcontractor", "cost"):
         return rate.quantize(_MONEY)
 
-    if resource.resource_type in ("labour", "equipment"):
+    # labour/equipment/crew: a crew occupies an activity's time the same way
+    # labour/equipment does (2026-07-08, per Maro).
+    if resource.resource_type in ("labour", "equipment", "crew"):
         duration_days = (
             Decimal(str(activity.duration_days))
             if activity is not None and activity.duration_days is not None
@@ -43,9 +48,9 @@ def compute_assignment_rate_line_qty(
     """The qty to show on this assignment's synced CostRateLine (app/services/
     cost_sync.py) — chosen so qty x rate reproduces compute_assignment_budget
     exactly, for whichever formula applies to this resource's type."""
-    if resource.resource_type == "subcontractor":
+    if resource.resource_type in ("subcontractor", "cost"):
         return Decimal(1)
-    if resource.resource_type in ("labour", "equipment"):
+    if resource.resource_type in ("labour", "equipment", "crew"):
         duration_days = (
             Decimal(str(activity.duration_days))
             if activity is not None and activity.duration_days is not None

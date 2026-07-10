@@ -16,13 +16,16 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.cost_element import CostElement
 from app.models.cost_rate_line import CostRateLine
+from app.models.period import Period
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
+from app.models.schedule_variant import ScheduleVariant
 from app.services.reference_codes import next_code
 from app.services.resource_costing import compute_assignment_budget, compute_assignment_rate_line_qty
 
@@ -32,10 +35,49 @@ async def _get_linked_element(db: AsyncSession, activity_id: uuid.UUID) -> CostE
     return result.scalar_one_or_none()
 
 
+async def _get_or_create_live_period(db: AsyncSession, project_id: uuid.UUID) -> Period:
+    """Risk/Cost/ICD's own live reporting Period for the project — unrelated
+    to whichever SchedulePeriod/ScheduleVariant the triggering activity lives
+    in (docs/SCHEDULE_VARIANTS_PLAN.md split Period in two for exactly this
+    reason). Same atomic find-or-create shape as app/api/periods.py's own
+    bootstrap_period."""
+    result = await db.execute(
+        select(Period).where(Period.project_id == project_id).order_by(Period.created_at)
+    )
+    periods = list(result.scalars().all())
+    active = next((p for p in periods if p.freeze_status == "live"), None) or (periods[0] if periods else None)
+    if active is not None:
+        return active
+
+    period = Period(project_id=project_id, period_label="Period 1", freeze_status="live")
+    db.add(period)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        result = await db.execute(
+            select(Period).where(Period.project_id == project_id, Period.freeze_status == "live")
+        )
+        return result.scalar_one()
+    await db.refresh(period)
+    return period
+
+
 async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.UUID) -> None:
     """Called after every resource assignment create/update/delete for an activity."""
     activity = await db.get(Activity, activity_id)
     if activity is None:
+        return
+
+    # Only the master schedule's resource assignments drive real Cost Plan
+    # budget lines (docs/SCHEDULE_VARIANTS_PLAN.md §F) — a "what-if"/recovery/
+    # mitigation variant resourcing its own activities shouldn't silently
+    # create or move real budget, since it isn't the schedule of record until
+    # (if ever) promoted. promote_variant re-links any existing schedule-
+    # sourced elements onto the new master's matching-code activities, so this
+    # gate never orphans a link that promotion is about to fix up anyway.
+    variant = await db.get(ScheduleVariant, activity.schedule_variant_id)
+    if variant is None or not variant.is_master:
         return
 
     element = await _get_linked_element(db, activity_id)
@@ -66,9 +108,10 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
 
     if element is None:
         code = await next_code(db, CostElement, "CST", activity.project_id)
+        live_period = await _get_or_create_live_period(db, activity.project_id)
         element = CostElement(
             project_id=activity.project_id,
-            period_id=activity.period_id,
+            period_id=live_period.id,
             code=code,
             element_type="fixed",
             description=description,

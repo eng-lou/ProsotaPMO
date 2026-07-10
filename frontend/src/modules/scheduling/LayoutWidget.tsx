@@ -1,8 +1,36 @@
+import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import type { GanttFontFamily, GanttLayout, GanttStyle } from '@/lib/ganttLayout'
+
+interface PydanticErrorItem {
+  loc?: (string | number)[]
+  msg?: string
+}
+
+// Unlike the other widgets' own copy of this helper, `detail` here isn't
+// always a plain string — a numeric field out of its schema range (e.g.
+// print_font_size above 24) fails FastAPI's own request validation *before*
+// any endpoint code runs, which shapes `detail` as a list of
+// {loc, msg} pydantic error objects instead (2026-07-06, per Maro: a 422 on
+// saving a Layout was only ever shown as a generic "check your connection"
+// message, since this widget's handleSave didn't call apiErrorDetail at
+// all). Falls back to the field name + message per error, semicolon-joined.
+function apiErrorDetail(err: unknown): string | undefined {
+  if (!axios.isAxiosError(err)) return undefined
+  const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map(item => {
+      const { loc, msg } = item as PydanticErrorItem
+      const field = loc && loc.length > 0 ? loc[loc.length - 1] : 'value'
+      return msg ? `${field}: ${msg}` : JSON.stringify(item)
+    }).join('; ')
+  }
+  return undefined
+}
 
 interface Props {
   layouts: GanttLayout[]
@@ -16,6 +44,32 @@ interface Props {
 }
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+
+// A native <input type="number">'s min/max attributes only affect the
+// spinner arrows and the browser's own (never actually shown here, since
+// this isn't inside a <form>) validation UI — nothing stops typing/pasting a
+// value outside them, which then reaches the backend's own ge/le schema
+// bound and 422s (2026-07-06, per Maro: saving a Layout after tweaking a
+// font-size field failed with a generic "check your connection" error,
+// which turned out to be a plain out-of-range value on save, only ever
+// caught at the backend, not before).
+//
+// Deliberately only clamped onBlur, never onChange — clamping every
+// keystroke fights a controlled input while typing a multi-digit number: the
+// field is these inputs' *only* state (no separate raw-string draft per
+// field), so clamping mid-edit rewrites what's displayed on every character
+// typed. Concretely, typing "18" over an existing "8" starts by clearing the
+// box, which forced-substituted a fallback (say 9); the next keystroke then
+// appended to *that* instead of a blank field, quickly producing a number
+// above the max, which clamped to 24 — and appending any further digit to
+// "24" clamps right back to 24, so the field got stuck there no matter what
+// was typed next (2026-07-06, per Maro: "it wont let me choose a number... is
+// forcing me to pick 24"). Letting onChange pass the raw typed value through
+// unclamped, and only clamping/defaulting once the field is left, fixes this
+// while still guaranteeing nothing out-of-range ever reaches Save.
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
 
 // No native <input type="color"> here — that OS-level dialog itself was
 // hanging the whole browser tab on Windows/Chrome (2026-07-05, per Maro; two
@@ -120,8 +174,8 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
       if (editingId) await onUpdate(editingId, name.trim(), draft)
       else await onCreate(name.trim(), draft)
       closeForm()
-    } catch {
-      setError(`Could not ${editingId ? 'update' : 'save'} the layout — check your connection and try again.`)
+    } catch (err) {
+      setError(apiErrorDetail(err) ?? `Could not ${editingId ? 'update' : 'save'} the layout — check your connection and try again.`)
     } finally {
       setSaving(false)
     }
@@ -197,7 +251,7 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
       }
       await onCreate(parsed.name, parsed.style as GanttStyle)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not import that file.')
+      setError(apiErrorDetail(err) ?? (err instanceof Error ? err.message : 'Could not import that file.'))
     }
   }
 
@@ -274,20 +328,44 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
 
           <div className="grid grid-cols-4 gap-6">
             <div>
-              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Gantt colours</div>
+              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Gantt</div>
               <div className="space-y-1.5">
                 <ColorField label="Critical activity" value={draft.critical_color} onChange={setField('critical_color')} />
                 <ColorField label="Non-critical activity" value={draft.non_critical_color} onChange={setField('non_critical_color')} />
                 <ColorField label="Critical milestone" value={draft.milestone_critical_color} onChange={setField('milestone_critical_color')} />
                 <ColorField label="Non-critical milestone" value={draft.milestone_noncritical_color} onChange={setField('milestone_noncritical_color')} />
                 <ColorField label="Baseline" value={draft.baseline_color} onChange={setField('baseline_color')} />
+                <ColorField label="Sub-critical" value={draft.sub_critical_color} onChange={setField('sub_critical_color')} />
                 <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
                   Baseline thickness
                   <input
                     type="number" min={2} max={20} value={draft.baseline_thickness}
-                    onChange={e => setField('baseline_thickness')(Number(e.target.value) || draft.baseline_thickness)}
+                    onChange={e => setField('baseline_thickness')(Number(e.target.value))}
+                    onBlur={e => setField('baseline_thickness')(clamp(Number(e.target.value) || 7, 2, 20))}
                     className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
                   />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="Timeline header marks + the optional name/resource/finish bar label">
+                  Timeline/label font (screen)
+                  <input
+                    type="number" min={6} max={24} step={1}
+                    value={draft.gantt_font_size}
+                    onChange={e => setField('gantt_font_size')(Number(e.target.value))}
+                    onBlur={e => setField('gantt_font_size')(clamp(Number(e.target.value) || 10, 6, 24))}
+                    className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="Independent of the Activity table's own font, below">
+                  Timeline/label font type
+                  <select
+                    value={draft.gantt_font_family}
+                    onChange={e => setField('gantt_font_family')(e.target.value as GanttFontFamily)}
+                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  >
+                    <option value="sans">Sans-serif</option>
+                    <option value="serif">Serif</option>
+                    <option value="mono">Monospace</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -308,12 +386,45 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
               <div className="space-y-1.5">
                 <ColorField label="Activity row shade" value={draft.activity_row_color} onChange={setField('activity_row_color')} />
                 <ColorField label="Milestone row shade" value={draft.milestone_row_color} onChange={setField('milestone_row_color')} />
+                <ColorField label="Highlight colour" value={draft.highlight_color} onChange={setField('highlight_color')} />
                 <ColorField label="Font colour" value={draft.table_font_color} onChange={setField('table_font_color')} />
                 <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
                   Font
                   <select
                     value={draft.table_font_family}
                     onChange={e => setField('table_font_family')(e.target.value as GanttFontFamily)}
+                    className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  >
+                    <option value="sans">Sans-serif</option>
+                    <option value="serif">Serif</option>
+                    <option value="mono">Monospace</option>
+                  </select>
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                  Font size (screen)
+                  <input
+                    type="number" min={10} max={24} step={1}
+                    value={draft.table_font_size}
+                    onChange={e => setField('table_font_size')(Number(e.target.value))}
+                    onBlur={e => setField('table_font_size')(clamp(Number(e.target.value) || 14, 10, 24))}
+                    className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="The column-label header row (Code/WBS/Type/...), independent of the body text above">
+                  Header font size (screen)
+                  <input
+                    type="number" min={6} max={24} step={1}
+                    value={draft.header_font_size}
+                    onChange={e => setField('header_font_size')(Number(e.target.value))}
+                    onBlur={e => setField('header_font_size')(clamp(Number(e.target.value) || 12, 6, 24))}
+                    className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="Independent of the body text's own font, above">
+                  Header font type
+                  <select
+                    value={draft.header_font_family}
+                    onChange={e => setField('header_font_family')(e.target.value as GanttFontFamily)}
                     className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
                   >
                     <option value="sans">Sans-serif</option>
@@ -341,6 +452,13 @@ export function LayoutWidget({ layouts, activeStyle, onCreate, onUpdate, onApply
                   <input
                     type="checkbox" checked={draft.show_connectors}
                     onChange={e => setField('show_connectors')(e.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="A ring around a bar/milestone that's critical within its own tagged sub-project, even when not on the master critical path">
+                  Sub-critical indicator
+                  <input
+                    type="checkbox" checked={draft.show_sub_critical}
+                    onChange={e => setField('show_sub_critical')(e.target.checked)}
                   />
                 </label>
                 <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-1">Bar labels</div>

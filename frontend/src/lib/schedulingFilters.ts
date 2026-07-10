@@ -26,6 +26,8 @@ function getFieldValue(activity: Activity, field: FilterFieldKey): unknown {
     case 'variance_days': return activity.variance_days
     case 'total_float_hours': return activity.total_float_hours
     case 'free_float_hours': return activity.free_float_hours
+    case 'sub_total_float_hours': return activity.sub_total_float_hours
+    case 'sub_is_critical': return activity.sub_is_critical
     case 'pct_complete': return activity.pct_complete
     case 'duration_pct_complete': return activity.duration_pct_complete
     case 'bac': return activity.bac

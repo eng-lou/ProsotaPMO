@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { resetAllDismissedWarnings, useDismissedWarningsCount } from '@/lib/confirmWithDontAsk'
+import { loadHiddenNavPanels, saveHiddenNavPanels } from '@/lib/hiddenNavPanels'
 import { useProject } from '@/lib/ProjectContext'
 
 const NAV = [
   { to: '/dashboard', label: 'Controls Dashboard' },
   { to: '/scheduling', label: 'Scheduling' },
+  { to: '/4d', label: '4D' },
   { to: '/risks', label: 'Risk Register' },
   { to: '/costs', label: 'Cost Plan' },
   { to: '/icd', label: 'ICD Tracker' },
@@ -19,6 +22,20 @@ export function Sidebar() {
   const { selectedProject, clearProject } = useProject()
   const navigate = useNavigate()
   const dismissedCount = useDismissedWarningsCount()
+  // Which panels are hidden from the list below (2026-07-10, per Maro) —
+  // hiding one only removes it from this list; its route still works if
+  // visited directly, nothing is actually disabled.
+  const [hiddenPanels, setHiddenPanels] = useState<Set<string>>(loadHiddenNavPanels)
+  const [hidePanelsOpen, setHidePanelsOpen] = useState(false)
+  const toggleHiddenPanel = (to: string) => {
+    setHiddenPanels(prev => {
+      const next = new Set(prev)
+      if (next.has(to)) next.delete(to)
+      else next.add(to)
+      saveHiddenNavPanels(next)
+      return next
+    })
+  }
 
   const handleSwitchProject = () => {
     clearProject()
@@ -28,7 +45,7 @@ export function Sidebar() {
   return (
     <aside className="no-print flex flex-col w-60 min-h-screen bg-gray-900 text-white shrink-0">
       <div className="px-6 py-5 border-b border-gray-700">
-        <span className="text-lg font-bold tracking-tight">ProsotaPMO</span>
+        <span className="text-lg font-bold tracking-tight">Prosota</span>
       </div>
 
       {selectedProject && (
@@ -48,7 +65,7 @@ export function Sidebar() {
       )}
 
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV.map(({ to, label }) => (
+        {NAV.filter(({ to }) => !hiddenPanels.has(to)).map(({ to, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -79,6 +96,23 @@ export function Sidebar() {
           >
             ⚙ Reset {dismissedCount} dismissed warning{dismissedCount === 1 ? '' : 's'}
           </button>
+        )}
+        <button
+          onClick={() => setHidePanelsOpen(o => !o)}
+          title="Choose which panels show up in the list above — hiding one doesn't disable it, its page still works if you go there directly"
+          className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors mb-2"
+        >
+          ⚙ {hidePanelsOpen ? 'Hide panels ▴' : 'Hide panels…'}
+        </button>
+        {hidePanelsOpen && (
+          <div className="mb-2 space-y-1 max-h-48 overflow-y-auto">
+            {NAV.map(({ to, label }) => (
+              <label key={to} className="flex items-center gap-1.5 text-xs text-gray-300 px-1">
+                <input type="checkbox" checked={hiddenPanels.has(to)} onChange={() => toggleHiddenPanel(to)} />
+                {label}
+              </label>
+            ))}
+          </div>
         )}
         <p className="text-xs text-gray-400 truncate mb-2">{user?.email}</p>
         <button

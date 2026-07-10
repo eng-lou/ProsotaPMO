@@ -1,11 +1,27 @@
+import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
-import type { ScheduleBaseline } from './types'
+import type { ScheduleBaseline, ScheduleVariant } from './types'
+
+function apiErrorDetail(err: unknown): string | undefined {
+  return axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
+}
 
 interface Props {
   periodId: string
+  // Every *other* schedule variant in the project (not the one this widget
+  // is currently open against) — offered as a source to baseline FROM
+  // (docs/SCHEDULE_VARIANTS_PLAN.md §D.7 — Maro: "the ability to use the
+  // second programme and assign the original schedule as a baseline is
+  // important and vice versa"). Empty on a project with only one schedule —
+  // the cross-variant option simply doesn't show.
+  otherVariants: ScheduleVariant[]
   onChange: () => Promise<void>
+  // "Open a baseline as a working schedule" (docs/SCHEDULING_GAPS_PLAN.md
+  // Phase 6) — forks a new, editable ScheduleVariant from a baseline's own
+  // captured snapshot and switches to it. See useScheduleVariant.ts.
+  onPromote: (baselineId: string, name: string) => Promise<{ variant: ScheduleVariant; relationships_from_baseline_snapshot: boolean }>
   onClose: () => void
 }
 
@@ -13,17 +29,28 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-export function BaselineWidget({ periodId, onChange, onClose }: Props) {
+// '' = baseline this schedule's own current state (the original, same-variant
+// capture) — matches the native <select>'s own empty-string convention
+// rather than inventing a sentinel, same pattern already used for
+// SchedulingQualityWidget's scope selector.
+const CURRENT_SCHEDULE = ''
+
+export function BaselineWidget({ periodId, otherVariants, onChange, onPromote, onClose }: Props) {
   const [baselines, setBaselines] = useState<ScheduleBaseline[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [date, setDate] = useState(today)
+  const [sourceVariantId, setSourceVariantId] = useState(CURRENT_SCHEDULE)
+  const [error, setError] = useState<string | null>(null)
   const [assigningId, setAssigningId] = useState<string | null>(null)
+  const [promotingId, setPromotingId] = useState<string | null>(null)
+  const [promoteName, setPromoteName] = useState('')
+  const [promoteBusy, setPromoteBusy] = useState(false)
 
   const load = async () => {
     setLoading(true)
-    const res = await api.get<ScheduleBaseline[]>('/api/v1/schedule-baselines/', { params: { period_id: periodId } })
+    const res = await api.get<ScheduleBaseline[]>('/api/v1/schedule-baselines/', { params: { schedule_period_id: periodId } })
     setBaselines(res.data)
     setLoading(false)
   }
@@ -32,10 +59,23 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
 
   const handleCreate = async () => {
     if (!name.trim() || !date) return
-    await api.post('/api/v1/schedule-baselines/', { period_id: periodId, name, baseline_date: date })
+    setError(null)
+    try {
+      if (sourceVariantId === CURRENT_SCHEDULE) {
+        await api.post('/api/v1/schedule-baselines/', { schedule_period_id: periodId, name, baseline_date: date })
+      } else {
+        await api.post('/api/v1/schedule-baselines/from-variant', {
+          schedule_period_id: periodId, source_schedule_variant_id: sourceVariantId, name, baseline_date: date,
+        })
+      }
+    } catch (err) {
+      setError(apiErrorDetail(err) ?? 'Could not save that baseline — check your connection and try again.')
+      return
+    }
     setCreating(false)
     setName('')
     setDate(today())
+    setSourceVariantId(CURRENT_SCHEDULE)
     await load()
   }
 
@@ -67,6 +107,27 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
     }
   }
 
+  const handleConfirmPromote = async (b: ScheduleBaseline) => {
+    if (!promoteName.trim()) return
+    setPromoteBusy(true)
+    try {
+      const result = await onPromote(b.id, promoteName.trim())
+      if (!result.relationships_from_baseline_snapshot) {
+        window.alert(
+          `"${b.name}" was captured before baselines saved relationship logic, so "${promoteName.trim()}" was seeded ` +
+          'with the current live relationships between its matched activities instead of a true historical snapshot.'
+        )
+      }
+      setPromotingId(null)
+      setPromoteName('')
+      onClose()
+    } catch (err) {
+      setError(apiErrorDetail(err) ?? 'Could not promote that baseline — check your connection and try again.')
+    } finally {
+      setPromoteBusy(false)
+    }
+  }
+
   const handleDelete = async (b: ScheduleBaseline) => {
     if (!(await confirmWithDontAsk(
       'scheduling.baseline-delete',
@@ -93,6 +154,7 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
             <th className="px-2 py-1.5 border border-gray-200">Name</th>
             <th className="px-2 py-1.5 border border-gray-200">Date</th>
             <th className="px-2 py-1.5 border border-gray-200 text-right">Activities</th>
+            <th className="px-2 py-1.5 border border-gray-200"></th>
             <th className="px-2 py-1.5 border border-gray-200"></th>
             <th className="px-2 py-1.5 border border-gray-200"></th>
           </tr>
@@ -125,13 +187,47 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
                   </button>
                 )}
               </td>
+              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
+                {promotingId === b.id ? (
+                  <span className="flex items-center gap-1">
+                    <input
+                      value={promoteName}
+                      onChange={e => setPromoteName(e.target.value)}
+                      placeholder="New schedule name"
+                      autoFocus
+                      className="border border-gray-300 rounded px-1.5 py-0.5 text-xs w-36"
+                    />
+                    <button
+                      onClick={() => handleConfirmPromote(b)}
+                      disabled={promoteBusy || !promoteName.trim()}
+                      className="text-blue-600 hover:text-blue-700 disabled:opacity-40"
+                    >
+                      Go
+                    </button>
+                    <button
+                      onClick={() => { setPromotingId(null); setPromoteName('') }}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => { setPromotingId(b.id); setPromoteName(`${b.name} (Schedule)`) }}
+                    title="Fork a brand new, editable schedule seeded from this baseline's captured snapshot"
+                    className="text-gray-500 hover:text-gray-700"
+                  >
+                    Promote to Schedule
+                  </button>
+                )}
+              </td>
               <td className="px-2 py-1.5 border border-gray-200 text-right">
                 <button onClick={() => handleDelete(b)} className="text-gray-400 hover:text-red-600">Delete</button>
               </td>
             </tr>
           ))}
           {baselines.length === 0 && !loading && (
-            <tr><td colSpan={5} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No baselines saved yet for this period</td></tr>
+            <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No baselines saved yet for this period</td></tr>
           )}
         </tbody>
       </table>
@@ -157,8 +253,28 @@ export function BaselineWidget({ periodId, onChange, onClose }: Props) {
               className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
             />
           </label>
+          {otherVariants.length > 0 && (
+            <label className="text-xs text-gray-600">
+              Baseline from
+              <select
+                value={sourceVariantId}
+                onChange={e => setSourceVariantId(e.target.value)}
+                title="Capture this baseline from a different schedule's current dates instead of this one's own"
+                className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+              >
+                <option value={CURRENT_SCHEDULE}>This schedule (current state)</option>
+                {otherVariants.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </label>
+          )}
+          {error && <p className="text-xs text-red-600 w-full">{error}</p>}
           <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700">Save</button>
-          <button onClick={() => { setCreating(false); setName(''); setDate(today()) }} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
+          <button
+            onClick={() => { setCreating(false); setName(''); setDate(today()); setSourceVariantId(CURRENT_SCHEDULE); setError(null) }}
+            className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5"
+          >
+            Cancel
+          </button>
         </div>
       ) : (
         <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Set a new baseline</button>

@@ -28,6 +28,20 @@ def _to_response(row: ProjectLetterhead) -> ProjectLetterheadResponse:
         footer_center=LetterheadZone(**row.footer_zones["center"]),
         footer_right=LetterheadZone(**row.footer_zones["right"]),
         show_gantt_legend=row.show_gantt_legend,
+        timescale_start_mode=row.timescale_start_mode,  # type: ignore[arg-type]
+        timescale_finish_mode=row.timescale_finish_mode,  # type: ignore[arg-type]
+        timescale_start_custom_date=row.timescale_start_custom_date,
+        timescale_finish_custom_date=row.timescale_finish_custom_date,
+        print_column_widths=row.print_column_widths,
+        print_udf_column_width=row.print_udf_column_width,
+        print_font_size=row.print_font_size,
+        header_print_font_size=row.header_print_font_size,
+        gantt_print_font_size=row.gantt_print_font_size,
+        gantt_legend_font_size=row.gantt_legend_font_size,
+        print_font_family=row.print_font_family,  # type: ignore[arg-type]
+        gantt_print_font_family=row.gantt_print_font_family,  # type: ignore[arg-type]
+        header_print_font_family=row.header_print_font_family,  # type: ignore[arg-type]
+        gantt_legend_font_family=row.gantt_legend_font_family,  # type: ignore[arg-type]
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -49,6 +63,20 @@ async def get_or_default(db: AsyncSession, project_id: uuid.UUID) -> ProjectLett
         footer_center=LetterheadZone(),
         footer_right=LetterheadZone(),
         show_gantt_legend=False,
+        timescale_start_mode="auto",
+        timescale_finish_mode="auto",
+        timescale_start_custom_date=None,
+        timescale_finish_custom_date=None,
+        print_column_widths={},
+        print_udf_column_width=None,
+        print_font_size=9,
+        header_print_font_size=9,
+        gantt_print_font_size=8,
+        gantt_legend_font_size=9,
+        print_font_family="sans",
+        gantt_print_font_family="sans",
+        header_print_font_family="sans",
+        gantt_legend_font_family="sans",
     )
 
 
@@ -67,6 +95,20 @@ async def upsert(db: AsyncSession, data: ProjectLetterheadUpsert) -> ProjectLett
         "left": data.footer_left.model_dump(), "center": data.footer_center.model_dump(), "right": data.footer_right.model_dump(),
     }
     row.show_gantt_legend = data.show_gantt_legend
+    row.timescale_start_mode = data.timescale_start_mode
+    row.timescale_finish_mode = data.timescale_finish_mode
+    row.timescale_start_custom_date = data.timescale_start_custom_date
+    row.timescale_finish_custom_date = data.timescale_finish_custom_date
+    row.print_column_widths = data.print_column_widths
+    row.print_udf_column_width = data.print_udf_column_width
+    row.print_font_size = data.print_font_size
+    row.header_print_font_size = data.header_print_font_size
+    row.gantt_print_font_size = data.gantt_print_font_size
+    row.gantt_legend_font_size = data.gantt_legend_font_size
+    row.print_font_family = data.print_font_family
+    row.gantt_print_font_family = data.gantt_print_font_family
+    row.header_print_font_family = data.header_print_font_family
+    row.gantt_legend_font_family = data.gantt_legend_font_family
     await db.commit()
     await db.refresh(row)
     return _to_response(row)

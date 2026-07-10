@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
-from app.models.period import Period
+from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
 from app.services import scheduling_quality_criterion as criteria_svc
 from app.services.scheduling_cpm import _cpm_participants
 
@@ -59,22 +60,54 @@ def _status_max(actual: float, threshold: float) -> Status:
     return "warn" if actual <= threshold * 2 else "fail"
 
 
-async def compute_quality(db: AsyncSession, period_id: uuid.UUID) -> dict:
-    period = await db.get(Period, period_id)
+async def compute_quality(
+    db: AsyncSession, schedule_period_id: uuid.UUID, scope_subproject_id: uuid.UUID | None = None
+) -> dict:
+    period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
-        raise HTTPException(status_code=404, detail="Period not found")
-    thresholds = await criteria_svc.thresholds_by_check(db, period.project_id)
+        raise HTTPException(status_code=404, detail="Schedule period not found")
+    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
+    project_id = variant.project_id
+    thresholds = await criteria_svc.thresholds_by_check(db, project_id)
 
-    activities_result = await db.execute(select(Activity).where(Activity.period_id == period_id))
+    # Sub-project scoping (docs/SUBPROJECT_FLOAT_PLAN.md §F) — restricts the
+    # activity set to one tagged sub-project's own subtree (still including
+    # any further-nested sub-projects' activities, since they're structurally
+    # "within that sub network" too) and switches checks 6/7/12 to read each
+    # activity's sub_total_float_hours/sub_is_critical instead of the master
+    # fields. Local imports: same reason as
+    # app/services/schedule_subproject.py's own cross-service imports — avoids
+    # a module-load-time circular import between activity.py and this module.
+    scope_name: str | None = None
+    scope_ids: set[uuid.UUID] | None = None
+    if scope_subproject_id is not None:
+        from app.models.schedule_subproject import ScheduleSubproject
+        from app.services.activity import _subtree_ids
+
+        subproject = await db.get(ScheduleSubproject, scope_subproject_id)
+        if subproject is None or subproject.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Sub-project not found in this project.")
+        scope_name = subproject.name
+        scope_ids = await _subtree_ids(db, schedule_period_id, subproject.root_wbs_id)
+
+    activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
     all_activities = list(activities_result.scalars().all())
+    if scope_ids is not None:
+        all_activities = [a for a in all_activities if a.id in scope_ids]
     participants = _cpm_participants(all_activities)
     total = len(participants)
     participant_ids = {a.id for a in participants}
 
+    # Which float/critical fields checks 6/7/12 read — the master ones for
+    # the whole-schedule view (unchanged default), or the scoped sub-project
+    # ones when a scope is selected.
+    float_attr = "sub_total_float_hours" if scope_ids is not None else "total_float_hours"
+    critical_attr = "sub_is_critical" if scope_ids is not None else "is_critical"
+
     rel_result = await db.execute(
         select(ActivityRelationship)
         .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.period_id == period_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
     )
     relationships = [
         r for r in rel_result.scalars().all()
@@ -91,12 +124,17 @@ async def compute_quality(db: AsyncSession, period_id: uuid.UUID) -> dict:
     non_fs = [r for r in relationships if r.relationship_type != "FS"]
     negative_lag = [r for r in relationships if r.lag_hours < 0]
     positive_lag = [r for r in relationships if r.lag_hours > 0]
-    hard_constraints = [a for a in participants if a.constraint_type == "ms"]
+    # mf (Mandatory Finish, 2026-07-07) is just as "hard" as ms (Mandatory
+    # Start) for DCMA's purposes — both can force an illogical/infeasible
+    # date regardless of network logic. alap is deliberately excluded: it
+    # only ever uses up an activity's own existing float, never overriding
+    # logic the way the mandatory pair can.
+    hard_constraints = [a for a in participants if a.constraint_type in ("ms", "mf")]
     high_float = [
         a for a in participants
-        if a.total_float_hours is not None and a.total_float_hours / _NOMINAL_HOURS_PER_DAY > HIGH_FLOAT_DAYS
+        if getattr(a, float_attr) is not None and getattr(a, float_attr) / _NOMINAL_HOURS_PER_DAY > HIGH_FLOAT_DAYS
     ]
-    negative_float = [a for a in participants if a.total_float_hours is not None and a.total_float_hours < 0]
+    negative_float = [a for a in participants if getattr(a, float_attr) is not None and getattr(a, float_attr) < 0]
     high_duration = [
         a for a in participants
         if (a.duration_hours or 0) / _NOMINAL_HOURS_PER_DAY > HIGH_DURATION_DAYS
@@ -113,7 +151,7 @@ async def compute_quality(db: AsyncSession, period_id: uuid.UUID) -> dict:
     ]
     baselined_or_actual = sum(1 for a in participants if a.bl_finish is not None or a.actual_finish is not None)
 
-    critical_path_pass, critical_path_detail = _critical_path_test(participants, relationships)
+    critical_path_pass, critical_path_detail = _critical_path_test(participants, relationships, critical_attr)
 
     # Relationship-based checks (3, 4, 5) report the *activities* on each side
     # of the offending link, deduplicated — codes, not relationship IDs, since
@@ -218,23 +256,29 @@ async def compute_quality(db: AsyncSession, period_id: uuid.UUID) -> dict:
         logic_score = _pct(total * 2 - len(missing_pred) - len(missing_succ), total * 2)
 
     return {
-        "period_id": period_id,
+        "schedule_period_id": schedule_period_id,
         "activity_count": total,
         "logic_score": logic_score,
         "checks": checks,
+        "scope_subproject_id": scope_subproject_id,
+        "scope_name": scope_name,
     }
 
 
 def _critical_path_test(
-    participants: list[Activity], relationships: list[ActivityRelationship]
+    participants: list[Activity], relationships: list[ActivityRelationship], critical_attr: str = "is_critical"
 ) -> tuple[bool, str]:
     """DCMA #12: the critical path must be one continuous, traceable chain — not
     fragments. Checked here as: every critical activity (except one at each end of
     the chain) must have at least one critical predecessor AND at least one critical
     successor among *its own* relationships. A critical activity with no critical
     neighbour on one side is a break in the chain.
+
+    critical_attr: "is_critical" for the master schedule (default), or
+    "sub_is_critical" when scoped to a tagged sub-project (§F) — same
+    activity list either way, just a different notion of "critical".
     """
-    critical = [a for a in participants if a.is_critical]
+    critical = [a for a in participants if getattr(a, critical_attr)]
     if not critical:
         return True, "no critical path"
     critical_ids = {a.id for a in critical}

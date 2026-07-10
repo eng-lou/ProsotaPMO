@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
-import { resolveHoursPerDay } from './durationDisplay'
+import { formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import {
   ACTIVITY_TYPES,
   CONSTRAINT_TYPES,
+  isMilestoneType,
   REASSESSMENT_TRIGGER_FIELDS,
   type Activity,
   type ActivityType,
@@ -22,6 +23,10 @@ export interface ActivityFormValues {
   constraint_type: ConstraintType | ''
   constraint_date: string
   calendar_id: string
+  // P6's suspend/resume actuals (docs/SCHEDULING_GAPS_PLAN.md Phase 11) —
+  // plain user-entered facts, no CPM interaction for this first cut.
+  suspend_date: string
+  resume_date: string
 }
 
 function toFormValues(activity: Activity | null): ActivityFormValues {
@@ -33,21 +38,42 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
     constraint_type: activity?.constraint_type ?? '',
     constraint_date: toDatetimeLocalValue(activity?.constraint_date),
     calendar_id: activity?.calendar_id ?? '',
+    suspend_date: toDatetimeLocalValue(activity?.suspend_date),
+    resume_date: toDatetimeLocalValue(activity?.resume_date),
   }
 }
 
-export function toActivityPayload(values: ActivityFormValues, calendars: Calendar[]) {
-  const isMilestone = values.activity_type === 'milestone'
+// isParent reflects the activity's *actual, structural* wbs_summary status
+// (has real children right now) — not values.activity_type, which is just
+// whatever the form's Type dropdown currently shows and can't itself demote
+// a parent (that only happens by removing its children; see
+// app/services/activity.py:_recompute_hierarchy). A WBS/Project summary
+// row's duration/% complete/constraint/calendar are rollups from its
+// children — the backend rejects these outright for one (2026-07-06, per
+// Maro), so they're left out of the payload entirely rather than sent back
+// unchanged.
+export function toActivityPayload(values: ActivityFormValues, calendars: Calendar[], isParent: boolean) {
+  const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
+  // alap needs no date either (2026-07-07, per Maro) — a relative positioning
+  // directive, not an exact one — but unlike asap it's still a real,
+  // distinct constraint_type to store, not nulled out to "no constraint".
+  const needsNoDate = isAsap || values.constraint_type === 'alap'
   const hoursPerDay = resolveHoursPerDay({ calendar_id: values.calendar_id || null }, calendars)
-  return {
+  const payload: Record<string, unknown> = {
     task_name: values.task_name,
     activity_type: values.activity_type,
+  }
+  if (isParent) return payload
+  return {
+    ...payload,
     duration_hours: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) * hoursPerDay : null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
     constraint_type: isAsap ? null : values.constraint_type,
-    constraint_date: isAsap ? null : values.constraint_date || null,
+    constraint_date: needsNoDate ? null : values.constraint_date || null,
     calendar_id: values.calendar_id || null,
+    suspend_date: values.suspend_date || null,
+    resume_date: values.resume_date || null,
   }
 }
 
@@ -64,7 +90,8 @@ interface Props {
 
 const TYPE_LABELS: Record<ActivityType, string> = {
   task: 'Task',
-  milestone: 'Milestone',
+  start_milestone: 'Start Milestone',
+  finish_milestone: 'Finish Milestone',
   wbs_summary: 'WBS Summary',
 }
 
@@ -77,8 +104,14 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
   const set = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) =>
     setValues(v => ({ ...v, [key]: value }))
 
-  const isMilestone = values.activity_type === 'milestone'
+  const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
+  // See toActivityPayload's own needsNoDate — alap needs no date either.
+  const needsNoDate = isAsap || values.constraint_type === 'alap'
+  // The activity's real, structural parent status — see toActivityPayload's
+  // own comment above for why this must be the activity prop's actual type,
+  // not the (freely, but ineffectively) editable Type dropdown.
+  const isParent = activity?.activity_type === 'wbs_summary'
 
   // Compared against the form's own initial snapshot (not the raw activity object) —
   // constraint_date/actual_* are datetime-local values truncated to the minute, while
@@ -113,23 +146,30 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
         />
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Type</label>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          Type{isParent && <span className="font-normal text-gray-400"> — auto-set by having children</span>}
+        </label>
         <select
           value={values.activity_type}
+          disabled={isParent}
+          title={isParent ? 'A WBS/Project summary is set automatically by having children, not manually chosen — remove them to change this' : undefined}
           onChange={e => set('activity_type', e.target.value as ActivityType)}
-          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
         </select>
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Duration (days)</label>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          Duration (days){isParent && <span className="font-normal text-gray-400"> — computed from children</span>}
+        </label>
         <input
           type="number"
           min={0}
           step={0.5}
           value={isMilestone ? 0 : values.duration_days}
-          disabled={isMilestone}
+          disabled={isMilestone || isParent}
+          title={isParent ? 'Rolled up from this WBS/Project summary\'s own children — outdent or remove them to edit this directly' : undefined}
           onChange={e => set('duration_days', e.target.value)}
           className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
@@ -138,17 +178,23 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
         <div className="col-span-2 grid grid-cols-4 gap-3 bg-gray-50 rounded-md p-2.5 text-xs">
           <div>
             <div className="text-gray-400 mb-0.5">Start (computed)</div>
-            <div className="font-medium text-gray-700">{formatDateTime(activity.start)}</div>
+            <div className="font-medium text-gray-700">
+              {/* A Finish Milestone's Start is populated equal to its Finish
+                  internally (CPM needs a concrete instant either way), but
+                  isn't its own meaningful date — shown as n/a rather than a
+                  redundant duplicate of Finish below (2026-07-07, per Maro). */}
+              {activity.activity_type === 'finish_milestone' ? 'n/a for a Finish Milestone' : formatDateTime(activity.start)}
+            </div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Finish (computed)</div>
-            <div className="font-medium text-gray-700">{formatDateTime(activity.finish)}</div>
+            <div className="font-medium text-gray-700">
+              {activity.activity_type === 'start_milestone' ? 'n/a for a Start Milestone' : formatDateTime(activity.finish)}
+            </div>
           </div>
           <div>
-            <div className="text-gray-400 mb-0.5">Total Float</div>
-            <div className="font-medium text-gray-700">
-              {activity.total_float_hours ?? '—'}{activity.total_float_hours !== null ? 'h' : ''}
-            </div>
+            <div className="text-gray-400 mb-0.5">Total Float (d)</div>
+            <div className="font-medium text-gray-700">{formatFloatDays(activity.total_float_hours, activity, calendars)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Critical?</div>
@@ -169,10 +215,6 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
             </div>
           </div>
           <div>
-            <div className="text-gray-400 mb-0.5">Duration (hours)</div>
-            <div className="font-medium text-gray-700">{activity.duration_hours ?? '—'}</div>
-          </div>
-          <div>
             <div className="text-gray-400 mb-0.5" title="Computed: Duration x (1 - % Complete) — not directly editable">Remaining Duration (d)</div>
             <div className="font-medium text-gray-700">
               {activity.remaining_duration_hours != null
@@ -189,15 +231,27 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
         </div>
       )}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">% Complete</label>
-        <input type="number" min={0} max={100} value={values.pct_complete} onChange={e => set('pct_complete', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm" />
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          % Complete{isParent && <span className="font-normal text-gray-400"> — weighted average of children</span>}
+        </label>
+        <input
+          type="number" min={0} max={100} value={values.pct_complete}
+          disabled={isParent}
+          title={isParent ? 'A weighted average of this WBS/Project summary\'s own children\'s % Complete' : undefined}
+          onChange={e => set('pct_complete', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+        />
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Type</label>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          Constraint Type{isParent && <span className="font-normal text-gray-400"> — n/a for summary rows</span>}
+        </label>
         <select
           value={values.constraint_type}
+          disabled={isParent}
+          title={isParent ? 'Not used for a WBS/Project summary — demote it to a task (remove its children) to set a constraint' : undefined}
           onChange={e => set('constraint_type', e.target.value as ConstraintType | '')}
-          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           {CONSTRAINT_TYPES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
@@ -206,24 +260,48 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
         <label className="block text-xs font-semibold text-gray-600 mb-1">Constraint Date/Time</label>
         <input
           type="datetime-local"
-          value={isAsap ? '' : values.constraint_date}
-          disabled={isAsap}
+          value={needsNoDate ? '' : values.constraint_date}
+          disabled={needsNoDate || isParent}
           onChange={e => set('constraint_date', e.target.value)}
           className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">Calendar</label>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          Calendar{isParent && <span className="font-normal text-gray-400"> — n/a for summary rows</span>}
+        </label>
         <select
           value={values.calendar_id}
+          disabled={isParent}
+          title={isParent ? 'Not used for a WBS/Project summary — it isn\'t part of the CPM network itself' : undefined}
           onChange={e => set('calendar_id', e.target.value)}
-          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           <option value="">(inherit project default)</option>
           {calendars.map(c => (
             <option key={c.id} value={c.id}>{c.name}{c.is_project_default ? ' (default)' : ''}</option>
           ))}
         </select>
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1" title="Distinct from Actual Start/Finish — an activity can start, get suspended mid-flight, then resume later.">
+          Suspend Date/Time
+        </label>
+        <input
+          type="datetime-local"
+          value={values.suspend_date}
+          onChange={e => set('suspend_date', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Resume Date/Time</label>
+        <input
+          type="datetime-local"
+          value={values.resume_date}
+          onChange={e => set('resume_date', e.target.value)}
+          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+        />
       </div>
       {hasTriggerChanges && (
         <div className="col-span-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
