@@ -129,6 +129,16 @@ interface Props {
   // state comment and ModelObjects' matching prop comment for the full story.
   isolatedObjectIds: Set<string>
   isolatedExpressIds: Set<number>
+  // Hide-by-sub-element (2026-07-11, for Collections) — an IFC sub-element
+  // hidden independent of isolate mode, e.g. one door hidden out of a
+  // Collection while the rest of its model stays visible. Composite
+  // `${objectId}::${expressID}` keys, NOT a flat Set<number> the way
+  // isolatedExpressIds/selectedExpressIds are — expressIDs are only unique
+  // within one loaded IFC model, so a flat set would collide across two
+  // federated models sharing the same expressID number (a real, pre-
+  // existing gap in those two, not worth propagating into a new one).
+  // Mirrors ModelObjects' own elementKey convention below exactly.
+  hiddenExpressIds: Set<string>
   onToggleIsolate: () => void
   onShowAll: () => void
   // "Linked Activities" widget (2026-07-09, per Maro) — pre-built by
@@ -221,7 +231,7 @@ const OBJECT_SELECTED_EMISSIVE = new THREE.Color(0xf59e0b)
 // change, not just once on import.
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
-  boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, sectionBoxes,
+  boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -253,6 +263,9 @@ function ModelObjects({
   // state comment for the full story.
   isolatedObjectIds: Set<string>
   isolatedExpressIds: Set<number>
+  // See Viewport3D's own top-level Props doc comment on hiddenExpressIds —
+  // same composite-key set, threaded straight through.
+  hiddenExpressIds: Set<string>
 }) {
   const upAxis = settings.upAxis
   useEffect(() => {
@@ -284,7 +297,12 @@ function ModelObjects({
         const isolatedOut = isolateMode && (
           isolatingSubElements ? !isolatedExpressIds.has(child.userData.expressID) : !isObjectIsolated
         )
-        child.visible = settings.showFaces && !isolatedOut
+        // Hide always wins over isolate, unconditionally ANDed in — same
+        // shape as FourD.tsx's own object-level visibility check
+        // (`!hiddenIds.has(o.id) && (!isolateMode || ...)`), just at the
+        // sub-element granularity (2026-07-11, for Collections).
+        const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
+        child.visible = settings.showFaces && !isolatedOut && !isChildHidden
         child.castShadow = settings.shadows
         child.receiveShadow = settings.shadows
         // Materials aren't necessarily unique per mesh — GLTF/OBJ/FBX
@@ -392,7 +410,7 @@ function ModelObjects({
         }
       })
     }
-  }, [objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, customTextures, isolateMode])
+  }, [objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, customTextures, isolateMode, hiddenExpressIds])
 
   // Section Box clipping is applied every frame here, not inside the
   // effect above (2026-07-09 fix, per Maro: "if i move the object midway
@@ -919,7 +937,7 @@ function ClippingSetup() {
 // re-renders both.
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, onToggleIsolate, onShowAll, linkedActivitiesWidget,
+  onSelectAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, linkedActivitiesWidget,
   gizmoMode, onTransformChange,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
@@ -1392,6 +1410,7 @@ export function Viewport3D({
             isolateMode={isolateMode}
             isolatedObjectIds={isolatedObjectIds}
             isolatedExpressIds={isolatedExpressIds}
+            hiddenExpressIds={hiddenExpressIds}
             sectionBoxes={sectionBoxes}
           />
           <SectionBoxGizmos

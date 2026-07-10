@@ -857,6 +857,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // per-element scoping needs it too; see that block's own header.)
   const [draggingSectionBox, setDraggingSectionBox] = useState<{ id: string; bounds: SectionBoxBounds } | null>(null)
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+  // Hide-by-sub-element (2026-07-11, for Collections) — see Viewport3D.tsx's
+  // own Props doc comment on why this is a composite-key Set<string>, not a
+  // flat Set<number> the way isolatedExpressIds/selectedExpressIds are.
+  const [hiddenExpressIds, setHiddenExpressIds] = useState<Set<string>>(new Set())
   // Isolate Selected / Show All (2026-07-08, per Maro: "isolate selected,
   // show view focus on selected, show all") — a temporary overlay on top of
   // hiddenIds' own deliberate per-object hide list, not a replacement for
@@ -1407,6 +1411,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setIsolatedObjectIds(new Set())
     setIsolatedExpressIds(new Set())
     setHiddenIds(new Set())
+    setHiddenExpressIds(new Set())
   }
 
   // "Isolate Linked Elements" — activities -> elements (2026-07-09, per
@@ -2097,6 +2102,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             isolateMode={isolateMode}
             isolatedObjectIds={isolatedObjectIds}
             isolatedExpressIds={isolatedExpressIds}
+            hiddenExpressIds={hiddenExpressIds}
             onToggleIsolate={handleToggleIsolate}
             onShowAll={handleShowAll}
             linkedActivitiesWidget={
