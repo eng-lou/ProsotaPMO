@@ -35,6 +35,7 @@ import {
   type Collection as CollectionType, type CollectionMember,
 } from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
+import { listElementTransforms, saveElementTransform, type ElementTransform } from './elementTransforms'
 import { resolveSelectionToMemberRefs } from './collectionResolvers'
 import { useAnimationProfiles } from './animationProfiles'
 import { useElementKeyframes, type ElementKeyframe, type KeyframeField } from './elementKeyframes'
@@ -1054,6 +1055,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // (2026-07-11 — lifted up here from a Viewport3D-local state once the
   // Transform panel moved out to a PropertiesPanel sibling, per Maro).
   const [, setTransformTick] = useState(0)
+  // Debounced transform persistence (2026-07-11) — see
+  // pendingTransformSaveRef's own declaration further down, right after
+  // activeTransformObject/isElementTransform/activeIfcHandle are derived
+  // (persistActiveTransform needs all three, so it's defined there, not
+  // here — this ref just needs to exist before that point).
+  const pendingTransformSaveRef = useRef<{ timeout: ReturnType<typeof setTimeout>; flush: () => void } | null>(null)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -1168,20 +1175,71 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Sequential (`for` + `await`), not Promise.all, so one failed/corrupt
   // file can't take the rest of the restore down with it — each is wrapped
   // in its own try/catch.
+  // Manual position/rotation/scale edits (2026-07-11, per a real incident:
+  // confirmed via a full audit that this had never been persisted anywhere
+  // — no DB column, no update endpoint — so every gizmo drag/Properties-
+  // panel edit was silently thrown away on every reload). Fetched here
+  // alongside the models themselves (not a separate effect) so the restore
+  // loop below can apply each one to its freshly-loaded object/element in
+  // the same pass, using the local `transforms` array directly rather than
+  // the `elementTransforms` state (which wouldn't be populated yet inside
+  // this same async run due to React's own state-update timing).
+  // A ref, not state — nothing renders based on this list directly (unlike
+  // e.g. customTextures, which affects materials every render), it only
+  // ever needs to be read at save-time (to dedupe an upsert into the local
+  // cache) and at restore-time, so there's no reason to trigger a
+  // re-render every time it changes.
+  const elementTransformsRef = useRef<ElementTransform[]>([])
+
   useEffect(() => {
     if (!selectedProject) return
     let cancelled = false
     ;(async () => {
-      const files = await listModel3DFiles(selectedProject.id).catch(() => [])
+      const [files, transforms] = await Promise.all([
+        listModel3DFiles(selectedProject.id).catch(() => []),
+        listElementTransforms(selectedProject.id).catch(() => []),
+      ])
+      if (cancelled) return
+      elementTransformsRef.current = transforms
+
+      const applyTransform = (object: Object3D, t: ElementTransform | undefined) => {
+        if (!t) return
+        object.position.set(t.position_x, t.position_y, t.position_z)
+        object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
+        object.scale.set(t.scale_x, t.scale_y, t.scale_z)
+      }
+
       for (const file of files) {
         if (cancelled) return
         try {
           const blob = await downloadModel3DFile(file.id)
           const restoredFile = new File([blob], file.name)
+          const wholeFileTransform = transforms.find(t => t.model3d_file_id === file.id && t.element_ref === null)
           if (file.kind === 'ifc') {
             const { loadIfcModel } = await import('./ifcModel')
             const handle = await loadIfcModel(restoredFile)
             if (cancelled) { const { disposeIfcModel } = await import('./ifcModel'); disposeIfcModel(handle); return }
+            applyTransform(handle.object, wholeFileTransform)
+            // Element-scoped transforms (2026-07-11) — a specific IFC
+            // sub-element repositioned independently of its parent model,
+            // matching how TransformPanel/the gizmo already resolve a
+            // specific selected sub-element as the edit target (see
+            // Viewport3D.tsx's own activeObject derivation).
+            const elementTransforms_ = transforms.filter(t => t.model3d_file_id === file.id && t.element_ref !== null)
+            if (elementTransforms_.length > 0) {
+              const { getExpressIdFromGuid } = await import('./ifcModel')
+              const byExpressId = new Map<number, ElementTransform>()
+              for (const t of elementTransforms_) {
+                const expressId = getExpressIdFromGuid(handle, t.element_ref as string)
+                if (expressId !== undefined) byExpressId.set(expressId, t)
+              }
+              if (byExpressId.size > 0) {
+                handle.object.traverse(child => {
+                  const t = byExpressId.get(child.userData.expressID)
+                  if (t) applyTransform(child, t)
+                })
+              }
+            }
             const id = `ifc-${handle.modelID}`
             handle.object.userData.sceneObjectId = id
             setIfcHandles(prev => [...prev, handle])
@@ -1191,6 +1249,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           } else {
             const object = await loadModel3DFile(restoredFile)
             if (cancelled) return
+            applyTransform(object, wholeFileTransform)
             const id = crypto.randomUUID()
             object.name = file.name
             object.userData.sceneObjectId = id
@@ -1742,6 +1801,81 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     activeIfcHandle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
     if (found) { activeTransformObject = found; isElementTransform = true }
   }
+
+  // Persists whatever handleTransformChange below just bumped the tick
+  // for (2026-07-11, per a real incident — see element_transform.py's own
+  // docstring: transform edits had never been saved anywhere at all).
+  // Debounced 700ms so a gizmo drag (many onChange calls per second)
+  // doesn't fire a save per frame — only once dragging/editing actually
+  // stops. modelFileId/object/elementScoped/handle/expressId are captured
+  // by closure at the moment of the *call*, not re-read when the timeout
+  // fires, so switching the active selection mid-debounce can't corrupt
+  // which object's data actually gets saved.
+  //
+  // flush() lets the selection-change effect further down force this
+  // pending save through immediately rather than losing it outright if
+  // the user switches to editing something else within the 700ms window
+  // — a single shared timeout ref would otherwise just clearTimeout the
+  // still-pending save for whatever was being edited before.
+  const persistActiveTransform = () => {
+    if (!activeTransformObject || !activeSceneObject?.fileId) return
+    const modelFileId = activeSceneObject.fileId
+    const object = activeTransformObject
+    const elementScoped = isElementTransform
+    const handle = activeIfcHandle
+    const expressId = selectedExpressId
+
+    const doSave = async () => {
+      let elementRef: string | null = null
+      if (elementScoped && handle && expressId !== null) {
+        const { getGuidFromExpressId } = await import('./ifcModel')
+        elementRef = getGuidFromExpressId(handle, expressId) ?? null
+      }
+      try {
+        const saved = await saveElementTransform({
+          model3d_file_id: modelFileId, element_ref: elementRef,
+          position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
+          rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
+          scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
+        })
+        elementTransformsRef.current = [
+          ...elementTransformsRef.current.filter(t => !(t.model3d_file_id === saved.model3d_file_id && t.element_ref === saved.element_ref)),
+          saved,
+        ]
+      } catch (err) {
+        console.error('Failed to save transform', err)
+      }
+    }
+
+    if (pendingTransformSaveRef.current) clearTimeout(pendingTransformSaveRef.current.timeout)
+    pendingTransformSaveRef.current = {
+      flush: doSave,
+      timeout: setTimeout(() => { pendingTransformSaveRef.current = null; doSave() }, 700),
+    }
+  }
+
+  const handleTransformChange = () => {
+    setTransformTick(t => t + 1)
+    persistActiveTransform()
+  }
+
+  // Flushes a still-pending debounced transform save immediately if the
+  // active selection changes before the 700ms debounce would otherwise
+  // fire on its own (2026-07-11) — without this, editing object A then
+  // switching to object B within that window would clearTimeout A's
+  // still-pending save (persistActiveTransform above) and silently lose
+  // it. Also covers unmount, via the same cleanup mechanism.
+  useEffect(() => {
+    return () => {
+      if (pendingTransformSaveRef.current) {
+        clearTimeout(pendingTransformSaveRef.current.timeout)
+        pendingTransformSaveRef.current.flush()
+        pendingTransformSaveRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeObjectId, selectedExpressId])
+
   // Same specific-element-or-whole-model target as activeTransformObject
   // above, applied to Material/Texture too (2026-07-09 fix, per Maro:
   // "changing a material for one element still changes the whole") —
@@ -2136,7 +2270,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             id: activeSceneObject.id, name: activeSceneObject.name, sourceUpAxis: activeSceneObject.sourceUpAxis, object: activeTransformObject,
           } : null}
           isElementTransform={isElementTransform}
-          onTransformChange={() => setTransformTick(t => t + 1)}
+          onTransformChange={handleTransformChange}
           gizmoMode={gizmoMode}
           onGizmoModeChange={setGizmoMode}
           activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
@@ -2192,7 +2326,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
               />
             }
             gizmoMode={gizmoMode}
-            onTransformChange={() => setTransformTick(t => t + 1)}
+            onTransformChange={handleTransformChange}
             environmentUrl={customEnvironment?.url ?? null}
             onEnvironmentError={handleEnvironmentError}
             customTextures={customTextures}

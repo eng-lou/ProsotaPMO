@@ -45,6 +45,7 @@ from app.models.material_preset import MaterialPreset
 from app.models.model3d_file import Model3DFile
 from app.models.section_box import SectionBox
 from app.models.camera_view import CameraView
+from app.models.element_transform import ElementTransform
 
 __all__ = [
     "Base",
@@ -99,4 +100,5 @@ __all__ = [
     "Model3DFile",
     "SectionBox",
     "CameraView",
+    "ElementTransform",
 ]
