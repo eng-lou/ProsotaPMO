@@ -128,3 +128,35 @@ Two mistakes worth remembering because they're easy to make again:
   was more than one level of nesting. Caught by reading it back over
   before it shipped, not by a user report — worth the extra look whenever
   a UI component recurses into copies of itself.
+
+**"Select by Storey" got built twice.** The first version put a small
+button directly on each storey's own row inside the existing spatial-
+structure tree — technically it worked, but a tiny grey text link buried
+inside a tree that starts collapsed is a genuinely bad way to expose a
+feature: Maro couldn't find it, and even after fixing *why* it was hidden
+(the tree wasn't expanding far enough down by default), it still didn't
+read as a real, clickable control. Rebuilt as a plain list of properly-
+styled buttons instead, sitting on its own, not nested in anything —
+matching the "Select by Type" list that already worked and that nobody
+had complained about. The lesson: when a first attempt at a UI affordance
+gets "I don't see it" / "not working" twice in a row, the fix usually
+isn't a smaller tweak to the same idea — it's worth stepping back and
+copying whatever similar thing in the app is already known to work,
+rather than iterating on the same buried approach a third time.
+
+**Then a real bug, found by actually reading the code, not guessing**:
+"when i isolate then box select, it doesnt work." Box-select decides
+whether an object falls inside the dragged rectangle by checking one
+point — the center of that object's bounding box. That bounding-box
+calculation didn't know or care whether individual pieces of the object
+were currently hidden (which is exactly what "isolate one small part of a
+large model" does) — so once most of a big model was hidden by isolating
+one small piece, the "center point" being tested was still the center of
+the *entire original object*, often far outside whatever tiny bit was
+actually still visible on screen. A box drawn around what you can
+actually see could never contain a center point sitting somewhere
+invisible. Fixed by only measuring the parts that are actually visible
+right now. Verified with a small standalone script using the real 3D
+library before shipping it, not just by reasoning about it on paper —
+confirmed the old math really did land far from the visible content, and
+the fix landed exactly on it.
