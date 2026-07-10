@@ -72,13 +72,27 @@ function collectLeafExpressIds(node: IfcTreeNode): number[] {
   return node.children.flatMap(collectLeafExpressIds)
 }
 
+// Whether a storey sits *below* this node, at any depth (2026-07-11, per
+// Maro: "i dont see the select by storey" — the tree only auto-expanded
+// the first 2 levels, and a standard IFC hierarchy is Project(0) >
+// Site(1) > Building(2) > Storey(3), so storeys sat one level past what
+// ever auto-expanded, hidden under a collapsed "Building" node by
+// default). Deliberately checks *descendants*, not the node itself — an
+// ancestor of a storey should auto-expand so the storey row is reachable
+// at all, but the storey's own children (its actual building elements,
+// often hundreds of them) shouldn't dump open by default just because
+// this check passed for the storey too.
+function hasDescendantStorey(node: IfcTreeNode): boolean {
+  return node.children.some(child => child.type === 'IFCBUILDINGSTOREY' || hasDescendantStorey(child))
+}
+
 function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect, onSelectWholeModel, onSelectMany }: {
   node: IfcTreeNode; depth: number; selectedExpressId: number | null; selectedExpressIds: Set<number>
   onSelect: (id: number, additive: boolean) => void
   onSelectWholeModel: (additive: boolean) => void
   onSelectMany: (expressIDs: number[], additive: boolean) => void
 }) {
-  const [expanded, setExpanded] = useState(depth < 2)
+  const [expanded, setExpanded] = useState(depth < 2 || hasDescendantStorey(node))
   const hasChildren = node.children.length > 0
   const isPrimary = node.expressID === selectedExpressId
   const isSelected = selectedExpressIds.has(node.expressID)
