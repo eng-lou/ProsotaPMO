@@ -95,3 +95,36 @@ second. A useful general lesson: whenever "the same thing can be linked to
 more than one thing," check whether the code actually expected that, or
 quietly assumed one-to-one and will just clobber itself the moment it
 isn't.
+
+**Then a genuinely new feature: Collections**, Blender-style — create and
+nest named groups, freely add IFC sub-elements or whole 3D objects to
+them regardless of where they sit in the model's own import hierarchy
+(Maro's example: gather every door on a building, scattered across many
+different branches of the hierarchy, into one "Doors" group), then
+select/hide/isolate by group. Planned properly first (a written plan,
+reviewed against the actual code before writing any of it) since it
+touches a lot of the viewport's existing selection/visibility machinery.
+Built in six small stages, each checked before moving to the next: the
+database tables, a working list/tree panel with no connection to the 3D
+view yet, "add whatever's currently selected to a group," hiding one
+element without hiding its whole model (something the app couldn't do at
+all before), select/hide/isolate for a whole group (including nested
+sub-groups), and finally two fast ways to build a big selection in the
+first place — click an element *type* (e.g. "every door") or click a
+building *storey* to select everything on it.
+
+Two mistakes worth remembering because they're easy to make again:
+- A brand new file imported another file "the normal way" instead of the
+  lazy/on-demand way the rest of that area already uses for something
+  large and rarely needed (the IFC-reading library) — it worked, `tsc`
+  found nothing wrong, but the app's downloaded size roughly doubled
+  because that large library got bundled into the very first thing every
+  visitor downloads instead of loading only when someone actually opens
+  an IFC file. Type-checking a file is not the same as checking what it
+  costs to load — that only showed up in the build's own size report.
+- Some retry/rename/delete logic that repeats itself down a tree of
+  nested groups was accidentally hard-wired to always act on the *topmost*
+  group instead of whichever one was actually clicked, the moment there
+  was more than one level of nesting. Caught by reading it back over
+  before it shipped, not by a user report — worth the extra look whenever
+  a UI component recurses into copies of itself.
