@@ -79,3 +79,19 @@ camera tools, native animation, rendering) are still exactly what a
 back up, is whether there's a middle path (browser for building the
 schedule, an optional Blender export for the polished 3D/animation side)
 rather than an all-or-nothing choice.
+
+**Back in the browser, a real animation bug turned up almost immediately**:
+Maro linked one IFC object to two different activities — a "fall down"
+profile on the first, a "go back up" profile on a second, later activity —
+and only the second animation ever played; the first was silently ignored.
+The cause: the code that resolves "which activity/profile animates this
+object" only ever kept *one* answer per object, so linking a second
+activity to the same object just overwrote the first one's animation
+instead of adding to it. Fixed by keeping every link an object has and,
+at any given moment in the timeline, picking whichever linked activity is
+chronologically current — so the object now falls during the first
+activity, holds that fallen position afterward, then rises during the
+second. A useful general lesson: whenever "the same thing can be linked to
+more than one thing," check whether the code actually expected that, or
+quietly assumed one-to-one and will just clobber itself the moment it
+isn't.
