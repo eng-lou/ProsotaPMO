@@ -535,11 +535,39 @@ function ModelObjects({
 // with no track just holds its captured base value, same as an unkeyed
 // channel in Blender) — the profile, if also present, only ever drives
 // opacity/colour in that case; never fights over position/rotation/scale.
+// One object can be linked to more than one activity (2026-07-11 fix, per
+// Maro: an IFC object assigned to a "fall down" profile on one activity and
+// a "go back up" profile on a second, later activity — only the second
+// animation ever played, because ResolvedTimelineTarget used to hold a
+// single activity/profile per object and each link just overwrote whatever
+// the previous one had set. Every link now gets kept (see `links` below),
+// and pickActiveLink() at apply-time chooses whichever activity is
+// chronologically current for `now` — the same idea as a Blender NLA strip
+// stack, minus any blending: activities before their own start still
+// correctly show "at rest" (computeAppliedAnimationStateAt already clamps
+// that), so falling back to the earliest link when `now` precedes every
+// link's start is safe, not just a default-of-convenience.
+interface ResolvedTimelineLink {
+  activity: Pick<Activity, 'start' | 'finish'>
+  profile: AnimationProfileConfig
+  axis: Axis
+}
+
+function pickActiveLink(links: ResolvedTimelineLink[], now: Date): ResolvedTimelineLink | null {
+  if (links.length === 0) return null
+  const nowMs = now.getTime()
+  const sorted = [...links].sort((a, b) => new Date(a.activity.start!).getTime() - new Date(b.activity.start!).getTime())
+  let active = sorted[0]
+  for (const link of sorted) {
+    if (new Date(link.activity.start!).getTime() <= nowMs) active = link
+    else break
+  }
+  return active
+}
+
 interface ResolvedTimelineTarget {
   object: THREE.Object3D
-  activity: Pick<Activity, 'start' | 'finish'> | null
-  profile: AnimationProfileConfig | null
-  axis: Axis
+  links: ResolvedTimelineLink[]
   basePosition: THREE.Vector3
   baseRotation: THREE.Euler
   baseScale: THREE.Vector3
@@ -657,7 +685,7 @@ function TimelinePlayback({
         let target = byObject.get(object)
         if (!target) {
           target = {
-            object, activity: null, profile: null, axis: 'z',
+            object, links: [],
             basePosition: object.position.clone(),
             baseRotation: object.rotation.clone(),
             baseScale: object.scale.clone(),
@@ -699,9 +727,7 @@ function TimelinePlayback({
         if (!object) continue
 
         const target = getOrCreate(object)
-        target.activity = activity
-        target.profile = profile
-        target.axis = profile.axis
+        target.links.push({ activity, profile, axis: profile.axis })
       }
 
       // Mode B — manual keyframes, entirely independent of the above: any
@@ -775,18 +801,19 @@ function TimelinePlayback({
 
     for (const target of targetsRef.current) {
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
-      const state = target.activity && target.profile ? computeAppliedAnimationStateAt(target.activity, target.profile, now) : null
+      const activeLink = pickActiveLink(target.links, now)
+      const state = activeLink ? computeAppliedAnimationStateAt(activeLink.activity, activeLink.profile, now) : null
 
       if (hasKeyframes) {
         if (dateChanged) applyKeyframedTransform(target, now, upAxis)
-      } else if (state) {
+      } else if (state && activeLink) {
         target.object.position.set(
           target.basePosition.x + state.positionOffset[0],
           target.basePosition.y + state.positionOffset[1],
           target.basePosition.z + state.positionOffset[2],
         )
         target.object.rotation.copy(target.baseRotation)
-        target.object.rotation[target.axis] += state.rotationOffsetDeg * DEG_TO_RAD
+        target.object.rotation[activeLink.axis] += state.rotationOffsetDeg * DEG_TO_RAD
         target.object.scale.copy(target.baseScale).multiplyScalar(state.scaleMultiplier)
       }
 
