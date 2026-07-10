@@ -72,31 +72,38 @@ function collectLeafExpressIds(node: IfcTreeNode): number[] {
   return node.children.flatMap(collectLeafExpressIds)
 }
 
-// Whether a storey sits *below* this node, at any depth (2026-07-11, per
-// Maro: "i dont see the select by storey" — the tree only auto-expanded
-// the first 2 levels, and a standard IFC hierarchy is Project(0) >
-// Site(1) > Building(2) > Storey(3), so storeys sat one level past what
-// ever auto-expanded, hidden under a collapsed "Building" node by
-// default). Deliberately checks *descendants*, not the node itself — an
-// ancestor of a storey should auto-expand so the storey row is reachable
-// at all, but the storey's own children (its actual building elements,
-// often hundreds of them) shouldn't dump open by default just because
-// this check passed for the storey too.
-function hasDescendantStorey(node: IfcTreeNode): boolean {
-  return node.children.some(child => child.type === 'IFCBUILDINGSTOREY' || hasDescendantStorey(child))
+// Every IFCBUILDINGSTOREY node anywhere in the tree, at whatever depth
+// (2026-07-11, for Select by Storey's own button list — see ModelItem's
+// storeys useEffect below for why these live as a flat list of real
+// buttons rather than something found by browsing the tree itself: an
+// earlier version put a "Select Storey" link directly on each storey's own
+// tree row, but that meant it was invisible unless the tree happened to be
+// expanded that far down first, and per Maro ("give me an actual button...
+// not working") a small inline text link buried in a collapsed tree
+// doesn't read as a real, discoverable control anyway).
+function collectStoreyNodes(node: IfcTreeNode): IfcTreeNode[] {
+  const own = node.type === 'IFCBUILDINGSTOREY' ? [node] : []
+  return [...own, ...node.children.flatMap(collectStoreyNodes)]
 }
 
-function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect, onSelectWholeModel, onSelectMany }: {
+function findNodeByExpressId(node: IfcTreeNode, expressID: number): IfcTreeNode | null {
+  if (node.expressID === expressID) return node
+  for (const child of node.children) {
+    const found = findNodeByExpressId(child, expressID)
+    if (found) return found
+  }
+  return null
+}
+
+function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect, onSelectWholeModel }: {
   node: IfcTreeNode; depth: number; selectedExpressId: number | null; selectedExpressIds: Set<number>
   onSelect: (id: number, additive: boolean) => void
   onSelectWholeModel: (additive: boolean) => void
-  onSelectMany: (expressIDs: number[], additive: boolean) => void
 }) {
-  const [expanded, setExpanded] = useState(depth < 2 || hasDescendantStorey(node))
+  const [expanded, setExpanded] = useState(depth < 2)
   const hasChildren = node.children.length > 0
   const isPrimary = node.expressID === selectedExpressId
   const isSelected = selectedExpressIds.has(node.expressID)
-  const isStorey = node.type === 'IFCBUILDINGSTOREY'
   return (
     <div>
       <div
@@ -119,21 +126,12 @@ function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect
           </button>
         ) : <span className="w-3 shrink-0" />}
         <span className="truncate">{node.type}</span>
-        {isStorey && (
-          <button
-            onClick={e => { e.stopPropagation(); onSelectMany(collectLeafExpressIds(node), e.ctrlKey || e.metaKey) }}
-            title="Select by Storey — select every element on this storey"
-            className="ml-auto text-[10px] text-gray-400 hover:text-blue-700 shrink-0 px-1"
-          >
-            Select Storey
-          </button>
-        )}
       </div>
       {hasChildren && expanded && node.children.map((child, i) => (
         <TreeNode
           key={`${child.expressID}-${i}`} node={child} depth={depth + 1}
           selectedExpressId={selectedExpressId} selectedExpressIds={selectedExpressIds}
-          onSelect={onSelect} onSelectWholeModel={onSelectWholeModel} onSelectMany={onSelectMany}
+          onSelect={onSelect} onSelectWholeModel={onSelectWholeModel}
         />
       ))}
     </div>
@@ -180,14 +178,35 @@ function ModelItem({
   const [typeCounts, setTypeCounts] = useState<{ typeName: string; count: number }[]>([])
   const [elementInfo, setElementInfo] = useState<IfcElementInfo | null>(null)
   const [loadingElement, setLoadingElement] = useState(false)
+  // Select by Storey (2026-07-11) — a flat list of real buttons, one per
+  // storey, not something buried in the spatial tree (see
+  // collectStoreyNodes' own header for why that first attempt didn't
+  // work). Names load in a second pass once the tree itself is in —
+  // getSpatialTree's own nodes carry no Name (see getElementName's own
+  // header), so each storey's real name ("Ground Floor") is fetched
+  // separately, a handful of cheap calls rather than slowing down the
+  // whole tree fetch for every element just to get a few storeys' names.
+  const [storeys, setStoreys] = useState<{ expressID: number; name: string }[]>([])
 
   useEffect(() => {
     let cancelled = false
     setTree(null)
     setTypeCounts([])
-    import('./ifcModel').then(({ getSpatialTree, getTypeCounts }) => {
+    setStoreys([])
+    import('./ifcModel').then(({ getSpatialTree, getTypeCounts, getElementName }) => {
       if (cancelled) return
-      getSpatialTree(handle).then(t => { if (!cancelled) setTree(t) })
+      getSpatialTree(handle).then(t => {
+        if (cancelled) return
+        setTree(t)
+        const storeyNodes = collectStoreyNodes(t)
+        setStoreys(storeyNodes.map(n => ({ expressID: n.expressID, name: `Storey ${n.expressID}` })))
+        for (const node of storeyNodes) {
+          getElementName(handle, node.expressID).then(name => {
+            if (cancelled || name === '—') return
+            setStoreys(prev => prev.map(s => (s.expressID === node.expressID ? { ...s, name } : s)))
+          })
+        }
+      })
       setTypeCounts(getTypeCounts(handle))
     })
     return () => { cancelled = true }
@@ -230,12 +249,34 @@ function ModelItem({
               <TreeNode
                 node={tree} depth={0} selectedExpressId={isActiveModel ? selectedExpressId : null}
                 selectedExpressIds={isActiveModel ? selectedExpressIds : new Set()}
-                onSelect={onSelect} onSelectWholeModel={onSelectWholeModel} onSelectMany={onSelectMany}
+                onSelect={onSelect} onSelectWholeModel={onSelectWholeModel}
               />
             ) : (
               <p className="px-3 py-2 text-xs text-gray-400">Loading spatial structure…</p>
             )}
           </div>
+
+          {storeys.length > 0 && (
+            <>
+              <SectionHeader label="Select by Storey" />
+              <div className="px-3 pb-2 flex flex-wrap gap-1">
+                {storeys.map(s => (
+                  <button
+                    key={s.expressID}
+                    onClick={e => {
+                      if (!tree) return
+                      const node = findNodeByExpressId(tree, s.expressID)
+                      if (node) onSelectMany(collectLeafExpressIds(node), e.ctrlKey || e.metaKey)
+                    }}
+                    title={`Select every element on ${s.name}, Ctrl/Cmd+click to add to the current selection`}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-blue-400 hover:text-blue-700"
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           <SectionHeader label="Class > Type > Occurrence" />
           <div className="max-h-40 overflow-y-auto px-3 pb-2 space-y-0.5">

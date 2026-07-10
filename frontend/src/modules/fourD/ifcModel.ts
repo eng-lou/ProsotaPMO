@@ -229,6 +229,21 @@ function unwrapIfcValue(v: unknown): string {
   return '—'
 }
 
+// Just the Name attribute for one element (2026-07-11, for Select by
+// Storey's own button labels — "Ground Floor" not "IFCBUILDINGSTOREY
+// #4231") — getSpatialTree's own nodes carry no Name at all
+// (getSpatialStructure is called with includeProperties=false, since
+// fetching every element's full property set just to build the tree would
+// be far too slow for a large model); this fetches just the one attribute
+// for a small, bounded set of nodes (a handful of storeys, not everything),
+// via the same getItemProperties call getElementInfo already uses as its
+// own first step — deliberately skipping the property-set fetch
+// getElementInfo also does, unneeded here.
+export async function getElementName(handle: IfcModelHandle, expressID: number): Promise<string> {
+  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
+  return unwrapIfcValue(props.Name)
+}
+
 export interface IfcPropertySetView {
   name: string
   properties: { name: string; value: string }[]
