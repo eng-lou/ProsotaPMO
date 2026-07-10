@@ -10,6 +10,9 @@ interface Props {
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
   onAddSelected: (id: string) => void
+  onSelect: (id: string) => void
+  onHide: (id: string) => void
+  onIsolate: (id: string) => void
 }
 
 // "Move to…" reparent picker, not drag-and-drop (2026-07-11) — a plain
@@ -36,7 +39,10 @@ function descendantIds(collections: Collection[], rootId: string): Set<string> {
 // its own `collection.id` when it actually calls one, rather than the
 // parent pre-binding a version scoped to itself (which would make every
 // descendant silently act on its *ancestor's* id instead of its own).
-function CollectionNode({ collection, allCollections, depth, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected }: {
+function CollectionNode({
+  collection, allCollections, depth, canAddSelected,
+  onCreate, onRename, onReparent, onDelete, onAddSelected, onSelect, onHide, onIsolate,
+}: {
   collection: Collection
   allCollections: Collection[]
   depth: number
@@ -46,6 +52,9 @@ function CollectionNode({ collection, allCollections, depth, canAddSelected, onC
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
   onAddSelected: (id: string) => void
+  onSelect: (id: string) => void
+  onHide: (id: string) => void
+  onIsolate: (id: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(collection.name)
@@ -62,60 +71,93 @@ function CollectionNode({ collection, allCollections, depth, canAddSelected, onC
   const excluded = descendantIds(allCollections, collection.id)
   excluded.add(collection.id)
   const moveTargets = allCollections.filter(c => !excluded.has(c.id))
+  const hasAnyMembers = collection.members.length > 0 || children.some(c => c.members.length > 0)
 
   return (
     <div>
-      <div className="flex items-center gap-1.5 px-3 py-2" style={{ paddingLeft: `${12 + depth * 16}px` }}>
-        {children.length > 0 ? (
-          <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 w-3 shrink-0" title={expanded ? 'Collapse' : 'Expand'}>
-            {expanded ? '▾' : '▸'}
-          </button>
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
-        {editing ? (
-          <input
-            autoFocus
-            value={draftName}
-            onChange={e => setDraftName(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commitRename()
-              if (e.key === 'Escape') { setDraftName(collection.name); setEditing(false) }
-            }}
-            className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
-          />
-        ) : (
-          <span
-            onDoubleClick={() => setEditing(true)}
-            className="flex-1 text-xs text-gray-700 truncate cursor-text"
-            title="Double-click to rename"
+      <div className="px-3 py-2" style={{ paddingLeft: `${12 + depth * 16}px` }}>
+        <div className="flex items-center gap-1.5">
+          {children.length > 0 ? (
+            <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 w-3 shrink-0" title={expanded ? 'Collapse' : 'Expand'}>
+              {expanded ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span className="w-3 shrink-0" />
+          )}
+          {editing ? (
+            <input
+              autoFocus
+              value={draftName}
+              onChange={e => setDraftName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={e => {
+                if (e.key === 'Enter') commitRename()
+                if (e.key === 'Escape') { setDraftName(collection.name); setEditing(false) }
+              }}
+              className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+            />
+          ) : (
+            <span
+              onDoubleClick={() => setEditing(true)}
+              className="flex-1 text-xs text-gray-700 truncate cursor-text"
+              title="Double-click to rename"
+            >
+              {collection.name}
+              <span className="text-gray-400 ml-1">({collection.members.length})</span>
+            </span>
+          )}
+          <select
+            value={collection.parent_collection_id ?? ''}
+            onChange={e => onReparent(collection.id, e.target.value || null)}
+            title="Move to another collection"
+            className="text-xs border border-gray-300 rounded px-1 py-0.5 max-w-[90px] shrink-0"
           >
-            {collection.name}
-            <span className="text-gray-400 ml-1">({collection.members.length})</span>
-          </span>
-        )}
-        <select
-          value={collection.parent_collection_id ?? ''}
-          onChange={e => onReparent(collection.id, e.target.value || null)}
-          title="Move to another collection"
-          className="text-xs border border-gray-300 rounded px-1 py-0.5 max-w-[90px] shrink-0"
-        >
-          <option value="">— top level —</option>
-          {moveTargets.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-        <button
-          onClick={() => onAddSelected(collection.id)}
-          disabled={!canAddSelected}
-          title={canAddSelected ? 'Add the current viewport selection to this collection' : 'Select something in the viewport first'}
-          className="text-xs text-gray-400 hover:text-gray-700 disabled:text-gray-200 disabled:hover:text-gray-200 shrink-0"
-        >
-          ⊕
-        </button>
-        <button onClick={() => onCreate(collection.id)} title="Add sub-collection" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">+</button>
-        <button onClick={() => onDelete(collection.id)} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+            <option value="">— top level —</option>
+            {moveTargets.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <button onClick={() => onCreate(collection.id)} title="Add sub-collection" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">+</button>
+          <button onClick={() => onDelete(collection.id)} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        </div>
+        {/* Second row: acting on the collection's *contents* (including
+            nested sub-collections' contents — see FourD.tsx's own
+            flattenCollectionMemberRefs), separate from the row above,
+            which manages the collection's own structure. */}
+        <div className="flex items-center gap-1 mt-1" style={{ paddingLeft: '18px' }}>
+          <button
+            onClick={() => onSelect(collection.id)}
+            disabled={!hasAnyMembers}
+            title="Select every element in this collection"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Select
+          </button>
+          <button
+            onClick={() => onHide(collection.id)}
+            disabled={!hasAnyMembers}
+            title="Hide every element in this collection"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Hide
+          </button>
+          <button
+            onClick={() => onIsolate(collection.id)}
+            disabled={!hasAnyMembers}
+            title="Isolate — show only this collection's elements"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Isolate
+          </button>
+          <button
+            onClick={() => onAddSelected(collection.id)}
+            disabled={!canAddSelected}
+            title={canAddSelected ? 'Add the current viewport selection to this collection' : 'Select something in the viewport first'}
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            ⊕ Add Selected
+          </button>
+        </div>
       </div>
       {expanded && children.map(child => (
         <CollectionNode
@@ -129,6 +171,9 @@ function CollectionNode({ collection, allCollections, depth, canAddSelected, onC
           onReparent={onReparent}
           onDelete={onDelete}
           onAddSelected={onAddSelected}
+          onSelect={onSelect}
+          onHide={onHide}
+          onIsolate={onIsolate}
         />
       ))}
     </div>
@@ -141,11 +186,9 @@ function CollectionNode({ collection, allCollections, depth, canAddSelected, onC
 // hierarchy, then select/hide/isolate by the group. Content-only —
 // SideDock.tsx owns the outer chrome, same as
 // AnimationProfilePanel/SectionBoxPanel/CameraViewPanel.
-//
-// Select/Hide/Isolate-by-collection buttons land in a later phase of this
-// same feature (needs the sub-element hide extension, not built yet) — for
-// now, per-row action is just ⊕ Add Selected + Move-to/rename/delete.
-export function CollectionsPanel({ collections, error, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected }: Props) {
+export function CollectionsPanel({
+  collections, error, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected, onSelect, onHide, onIsolate,
+}: Props) {
   const roots = collections.filter(c => c.parent_collection_id === null)
 
   return (
@@ -179,6 +222,9 @@ export function CollectionsPanel({ collections, error, canAddSelected, onCreate,
               onReparent={onReparent}
               onDelete={onDelete}
               onAddSelected={onAddSelected}
+              onSelect={onSelect}
+              onHide={onHide}
+              onIsolate={onIsolate}
             />
           ))}
         </div>

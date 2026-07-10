@@ -19,7 +19,7 @@ import {
   EMPTY_MATERIAL_PRESET_CONFIG, type MaterialPresetConfig,
 } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
-import { resolveActivityLinksToIsolationTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
+import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type SourceKind } from './modelElementLinks'
 import { deleteModel3DFile, downloadModel3DFile, listModel3DFiles, uploadModel3DFile, type Model3DKind } from './model3dFiles'
@@ -510,6 +510,64 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (newMembers.length > 0) {
       setCollections(prev => prev.map(c => (c.id === collectionId ? { ...c, members: [...c.members, ...newMembers] } : c)))
     }
+  }
+
+  // Select/Hide/Isolate by collection (2026-07-11) — recurse into nested
+  // sub-collections, same as Blender's own outliner (right-click "Select
+  // Objects" on a collection selects its sub-collections' contents too) —
+  // matches the "Doors" example from Maro's own request: a parent
+  // collection with per-floor sub-collections should still isolate every
+  // door at once, not just whichever happen to be direct members.
+  const flattenCollectionMemberRefs = (collectionId: string): { source_kind: SourceKind; element_ref: string }[] => {
+    const subtreeIds = new Set<string>([collectionId])
+    const stack = [collectionId]
+    while (stack.length > 0) {
+      const current = stack.pop() as string
+      for (const c of collections) {
+        if (c.parent_collection_id === current && !subtreeIds.has(c.id)) {
+          subtreeIds.add(c.id)
+          stack.push(c.id)
+        }
+      }
+    }
+    return collections
+      .filter(c => subtreeIds.has(c.id))
+      .flatMap(c => c.members.map(m => ({ source_kind: m.source_kind, element_ref: m.element_ref })))
+  }
+
+  const handleSelectCollection = async (collectionId: string) => {
+    const refs = flattenCollectionMemberRefs(collectionId)
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    if (objectIds.size === 0 && expressIds.size === 0) return
+    setSelectedObjectIds(objectIds)
+    setSelectedExpressIds(expressIds)
+    setSelectedExpressId(null)  // no single "primary" element in a bulk collection select
+    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
+    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
+    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
+  }
+
+  const handleHideCollection = async (collectionId: string) => {
+    const refs = flattenCollectionMemberRefs(collectionId)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    // objectIds mixes genuine mesh-kind whole-object members with the
+    // owning IFC model's own bookkeeping entry (added for isolate's "parent
+    // hides children" three.js need — see linkedElements.ts's own comment —
+    // irrelevant to hide). Only the former belongs in hiddenIds; hiding an
+    // IFC sub-element never touches its model's own object-level
+    // visibility (Viewport3D.tsx's own hiddenExpressIds doc comment).
+    const meshObjectIds = [...objectIds].filter(id => !id.startsWith('ifc-'))
+    if (meshObjectIds.length > 0) setHiddenIds(prev => new Set([...prev, ...meshObjectIds]))
+    if (expressKeys.size > 0) setHiddenExpressIds(prev => new Set([...prev, ...expressKeys]))
+  }
+
+  const handleIsolateCollection = async (collectionId: string) => {
+    const refs = flattenCollectionMemberRefs(collectionId)
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    if (objectIds.size === 0) return
+    setIsolatedObjectIds(objectIds)
+    setIsolatedExpressIds(expressIds)
+    setIsolateMode(true)
   }
 
   // Camera Views (2026-07-10, per Maro: "add camera too so i can capture
@@ -1961,6 +2019,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onReparent={handleReparentCollection}
           onDelete={handleDeleteCollection}
           onAddSelected={handleAddSelectedToCollection}
+          onSelect={handleSelectCollection}
+          onHide={handleHideCollection}
+          onIsolate={handleIsolateCollection}
         />
       ),
     })

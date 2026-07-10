@@ -13,6 +13,16 @@ export interface LinkableSceneObject {
 export interface ResolvedIsolationTarget {
   objectIds: Set<string>
   expressIds: Set<number>
+  // Composite `${objectId}::${expressID}` keys, one per resolved IFC
+  // sub-element (2026-07-11, for Collections' hide-by-sub-element) —
+  // objectIds/expressIds above are both flat, so once more than one IFC
+  // model is involved there's no way to recover *which* model a given
+  // expressID actually belongs to from them alone. Viewport3D.tsx's
+  // hiddenExpressIds needs exactly that pairing (see its own Props doc
+  // comment on why hide can't reuse a flat Set<number> the way isolate
+  // does); this is computed once, right here, where both halves of the
+  // pair are already known together — not re-derived later.
+  expressKeys: Set<string>
 }
 
 // Tries each loaded IFC model in turn for a GlobalId match (2026-07-09,
@@ -67,7 +77,8 @@ export async function resolveElementRefsToTargets(
 ): Promise<ResolvedIsolationTarget> {
   const objectIds = new Set<string>()
   const expressIds = new Set<number>()
-  if (refs.length === 0) return { objectIds, expressIds }
+  const expressKeys = new Set<string>()
+  if (refs.length === 0) return { objectIds, expressIds, expressKeys }
 
   const needsIfc = refs.some(r => r.source_kind === 'ifc') && ifcHandles.length > 0
   const ifcModel = needsIfc ? await import('./ifcModel') : null
@@ -79,12 +90,14 @@ export async function resolveElementRefsToTargets(
     } else if (ifcModel) {
       const resolved = await resolveInAnyHandle(ifcHandles, ref.element_ref, ifcModel)
       if (resolved) {
+        const objectId = `ifc-${resolved.handle.modelID}`
         expressIds.add(resolved.expressId)
-        objectIds.add(`ifc-${resolved.handle.modelID}`)
+        objectIds.add(objectId)
+        expressKeys.add(`${objectId}::${resolved.expressId}`)
       }
     }
   }
-  return { objectIds, expressIds }
+  return { objectIds, expressIds, expressKeys }
 }
 
 export async function resolveActivityLinksToIsolationTargets(
