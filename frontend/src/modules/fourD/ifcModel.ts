@@ -191,6 +191,21 @@ export function getTypeCounts(handle: IfcModelHandle): { typeName: string; count
     .sort((a, b) => b.count - a.count)
 }
 
+// Every expressID of one IFC type (2026-07-11, per Maro: "select all the
+// doors" — Select by Type) — getTypeCounts above already looks up typeID
+// via the same GetAllTypesOfModel call, but only ever keeps the *count*,
+// discarding the actual ids. Reuses the exact .size()/.get(i) Vector
+// idiom this file already uses at loadIfcModel above for flatMeshes/
+// geometries.
+export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): number[] {
+  const match = handle.api.GetAllTypesOfModel(handle.modelID).find(t => t.typeName === typeName)
+  if (!match) return []
+  const ids = handle.api.GetLineIDsWithType(handle.modelID, match.typeID)
+  const out: number[] = []
+  for (let i = 0; i < ids.size(); i++) out.push(ids.get(i))
+  return out
+}
+
 export interface IfcTreeNode {
   expressID: number
   type: string

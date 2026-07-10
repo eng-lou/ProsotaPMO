@@ -17,6 +17,10 @@ interface Props {
   selectedExpressId: number | null
   selectedExpressIds: Set<number>
   onSelectExpressId: (expressID: number | null, additive?: boolean, objectId?: string) => void
+  // Select by Type / Select by Storey (2026-07-11) — see IfcDataPanel.tsx's
+  // own onSelectMany doc comment; just passed straight through, this panel
+  // doesn't otherwise touch bulk selection.
+  onSelectMany: (expressIDs: number[], additive: boolean, objectId: string) => void
   onUnloadIfc: (id: string) => void
   meshImports: MeshImportItem[]
   hiddenIds: Set<string>
@@ -57,7 +61,7 @@ interface Props {
 // both tabs' own Activity Link sections (ElementLinkFields.tsx) — this
 // panel doesn't otherwise touch linking itself.
 export function DataPanel({
-  open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onUnloadIfc,
+  open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
   meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: Props) {
@@ -118,6 +122,7 @@ export function DataPanel({
           selectedExpressId={selectedExpressId}
           selectedExpressIds={selectedExpressIds}
           onSelect={onSelectExpressId}
+          onSelectMany={onSelectMany}
           onUnload={onUnloadIfc}
           selectedObjectIds={selectedObjectIds}
           onSelectWholeModel={selectWholeIfcModel}

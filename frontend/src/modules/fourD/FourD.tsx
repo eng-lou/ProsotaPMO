@@ -1319,6 +1319,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Bulk sibling of handleSelectExpressId above (2026-07-11, per Maro:
+  // Select by Type / Select by Storey — "select all the doors" without
+  // ctrl-clicking each one) — deliberately NOT a loop calling the single-id
+  // handler above, same stale-closure reasoning handleBoxSelect's own
+  // comment already gives for box-select: looping a setState-from-previous-
+  // state handler N times in one synchronous pass means every iteration
+  // after the first reads the *original* pre-click selectedExpressIds, not
+  // what the previous iteration just set.
+  const handleSelectExpressIds = (expressIDs: number[], additive: boolean, objectId: string) => {
+    if (expressIDs.length === 0) return
+    const next = additive ? new Set([...selectedExpressIds, ...expressIDs]) : new Set(expressIDs)
+    setSelectedExpressIds(next)
+    setSelectedExpressId(expressIDs[expressIDs.length - 1])
+    setActiveIfcModelId(objectId)
+    setSelectedObjectIds(prev => (prev.has(objectId) ? prev : new Set([...prev, objectId])))
+    setActiveObjectId(objectId)
+  }
+
   // Renamed from handleUnloadMesh — see performUnloadIfc's matching comment.
   const performUnloadMesh = (id: string) => {
     setSceneObjects(prev => {
@@ -2216,6 +2234,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           selectedExpressId={selectedExpressId}
           selectedExpressIds={selectedExpressIds}
           onSelectExpressId={handleSelectExpressId}
+          onSelectMany={handleSelectExpressIds}
           onUnloadIfc={requestUnloadModel}
           meshImports={meshImports}
           hiddenIds={hiddenIds}

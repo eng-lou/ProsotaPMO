@@ -28,6 +28,13 @@ interface Props {
   selectedExpressId: number | null
   selectedExpressIds: Set<number>
   onSelect: (expressID: number | null, additive: boolean, objectId: string) => void
+  // Bulk sibling of onSelect above (2026-07-11, per Maro: "select all the
+  // doors" — Select by Type / Select by Storey). Shared by both: type-count
+  // rows below and the spatial tree's own per-storey "Select Storey"
+  // button both resolve to a plain expressID list, just via different
+  // means (a web-ifc type-code lookup vs. walking the already-fetched
+  // spatial tree's own leaves) — no reason for two near-identical props.
+  onSelectMany: (expressIDs: number[], additive: boolean, objectId: string) => void
   onUnload: (id: string) => void
   selectedObjectIds: Set<string>
   // Selects "the whole model" rather than one specific element (2026-07-09
@@ -53,15 +60,29 @@ interface Props {
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
 
-function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect, onSelectWholeModel }: {
+// Every leaf (no-children) expressID under a spatial-tree node, recursively
+// (2026-07-11, for Select by Storey) — walks whatever's already been
+// fetched into the tree, no web-ifc calls of its own. A storey's own
+// direct children are normally the contained elements themselves, but this
+// recurses regardless in case any intermediate container ever sits between
+// a storey and its elements — either way, only real geometry-bearing
+// leaves end up selected, never a container's own (meaningless) expressID.
+function collectLeafExpressIds(node: IfcTreeNode): number[] {
+  if (node.children.length === 0) return [node.expressID]
+  return node.children.flatMap(collectLeafExpressIds)
+}
+
+function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect, onSelectWholeModel, onSelectMany }: {
   node: IfcTreeNode; depth: number; selectedExpressId: number | null; selectedExpressIds: Set<number>
   onSelect: (id: number, additive: boolean) => void
   onSelectWholeModel: (additive: boolean) => void
+  onSelectMany: (expressIDs: number[], additive: boolean) => void
 }) {
   const [expanded, setExpanded] = useState(depth < 2)
   const hasChildren = node.children.length > 0
   const isPrimary = node.expressID === selectedExpressId
   const isSelected = selectedExpressIds.has(node.expressID)
+  const isStorey = node.type === 'IFCBUILDINGSTOREY'
   return (
     <div>
       <div
@@ -84,12 +105,21 @@ function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect
           </button>
         ) : <span className="w-3 shrink-0" />}
         <span className="truncate">{node.type}</span>
+        {isStorey && (
+          <button
+            onClick={e => { e.stopPropagation(); onSelectMany(collectLeafExpressIds(node), e.ctrlKey || e.metaKey) }}
+            title="Select by Storey — select every element on this storey"
+            className="ml-auto text-[10px] text-gray-400 hover:text-blue-700 shrink-0 px-1"
+          >
+            Select Storey
+          </button>
+        )}
       </div>
       {hasChildren && expanded && node.children.map((child, i) => (
         <TreeNode
           key={`${child.expressID}-${i}`} node={child} depth={depth + 1}
           selectedExpressId={selectedExpressId} selectedExpressIds={selectedExpressIds}
-          onSelect={onSelect} onSelectWholeModel={onSelectWholeModel}
+          onSelect={onSelect} onSelectWholeModel={onSelectWholeModel} onSelectMany={onSelectMany}
         />
       ))}
     </div>
@@ -115,13 +145,14 @@ function Field({ label, value }: { label: string; value: string }) {
 // since expressIDs aren't comparable across different models' own web-ifc
 // sessions (2026-07-09, per multi-model support).
 function ModelItem({
-  handle, isActiveModel, selectedExpressId, selectedExpressIds, onSelect, onUnload,
+  handle, isActiveModel, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
   selected, onToggleSelected, onSelectWholeModel,
   activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: {
   handle: IfcModelHandle; isActiveModel: boolean
   selectedExpressId: number | null; selectedExpressIds: Set<number>
   onSelect: (id: number, additive: boolean) => void
+  onSelectMany: (expressIDs: number[], additive: boolean) => void
   onUnload: () => void
   selected: boolean; onToggleSelected: () => void
   onSelectWholeModel: (additive: boolean) => void
@@ -185,7 +216,7 @@ function ModelItem({
               <TreeNode
                 node={tree} depth={0} selectedExpressId={isActiveModel ? selectedExpressId : null}
                 selectedExpressIds={isActiveModel ? selectedExpressIds : new Set()}
-                onSelect={onSelect} onSelectWholeModel={onSelectWholeModel}
+                onSelect={onSelect} onSelectWholeModel={onSelectWholeModel} onSelectMany={onSelectMany}
               />
             ) : (
               <p className="px-3 py-2 text-xs text-gray-400">Loading spatial structure…</p>
@@ -195,7 +226,15 @@ function ModelItem({
           <SectionHeader label="Class > Type > Occurrence" />
           <div className="max-h-40 overflow-y-auto px-3 pb-2 space-y-0.5">
             {typeCounts.map(t => (
-              <div key={t.typeName} className="flex items-center justify-between text-xs text-gray-600">
+              <div
+                key={t.typeName}
+                onClick={async e => {
+                  const { getExpressIdsForType } = await import('./ifcModel')
+                  onSelectMany(getExpressIdsForType(handle, t.typeName), e.ctrlKey || e.metaKey)
+                }}
+                title={`Select by Type — select every ${t.typeName} element (${t.count}), Ctrl/Cmd+click to add to the current selection`}
+                className="flex items-center justify-between text-xs text-gray-600 cursor-pointer hover:bg-gray-50 hover:text-blue-700 rounded px-1 -mx-1"
+              >
                 <span className="truncate">{t.typeName}</span>
                 <span className="text-gray-400">{t.count}</span>
               </div>
@@ -278,7 +317,7 @@ function ModelItem({
 // see ElementLinkFields.tsx's own header for the shared shape with
 // MeshDataPanel.tsx's equivalent.
 export function IfcDataPanel({
-  handles, activeObjectId, selectedExpressId, selectedExpressIds, onSelect, onUnload,
+  handles, activeObjectId, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
   selectedObjectIds, onSelectWholeModel,
   activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: Props) {
@@ -302,6 +341,7 @@ export function IfcDataPanel({
             selectedExpressId={selectedExpressId}
             selectedExpressIds={selectedExpressIds}
             onSelect={(exprId, additive) => onSelect(exprId, additive, id)}
+            onSelectMany={(exprIds, additive) => onSelectMany(exprIds, additive, id)}
             onUnload={() => onUnload(id)}
             selected={selectedObjectIds.has(id)}
             onToggleSelected={() => { onSelectWholeModel(id, true) }}
