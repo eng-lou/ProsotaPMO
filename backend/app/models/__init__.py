@@ -36,6 +36,8 @@ from app.models.scheduling_highlight import SchedulingHighlight
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.models.animation_profile import AnimationProfile
+from app.models.collection import Collection
+from app.models.collection_member import CollectionMember
 from app.models.model_element_link import ModelElementLink
 from app.models.dock_layout import DockLayout
 from app.models.element_keyframe import ElementKeyframe
@@ -88,6 +90,8 @@ __all__ = [
     "UserDefinedFieldDefinition",
     "UserDefinedFieldValue",
     "AnimationProfile",
+    "Collection",
+    "CollectionMember",
     "ModelElementLink",
     "DockLayout",
     "ElementKeyframe",

@@ -30,6 +30,8 @@ import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { CameraViewPanel } from './CameraViewPanel'
+import { createCollection, deleteCollection, listCollections, updateCollection, type Collection as CollectionType } from './collections'
+import { CollectionsPanel } from './CollectionsPanel'
 import { useAnimationProfiles } from './animationProfiles'
 import { useElementKeyframes, type ElementKeyframe, type KeyframeField } from './elementKeyframes'
 import { DockLayoutMenu } from './DockLayoutMenu'
@@ -90,6 +92,8 @@ const SECTION_PANEL_OPEN_KEY = 'prosota_4d_section_panel_open'
 const SECTION_PANEL_DOCK_KEY = 'prosota_4d_section_panel_dock'
 const CAMERA_PANEL_OPEN_KEY = 'prosota_4d_camera_panel_open'
 const CAMERA_PANEL_DOCK_KEY = 'prosota_4d_camera_panel_dock'
+const COLLECTIONS_PANEL_OPEN_KEY = 'prosota_4d_collections_panel_open'
+const COLLECTIONS_PANEL_DOCK_KEY = 'prosota_4d_collections_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -414,6 +418,69 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Collections (2026-07-11, per Maro's Blender reference) — project-scoped,
+  // persisted server-side (collection.py). This phase is hollow: tree CRUD
+  // only (create/rename/reparent/delete) — Add-Selected and per-collection
+  // Select/Hide/Isolate land once the reverse resolver and sub-element hide
+  // extension exist (see this feature's own plan doc, later phases).
+  const [collections, setCollections] = useState<CollectionType[]>([])
+  const [collectionError, setCollectionError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listCollections(selectedProject.id).then(cs => { if (!cancelled) setCollections(cs) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  const collectionErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  const handleCreateCollection = async (parentCollectionId: string | null) => {
+    if (!selectedProject) return
+    try {
+      setCollectionError(null)
+      const created = await createCollection({ project_id: selectedProject.id, parent_collection_id: parentCollectionId })
+      setCollections(prev => [...prev, created])
+    } catch (err) {
+      setCollectionError(collectionErrorMessage(err, 'Failed to create collection'))
+    }
+  }
+
+  const handleUpdateCollection = async (id: string, data: { name?: string; parent_collection_id?: string | null }) => {
+    try {
+      setCollectionError(null)
+      const updated = await updateCollection(id, data)
+      setCollections(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setCollectionError(collectionErrorMessage(err, 'Failed to update collection'))
+    }
+  }
+  const handleRenameCollection = (id: string, name: string) => handleUpdateCollection(id, { name })
+  const handleReparentCollection = (id: string, parentCollectionId: string | null) =>
+    handleUpdateCollection(id, { parent_collection_id: parentCollectionId })
+
+  const handleDeleteCollection = async (id: string) => {
+    if (!selectedProject) return
+    try {
+      setCollectionError(null)
+      await deleteCollection(id)
+      // Cascades sub-collections server-side (ON DELETE CASCADE) — a
+      // re-fetch (not a local filter) is the simplest correct way to drop
+      // whichever descendants went with it, rather than re-deriving the
+      // cascade's own reachability logic client-side just to avoid one
+      // extra round-trip.
+      setCollections(await listCollections(selectedProject.id))
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setCollections(await listCollections(selectedProject.id))
+        return
+      }
+      setCollectionError(collectionErrorMessage(err, 'Failed to delete collection'))
+    }
+  }
+
   // Camera Views (2026-07-10, per Maro: "add camera too so i can capture
   // the model at different angles like blender") — project-scoped,
   // persisted server-side like everything else this session (see
@@ -630,6 +697,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setCameraPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(CAMERA_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Collections panel (2026-07-11, per Maro's Blender reference) —
+  // same shared-side-dock treatment as Section Box/Camera Views/Animation
+  // Profiles above.
+  const [collectionsPanelOpen, setCollectionsPanelOpen] = useState(() => loadPanelOpen(COLLECTIONS_PANEL_OPEN_KEY, false))
+  const toggleCollectionsPanel = () => {
+    setCollectionsPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(COLLECTIONS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [collectionsPanelDock, setCollectionsPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(COLLECTIONS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleCollectionsPanelDock = () => {
+    setCollectionsPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(COLLECTIONS_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -1819,6 +1911,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (collectionsPanelOpen) {
+    dockablePanels.push({
+      id: 'collections', label: 'Collections', dock: collectionsPanelDock,
+      onToggleDock: toggleCollectionsPanelDock, onClose: toggleCollectionsPanel,
+      content: (
+        <CollectionsPanel
+          collections={collections}
+          error={collectionError}
+          onCreate={handleCreateCollection}
+          onRename={handleRenameCollection}
+          onReparent={handleReparentCollection}
+          onDelete={handleDeleteCollection}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -1872,6 +1980,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           }`}
         >
           Camera Views
+        </button>
+        <button
+          onClick={toggleCollectionsPanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            collectionsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Collections
         </button>
         <div className="w-px h-4 bg-gray-200 mx-1" />
         <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" onChange={handleFileSelected} className="hidden" />
