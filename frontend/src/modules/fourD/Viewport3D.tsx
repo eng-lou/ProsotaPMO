@@ -1193,7 +1193,23 @@ export function Viewport3D({
         // either, and could box-select a whole object isolate had hidden).
         for (const { id, object, visible } of importedObjects) {
           if (!visible) continue
-          const center = new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3())
+          // Bounds of only the currently-*visible* meshes within this object
+          // (2026-07-11 fix, per Maro: "when i isolate then box select, it
+          // doesnt work") — THREE.Box3.setFromObject includes every mesh's
+          // geometry regardless of its own .visible flag, so once a specific
+          // sub-element is isolated (or, since Collections, individually
+          // hidden), the *whole object's* bounding-box center stayed
+          // anchored to its full, un-isolated geometry — nowhere near
+          // wherever the now-zoomed-in isolated content actually sits on
+          // screen, so a box drawn around what's visible could never
+          // contain that stale center point. Building the box mesh-by-mesh
+          // from only what's actually visible fixes this for both isolate
+          // and the newer per-element hide, without needing a full
+          // expressID-granular box-select rewrite.
+          const box = new THREE.Box3()
+          object.traverse(child => { if (child instanceof THREE.Mesh && child.visible) box.expandByObject(child) })
+          if (box.isEmpty()) continue
+          const center = box.getCenter(new THREE.Vector3())
           center.project(camera)
           if (center.z < 1 && center.x >= ndcXMin && center.x <= ndcXMax && center.y >= ndcYMin && center.y <= ndcYMax) {
             matched.push(id)
