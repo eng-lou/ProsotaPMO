@@ -30,8 +30,12 @@ import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { CameraViewPanel } from './CameraViewPanel'
-import { createCollection, deleteCollection, listCollections, updateCollection, type Collection as CollectionType } from './collections'
+import {
+  addCollectionMember, createCollection, deleteCollection, listCollections, updateCollection,
+  type Collection as CollectionType, type CollectionMember,
+} from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
+import { resolveSelectionToMemberRefs } from './collectionResolvers'
 import { useAnimationProfiles } from './animationProfiles'
 import { useElementKeyframes, type ElementKeyframe, type KeyframeField } from './elementKeyframes'
 import { DockLayoutMenu } from './DockLayoutMenu'
@@ -478,6 +482,33 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         return
       }
       setCollectionError(collectionErrorMessage(err, 'Failed to delete collection'))
+    }
+  }
+
+  // "Add Selected to Collection" (2026-07-11) — resolveSelectionToMemberRefs
+  // is the reverse of linkedElements.ts's own resolvers: live selection ->
+  // loose (source_kind, element_ref) refs. getIfcHandleFor(activeIfcModelId)
+  // is the same handle selectedExpressIds is already implicitly scoped to
+  // (see collectionResolvers.ts's own header) — no re-derivation needed.
+  const handleAddSelectedToCollection = async (collectionId: string) => {
+    const handle = getIfcHandleFor(activeIfcModelId)
+    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    if (drafts.length === 0) return
+    setCollectionError(null)
+    const newMembers: CollectionMember[] = []
+    for (const draft of drafts) {
+      try {
+        newMembers.push(await addCollectionMember({ collection_id: collectionId, ...draft }))
+      } catch (err) {
+        // 409 = this element's already in this collection — a benign no-op
+        // from the user's perspective (they selected some already-grouped
+        // elements alongside new ones), not worth surfacing per-element.
+        if (axios.isAxiosError(err) && err.response?.status === 409) continue
+        setCollectionError(collectionErrorMessage(err, 'Failed to add some elements to the collection'))
+      }
+    }
+    if (newMembers.length > 0) {
+      setCollections(prev => prev.map(c => (c.id === collectionId ? { ...c, members: [...c.members, ...newMembers] } : c)))
     }
   }
 
@@ -1919,10 +1950,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <CollectionsPanel
           collections={collections}
           error={collectionError}
+          canAddSelected={selectedObjectIds.size > 0 || selectedExpressIds.size > 0}
           onCreate={handleCreateCollection}
           onRename={handleRenameCollection}
           onReparent={handleReparentCollection}
           onDelete={handleDeleteCollection}
+          onAddSelected={handleAddSelectedToCollection}
         />
       ),
     })

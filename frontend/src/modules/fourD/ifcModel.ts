@@ -151,6 +151,27 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
   return result === undefined ? undefined : Number(result)
 }
 
+// GlobalId for a given expressID — the exact reverse of getExpressIdFromGuid
+// above (2026-07-11, for Collections' "Add Selected" — needs an
+// element_ref, and GlobalId is what that means for source_kind="ifc", same
+// as ModelElementLink). Deliberately not routed through getElementInfo,
+// which pays for two full property-set round trips just to read one field
+// off the result — this is a single synchronous web-ifc call, same idiom
+// as getExpressIdFromGuid itself.
+export function getGuidFromExpressId(handle: IfcModelHandle, expressID: number): string | undefined {
+  const result = handle.api.GetGuidFromExpressId(handle.modelID, expressID)
+  return result === undefined ? undefined : String(result)
+}
+
+// A snapshot-quality type name for a given expressID — same reasoning as
+// getGuidFromExpressId above (Collections' element_label needs *something*
+// readable, not a full getElementInfo property-set fetch). Same
+// GetNameFromTypeCode call getTypeCounts below already uses, just for one
+// specific element instead of every type in the model.
+export function getElementTypeName(handle: IfcModelHandle, expressID: number): string {
+  return handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.modelID, expressID))
+}
+
 export function disposeIfcModel(handle: IfcModelHandle) {
   handle.object.traverse(child => {
     if (child instanceof THREE.Mesh) {

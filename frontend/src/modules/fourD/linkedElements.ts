@@ -54,26 +54,30 @@ async function resolveInAnyHandle(
 // this, isolating an IFC element by activity would isolate the *expressID*
 // correctly but the whole model would still vanish, since the model's own
 // object-level entry was never added.
-export async function resolveActivityLinksToIsolationTargets(
-  activityIds: Set<string>,
-  links: ModelElementLink[],
+// The per-ref resolution shared by anything that needs to turn a set of
+// loose (source_kind, element_ref) refs into live scene targets — extracted
+// (2026-07-11, for the Collections feature) so Collections' own select/
+// hide/isolate-by-collection can reuse the identical mesh/ifc branching
+// instead of duplicating it. resolveActivityLinksToIsolationTargets below
+// is now a thin wrapper around this.
+export async function resolveElementRefsToTargets(
+  refs: { source_kind: 'ifc' | 'mesh'; element_ref: string }[],
   sceneObjects: LinkableSceneObject[],
   ifcHandles: IfcModelHandle[],
 ): Promise<ResolvedIsolationTarget> {
   const objectIds = new Set<string>()
   const expressIds = new Set<number>()
-  const relevant = links.filter(l => activityIds.has(l.activity_id))
-  if (relevant.length === 0) return { objectIds, expressIds }
+  if (refs.length === 0) return { objectIds, expressIds }
 
-  const needsIfc = relevant.some(l => l.source_kind === 'ifc') && ifcHandles.length > 0
+  const needsIfc = refs.some(r => r.source_kind === 'ifc') && ifcHandles.length > 0
   const ifcModel = needsIfc ? await import('./ifcModel') : null
 
-  for (const link of relevant) {
-    if (link.source_kind === 'mesh') {
-      const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
+  for (const ref of refs) {
+    if (ref.source_kind === 'mesh') {
+      const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === ref.element_ref)
       if (match) objectIds.add(match.id)
     } else if (ifcModel) {
-      const resolved = await resolveInAnyHandle(ifcHandles, link.element_ref, ifcModel)
+      const resolved = await resolveInAnyHandle(ifcHandles, ref.element_ref, ifcModel)
       if (resolved) {
         expressIds.add(resolved.expressId)
         objectIds.add(`ifc-${resolved.handle.modelID}`)
@@ -81,6 +85,19 @@ export async function resolveActivityLinksToIsolationTargets(
     }
   }
   return { objectIds, expressIds }
+}
+
+export async function resolveActivityLinksToIsolationTargets(
+  activityIds: Set<string>,
+  links: ModelElementLink[],
+  sceneObjects: LinkableSceneObject[],
+  ifcHandles: IfcModelHandle[],
+): Promise<ResolvedIsolationTarget> {
+  const relevant = links.filter(l => activityIds.has(l.activity_id))
+  return resolveElementRefsToTargets(
+    relevant.map(l => ({ source_kind: l.source_kind, element_ref: l.element_ref })),
+    sceneObjects, ifcHandles,
+  )
 }
 
 // The reverse direction — "Linked Activities" widget: given whatever's

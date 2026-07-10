@@ -4,10 +4,12 @@ import type { Collection } from './collections'
 interface Props {
   collections: Collection[]
   error: string | null
+  canAddSelected: boolean
   onCreate: (parentCollectionId: string | null) => void
   onRename: (id: string, name: string) => void
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
+  onAddSelected: (id: string) => void
 }
 
 // "Move to…" reparent picker, not drag-and-drop (2026-07-11) — a plain
@@ -34,14 +36,16 @@ function descendantIds(collections: Collection[], rootId: string): Set<string> {
 // its own `collection.id` when it actually calls one, rather than the
 // parent pre-binding a version scoped to itself (which would make every
 // descendant silently act on its *ancestor's* id instead of its own).
-function CollectionNode({ collection, allCollections, depth, onCreate, onRename, onReparent, onDelete }: {
+function CollectionNode({ collection, allCollections, depth, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected }: {
   collection: Collection
   allCollections: Collection[]
   depth: number
+  canAddSelected: boolean
   onCreate: (parentCollectionId: string | null) => void
   onRename: (id: string, name: string) => void
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
+  onAddSelected: (id: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(collection.name)
@@ -102,6 +106,14 @@ function CollectionNode({ collection, allCollections, depth, onCreate, onRename,
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
+        <button
+          onClick={() => onAddSelected(collection.id)}
+          disabled={!canAddSelected}
+          title={canAddSelected ? 'Add the current viewport selection to this collection' : 'Select something in the viewport first'}
+          className="text-xs text-gray-400 hover:text-gray-700 disabled:text-gray-200 disabled:hover:text-gray-200 shrink-0"
+        >
+          ⊕
+        </button>
         <button onClick={() => onCreate(collection.id)} title="Add sub-collection" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">+</button>
         <button onClick={() => onDelete(collection.id)} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
       </div>
@@ -111,10 +123,12 @@ function CollectionNode({ collection, allCollections, depth, onCreate, onRename,
           collection={child}
           allCollections={allCollections}
           depth={depth + 1}
+          canAddSelected={canAddSelected}
           onCreate={onCreate}
           onRename={onRename}
           onReparent={onReparent}
           onDelete={onDelete}
+          onAddSelected={onAddSelected}
         />
       ))}
     </div>
@@ -128,11 +142,10 @@ function CollectionNode({ collection, allCollections, depth, onCreate, onRename,
 // SideDock.tsx owns the outer chrome, same as
 // AnimationProfilePanel/SectionBoxPanel/CameraViewPanel.
 //
-// This phase is hollow — tree/rename/move/delete only. Add-Selected and
-// the per-collection Select/Hide/Isolate buttons land in later phases of
-// this same feature (they need the reverse selection->element-ref resolver
-// and the sub-element hide extension respectively, neither built yet).
-export function CollectionsPanel({ collections, error, onCreate, onRename, onReparent, onDelete }: Props) {
+// Select/Hide/Isolate-by-collection buttons land in a later phase of this
+// same feature (needs the sub-element hide extension, not built yet) — for
+// now, per-row action is just ⊕ Add Selected + Move-to/rename/delete.
+export function CollectionsPanel({ collections, error, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected }: Props) {
   const roots = collections.filter(c => c.parent_collection_id === null)
 
   return (
@@ -160,10 +173,12 @@ export function CollectionsPanel({ collections, error, onCreate, onRename, onRep
               collection={collection}
               allCollections={collections}
               depth={0}
+              canAddSelected={canAddSelected}
               onCreate={onCreate}
               onRename={onRename}
               onReparent={onReparent}
               onDelete={onDelete}
+              onAddSelected={onAddSelected}
             />
           ))}
         </div>
