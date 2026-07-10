@@ -160,3 +160,36 @@ right now. Verified with a small standalone script using the real 3D
 library before shipping it, not just by reasoning about it on paper —
 confirmed the old math really did land far from the visible content, and
 the fix landed exactly on it.
+
+**Then the big one**: "when i refresh all my hard work is gone regarding
+4d, are you playing with me???" This deserved a real, evidence-based
+answer, not reassurance. Checked every piece of 4D state one by one
+against the actual code, and found something genuinely serious: moving,
+rotating, or resizing an imported model or one of its individual parts —
+via the drag handles or the numeric fields — had never been saved
+anywhere, this entire session. Not a bug that crept in; it was simply
+never built, alongside a dozen other things that *were* correctly saved.
+Every bit of careful manual positioning (lining up separate imported
+models against each other, especially) vanished the instant the page
+reloaded, because nothing ever told it to remember.
+
+While chasing that, a second, related discovery: the same building model
+had been re-imported five separate times over one day, each time
+uploading a fresh ~15MB copy, because reloading the page wasn't reliably
+bringing the model back — so the natural thing to do was just import it
+again. Reading the code alone wouldn't have shown this; querying the real
+database directly did, and it made the actual scale of the problem
+obvious in a way no amount of code-reading would have (five copies, one
+name, spread across twelve hours — a pattern, not a fluke). Cleaned up
+the four stale copies, then fixed *why* it kept happening: re-importing a
+file with the same name now replaces whatever was there before instead
+of quietly piling up another copy next to it.
+
+Both fixes shipped the same way as everything else this session — a real
+database table for the positioning data, endpoints to save and reload it,
+and it actually loads back into place the next time the model opens. The
+lesson underneath all of this: when someone says "my work is gone,"
+checking the code that's *supposed* to save something isn't enough —
+checking the actual data (what's really sitting in the database, right
+now) is what turns "I think this should work" into "here's exactly what
+went wrong and why."
