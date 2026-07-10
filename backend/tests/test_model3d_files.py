@@ -69,3 +69,43 @@ async def test_delete_unknown_file_404s(client: AsyncClient, project: Project):
 async def test_download_unknown_file_404s(client: AsyncClient, project: Project):
     resp = await client.get(f"/api/v1/model3d-files/{uuid.uuid4()}/download")
     assert resp.status_code == 404
+
+
+async def test_reimporting_same_name_replaces_not_accumulates(client: AsyncClient, project: Project):
+    # Real incident (2026-07-11): the frontend's restore-on-mount was slow/
+    # unreliable enough that a user re-imported the same file 5 times
+    # across one day, leaving 5 full duplicate copies in the database and
+    # on disk. Re-importing a file with the same name/kind must replace
+    # the prior row, not pile up alongside it.
+    data, files = upload_payload(str(project.id), content=b"version-one")
+    first = (await client.post("/api/v1/model3d-files/", data=data, files=files)).json()
+
+    data2, files2 = upload_payload(str(project.id), content=b"version-two")
+    second = (await client.post("/api/v1/model3d-files/", data=data2, files=files2)).json()
+
+    assert first["id"] != second["id"]  # a genuinely new row, not an in-place update
+
+    listing = (await client.get("/api/v1/model3d-files/", params={"project_id": str(project.id)})).json()
+    matching = [f for f in listing if f["name"] == "tower.ifc"]
+    assert len(matching) == 1, f"expected exactly one 'tower.ifc' row, found {len(matching)}"
+    assert matching[0]["id"] == second["id"]
+
+    # The old row's own id is gone -- both the DB row and its disk file.
+    old_download = await client.get(f"/api/v1/model3d-files/{first['id']}/download")
+    assert old_download.status_code == 404
+
+    new_download = await client.get(f"/api/v1/model3d-files/{second['id']}/download")
+    assert new_download.status_code == 200
+    assert new_download.content == b"version-two"
+
+
+async def test_reimporting_different_name_does_not_replace(client: AsyncClient, project: Project):
+    data, files = upload_payload(str(project.id), name="tower.ifc")
+    tower = (await client.post("/api/v1/model3d-files/", data=data, files=files)).json()
+
+    data2, files2 = upload_payload(str(project.id), name="annex.ifc")
+    annex = (await client.post("/api/v1/model3d-files/", data=data2, files=files2)).json()
+
+    listing = (await client.get("/api/v1/model3d-files/", params={"project_id": str(project.id)})).json()
+    ids = {f["id"] for f in listing}
+    assert tower["id"] in ids and annex["id"] in ids  # both survive -- different names, not a re-import of the same file

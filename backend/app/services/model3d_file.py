@@ -30,6 +30,28 @@ async def list_files(db: AsyncSession, project_id: uuid.UUID) -> list[Model3DFil
 async def create_file(
     db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, upload: UploadFile,
 ) -> Model3DFileResponse:
+    # Re-importing a file with the same name/kind REPLACES the existing one
+    # rather than accumulating a new row alongside it (2026-07-11, per a
+    # real incident: the frontend's own restore-on-mount effect was slow/
+    # unreliable enough in practice that a user re-imported the same ~15MB
+    # IFC file 5 separate times across one day, leaving 5 full duplicate
+    # copies in the database and on disk, each restore slower than the
+    # last). Deleting the prior row first (not overwriting its bytes in
+    # place) deliberately cascades anything FK'd to it -- SectionBox,
+    # ElementTransform -- consistent with how those tables already treat a
+    # "re-import" as potentially-different geometry, not guaranteed to be
+    # the same file (see section_box.py's own docstring on why it uses a
+    # real FK instead of ModelElementLink's loose filename identity).
+    existing = (await db.execute(
+        select(Model3DFile).where(
+            Model3DFile.project_id == project_id, Model3DFile.name == name, Model3DFile.kind == kind,
+        )
+    )).scalar_one_or_none()
+    if existing is not None:
+        delete_stored_file(existing.storage_filename)
+        await db.delete(existing)
+        await db.flush()
+
     storage_filename = generate_storage_filename(name)
     dest = storage_path(storage_filename)
     size = 0
