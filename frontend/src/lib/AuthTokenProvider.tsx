@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios'
 import { api } from './api'
@@ -27,6 +27,24 @@ async function getTokenWithRetry(getAccessTokenSilently: () => Promise<string>, 
 
 export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
   const { getAccessTokenSilently } = useAuth0()
+  // Gates `children` (and everything they mount) until a token has been
+  // fetched at least once (2026-07-12, per Maro: "when i hard refresh...
+  // literally have to log out then log back in to see what i was working
+  // on"). React fires a *child's* mount effects before its parent's — so
+  // without this gate, a descendant like FourD's own model-restore effect
+  // could fire its first API call before the interceptors below were even
+  // registered, let alone before any token existed to attach. That request
+  // goes out with no Authorization header and no response-interceptor retry
+  // to catch the resulting 401 (nothing was listening yet), which is
+  // indistinguishable downstream from "you have no saved models" — exactly
+  // the reported symptom. Signing out/in "fixed" it only by coincidence: a
+  // full remount happens to land in a state where a token's already warm by
+  // the time anything renders. This makes that reliable by construction
+  // instead: nothing below can mount, so nothing below can race, until a
+  // real token fetch has resolved (success or exhausted failure — see
+  // getTokenWithRetry's own header on why a failure still lets requests
+  // through rather than blocking forever).
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
     const requestInterceptor = api.interceptors.request.use(async (config) => {
@@ -81,11 +99,29 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
       },
     )
 
+    // Fired synchronously in this same effect (i.e. after the two
+    // interceptor registrations above, both of which are synchronous calls
+    // — only this token fetch itself is actually async), so by the time it
+    // resolves the interceptors are guaranteed already attached. `finally`,
+    // not `then`: a genuinely-unauthenticated user (retries exhausted)
+    // should still fall through to `ready`, same as every other call in
+    // this file — this is only closing the startup race, not adding a new
+    // way to get stuck on a blank screen.
+    getTokenWithRetry(getAccessTokenSilently).finally(() => setReady(true))
+
     return () => {
       api.interceptors.request.eject(requestInterceptor)
       api.interceptors.response.eject(responseInterceptor)
     }
   }, [getAccessTokenSilently])
+
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <span className="text-gray-400 text-sm">Loading…</span>
+      </div>
+    )
+  }
 
   return <>{children}</>
 }
