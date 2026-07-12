@@ -5,6 +5,7 @@ from app.api.activities import router as activities_router
 from app.api.activity_relationships import router as activity_relationships_router
 from app.api.activity_steps import router as activity_steps_router
 from app.api.animation_profiles import router as animation_profiles_router
+from app.api.annotations import router as annotations_router
 from app.api.calendar_breaks import router as calendar_breaks_router
 from app.api.calendar_exceptions import router as calendar_exceptions_router
 from app.api.calendars import router as calendars_router
@@ -115,6 +116,7 @@ app.include_router(collection_members_router, prefix="/api/v1", dependencies=_au
 app.include_router(element_transforms_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(paths_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(path_followers_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(annotations_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

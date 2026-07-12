@@ -106,9 +106,12 @@ export async function resolveActivityLinksToIsolationTargets(
   sceneObjects: LinkableSceneObject[],
   ifcHandles: IfcModelHandle[],
 ): Promise<ResolvedIsolationTarget> {
-  const relevant = links.filter(l => activityIds.has(l.activity_id))
+  // source_kind="annotation" links (2026-07-12) aren't scene objects —
+  // Isolate has nothing to resolve them to, so they're excluded here rather
+  // than passed through.
+  const relevant = links.filter(l => activityIds.has(l.activity_id) && l.source_kind !== 'annotation')
   return resolveElementRefsToTargets(
-    relevant.map(l => ({ source_kind: l.source_kind, element_ref: l.element_ref })),
+    relevant.map(l => ({ source_kind: l.source_kind as 'ifc' | 'mesh', element_ref: l.element_ref })),
     sceneObjects, ifcHandles,
   )
 }

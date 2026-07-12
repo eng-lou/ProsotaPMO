@@ -48,7 +48,15 @@ class ModelElementLink(Base, TimestampMixin):
     no profile assigned falls back to the timeline's own default behaviour
     (appear over the task's duration), and deleting a profile that's still
     assigned somewhere shouldn't take the link down with it — just reverts
-    those links to that same default."""
+    those links to that same default.
+
+    source_kind="annotation" (2026-07-12, added alongside annotation.py) —
+    element_ref is an Annotation row's own id, letting a Placemark/Footnote
+    be linked to an Activity + AnimationProfile exactly like a mesh/IFC
+    element is, so it pops per that profile's own existing Trigger/
+    Transform/Opacity/Colour settings — see Viewport3D.tsx's
+    AnnotationMarker for how the resulting positionOffset/opacity/color get
+    applied to a marker rather than a mesh's material."""
 
     __tablename__ = "model_element_links"
     __table_args__ = (

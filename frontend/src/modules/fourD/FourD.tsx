@@ -58,6 +58,8 @@ import type { GizmoMode, KeyframeSupport, PathProgressSupport } from './Transfor
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
+import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
+import { AnnotationsPanel } from './AnnotationsPanel'
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
 import { ImportModelDialog } from './ImportModelDialog'
 import { UnloadModelDialog } from './UnloadModelDialog'
@@ -105,6 +107,8 @@ const COLLECTIONS_PANEL_OPEN_KEY = 'prosota_4d_collections_panel_open'
 const COLLECTIONS_PANEL_DOCK_KEY = 'prosota_4d_collections_panel_dock'
 const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
 const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
+const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
+const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -731,6 +735,104 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Annotations — Placemark/Footnote (2026-07-12, per Maro's Navisworks
+  // reference screenshot). Project-scoped, persisted server-side like
+  // everything else this session (see annotation.py's own docstring).
+  // "+ Placemark"/"+ Footnote" (AnnotationsPanel.tsx) arm addingAnnotationKind,
+  // which AnnotationAddCatcher (reusing PathGizmo.tsx's own
+  // PathAddPointCatcher verbatim — see Viewport3D.tsx's render below) turns
+  // into a single click-to-place; handlePlaceAnnotation creates it and
+  // immediately clears the arming state, unlike Path's own continuous
+  // multi-point mode.
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [annotationError, setAnnotationError] = useState<string | null>(null)
+  const [addingAnnotationKind, setAddingAnnotationKind] = useState<AnnotationKind | null>(null)
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listAnnotations(selectedProject.id).then(as => { if (!cancelled) setAnnotations(as) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  // Default icon per kind (2026-07-12, per Maro: "so what's the difference
+  // [between Comment and Footnote]") — Placemark keeps the pin, Footnote
+  // defaults to a flag (a technical callout), Comment defaults to its own
+  // speech-bubble glyph (a review note) — immediately visually distinct
+  // the moment you place one, on top of the status/style differences.
+  const DEFAULT_ANNOTATION_ICON: Record<AnnotationKind, Annotation['icon']> = {
+    placemark: 'pin', footnote: 'flag', comment: 'comment',
+  }
+  const handlePlaceAnnotation = async (point: { x: number; y: number; z: number }) => {
+    if (!selectedProject || !addingAnnotationKind) return
+    const kind = addingAnnotationKind
+    setAddingAnnotationKind(null)
+    try {
+      setAnnotationError(null)
+      const created = await createAnnotation({
+        project_id: selectedProject.id, kind, position_x: point.x, position_y: point.y, position_z: point.z,
+        icon: DEFAULT_ANNOTATION_ICON[kind],
+      })
+      setAnnotations(prev => [...prev, created])
+    } catch (err) {
+      setAnnotationError(err instanceof Error ? err.message : 'Failed to place annotation')
+    }
+  }
+  const handleUpdateAnnotation = async (id: string, patch: AnnotationUpdate) => {
+    try {
+      setAnnotationError(null)
+      const updated = await updateAnnotation(id, patch)
+      setAnnotations(prev => prev.map(a => (a.id === id ? updated : a)))
+    } catch (err) {
+      setAnnotationError(err instanceof Error ? err.message : 'Failed to update annotation')
+    }
+  }
+  const handleDeleteAnnotation = async (id: string) => {
+    try {
+      setAnnotationError(null)
+      await deleteAnnotation(id)
+      setAnnotations(prev => prev.filter(a => a.id !== id))
+      if (selectedAnnotationId === id) setSelectedAnnotationId(null)
+    } catch (err) {
+      setAnnotationError(err instanceof Error ? err.message : 'Failed to delete annotation')
+    }
+  }
+  // Live drag preview for a marker being dragged in the viewport
+  // (AnnotationMarker.tsx) — same local-preview-then-PATCH-on-release
+  // convention as draggingPath above, so a drag doesn't spam a PATCH per
+  // pointer-move frame.
+  const [draggingAnnotation, setDraggingAnnotation] = useState<{ id: string; point: { x: number; y: number; z: number } } | null>(null)
+  const handleAnnotationDragMove = (id: string, point: { x: number; y: number; z: number }) => setDraggingAnnotation({ id, point })
+  const handleAnnotationDragEnd = (id: string, point: { x: number; y: number; z: number }) => {
+    setDraggingAnnotation(null)
+    handleUpdateAnnotation(id, { position_x: point.x, position_y: point.y, position_z: point.z })
+  }
+  // Memoized (2026-07-12) — same resolvedPaths lesson from tonight's own
+  // Follow Path debugging: a plain .map() here would hand Viewport3D a
+  // fresh array identity on every render, and this array feeds straight
+  // into each AnnotationMarker's own useMemo dependencies.
+  const resolvedAnnotations: Annotation[] = useMemo(
+    () => annotations.map(a => (draggingAnnotation?.id === a.id ? { ...a, position_x: draggingAnnotation.point.x, position_y: draggingAnnotation.point.y, position_z: draggingAnnotation.point.z } : a)),
+    [annotations, draggingAnnotation],
+  )
+  const handleBindAnnotationLeader = (id: string) => {
+    if (!pathBindTarget) return
+    handleUpdateAnnotation(id, { source_kind: 'mesh', element_ref: pathBindTarget.ref })
+  }
+  const handleUnbindAnnotationLeader = (id: string) => handleUpdateAnnotation(id, { source_kind: null, element_ref: null })
+  const handleLinkAnnotationToActivity = async (annotationId: string, activityId: string) => {
+    try {
+      setLinkError(null)
+      const link = await createModelElementLink({
+        activity_id: activityId, source_kind: 'annotation', element_ref: annotationId,
+        element_label: annotations.find(a => a.id === annotationId)?.text || 'Annotation',
+      })
+      setModelElementLinks(prev => [...prev, link])
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Failed to link annotation')
+    }
+  }
+
   // Camera Views (2026-07-10, per Maro: "add camera too so i can capture
   // the model at different angles like blender") — project-scoped,
   // persisted server-side like everything else this session (see
@@ -1011,6 +1113,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setPathsPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(PATHS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Annotations panel — Placemark/Footnote (2026-07-12, per Maro's
+  // Navisworks reference screenshot) — same shared-side-dock treatment as
+  // Paths/Collections/Section Box/Camera Views/Animation Profiles above.
+  const [annotationsPanelOpen, setAnnotationsPanelOpen] = useState(() => loadPanelOpen(ANNOTATIONS_PANEL_OPEN_KEY, false))
+  const toggleAnnotationsPanel = () => {
+    setAnnotationsPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(ANNOTATIONS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [annotationsPanelDock, setAnnotationsPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(ANNOTATIONS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleAnnotationsPanelDock = () => {
+    setAnnotationsPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(ANNOTATIONS_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -1559,6 +1686,26 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setSelectedObjectIds(next)
     const remaining = [...next]
     setActiveObjectId(turningOn ? id : (remaining.length ? remaining[remaining.length - 1] : null))
+  }
+
+  // AnimationActorsList's own "click an actor's name to select it"
+  // (2026-07-12) — mesh resolves its scene-object id from the actor's own
+  // filename ref the same way TimelinePlayback's Mode A resolution already
+  // does; annotation just needs its own id (already the element_ref). IFC
+  // is deliberately not selectable from here (see AnimationActorsList.tsx's
+  // own onSelect prop — null for 'ifc') — the actor list only has a
+  // GlobalId, and resolving that to a specific sub-element to select needs
+  // the same async web-ifc GUID->expressID lookup TimelinePlayback's Mode A
+  // resolution does, which isn't worth pulling into a click handler for a
+  // v1 pass, same "IFC sub-element identity is out of scope for now"
+  // precedent Follow Path/manual keyframing already set.
+  const handleSelectActor = (sourceKind: 'mesh' | 'ifc' | 'annotation', elementRef: string) => {
+    if (sourceKind === 'mesh') {
+      const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === elementRef)
+      if (match) handleSelectObject(match.id)
+    } else if (sourceKind === 'annotation') {
+      setSelectedAnnotationId(elementRef)
+    }
   }
 
   const handleSelectAll = () => {
@@ -2452,6 +2599,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             keyframesByDay={activeObjectKeyframesByDay}
             onMoveKeyframes={handleMoveKeyframes}
             onDeleteKeyframes={handleDeleteKeyframes}
+            elementKeyframes={elementKeyframes.keyframes}
+            pathFollowers={pathFollowers}
+            annotations={resolvedAnnotations}
+            animationProfiles={animationProfiles.profiles}
+            onSelectActor={handleSelectActor}
           />
         )
     }
@@ -2620,6 +2772,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (annotationsPanelOpen) {
+    dockablePanels.push({
+      id: 'annotations', label: '3D Notations', dock: annotationsPanelDock,
+      onToggleDock: toggleAnnotationsPanelDock, onClose: toggleAnnotationsPanel,
+      content: (
+        <AnnotationsPanel
+          annotations={resolvedAnnotations}
+          error={annotationError}
+          addingKind={addingAnnotationKind}
+          bindTarget={pathBindTarget}
+          activities={activities}
+          modelElementLinks={modelElementLinks}
+          animationProfiles={animationProfiles.profiles}
+          onStartAdding={kind => setAddingAnnotationKind(prev => (prev === kind ? null : kind))}
+          onUpdate={handleUpdateAnnotation}
+          onDelete={handleDeleteAnnotation}
+          onBindLeader={handleBindAnnotationLeader}
+          onUnbindLeader={handleUnbindAnnotationLeader}
+          onLinkActivity={handleLinkAnnotationToActivity}
+          onUnlinkActivity={handleUnlinkElement}
+          onAssignProfile={handleAssignProfile}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -2689,6 +2866,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           }`}
         >
           Paths
+        </button>
+        <button
+          onClick={toggleAnnotationsPanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            annotationsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          3D Notations
         </button>
         <div className="w-px h-4 bg-gray-200 mx-1" />
         <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" onChange={handleFileSelected} className="hidden" />
@@ -2807,6 +2992,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onPathDragMove={handlePathDragMove}
             onPathDragEnd={handlePathDragEnd}
             onAddPathPoint={handleAddPathPoint}
+            annotations={resolvedAnnotations}
+            addingAnnotationKind={addingAnnotationKind}
+            onPlaceAnnotation={handlePlaceAnnotation}
+            selectedAnnotationId={selectedAnnotationId}
+            onSelectAnnotation={setSelectedAnnotationId}
+            onAnnotationDragMove={handleAnnotationDragMove}
+            onAnnotationDragEnd={handleAnnotationDragEnd}
           />
 
           {bottomWindows.length > 0 && (

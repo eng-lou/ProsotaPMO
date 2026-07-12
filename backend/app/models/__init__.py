@@ -48,6 +48,7 @@ from app.models.camera_view import CameraView
 from app.models.element_transform import ElementTransform
 from app.models.path import Path
 from app.models.path_follower import PathFollower
+from app.models.annotation import Annotation
 
 __all__ = [
     "Base",
@@ -105,4 +106,5 @@ __all__ = [
     "ElementTransform",
     "Path",
     "PathFollower",
+    "Annotation",
 ]

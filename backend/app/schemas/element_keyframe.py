@@ -15,8 +15,14 @@ from pydantic import BaseModel, ConfigDict
 # pos_x/rot_x/etc — only Viewport3D.tsx's own per-frame application differs
 # (a path_progress value feeds a curve lookup instead of being written
 # straight onto object.position/rotation).
+#
+# visible (2026-07-12, per Maro's Annotation reference — "keyframe if i
+# want") — 0/1, whether an Annotation (annotation.py) is showing at a given
+# date. Only ever written for source_kind="annotation"; ordinary mesh/ifc
+# targets have no use for it (their own visibility is driven by an assigned
+# AnimationProfile's opacity, not a manual on/off keyframe).
 KeyframeField = Literal[
-    "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "path_progress",
+    "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "path_progress", "visible",
 ]
 
 
@@ -28,7 +34,10 @@ class ElementKeyframeUpsert(BaseModel):
     # first-class identity via PathFollower's target_kind. element_ref is
     # "" for a camera row, same empty-string-not-null convention
     # PathFollower's own docstring explains.
-    source_kind: Literal["ifc", "mesh", "camera"]
+    # "annotation" (2026-07-12) — element_ref is the Annotation row's own id
+    # (annotation.py), for pos_x/y/z and visible keyframes on a Placemark/
+    # Footnote.
+    source_kind: Literal["ifc", "mesh", "camera", "annotation"]
     element_ref: str
     field: KeyframeField
     date: datetime

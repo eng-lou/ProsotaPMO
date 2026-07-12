@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ModelElementLinkBase(BaseModel):
     activity_id: uuid.UUID
-    source_kind: Literal["ifc", "mesh"]
+    # "annotation" (2026-07-12) — element_ref is an Annotation row's own id,
+    # see model_element_link.py's own docstring.
+    source_kind: Literal["ifc", "mesh", "annotation"]
     element_ref: str = Field(min_length=1, max_length=300)
     element_label: str = Field(min_length=1, max_length=300)
 

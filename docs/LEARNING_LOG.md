@@ -914,3 +914,259 @@ two existing calls already cover. Not yet manually verified in-browser
 (written and shipped for Maro to check on waking, same "server left running
 for a real check" situation as the rest of this feature) — `tsc --noEmit`
 and `vite build` both clean.
+
+## 2026-07-12 — Placemark/Footnote/Comment: reusing two existing tables
+## instead of building a third animation system
+
+Maro sent a Navisworks screenshot (Comment/Footnote/Placemark toolbar) and
+asked for the same, with two ways to animate a Placemark/Footnote: manual
+keyframes, or "you use the profiles to pop a placemark" — and, shown the
+actual Animation Profile editor (Trigger/Transform/Opacity/Colour/
+Interpolation), confirmed it should just work with that existing system,
+not a simplified version. Planned properly first (EnterPlanMode) given the
+size — a new spatial entity, tied into both animation modes, plus a
+separately-scoped review-comment flow — rather than guessing at scope
+mid-build.
+
+**The key design decision, and the one that kept this from becoming its
+own parallel animation system**: `ModelElementLink` and `ElementKeyframe`
+are already polymorphic on `source_kind` (`"ifc"`/`"mesh"`, plus `"camera"`
+from Follow Path). Adding `"annotation"` as a third value — element_ref is
+the Annotation row's own id — meant a Placemark/Footnote could link to an
+Activity + AnimationProfile, or get manual position/`visible` keyframes,
+using the *exact* existing tables, existing endpoints, existing frontend
+CRUD, and existing pure functions (`computeAppliedAnimationStateAt`,
+`interpolateKeyframeTrack`). Zero new animation math. This is the same
+pattern `path_progress`/`source_kind="camera"` already established for
+Follow Path — extend the two tables that already carry Mode A/B data
+rather than inventing a fourth data model each time a new thing needs to
+move on a timeline.
+
+**Comment is deliberately a separate, much simpler table** — attached to a
+CameraView, no 3D position, not animated, since a real review comment
+belongs to "the shot," not a point in space. Splitting it out kept the
+whole animation-integration effort scoped to just Annotation (Placemark +
+Footnote), which actually needed it.
+
+**Resolution architecture — a real lesson carried forward from tonight's
+own four-bug Follow Path debugging session, applied preemptively this
+time**: rather than folding a fourth mode into `TimelinePlayback`'s already
+large central resolver (which every one of tonight's earlier bugs lived
+inside), each `AnnotationMarker` resolves its *own* Mode A/B state in its
+*own* `useFrame`, reading the same already-memoized `activities`/
+`modelElementLinks`/`animationProfiles`/`elementKeyframes` props
+`TimelinePlayback` already receives. A marker is an Html overlay + a plain
+unwrapped mesh, not a `THREE.Object3D` with a `MeshStandardMaterial` for
+that resolver's own machinery to touch anyway — decentralizing it wasn't
+just safer, it was the more natural fit. Everything inside that `useFrame`
+mutates refs directly (position, material opacity, a DOM node's own
+`style.opacity`/`display` for the Html label, the leader line's buffer
+geometry) rather than React state, deliberately avoiding the exact render-
+churn bug class (`resolvedPaths`, `timelineRange`) tonight's earlier
+session spent hours tracking down.
+
+**Two real gaps caught by TypeScript, not by guessing** — widening
+`ModelElementLink.source_kind` naively (a shared `SourceKind` type used
+everywhere, including Collections member-ref resolution and the
+mesh/IFC-only Activity-linking UI) broke type-checking in three unrelated
+files, because those call sites correctly assume only real geometry can
+appear there. Fixed by introducing a second, wider
+`ModelElementLinkSourceKind` type just for the one place that actually
+needs `"annotation"`, leaving every existing consumer's stricter assumption
+intact — and by explicitly filtering `source_kind !== 'annotation'` out of
+`resolveActivityLinksToIsolationTargets` (Isolate has nothing to resolve an
+annotation link to; letting it through silently would've been a real,
+if minor, runtime wrong-behaviour bug the type system happened to catch
+first).
+
+**A near-circular-import**, caught before it became a build error:
+`AnnotationMarker.tsx` needed `pickActiveLink`/`ResolvedTimelineLink` (the
+"which of several links is chronologically active" logic), which lived
+inside `Viewport3D.tsx` — but `Viewport3D.tsx` needs to import
+`AnnotationMarker.tsx` to render it. Moved both to `timelinePlayback.ts`
+(the existing home for this exact class of pure animation-math function)
+rather than duplicating the logic or fighting the circular reference.
+
+**Scope decisions made and written down, not silently assumed**: icon is a
+small fixed emoji-glyph set, not custom-uploaded images; a Footnote's
+leader target is mesh-kind only in v1 (same "no stable per-sub-element
+identity yet" reasoning every other IFC-adjacent feature this session has
+already landed on for keyframing/Follow Path); dragging a marker persists
+its own base `position_x/y/z` even when Mode B keyframes exist for it,
+same "editing the base value doesn't fight the animated display until you
+understand the precedence" behaviour TransformPanel's own fields already
+have for meshes.
+
+Backend: 14 new tests (`test_annotations.py`, `test_comments.py` —
+CRUD, cascade-delete on project/camera-view removal, the new `visible`
+keyframe field, `source_kind="annotation"` accepted by both polymorphic
+tables), full suite 621 passing (607 + 14, no regressions). Migration
+verified before running (habit paying off again — this one's
+`create_table` calls were actually present this time, unlike the Follow
+Path migration two entries up). Frontend `tsc --noEmit` and `vite build`
+both clean. Not yet manually verified in-browser — same standing gap this
+project has (no Auth0 dev bypass, no headless browser here) — dev servers
+left running for Maro to check on waking: place a Placemark, drag it, key
+its visibility, link one to an Activity's existing profile and confirm
+Play actually animates it using that profile's own settings.
+
+## 2026-07-12 (later same day) — Two real bugs found by actually clicking
+## it, then a redo once a fuller reference photo showed the first pass
+## "wasn't nice"
+
+The very first thing tried after waking up threw 404s on the new
+`/api/v1/annotations/`/`/api/v1/comments/` routes. Turned out to be a real
+process-management bug, not a code bug: an earlier session's backend
+restart had killed the reloader parent but not the worker it had spawned
+via Python's own `multiprocessing.spawn_main` — Windows `taskkill /F` on a
+parent doesn't touch orphaned children by default (needed `/T` for the
+whole tree). That orphan had been serving every request since the *previous
+night*, quietly running yesterday's code the whole time this session's own
+`main.py` changes were being made — a second attempted restart made the
+exact same mistake before `Get-CimInstance Win32_Process -Filter
+"ProcessId=..." | Select CommandLine` on the still-listening PID finally
+showed the `parent_pid=` giveaway. Fixed by actually killing every
+`python.exe` process before relaunching, not just the one PID that seemed
+like "the server."
+
+**A second, much smaller bug**: a brand-new Comment started with
+`text: ""`, and the row's non-editing display was just `{comment.text}` —
+a genuinely empty, invisible `<span>` with nothing on the page to
+double-click. Fixed two ways: a placeholder ("click to add a note") for
+the empty state, and defaulting a fresh comment straight into edit mode so
+there's nothing to discover in the first place.
+
+**Then the bigger correction.** Maro sent a second, much fuller Navisworks
+screenshot (the actual 3D View Properties → 3D Notations panel, live
+viewport, full property grid) and said the first pass "is not nice."
+Comparing against it surfaced three real gaps, confirmed via follow-up
+questions rather than guessed at:
+
+1. Comment had been modeled as a review note attached to a saved Camera
+   View, no 3D position — because the *first* screenshot was just a
+   toolbar dropdown with no shape information to go on. The fuller
+   reference showed Comment listed in the same "3D Notations" list as
+   Footnote/Placemark, same property grid, same everything — a spatial
+   marker, not a viewpoint-scoped note. Wrong shape, not a styling
+   miss — worth calling out because it's exactly the risk of building
+   from a single toolbar icon's dropdown with no further reference: the
+   *names* were right, the *shape* was a guess.
+2. The note text itself was a tiny icon plus a hover-only badge — the
+   reference's own "Area:"/"Length:" boxes are permanently visible,
+   styled callout boxes connected to their point by a real leader line.
+3. No style controls at all beyond a single colour swatch, against a
+   reference with a full Design/Colors/Behavior property grid (background/
+   border/text colour, font size, thick border, distance-based hide).
+
+Given Comment needed to become a spatial `kind` anyway, the whole
+CameraView-attached `Comment` model/table/panel from earlier that day got
+deleted outright rather than migrated — same-session, unshipped work, nine
+files gone in one pass (`comment.py` model/schema/service/api,
+`comments.ts`, `CommentsPanel.tsx`, `test_comments.py`, plus every bit of
+`FourD.tsx` wiring: state, handlers, panel registration, toolbar button,
+localStorage keys, the `activeCameraViewId` tracking added specifically
+for it). `Annotation` absorbed `kind="comment"` and eight new columns
+(`has_background`, `background_color` — renamed from the old single
+`color`, keeping existing values via `UPDATE ... SET background_color =
+color` in the same migration rather than silently discarding them —
+`border_color`, `thick_border`, `text_color`, `font_size`,
+`hide_closer_than`, `hide_farther_than`), all added with real
+`server_default`s since the table already had a live row from the first
+pass's own testing — a bare `NOT NULL ADD COLUMN` against existing data
+fails outright, not something autogenerate writes on its own.
+
+**Rendering redo**: Placemark is now a real Google-Maps-style balloon pin
+(the classic `border-radius: 50% 50% 50% 0; rotate(-45deg)` CSS trick,
+inner content counter-rotated so the icon reads upright) instead of a
+plain hover badge. Footnote/Comment render as an always-visible callout
+box using every one of the new style fields, floating a fixed world-unit
+height above its own anchor point on a real 3D "stem" line — plus, when
+bound to a mesh element, a *second* leader line straight to that element's
+live position, so it keeps pointing at a moving/animated target rather
+than a fixed spot. Distance culling (`hide_closer_than`/
+`hide_farther_than`) is one more per-frame check ANDed into the same
+`shown` boolean the existing Mode A/B visibility resolution already
+computes — same ref-mutation, no-React-state architecture as everything
+else in this marker, carried forward deliberately rather than becoming a
+third source of the render-churn bug class chased down earlier this
+session.
+
+Backend: extended `test_annotations.py` (comment kind, every new style/
+behaviour field, a font-size-out-of-range rejection case), `test_comments.py`
+deleted along with the feature it tested. Frontend `tsc --noEmit` and
+`vite build` both clean. Not yet manually re-verified in-browser — same
+standing gap, and this time worth checking specifically: does the callout
+box actually read clearly against the model, does a bound leader line keep
+tracking a moving element, does distance culling visibly kick in when
+zooming past the configured bounds.
+
+## 2026-07-12 (later still) — "So what's the difference" turned into real
+## Comment/Footnote differentiation, then two more rounds of the profile-
+## vs-path fight, then a proper multi-track dope sheet
+
+**Comment vs Footnote had no real difference** — Maro noticed both
+rendered identically apart from the label, a fair catch: the redo earlier
+today had unified them down to the same box style with no distinguishing
+default. Fixed with two independent things, both requested together: (1)
+`status` ("open"|"resolved") added to Annotation, meaningful only for
+kind="comment" — a Footnote is a permanent technical callout with nothing
+to resolve, a Comment is a review note you close out, matching real
+Navisworks semantics; resolved comments dim to 50% opacity and strike
+through, folded into the *same* per-frame opacity write `useFrame` already
+owns (a static CSS opacity would've just been overwritten every frame by
+the Mode A/B-resolved value — same lesson about who owns what style
+property, applied on sight this time rather than needing to be
+rediscovered). (2) Kind-specific defaults: Footnote now defaults to 🚩,
+Comment to 💬 (Placemark keeps 📍), plus Comment gets rounded speech-
+bubble corners vs Footnote's sharp technical-callout ones — cosmetic, but
+immediate and free.
+
+**Then "the path animation doesnt work with the profiles"** — a real
+regression from the very first Mode-A-vs-Mode-C fix a few entries up. That
+fix only guarded Mode A's own transform block against a path-bound object.
+Reported fixed, then immediately reported broken again ("profile + path
+now both fight/glitch") — the *second* look found Mode B's
+`applyKeyframedTransform` has the exact same flaw: it resets any axis with
+no explicit keyframe back to `basePosition`, so a path-bound object that
+also happened to carry an unrelated keyframe (rotation, or a leftover
+position key from earlier testing) got stomped by *that* code path
+instead, unaffected by the first patch. Two one-off exclusion checks in a
+row, both incomplete, was the tell that this needed a structural fix
+instead of a growing list of "and also skip this if path-bound" guards
+sprinkled through every mode. Fixed by reordering instead: Follow Path
+(Mode C) now applies dead last in the per-frame loop, after Mode A and
+Mode B have both had their say — path position is unconditionally the
+final word for a bound object every frame, full stop, with zero awareness
+required in any other mode. Opacity/colour are a separate, untouched code
+path, so a path-bound object linked to a profile still fades/recolours
+correctly on top of following the curve.
+
+**Then the actual feature ask**: "underneath the animation timeline...
+actors with a sub line with keyframes on those, so the preset, and 3d path
+and the transform ones" — the single scrubber's diamond markers only ever
+showed the *current viewport selection's* keyframes, one pooled row for
+all nine transform fields. Planned properly (confirmed: Location/Rotation/
+Scale as three separate sub-lines not one pooled line; every mesh/IFC/
+Annotation actor included, not just meshes; Preset stays read-only here —
+dragging its bar would mean rescheduling the underlying Activity itself, a
+genuinely different, schedule-editing feature). Built as a new
+`AnimationActorsList.tsx`, project-wide rather than selection-scoped:
+actor identity is `{sourceKind, elementRef}` unioned across
+`modelElementLinks`/`elementKeyframes`/`pathFollowers` (memoized on those
+three already-stable arrays — deliberately not a new instance of this
+session's own render-churn bug class), each actor showing only the
+sub-tracks it actually has data for (Preset bars from linked Activities'
+own start/finish, 3D Path/Location/Rotation/Scale as day-grouped, drag-to-
+move/right-click-to-delete markers). The editable sub-tracks reuse
+TimelineWindow.tsx's own existing single-actor marker drag interaction
+verbatim, generalized to whichever day-grouped list a given actor+field
+resolves to instead of always the current selection, and call straight
+through to the same `onMoveKeyframes`/`onDeleteKeyframes` in FourD.tsx —
+already generic over any `ElementKeyframe[]`, so this needed zero backend
+or handler changes, purely new UI plumbing over data every other panel in
+this file already loads project-wide. IFC actors are shown but not
+click-to-select (would need the same async GUID→expressID web-ifc lookup
+Mode A's own resolution does, not worth it for a click handler yet — same
+"IFC sub-element identity is v1-out-of-scope" line this session has drawn
+several times already). `tsc --noEmit`/`vite build` clean; not yet
+manually checked in-browser.

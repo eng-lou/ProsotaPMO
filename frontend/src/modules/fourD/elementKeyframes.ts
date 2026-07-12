@@ -10,12 +10,14 @@ import { api } from '@/lib/api'
 // path_progress (2026-07-11) — see path_follower.py's own docstring: reuses
 // this exact date-keyed shape for "how far along its bound Path a target
 // currently is," rather than a new value store of its own.
-export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z' | 'path_progress'
+// visible (2026-07-12) — see annotation.py's own docstring: 0/1, whether a
+// Placemark/Footnote is showing at a given date.
+export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z' | 'path_progress' | 'visible'
 
 export interface ElementKeyframe {
   id: string
   project_id: string
-  source_kind: 'ifc' | 'mesh'
+  source_kind: 'ifc' | 'mesh' | 'annotation'
   element_ref: string
   field: KeyframeField
   date: string
@@ -48,7 +50,7 @@ export function useElementKeyframes(projectId: string | undefined) {
   // element_keyframes.py's own POST route docstring. Re-keying the same spot
   // (e.g. nudging a value at an already-keyed date) updates it in place
   // rather than erroring or duplicating.
-  const upsert = async (sourceKind: 'ifc' | 'mesh', elementRef: string, field: KeyframeField, date: Date, value: number): Promise<ElementKeyframe> => {
+  const upsert = async (sourceKind: 'ifc' | 'mesh' | 'annotation', elementRef: string, field: KeyframeField, date: Date, value: number): Promise<ElementKeyframe> => {
     const { data } = await api.post<ElementKeyframe>('/api/v1/element-keyframes/', {
       project_id: projectId, source_kind: sourceKind, element_ref: elementRef, field, date: date.toISOString(), value,
     })

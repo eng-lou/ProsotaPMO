@@ -1,8 +1,69 @@
 import type { Activity } from '@/modules/scheduling/types'
-import type { AnimationProfileConfig, Interpolation } from './animationProfiles'
+import type { AnimationProfileConfig, Axis, Interpolation } from './animationProfiles'
 import type { ElementKeyframe } from './elementKeyframes'
 
+// Moved here from Viewport3D.tsx (2026-07-12) so AnnotationMarker.tsx can
+// resolve its own Mode A link the identical way meshes/IFC elements do,
+// without a circular import (Viewport3D.tsx renders AnnotationMarker.tsx,
+// so the reverse import isn't possible) — the previous one had set. Every
+// link now gets kept, and pickActiveLink() at apply-time chooses whichever
+// activity is chronologically current for `now` — the same idea as a
+// Blender NLA strip stack, minus any blending: activities before their own
+// start still correctly show "at rest" (computeAppliedAnimationStateAt
+// already clamps that), so falling back to the earliest link when `now`
+// precedes every link's start is safe, not just a default-of-convenience.
+export interface ResolvedTimelineLink {
+  activity: Pick<Activity, 'start' | 'finish'>
+  profile: AnimationProfileConfig
+  axis: Axis
+}
+
+export function pickActiveLink(links: ResolvedTimelineLink[], now: Date): ResolvedTimelineLink | null {
+  if (links.length === 0) return null
+  const nowMs = now.getTime()
+  const sorted = [...links].sort((a, b) => new Date(a.activity.start!).getTime() - new Date(b.activity.start!).getTime())
+  let active = sorted[0]
+  for (const link of sorted) {
+    if (new Date(link.activity.start!).getTime() <= nowMs) active = link
+    else break
+  }
+  return active
+}
+
 const DAY_MS = 86_400_000
+
+// Date/Seconds/Frames display modes (2026-07-12, per Maro: "I want to
+// choose to see as date or time (normal blender time secs/frames etc)...
+// so i can be precise and also adjust frame rate") — this app's timeline
+// is calendar-date-driven with no fixed frame rate anywhere else in it (see
+// TimelineWindow.tsx's own header on why "speed" is calendar-days-per-
+// real-second, not frames-per-second), so "seconds"/"frames" here are both
+// derived relative to scheduleStart at the *current* Play speed setting,
+// not some independent fixed clock — moving the speed dropdown changes
+// what "12s" or "Frame 360" mean, exactly like scrubbing Blender's own
+// timeline means something different at 24fps vs 60fps for the same frame
+// number.
+export type TimeDisplayMode = 'date' | 'seconds' | 'frames'
+
+export function formatTimelineValue(
+  date: Date, scheduleStart: Date, mode: TimeDisplayMode, speedDaysPerSecond: number, fps: number,
+): string {
+  if (mode === 'date') {
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  }
+  const elapsedDays = (date.getTime() - scheduleStart.getTime()) / DAY_MS
+  const elapsedSeconds = speedDaysPerSecond > 0 ? elapsedDays / speedDaysPerSecond : 0
+  return mode === 'seconds' ? `${elapsedSeconds.toFixed(1)}s` : `Frame ${Math.round(elapsedSeconds * fps)}`
+}
+
+// Inverse of the above — the numeric entry field in Seconds/Frames mode
+// converts a typed value back into a real calendar Date to jump/scrub to.
+export function dateFromTimelineValue(
+  value: number, scheduleStart: Date, mode: 'seconds' | 'frames', speedDaysPerSecond: number, fps: number,
+): Date {
+  const seconds = mode === 'frames' ? (fps > 0 ? value / fps : 0) : value
+  return new Date(scheduleStart.getTime() + seconds * speedDaysPerSecond * DAY_MS)
+}
 
 // Earliest start / latest finish across real work (2026-07-11) — the
 // timeline's own date-range bounds, same "Guess" concept as Bonsai's own

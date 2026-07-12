@@ -4,7 +4,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, FlyControls, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
-import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig, type Axis } from './animationProfiles'
+import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
 // TimelinePlayback's resolution effect below, so web-ifc's real weight
@@ -13,7 +13,7 @@ import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileC
 // web-ifc into the main chunk, ~2.95MB -> 6.6MB, before this fix).
 import type { IfcModelHandle } from './ifcModel'
 import type { ModelElementLink } from './modelElementLinks'
-import { computeAppliedAnimationStateAt, interpolateKeyframeTrack } from './timelinePlayback'
+import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type ResolvedTimelineLink } from './timelinePlayback'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ViewerSettings } from './viewerSettings'
 import type { GizmoMode } from './TransformPanel'
@@ -34,6 +34,8 @@ import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
+import type { Annotation, AnnotationKind } from './annotations'
+import { AnnotationMarker } from './AnnotationMarker'
 
 export interface ImportedObject {
   id: string
@@ -233,6 +235,20 @@ interface Props {
   onPathDragMove: (pathId: string, points: PathPoint[]) => void
   onPathDragEnd: (pathId: string, points: PathPoint[]) => void
   onAddPathPoint: (pathId: string, point: PathPoint) => void
+  // Annotations — Placemark/Footnote (2026-07-12, per Maro's Navisworks
+  // reference screenshot). Reuses timelineDateRef/timelineActivities/
+  // timelineLinks/timelineProfiles/timelineElementKeyframes above rather
+  // than threading a second copy of the same data down — AnnotationMarker
+  // resolves its own Mode A/B state from those directly. addingAnnotationKind
+  // arms AnnotationAddCatcher (PathAddPointCatcher reused verbatim) for
+  // exactly one placement, unlike Path's own continuous multi-point mode.
+  annotations: Annotation[]
+  addingAnnotationKind: AnnotationKind | null
+  onPlaceAnnotation: (point: PathPoint) => void
+  selectedAnnotationId: string | null
+  onSelectAnnotation: (id: string) => void
+  onAnnotationDragMove: (id: string, point: PathPoint) => void
+  onAnnotationDragEnd: (id: string, point: PathPoint) => void
   // App.tsx's PersistentFourD keeps FourD mounted (CSS-hidden) rather than
   // unmounting it on navigation, so imported 3D/IFC data survives leaving
   // the tab (2026-07-11, per Maro). While hidden there's nothing to see, so
@@ -764,24 +780,6 @@ function ModelObjects({
 // correctly show "at rest" (computeAppliedAnimationStateAt already clamps
 // that), so falling back to the earliest link when `now` precedes every
 // link's start is safe, not just a default-of-convenience.
-interface ResolvedTimelineLink {
-  activity: Pick<Activity, 'start' | 'finish'>
-  profile: AnimationProfileConfig
-  axis: Axis
-}
-
-function pickActiveLink(links: ResolvedTimelineLink[], now: Date): ResolvedTimelineLink | null {
-  if (links.length === 0) return null
-  const nowMs = now.getTime()
-  const sorted = [...links].sort((a, b) => new Date(a.activity.start!).getTime() - new Date(b.activity.start!).getTime())
-  let active = sorted[0]
-  for (const link of sorted) {
-    if (new Date(link.activity.start!).getTime() <= nowMs) active = link
-    else break
-  }
-  return active
-}
-
 interface ResolvedTimelineTarget {
   object: THREE.Object3D
   links: ResolvedTimelineLink[]
@@ -1124,12 +1122,6 @@ function TimelinePlayback({
     const dateChanged = lastAppliedDateMs.current !== nowMs
     lastAppliedDateMs.current = nowMs
 
-    // Mode C — no dateChanged gate: unlike Mode A/B, a path-bound object's
-    // Location fields are locked read-only in TransformPanel (see
-    // PathProgressSupport's own header), so there's no manual-edit-vs-
-    // playback fight to guard against here — always safe to re-apply.
-    for (const target of pathTargetsRef.current) applyPathFollow(target, now)
-
     for (const target of targetsRef.current) {
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
       const activeLink = pickActiveLink(target.links, now)
@@ -1160,6 +1152,27 @@ function TimelinePlayback({
         }
       }
     }
+
+    // Mode C runs LAST, deliberately (2026-07-12 fix, per Maro: "the
+    // profile isnt working right... profile + path now both fight/glitch")
+    // — the first attempt at this fix only guarded Mode A's own transform
+    // block against a path-bound object, but Mode B's applyKeyframedTransform
+    // has the *identical* problem: it resets any axis with no explicit
+    // keyframe back to basePosition, so a path-bound object that also
+    // happens to carry an unrelated keyframe (rotation, or a leftover
+    // position key from earlier testing) got stomped right back the same
+    // way, just through a different code path. Rather than adding another
+    // one-off exclusion check (and inevitably missing the next mode that
+    // touches position too), Follow Path simply applies *after* every
+    // other mode has had its say each frame — path position is always the
+    // final word for a bound object, full stop, no matter what Mode A/B
+    // computed moments earlier in the same frame. No dateChanged gate:
+    // unlike Mode A/B, a path-bound object's Location fields are locked
+    // read-only in TransformPanel (see PathProgressSupport's own header),
+    // so there's no manual-edit-vs-playback fight to guard against here —
+    // always safe to re-apply, last, unconditionally.
+    for (const target of pathTargetsRef.current) applyPathFollow(target, now)
+
     if (activeObjectId) onTick()
   })
 
@@ -1258,6 +1271,7 @@ export function Viewport3D({
   onSaveCameraView, applyCameraViewRequest,
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
+  annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -1937,6 +1951,38 @@ export function Viewport3D({
             active={addingPointsForPathId !== null}
             upAxis={settings.upAxis}
             onAddPoint={point => { if (addingPointsForPathId) onAddPathPoint(addingPointsForPathId, point) }}
+          />
+          {annotations.map(annotation => (
+            <AnnotationMarker
+              key={annotation.id}
+              annotation={annotation}
+              dateRef={timelineDateRef}
+              activities={timelineActivities}
+              modelElementLinks={timelineLinks}
+              animationProfiles={timelineProfiles}
+              elementKeyframes={timelineElementKeyframes}
+              leaderTargetObject={
+                (annotation.kind === 'footnote' || annotation.kind === 'comment') && annotation.source_kind === 'mesh' && annotation.element_ref
+                  ? (timelineSceneObjects.find(o => o.kind === 'mesh' && o.name === annotation.element_ref)?.object ?? null)
+                  : null
+              }
+              selected={selectedAnnotationId === annotation.id}
+              onSelect={onSelectAnnotation}
+              onDragStart={() => {}}
+              onDragMove={onAnnotationDragMove}
+              onDragEnd={onAnnotationDragEnd}
+            />
+          ))}
+          {/* Single click-to-place for a new Placemark/Footnote (2026-07-12)
+              — reuses PathAddPointCatcher verbatim (its own raycast-the-scene-
+              then-fall-back-to-ground-plane logic has nothing Path-specific
+              in it); onPlaceAnnotation itself clears addingAnnotationKind
+              after one placement, so this naturally goes inactive right
+              after, unlike Path's own continuous multi-point mode. */}
+          <PathAddPointCatcher
+            active={addingAnnotationKind !== null}
+            upAxis={settings.upAxis}
+            onAddPoint={onPlaceAnnotation}
           />
         </Suspense>
         {flyMode ? (

@@ -2,11 +2,21 @@ import { api } from '@/lib/api'
 
 export type SourceKind = 'ifc' | 'mesh'
 
+// "annotation" (2026-07-12) — element_ref is an Annotation row's own id
+// (annotations.ts), letting a Placemark/Footnote link to an Activity +
+// AnimationProfile exactly like a mesh/IFC element does. A distinct,
+// wider type from SourceKind rather than widening SourceKind itself —
+// every existing SourceKind consumer (Collections member refs, DataPanel's
+// own link-to-activity UI) deals exclusively in real mesh/IFC geometry and
+// should keep statically rejecting anything else; only ModelElementLink's
+// own source_kind actually needs the third option.
+export type ModelElementLinkSourceKind = SourceKind | 'annotation'
+
 export interface ModelElementLink {
   id: string
   project_id: string
   activity_id: string
-  source_kind: SourceKind
+  source_kind: ModelElementLinkSourceKind
   element_ref: string
   element_label: string
   animation_profile_id: string | null
@@ -31,7 +41,7 @@ export async function listModelElementLinks(projectId: string): Promise<ModelEle
 
 export async function createModelElementLink(data: {
   activity_id: string
-  source_kind: SourceKind
+  source_kind: ModelElementLinkSourceKind
   element_ref: string
   element_label: string
 }): Promise<ModelElementLink> {

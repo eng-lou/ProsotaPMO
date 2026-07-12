@@ -55,7 +55,13 @@ class ElementKeyframe(Base, TimestampMixin):
     the one exception — always element_ref="", used only for the new
     field="path_progress" (camera-path animation), never for ordinary
     Transform fields, since the camera has no TransformPanel of its own to
-    key from in the first place."""
+    key from in the first place.
+
+    source_kind="annotation" (2026-07-12, added alongside annotation.py) —
+    element_ref is the Annotation row's own id, used for pos_x/y/z (moving
+    a Placemark/Footnote over time) and the new field="visible" (showing/
+    hiding it over time), reusing this exact same date-keyed shape rather
+    than giving Annotation its own animation machinery."""
 
     __tablename__ = "element_keyframes"
     __table_args__ = (

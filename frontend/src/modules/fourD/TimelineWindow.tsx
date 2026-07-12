@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
+import type { Annotation } from './annotations'
+import { AnimationActorsList } from './AnimationActorsList'
+import type { AnimationProfile } from './animationProfiles'
 import type { ElementKeyframe } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
+import type { PathFollower } from './pathFollowers'
+import { dateFromTimelineValue, formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
 
 interface Props {
   scheduleStart: Date | null
@@ -14,7 +19,8 @@ interface Props {
   dateRef: React.MutableRefObject<Date | null>
   // Only used to draw the task-bar strip (2026-07-11, per Maro) — which
   // linked activities' start/finish fall where along the scrubber, so
-  // scrubbing isn't blind to what's about to trigger.
+  // scrubbing isn't blind to what's about to trigger. Also project-wide
+  // input to AnimationActorsList's own Preset sub-tracks below.
   activities: Activity[]
   links: ModelElementLink[]
   // Diamond markers (2026-07-08, per Maro's confirmed scoping answer:
@@ -28,6 +34,17 @@ interface Props {
   keyframesByDay: { date: Date; keyframes: ElementKeyframe[] }[]
   onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
   onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
+  // Project-wide "dope sheet" (2026-07-12, per Maro: "underneath, the
+  // animation timeline... actors with a sub line with keyframes on
+  // those") — see AnimationActorsList.tsx's own header for the full
+  // rationale. Not scoped to keyframesByDay's current-selection-only view
+  // above; both coexist (the diamond markers on the main scrubber stay as
+  // a quick glance at *the current selection*, this is everything).
+  elementKeyframes: ElementKeyframe[]
+  pathFollowers: PathFollower[]
+  annotations: Annotation[]
+  animationProfiles: AnimationProfile[]
+  onSelectActor: (sourceKind: 'mesh' | 'ifc' | 'annotation', elementRef: string) => void
 }
 
 const SPEED_OPTIONS = [
@@ -40,10 +57,9 @@ const SPEED_OPTIONS = [
 const SLIDER_MAX = 1000
 const STEP_DAYS = 1
 const DAY_MS = 86_400_000
-
-function formatDate(d: Date): string {
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-}
+const FPS_OPTIONS = [24, 25, 30, 60]
+const DISPLAY_MODE_KEY = 'prosota_4d_timeline_display_mode'
+const FPS_KEY = 'prosota_4d_timeline_fps'
 
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -62,11 +78,45 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // settings entity here, so "speed" is expressed directly as calendar days
 // per real second, continuously advanced via requestAnimationFrame while
 // playing rather than pre-baking discrete keyframes onto each object.
-export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes }: Props) {
+export function TimelineWindow({
+  scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
+  elementKeyframes, pathFollowers, annotations, animationProfiles, onSelectActor,
+}: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [loop, setLoop] = useState(false)
   const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const [displayDate, setDisplayDate] = useState<Date | null>(dateRef.current)
+  // Date/Seconds/Frames display (2026-07-12, per Maro: "I want to choose
+  // to see as date or time... so i can be precise and also adjust frame
+  // rate") — see timelinePlayback.ts's own formatTimelineValue header for
+  // why seconds/frames are derived from speedDaysPerSecond rather than an
+  // independent fixed clock. Persisted like every other viewer preference
+  // in this module (ViewerSettings/RenderCaptureSettings's own
+  // localStorage convention).
+  const [timeDisplayMode, setTimeDisplayMode] = useState<TimeDisplayMode>(() => {
+    try {
+      const raw = localStorage.getItem(DISPLAY_MODE_KEY)
+      return raw === 'seconds' || raw === 'frames' ? raw : 'date'
+    } catch {
+      return 'date'
+    }
+  })
+  const [fps, setFps] = useState(() => {
+    try {
+      const raw = Number(localStorage.getItem(FPS_KEY))
+      return FPS_OPTIONS.includes(raw) ? raw : 30
+    } catch {
+      return 30
+    }
+  })
+  const changeTimeDisplayMode = (mode: TimeDisplayMode) => {
+    setTimeDisplayMode(mode)
+    try { localStorage.setItem(DISPLAY_MODE_KEY, mode) } catch { /* ignore */ }
+  }
+  const changeFps = (value: number) => {
+    setFps(value)
+    try { localStorage.setItem(FPS_KEY, String(value)) } catch { /* ignore */ }
+  }
   const rafRef = useRef<number | null>(null)
   const lastTimeRef = useRef<number | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -133,6 +183,12 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
   const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
   const current = displayDate ?? scheduleStart
   const sliderValue = totalMs > 0 ? Math.round(((current.getTime() - scheduleStart.getTime()) / totalMs) * SLIDER_MAX) : 0
+  // Elapsed seconds at the current Play speed, from scheduleStart to
+  // `current` — the numeric basis for both the Seconds/Frames display mode
+  // toolbar input below and formatTimelineValue's own identical maths, kept
+  // as one plain number here rather than parsed back out of the formatted
+  // display string (fragile the moment that format ever changes).
+  const elapsedSeconds = speedDaysPerSecond > 0 ? (current.getTime() - scheduleStart.getTime()) / DAY_MS / speedDaysPerSecond : 0
 
   const setCurrent = (next: Date) => {
     const clamped = clampToRange(next, scheduleStart, scheduleEnd)
@@ -217,12 +273,47 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
         >
           {SPEED_OPTIONS.map(o => <option key={o.daysPerSecond} value={o.daysPerSecond}>{o.label}</option>)}
         </select>
-        <input
-          type="date"
-          value={toDateInputValue(current)}
-          onChange={e => handleDateInput(e.target.value)}
-          className="text-xs border border-gray-300 rounded px-1.5 py-1 ml-auto"
-        />
+        <select
+          value={timeDisplayMode}
+          onChange={e => changeTimeDisplayMode(e.target.value as TimeDisplayMode)}
+          title="How dates are shown/entered on this timeline"
+          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+        >
+          <option value="date">Date</option>
+          <option value="seconds">Seconds</option>
+          <option value="frames">Frames</option>
+        </select>
+        {timeDisplayMode === 'frames' && (
+          <select
+            value={fps}
+            onChange={e => changeFps(Number(e.target.value))}
+            title="Frames per second"
+            className="text-xs border border-gray-300 rounded px-1.5 py-1"
+          >
+            {FPS_OPTIONS.map(f => <option key={f} value={f}>{f} fps</option>)}
+          </select>
+        )}
+        {timeDisplayMode === 'date' ? (
+          <input
+            type="date"
+            value={toDateInputValue(current)}
+            onChange={e => handleDateInput(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-1.5 py-1 ml-auto"
+          />
+        ) : (
+          <input
+            type="number"
+            step={timeDisplayMode === 'seconds' ? 0.1 : 1}
+            value={timeDisplayMode === 'seconds' ? Number(elapsedSeconds.toFixed(1)) : Math.round(elapsedSeconds * fps)}
+            onChange={e => {
+              if (e.target.value === '') return
+              setIsPlaying(false)
+              setCurrent(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
+            }}
+            title={timeDisplayMode === 'seconds' ? 'Elapsed seconds from schedule start, at the current speed' : 'Frame number, at the current speed and fps'}
+            className="text-xs border border-gray-300 rounded px-1.5 py-1 ml-auto w-24"
+          />
+        )}
       </div>
 
       <div className="relative" ref={trackRef}>
@@ -255,12 +346,20 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
               const dayKey = String(group.date.getTime())
               const dragging = dragState?.dayKey === dayKey
               const shownDate = dragging ? dragState.previewDate : group.date
-              const left = totalMs > 0 ? ((shownDate.getTime() - scheduleStart.getTime()) / totalMs) * 100 : 0
-              if (left < 0 || left > 100) return null
+              // Clamped, not filtered out (2026-07-12 fix, per Maro: "you
+              // dont show keyframes at 0 secs") — see AnimationActorsList.tsx's
+              // own identical fix for the full explanation: a day-group's
+              // date is midnight UTC, but scheduleStart keeps the earliest
+              // keyframe's real (non-midnight) timestamp, so day-zero
+              // keyframes computed as genuinely before scheduleStart and a
+              // raw `left < 0` filter dropped them instead of pinning them
+              // to the start.
+              const rawLeft = totalMs > 0 ? ((shownDate.getTime() - scheduleStart.getTime()) / totalMs) * 100 : 0
+              const left = Math.max(0, Math.min(100, rawLeft))
               return (
                 <div
                   key={dayKey}
-                  title={`Keyframed — ${formatDate(shownDate)} (drag to move, right-click to delete)`}
+                  title={`Keyframed — ${formatTimelineValue(shownDate, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)} (drag to move, right-click to delete)`}
                   onPointerDown={handleMarkerPointerDown(group)}
                   onContextMenu={handleMarkerContextMenu(group)}
                   className={`absolute top-0 w-2 h-2 bg-amber-500 border border-amber-600 rotate-45 -translate-x-1/2 pointer-events-auto cursor-grab active:cursor-grabbing ${dragging ? 'ring-2 ring-amber-300' : ''}`}
@@ -272,10 +371,27 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
         )}
       </div>
       <div className="flex items-center justify-between text-[10px] text-gray-400">
-        <span>{formatDate(scheduleStart)}</span>
-        <span className="text-xs text-gray-700 font-medium">{formatDate(current)}</span>
-        <span>{formatDate(scheduleEnd)}</span>
+        <span>{formatTimelineValue(scheduleStart, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
+        <span className="text-xs text-gray-700 font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
+        <span>{formatTimelineValue(scheduleEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
       </div>
+      <AnimationActorsList
+        scheduleStart={scheduleStart}
+        scheduleEnd={scheduleEnd}
+        activities={activities}
+        modelElementLinks={links}
+        elementKeyframes={elementKeyframes}
+        pathFollowers={pathFollowers}
+        annotations={annotations}
+        animationProfiles={animationProfiles}
+        timeDisplayMode={timeDisplayMode}
+        speedDaysPerSecond={speedDaysPerSecond}
+        fps={fps}
+        onJumpTo={date => { setIsPlaying(false); setCurrent(date) }}
+        onMoveKeyframes={onMoveKeyframes}
+        onDeleteKeyframes={onDeleteKeyframes}
+        onSelectActor={onSelectActor}
+      />
     </div>
   )
 }
