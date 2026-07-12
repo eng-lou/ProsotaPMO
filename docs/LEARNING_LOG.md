@@ -1257,3 +1257,82 @@ resizable, does toggling Variance Colours actually tint a baselined,
 behind-schedule element red, and does the baseline pane's own animation
 timing visibly diverge from the live pane wherever `start`/`finish` and
 `bl_start`/`bl_finish` actually differ.
+
+## 2026-07-12 (even later) — Clash Detective: Navisworks-style clash
+## detection, built on machinery that already existed
+
+Maro asked for clash detection "similar to Navisworks" off a screenshot of
+its Clash Detective dialog. Researched first (3 parallel Explore agents)
+rather than assuming a blank slate, and it paid off: two of the three real
+pieces this needed already existed. Collections (`collection.py`/
+`collection_member.py`, built 2026-07-11) are already exactly Navisworks'
+"Selection Set" concept — a loose, GUID-based `(source_kind, element_ref)`
+grouping that survives reloads — so a clash test's "3D Object 1"/"3D
+Object 2" groups became `group_a_collection_id`/`group_b_collection_id`
+pointing at two existing Collections, not a second selection system built
+in parallel. And `ifcModel.ts`'s `loadIfcModel` already builds one real
+`THREE.Mesh`/`BufferGeometry` per IFC element (tagged `userData.expressID`,
+confirmed by reading the loader rather than assuming) — so per-element
+geometry was already addressable; the one genuinely new piece was the
+geometric intersection test itself, which didn't exist anywhere in this
+codebase (every existing `Box3`/raycaster use is plane-clipping, camera
+framing, or pointer-picking, never element-vs-element).
+
+**The scope decision that kept this from becoming two features**: a clash
+test's "Run" just reads whatever the viewport is showing *right now* — no
+separate date-sweep engine. Mode A/B/C animation already drives every
+mesh's `matrixWorld` for the current timeline position, so testing "current
+state" is automatically 4D-aware for free: scrub to a date, hit Run, see
+clashes at that moment — matching the screenshot's own "Dynamic Clash
+Detection" framing without building a second engine that samples multiple
+dates across a whole schedule (a materially bigger, separate feature,
+deliberately deferred rather than half-built).
+
+**Added `three-mesh-bvh`** (pinned to `0.8.0`, not whatever `npm install`
+resolves by default — `0.7.8` came back flagged deprecated-for-this-
+three-version at install time, worth reading install output instead of
+just checking exit code 0) rather than hand-rolling triangle intersection.
+
+**A real correctness bug caught during design, not after**: the natural-
+seeming approach — build one `MeshBVH` per element's raw local geometry,
+reuse it across every pair it's tested against, and pass three-mesh-bvh a
+transform matrix per pair (its own supported API) — silently breaks the
+moment an element's own local space carries a non-uniform-relative-to-world
+scale (a Transform panel edit, an animated Mode B/C scale keyframe): a
+`bvh.closestPointToGeometry` distance measured in that element's own local
+units isn't the same number as a real-world distance once local and world
+scale diverge, which would make "5mm clearance" quietly mean something
+else per element. Avoided by baking each mesh into *world space* before
+building its BVH (`sceneClash.ts`'s `buildWorldBVH`: clone geometry,
+`applyMatrix4(matrixWorld)`, *then* build the tree) and comparing two
+world-space geometries with an identity transform — simpler code, and
+correct regardless of any element's own scale. Rebuilt fresh (cached only
+for the lifetime of one `findClashes()` call, never across runs) rather
+than cached long-term, which is also what makes re-running after scrubbing
+the timeline automatically correct — a moved element just gets a different
+world-space bake next run, no invalidation logic needed.
+
+**A known, documented simplification, not an oversight**: distances/
+tolerances assume scene units are already metres. `loadIfcModel` keeps
+each element's geometry in that IFC file's own native unit with no
+metre-normalization at import time (confirmed by reading the loader, not
+guessed) — a project authored in feet would need a per-model correction
+(`getLengthUnitToMetres`, already used by `TransformPanel.tsx`) this
+doesn't do. Called out because no *other* geometry feature in this app
+(box-select, camera framing, the section box) corrects for it either — the
+same longstanding assumption, just newly load-bearing for a numeric
+tolerance instead of a purely visual operation. Worth a real fix if a
+mixed-unit project ever makes "5mm" mean something else in practice.
+
+Backend: two new tables (`clash_tests`, `clash_results`, migration
+`a65e5d591b8f`, the usual `postgresql_nulls_not_distinct` autogenerate
+noise stripped). The one non-obvious piece of backend logic — bulk-
+replacing a test's results on every "Run" without wiping the review status
+of clashes that still exist — got its own dedicated test
+(`test_replace_results_preserves_status_for_pairs_that_still_clash`) rather
+than just trusting the diff-by-natural-key logic; all 7 new tests plus the
+existing 619 pass. `tsc --noEmit`/`vite build` clean. Not yet manually
+checked in-browser — worth checking specifically: create a test between
+two Collections with a known real overlap, confirm Run actually finds it
+and Approve survives a re-run, and confirm the viewport tint shows up
+(Clash Colours toggle, off by default like Variance Colours).

@@ -10,6 +10,8 @@ from app.api.calendar_breaks import router as calendar_breaks_router
 from app.api.calendar_exceptions import router as calendar_exceptions_router
 from app.api.calendars import router as calendars_router
 from app.api.camera_views import router as camera_views_router
+from app.api.clash_results import router as clash_results_router
+from app.api.clash_tests import router as clash_tests_router
 from app.api.collection_members import router as collection_members_router
 from app.api.collections import router as collections_router
 from app.api.cost_commitments import router as cost_commitments_router
@@ -117,6 +119,8 @@ app.include_router(element_transforms_router, prefix="/api/v1", dependencies=_au
 app.include_router(paths_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(path_followers_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(annotations_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(clash_tests_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(clash_results_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

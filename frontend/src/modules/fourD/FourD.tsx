@@ -60,6 +60,12 @@ import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFo
 import { PathsPanel } from './PathsPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
+import {
+  createClashTest, deleteClashTest, listClashTests, replaceClashResults, updateClashResult,
+  type ClashResult, type ClashResultPair, type ClashTest,
+} from './clashTests'
+import { ClashDetectionPanel } from './ClashDetectionPanel'
+import { resolveMembersToElements, findClashes, type ClashSceneObject } from './sceneClash'
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
 import { BaselineViewportPane } from './BaselineViewportPane'
 import { ImportModelDialog } from './ImportModelDialog'
@@ -110,6 +116,8 @@ const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
 const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
+const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
+const CLASH_PANEL_DOCK_KEY = 'prosota_4d_clash_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -1142,6 +1150,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Dockable Clash Detective panel (2026-07-12) — same shared-side-dock
+  // treatment as every panel above.
+  const [clashPanelOpen, setClashPanelOpen] = useState(() => loadPanelOpen(CLASH_PANEL_OPEN_KEY, false))
+  const toggleClashPanel = () => {
+    setClashPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(CLASH_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [clashPanelDock, setClashPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(CLASH_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleClashPanelDock = () => {
+    setClashPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(CLASH_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
   // Heights of the top/bottom window docks, in px — drag-resizable via
   // DockDivider.tsx between each dock and the viewport (2026-07-11, per
   // Maro: "the dividers separating the windows and the main the 3d
@@ -1398,6 +1430,167 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
     return map
   }, [modelElementLinks, activities, sceneObjects, ifcLinkKeys])
+
+  // Clash Detective (2026-07-12, per Maro's Navisworks reference screenshot)
+  // — reuses Collections as a test's two selection sets (see clash_test.py's
+  // own docstring on why) rather than a second selection concept. Geometry
+  // only ever exists client-side; "Run" reads whatever the viewport
+  // currently shows (sceneClash.ts's own header) and PUTs the computed
+  // pairs, letting the backend preserve review status for pairs that still
+  // exist across a re-run.
+  const [clashTests, setClashTests] = useState<ClashTest[]>([])
+  const [clashError, setClashError] = useState<string | null>(null)
+  const [clashRunProgress, setClashRunProgress] = useState<{ testId: string; done: number; total: number } | null>(null)
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listClashTests(selectedProject.id).then(ts => { if (!cancelled) setClashTests(ts) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  const clashErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  const handleCreateClashTest = async (draft: {
+    name: string; group_a_collection_id: string; group_b_collection_id: string; test_type: 'hard' | 'clearance'; tolerance_mm: number
+  }) => {
+    if (!selectedProject) return
+    try {
+      setClashError(null)
+      const created = await createClashTest({ project_id: selectedProject.id, ...draft })
+      setClashTests(prev => [...prev, created])
+    } catch (err) {
+      setClashError(clashErrorMessage(err, 'Failed to create clash test'))
+    }
+  }
+
+  const handleDeleteClashTest = async (id: string) => {
+    try {
+      setClashError(null)
+      await deleteClashTest(id)
+      setClashTests(prev => prev.filter(t => t.id !== id))
+    } catch (err) {
+      setClashError(clashErrorMessage(err, 'Failed to delete clash test'))
+    }
+  }
+
+  const handleUpdateClashResult = async (resultId: string, data: { status?: ClashResult['status']; comment?: string | null }) => {
+    try {
+      setClashError(null)
+      const updated = await updateClashResult(resultId, data)
+      setClashTests(prev => prev.map(t => (
+        t.id === updated.clash_test_id ? { ...t, results: t.results.map(r => (r.id === updated.id ? updated : r)) } : t
+      )))
+    } catch (err) {
+      setClashError(clashErrorMessage(err, 'Failed to update clash result'))
+    }
+  }
+
+  const handleRunClashTest = async (testId: string) => {
+    const test = clashTests.find(t => t.id === testId)
+    if (!test) return
+    const collectionA = collections.find(c => c.id === test.group_a_collection_id)
+    const collectionB = collections.find(c => c.id === test.group_b_collection_id)
+    if (!collectionA || !collectionB) {
+      setClashError('One of this test\'s Collections no longer exists — pick new ones (delete and recreate the test)')
+      return
+    }
+    setClashError(null)
+    setClashRunProgress({ testId, done: 0, total: 0 })
+    try {
+      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
+      const elementsA = await resolveMembersToElements(collectionA.members, clashSceneObjects, ifcHandles)
+      const selfTest = collectionA.id === collectionB.id
+      const elementsB = selfTest ? elementsA : await resolveMembersToElements(collectionB.members, clashSceneObjects, ifcHandles)
+      const found = await findClashes(elementsA, elementsB, test.test_type, test.tolerance_mm, selfTest, (done, total) => {
+        setClashRunProgress({ testId, done, total })
+      })
+      const pairs: ClashResultPair[] = found.map(f => ({
+        element_a_source_kind: f.elementA.sourceKind, element_a_ref: f.elementA.ref, element_a_label: f.elementA.label,
+        element_b_source_kind: f.elementB.sourceKind, element_b_ref: f.elementB.ref, element_b_label: f.elementB.label,
+        distance_mm: f.distanceMm,
+      }))
+      const updated = await replaceClashResults(testId, pairs)
+      setClashTests(prev => prev.map(t => (t.id === testId ? updated : t)))
+    } catch (err) {
+      setClashError(clashErrorMessage(err, 'Failed to run clash test'))
+    } finally {
+      setClashRunProgress(null)
+    }
+  }
+
+  const handleSelectClashPair = async (
+    elementA: { source_kind: 'ifc' | 'mesh'; ref: string },
+    elementB: { source_kind: 'ifc' | 'mesh'; ref: string },
+  ) => {
+    const refs = [
+      { source_kind: elementA.source_kind, element_ref: elementA.ref },
+      { source_kind: elementB.source_kind, element_ref: elementB.ref },
+    ]
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    if (objectIds.size === 0 && expressIds.size === 0) return
+    setSelectedObjectIds(objectIds)
+    setSelectedExpressIds(expressIds)
+    setSelectedExpressId(null)
+    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
+    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
+    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
+  }
+
+  // Keyed exactly like varianceByElementKey/customTextures above — resolved
+  // via the same per-ref async GlobalId->expressID lookup ifcLinkKeys uses,
+  // just keyed by the raw ref string instead of a ModelElementLink id since
+  // more than one ClashResult can share the same element. Approved results
+  // are excluded (Navisworks' own "approved clashes stop showing as red").
+  const [clashRefKeys, setClashRefKeys] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const refs = new Map<string, 'ifc' | 'mesh'>()
+    for (const test of clashTests) {
+      for (const r of test.results) {
+        if (r.status === 'approved') continue
+        refs.set(r.element_a_ref, r.element_a_source_kind)
+        refs.set(r.element_b_ref, r.element_b_source_kind)
+      }
+    }
+    if (refs.size === 0) { setClashRefKeys({}); return }
+    let cancelled = false
+    ;(async () => {
+      const needsIfc = [...refs.values()].some(k => k === 'ifc') && ifcHandles.length > 0
+      const ifcModel = needsIfc ? await import('./ifcModel') : null
+      if (cancelled) return
+      const next: Record<string, string> = {}
+      for (const [ref, sourceKind] of refs) {
+        if (sourceKind === 'mesh') {
+          const sceneObject = sceneObjects.find(o => o.kind === 'mesh' && o.name === ref)
+          if (sceneObject) next[ref] = sceneObject.id
+        } else if (ifcModel) {
+          for (const handle of ifcHandles) {
+            const expressId = ifcModel.getExpressIdFromGuid(handle, ref)
+            if (expressId !== undefined) { next[ref] = `ifc-${handle.modelID}::${expressId}`; break }
+          }
+        }
+      }
+      if (!cancelled) setClashRefKeys(next)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clashTests, sceneObjects, ifcHandles])
+
+  const clashByElementKey: Map<string, boolean> = useMemo(() => {
+    const map = new Map<string, boolean>()
+    for (const test of clashTests) {
+      for (const r of test.results) {
+        if (r.status === 'approved') continue
+        const keyA = clashRefKeys[r.element_a_ref]
+        const keyB = clashRefKeys[r.element_b_ref]
+        if (keyA) map.set(keyA, true)
+        if (keyB) map.set(keyB, true)
+      }
+    }
+    return map
+  }, [clashTests, clashRefKeys])
 
   // Joins each backend SectionBox (keyed by its own model3d_file_id) against
   // whichever currently-loaded SceneObject actually corresponds to that
@@ -2867,6 +3060,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (clashPanelOpen) {
+    dockablePanels.push({
+      id: 'clash', label: 'Clash Detective', dock: clashPanelDock,
+      onToggleDock: toggleClashPanelDock, onClose: toggleClashPanel,
+      content: (
+        <ClashDetectionPanel
+          collections={collections}
+          clashTests={clashTests}
+          error={clashError}
+          runProgress={clashRunProgress}
+          onCreate={handleCreateClashTest}
+          onDelete={handleDeleteClashTest}
+          onRun={handleRunClashTest}
+          onUpdateResult={handleUpdateClashResult}
+          onSelectPair={handleSelectClashPair}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -2937,6 +3149,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onAnnotationDragMove={handleAnnotationDragMove}
       onAnnotationDragEnd={handleAnnotationDragEnd}
       varianceByElementKey={varianceByElementKey}
+      clashByElementKey={clashByElementKey}
     />
   )
 
@@ -3014,6 +3227,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           }`}
         >
           3D Notations
+        </button>
+        <button
+          onClick={toggleClashPanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            clashPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Clash Detective
         </button>
         <button
           onClick={toggleCompareBaseline}

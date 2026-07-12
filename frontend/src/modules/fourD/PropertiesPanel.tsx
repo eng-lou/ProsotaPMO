@@ -210,6 +210,14 @@ export function PropertiesPanel({
           title="Tint elements linked to a baselined Activity by variance_days — red behind schedule, green ahead"
         />
       </Row>
+      <Row label="Clash Colours">
+        <input
+          type="checkbox"
+          checked={settings.showClashColors}
+          onChange={e => set('showClashColors', e.target.checked)}
+          title="Tint elements with an un-approved Clash Detective result red"
+        />
+      </Row>
 
       <SectionHeader label="Environment" />
       <div className="px-3 pb-1.5">

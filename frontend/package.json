@@ -20,6 +20,7 @@
     "react-router-dom": "^6.23.1",
     "recharts": "^2.12.7",
     "three": "^0.169.0",
+    "three-mesh-bvh": "^0.8.0",
     "three-stdlib": "^2.35.6",
     "web-ifc": "^0.0.77"
   },

@@ -262,6 +262,10 @@ interface Props {
   // passed straight through to ModelObjects. See that component's own
   // Props doc comment for the elementKey convention.
   varianceByElementKey: Map<string, number>
+  // Clash Detective (2026-07-12) — same treatment as varianceByElementKey
+  // above, one Map keyed the identical way, precomputed once in FourD.tsx
+  // from every open ClashTest's un-approved results.
+  clashByElementKey: Map<string, boolean>
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
@@ -286,6 +290,14 @@ const VARIANCE_LATE_COLOR = new THREE.Color(0xef4444)
 const VARIANCE_EARLY_COLOR = new THREE.Color(0x22c55e)
 const VARIANCE_MAGNITUDE_CAP_DAYS = 30
 const VARIANCE_MAX_LERP = 0.5
+// Clash Detective (2026-07-12, per Maro's Navisworks reference screenshot)
+// — flat red, not magnitude-scaled like variance above: a clash is binary
+// (an element either has an un-approved clash right now or it doesn't),
+// there's no equivalent of "days late" to scale the tint by. A stronger
+// lerp than variance's own 0.5 cap so a clash reads unambiguously even on
+// an already variance-tinted element.
+const CLASH_COLOR = new THREE.Color(0xdc2626)
+const CLASH_LERP = 0.65
 
 // Applies the render-mode/visibility/shadow settings to every mesh under an
 // imported object, and tints whichever mesh carries the currently-selected
@@ -294,7 +306,7 @@ const VARIANCE_MAX_LERP = 0.5
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
-  varianceByElementKey,
+  varianceByElementKey, clashByElementKey,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -337,6 +349,9 @@ function ModelObjects({
   // separate prop — one more render-affecting viewer setting, same as
   // showEdges/shadows/ambientOcclusion above it.
   varianceByElementKey: Map<string, number>
+  // Clash Detective (2026-07-12) — same elementKey convention, toggled via
+  // settings.showClashColors alongside showVarianceColors above it.
+  clashByElementKey: Map<string, boolean>
 }) {
   const upAxis = settings.upAxis
   useEffect(() => {
@@ -582,6 +597,13 @@ function ModelObjects({
                 const magnitude = Math.min(1, Math.abs(varianceDays) / VARIANCE_MAGNITUDE_CAP_DAYS)
                 mat.color.lerp(tint, magnitude * VARIANCE_MAX_LERP)
               }
+            }
+            // Clash Detective (2026-07-12) — same placement/reasoning as
+            // variance just above (underneath the selection lerps, same
+            // elementKey convention), flat red rather than magnitude-scaled
+            // (see CLASH_COLOR's own header on why).
+            if (settings.showClashColors && clashByElementKey.get(elementKey ?? id)) {
+              mat.color.lerp(CLASH_COLOR, CLASH_LERP)
             }
             // Shifts the actual surface colour toward the selection tint,
             // on top of (not instead of) the emissive glow above — see this
@@ -1338,7 +1360,7 @@ export function Viewport3D({
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
-  varianceByElementKey,
+  varianceByElementKey, clashByElementKey,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -1984,6 +2006,7 @@ export function Viewport3D({
             hiddenExpressIds={hiddenExpressIds}
             sectionBoxes={sectionBoxes}
             varianceByElementKey={varianceByElementKey}
+            clashByElementKey={clashByElementKey}
           />
           <SectionBoxGizmos
             boxes={sectionBoxes}

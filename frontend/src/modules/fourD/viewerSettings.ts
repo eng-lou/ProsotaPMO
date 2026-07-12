@@ -64,6 +64,10 @@ export interface ViewerSettings {
   // untinted regardless, but the toggle itself should still default off so
   // it doesn't surprise someone the first time a baseline does exist.
   showVarianceColors: boolean
+  // Clash Detective (2026-07-12, per Maro's Navisworks reference
+  // screenshot) — same "off by default" reasoning as showVarianceColors
+  // just above.
+  showClashColors: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -80,6 +84,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   environmentBackground: true,
   upAxis: 'z',
   showVarianceColors: false,
+  showClashColors: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

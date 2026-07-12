@@ -49,6 +49,8 @@ from app.models.element_transform import ElementTransform
 from app.models.path import Path
 from app.models.path_follower import PathFollower
 from app.models.annotation import Annotation
+from app.models.clash_test import ClashTest
+from app.models.clash_result import ClashResult
 
 __all__ = [
     "Base",
@@ -107,4 +109,6 @@ __all__ = [
     "Path",
     "PathFollower",
     "Annotation",
+    "ClashTest",
+    "ClashResult",
 ]
