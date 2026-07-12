@@ -51,6 +51,7 @@ from app.models.path_follower import PathFollower
 from app.models.annotation import Annotation
 from app.models.clash_test import ClashTest
 from app.models.clash_result import ClashResult
+from app.models.element_parent import ElementParent
 
 __all__ = [
     "Base",
@@ -111,4 +112,5 @@ __all__ = [
     "Annotation",
     "ClashTest",
     "ClashResult",
+    "ElementParent",
 ]

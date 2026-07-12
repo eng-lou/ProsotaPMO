@@ -20,6 +20,8 @@ import type { GizmoMode } from './TransformPanel'
 import type { CustomTextureSet } from './customTextures'
 import { axisCorrectionRotation, resolveDisplayAxis, type UpAxis } from './upAxis'
 import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline'
+import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
+import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
@@ -46,6 +48,14 @@ export interface ImportedObject {
   sourceUpAxis: UpAxis
   object: THREE.Object3D
   visible: boolean
+  // The imported file's own name (2026-07-12, added for element-parent
+  // rigging resolution in ModelObjects below — the raw THREE.Object3D's
+  // own `.name` isn't reliable for this: ifcModel.ts sets it to the
+  // filename, but import3d.ts never sets it at all for a mesh-kind import,
+  // leaving whatever a GLTF/OBJ/FBX loader happened to name its own root
+  // scene node). Same filename identity ElementParent/PathFollower/
+  // ModelElementLink's own element_ref already uses.
+  name: string
 }
 
 // A scene object as FourD.tsx itself models it — richer than ImportedObject
@@ -266,6 +276,17 @@ interface Props {
   // above, one Map keyed the identical way, precomputed once in FourD.tsx
   // from every open ClashTest's un-approved results.
   clashByElementKey: Map<string, boolean>
+  // "Set Pivot" click-to-pick (2026-07-12) — arms one more
+  // PathAddPointCatcher instance (reused verbatim, same as Paths/
+  // Annotations already do) below; onPickPivotPoint receives the
+  // world-space hit, FourD.tsx's own handlePickPivotPoint converts it into
+  // the active object's local space before calling elementPivot.ts's
+  // setPivot.
+  pivotPicking: boolean
+  onPickPivotPoint: (point: PathPoint) => void
+  // Crane-style rigging (2026-07-12) — passed straight through to
+  // ModelObjects, see that component's own Props doc comment.
+  elementParents: ElementParent[]
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
@@ -306,7 +327,7 @@ const CLASH_LERP = 0.65
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
-  varianceByElementKey, clashByElementKey,
+  varianceByElementKey, clashByElementKey, elementParents,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -352,8 +373,72 @@ function ModelObjects({
   // Clash Detective (2026-07-12) — same elementKey convention, toggled via
   // settings.showClashColors alongside showVarianceColors above it.
   clashByElementKey: Map<string, boolean>
+  // Crane-style rigging (2026-07-12) — see elementRigging.ts's own header.
+  // Mesh-kind only (child/parent are both filename element_refs), resolved
+  // against `objects` below the same way every other loose-ref relationship
+  // in this file already is.
+  elementParents: ElementParent[]
 }) {
   const upAxis = settings.upAxis
+
+  // Reparents/un-parents live Object3Ds to match elementParents whenever
+  // the loaded object set or the rig relationships themselves change
+  // (2026-07-12) — mirrors PathFollower's own resolution effect further
+  // down this file (element_ref -> live object, re-resolved on every
+  // relevant change) but drives real three.js scene-graph structure
+  // instead of a per-frame animation apply, so it belongs here next to the
+  // mount loop it directly feeds rather than inside TimelinePlayback.
+  // riggedChildIdsRef tracks what was actually rigged as of the *previous*
+  // run of this effect specifically so a row that disappears (deleted, or
+  // its target unloaded) gets properly detached rather than just silently
+  // left parented wherever it last was.
+  const riggedChildIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const nextRigged = new Set<string>()
+    for (const ep of elementParents) {
+      const child = objects.find(o => o.kind === 'mesh' && o.name === ep.child_element_ref)
+      const parent = objects.find(o => o.kind === 'mesh' && o.name === ep.parent_element_ref)
+      if (!child || !parent) continue
+      nextRigged.add(child.id)
+      if (child.object.parent !== parent.object) {
+        attachPreservingWorldTransform(child.object, parent.object)
+      }
+    }
+    for (const o of objects) {
+      if (riggedChildIdsRef.current.has(o.id) && !nextRigged.has(o.id)) {
+        detachToSceneRoot(o.object, o.sourceUpAxis, upAxis)
+      }
+      // A rigged child skips the <primitive visible={...}> mount below
+      // entirely, so hide/isolate's own `visible` flag (FourD.tsx's
+      // hiddenIds/isolateMode) needs applying here instead — the one thing
+      // that JSX prop would otherwise have done for it. Harmless no-op
+      // duplication for a root object, which still gets it from the prop
+      // too.
+      if (nextRigged.has(o.id)) o.object.visible = o.visible
+    }
+    riggedChildIdsRef.current = nextRigged
+  }, [objects, elementParents, upAxis])
+
+  // Same resolution as the effect above, computed at render time (cheap —
+  // just two `.find()` calls per relationship) rather than read off the
+  // ref, so the mount loop below reacts to a *new* elementParents row on
+  // the very same render it arrives, not one render later once the effect
+  // above has caught up. Only gates which objects get their own top-level
+  // <primitive> mount (rootObjects, further below) — the settings/tint
+  // pass right after this stays on the full `objects` list, since a rigged
+  // child still needs its own material/render-mode handling even though
+  // it's no longer separately mounted.
+  const riggedChildIds = new Set(
+    elementParents
+      .map(ep => ({
+        child: objects.find(o => o.kind === 'mesh' && o.name === ep.child_element_ref),
+        parent: objects.find(o => o.kind === 'mesh' && o.name === ep.parent_element_ref),
+      }))
+      .filter(r => r.child && r.parent)
+      .map(r => r.child!.id),
+  )
+  const rootObjects = objects.filter(o => !riggedChildIds.has(o.id))
+
   useEffect(() => {
     // Scene-wide displacement-subdivision budget for this pass (2026-07-11,
     // per Maro, mindful it "may lag our platform if abused" — see
@@ -813,7 +898,12 @@ function ModelObjects({
 
   return (
     <>
-      {objects.map(({ id, sourceUpAxis, object, visible }) => (
+      {/* rootObjects, not objects (2026-07-12) — a rigged child is never
+          separately mounted here; it rides along as a real descendant of
+          its parent's already-mounted Object3D (the effect above), same
+          pattern this file already uses for IFC sub-meshes, which are
+          never individually JSX'd either. */}
+      {rootObjects.map(({ id, sourceUpAxis, object, visible }) => (
         <group key={id} rotation={axisCorrectionRotation(sourceUpAxis, upAxis)}>
           <primitive object={object} visible={visible} onClick={handleClick} />
         </group>
@@ -1360,7 +1450,7 @@ export function Viewport3D({
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
-  varianceByElementKey, clashByElementKey,
+  varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -2007,6 +2097,7 @@ export function Viewport3D({
             sectionBoxes={sectionBoxes}
             varianceByElementKey={varianceByElementKey}
             clashByElementKey={clashByElementKey}
+            elementParents={elementParents}
           />
           <SectionBoxGizmos
             boxes={sectionBoxes}
@@ -2075,6 +2166,15 @@ export function Viewport3D({
             upAxis={settings.upAxis}
             onAddPoint={onPlaceAnnotation}
           />
+          {/* "Set Pivot" click-to-pick (2026-07-12) — reuses
+              PathAddPointCatcher verbatim a third time; onPickPivotPoint
+              itself clears pivotPicking after one placement, same one-shot
+              behaviour as Annotation placement above. */}
+          <PathAddPointCatcher
+            active={pivotPicking}
+            upAxis={settings.upAxis}
+            onAddPoint={onPickPivotPoint}
+          />
         </Suspense>
         {flyMode ? (
           // movementSpeed in scene units/sec — set well above the library's
@@ -2094,7 +2194,27 @@ export function Viewport3D({
           <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         )}
         {activeObject && (
-          <TransformControls object={activeObject.object} mode={gizmoMode} onChange={onTransformChange} />
+          <TransformControls
+            object={activeObject.object}
+            mode={gizmoMode}
+            onChange={onTransformChange}
+            // Tagged isPathGizmo (2026-07-12 fix, per Maro: "pick in
+            // viewport is very bad" — picking a wrong point) — the gizmo's
+            // own arrow/ring handle meshes are real, raycastable Object3Ds
+            // sitting in the scene right on top of whatever's selected,
+            // and PathAddPointCatcher's hit-test (reused verbatim for
+            // Paths/Annotations/pivot-picking) had no reason to know to
+            // skip them, same as it already skips its own curve/handle
+            // meshes. A click meant for the object's own surface could
+            // land on a gizmo handle instead, especially likely for pivot
+            // picking specifically since that's only ever armed *while* an
+            // object (and therefore this gizmo) is already selected and
+            // visible. `controls` (three-stdlib's TransformControls) is
+            // itself a real Object3D — tagging just this one root is
+            // enough, since the hit-test walks *up* the parent chain
+            // looking for the flag.
+            ref={el => { if (el) el.userData.isPathGizmo = true }}
+          />
         )}
         {settings.showAxisIndicator && (
           <GizmoHelper alignment="bottom-left" margin={[80, 80]}>

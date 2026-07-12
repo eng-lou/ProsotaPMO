@@ -34,6 +34,21 @@ export interface PathProgressSupport {
   onToggleKey: () => void
 }
 
+// "Set Pivot" (2026-07-12, per Maro's crane-rigging request) — see
+// elementPivot.ts's own header for why this exists (rotation/scale always
+// pivots around an object's own local origin, and a rigged part's file
+// almost never has that sitting at its hinge). `point` is undefined when
+// no override is set (the file's own original origin). Owned by FourD.tsx,
+// same "read/write the live object directly, this panel is presentational"
+// split every other Support type here already uses.
+export interface PivotSupport {
+  point: THREE.Vector3 | undefined
+  picking: boolean
+  onTogglePicking: () => void
+  onChange: (point: THREE.Vector3) => void
+  onReset: () => void
+}
+
 interface Props {
   object: THREE.Object3D
   mode: GizmoMode
@@ -57,6 +72,7 @@ interface Props {
   lengthUnitToMetres: number | null
   unitDisplay: IfcUnitDisplay
   keyframes: KeyframeSupport | null
+  pivot: PivotSupport
   // Forces a re-render after a field edit (2026-07-08 fix, per Maro: typed
   // 10 into a Location field, the model moved, but the field itself
   // reverted to showing 0) — every Field's onChange mutates `object`
@@ -170,7 +186,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, onFieldChange }: Props) {
+export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -219,6 +235,56 @@ export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgres
           />
         </>
       )}
+
+      {/* "Set Pivot" (2026-07-12) — moves where rotation/scale pivots from,
+          without moving the visible geometry. Placed before Location/
+          Rotation/Scale since it's the thing that changes what those three
+          sections actually mean, not a peer of them. */}
+      <SectionLabel label="Pivot" />
+      <p className="px-3 pb-1 text-[10px] text-gray-400">
+        Where rotation/scale pivots from — moves the origin, not the geometry.
+      </p>
+      {AXES.map(axis => {
+        const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'position')
+        const current = pivot.point?.[localAxis] ?? 0
+        const displayValue = toDisplayLength(sign * current, lengthUnitToMetres, unitDisplay)
+        return (
+          <div key={`pivot-${axis}`} className="flex items-center gap-1.5 px-3 py-0.5">
+            <span className="w-3 text-[11px] text-gray-400 shrink-0">{axis.toUpperCase()}</span>
+            <ResettableNumberInput
+              step={0.1}
+              value={Number.isFinite(displayValue) ? Number(displayValue.toFixed(3)) : 0}
+              defaultValue={0}
+              onChange={v => {
+                const next = (pivot.point ?? new THREE.Vector3()).clone()
+                next[localAxis] = sign * fromDisplayLength(v, lengthUnitToMetres, unitDisplay)
+                pivot.onChange(next)
+              }}
+              className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+            />
+            <span className="w-4 text-[10px] text-gray-400 shrink-0">{lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}</span>
+          </div>
+        )
+      })}
+      <div className="flex items-center gap-1.5 px-3 py-1">
+        <button
+          onClick={pivot.onTogglePicking}
+          title="Click a point on the model in the viewport to pivot from there"
+          className={`flex-1 text-[11px] px-1.5 py-1 rounded border font-medium ${
+            pivot.picking ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          {pivot.picking ? 'Click in viewport…' : 'Pick in Viewport'}
+        </button>
+        <button
+          onClick={pivot.onReset}
+          disabled={!pivot.point}
+          title="Restore the file's own original origin"
+          className="text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+        >
+          Reset
+        </button>
+      </div>
 
       {/* Fields always read X/Y/Z in that order; resolveDisplayAxis (upAxis.ts)
           is what actually points "Y"/"Z" at object.position.z/.y (Blender-

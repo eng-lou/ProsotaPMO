@@ -41,7 +41,19 @@ class ElementTransform(Base, TimestampMixin):
     so they stay correct regardless of the axis-correction wrapper group
     Viewport3D.tsx applies around every imported object. rotation is
     stored in radians, using THREE.Euler's default 'XYZ' order (nothing in
-    this codebase ever changes that order elsewhere)."""
+    this codebase ever changes that order elsewhere).
+
+    pivot_x/y/z (2026-07-12, per Maro's crane-rigging request — see
+    elementPivot.ts's own header) are a *local*-space offset marking where
+    this element's own rotation/scale origin has been moved to, via
+    "Set Pivot" — null (all three, always together) means "use the
+    source file's own original origin," the default for everything
+    imported before this feature existed. Deliberately not folded into a
+    generic JSON blob: every other field on this row is a plain typed
+    float for the same (model3d_file_id, element_ref) target, and pivot
+    is exactly that same shape, just consumed differently client-side
+    (an offset applied once at restore time, before position/rotation/
+    scale, rather than set directly on the object every frame)."""
 
     __tablename__ = "element_transforms"
     __table_args__ = (
@@ -62,3 +74,6 @@ class ElementTransform(Base, TimestampMixin):
     scale_x: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     scale_y: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     scale_z: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    pivot_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pivot_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pivot_z: Mapped[float | None] = mapped_column(Float, nullable=True)

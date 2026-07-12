@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import type { Object3D } from 'three'
+import { Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
@@ -54,7 +54,10 @@ import { computeVisibleActivities, ScheduleWindow } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
 import { computeKeyframeRange, computeScheduleRange, padDegenerateRange, unionRanges } from './timelinePlayback'
-import type { GizmoMode, KeyframeSupport, PathProgressSupport } from './TransformPanel'
+import type { GizmoMode, KeyframeSupport, PathProgressSupport, PivotSupport } from './TransformPanel'
+import { getPivot, setPivot } from './elementPivot'
+import { deleteElementParent, listElementParents, upsertElementParent, type ElementParent as ElementParentType } from './elementParents'
+import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
@@ -118,6 +121,8 @@ const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
 const CLASH_PANEL_DOCK_KEY = 'prosota_4d_clash_panel_dock'
+const RIG_PANEL_OPEN_KEY = 'prosota_4d_rig_panel_open'
+const RIG_PANEL_DOCK_KEY = 'prosota_4d_rig_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -715,6 +720,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
     if (!selectedProject) return
+    // Scope boundary (2026-07-12) — see the Element Parenting block's own
+    // header on why Follow Path and rig-parenting don't combine on the
+    // same object.
+    if (elementParents.some(ep => ep.child_element_ref === elementRef)) {
+      setPathError('This element is already rigged to a parent — clear its parent (Rigging panel) before binding a Path')
+      return
+    }
     try {
       setPathError(null)
       const follower = await upsertPathFollower({ project_id: selectedProject.id, path_id: pathId, target_kind: targetKind, element_ref: elementRef })
@@ -1171,6 +1183,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setClashPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(CLASH_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Rigging panel (2026-07-12) — same shared-side-dock treatment
+  // as every panel above.
+  const [rigPanelOpen, setRigPanelOpen] = useState(() => loadPanelOpen(RIG_PANEL_OPEN_KEY, false))
+  const toggleRigPanel = () => {
+    setRigPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(RIG_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [rigPanelDock, setRigPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(RIG_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleRigPanelDock = () => {
+    setRigPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(RIG_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -1644,6 +1680,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // handleSelectObject below for how they're kept in sync.
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
+  // "Pick in Viewport" for Set Pivot (2026-07-12) — arms the same
+  // PathAddPointCatcher raycast-then-ground-plane-fallback Paths/
+  // Annotations already reuse verbatim (Viewport3D.tsx), just for a third
+  // purpose. Turned off automatically the moment a point lands
+  // (handleSetPivotPoint below), same one-shot behaviour as Annotation
+  // placement, not Path's own continuous multi-point mode.
+  const [pivotPicking, setPivotPicking] = useState(false)
   // Bumped by Viewport3D's TransformControls onChange (fires continuously
   // while dragging) purely to force a re-render — PropertiesPanel.tsx's
   // TransformPanel section reads live values straight off the dragged
@@ -1689,10 +1732,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // off per Maro's explicit "if i unload, i expect the data not to persist"
   // — the alternative (blocking unload on any in-flight upload) would make
   // unload feel laggy for no real benefit.
-  const persistModelFile = async (id: string, file: File, kind: Model3DKind, sourceUpAxis: UpAxis) => {
+  const persistModelFile = async (id: string, file: File, kind: Model3DKind, sourceUpAxis: UpAxis, name: string) => {
     if (!selectedProject) return
     try {
-      const saved = await uploadModel3DFile(selectedProject.id, file.name, kind, sourceUpAxis, file)
+      const saved = await uploadModel3DFile(selectedProject.id, name, kind, sourceUpAxis, file)
       let stillLoaded = false
       setSceneObjects(prev => {
         stillLoaded = prev.some(o => o.id === id)
@@ -1724,17 +1767,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleImport3D = async (file: File, sourceUpAxis: UpAxis) => {
+  const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string) => {
     setImporting(true)
     setImportError(null)
     try {
       const object = await loadModel3DFile(file)
       const id = crypto.randomUUID()
-      object.name = file.name
+      object.name = name
       object.userData.sceneObjectId = id
-      setSceneObjects(prev => [...prev, { id, name: file.name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
+      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setDataTab('3d')
-      persistModelFile(id, file, 'mesh', sourceUpAxis)
+      persistModelFile(id, file, 'mesh', sourceUpAxis, name)
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
     } finally {
@@ -1742,21 +1785,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleImportIfc = async (file: File, sourceUpAxis: UpAxis) => {
+  const handleImportIfc = async (file: File, sourceUpAxis: UpAxis, name: string) => {
     setImporting(true)
     setImportError(null)
     try {
       const { loadIfcModel } = await import('./ifcModel')
       const handle = await loadIfcModel(file)
       const id = `ifc-${handle.modelID}`
+      handle.object.name = name
       handle.object.userData.sceneObjectId = id
       setIfcHandles(prev => [...prev, handle])
       setActiveIfcModelId(id)
       setSelectedExpressId(null)
       setSelectedExpressIds(new Set())
-      setSceneObjects(prev => [...prev, { id, name: file.name, kind: 'ifc', sourceUpAxis, object: handle.object, fileId: null }])
+      setSceneObjects(prev => [...prev, { id, name, kind: 'ifc', sourceUpAxis, object: handle.object, fileId: null }])
       setDataTab('ifc')
-      persistModelFile(id, file, 'ifc', sourceUpAxis)
+      persistModelFile(id, file, 'ifc', sourceUpAxis, name)
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import IFC file — see console for detail')
       console.error(err)
@@ -1765,12 +1809,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleConfirmImport = (sourceUpAxis: UpAxis) => {
+  const handleConfirmImport = (sourceUpAxis: UpAxis, name: string) => {
     if (!pendingImport) return
     const { file, kind } = pendingImport
     setPendingImport(null)
-    if (kind === 'ifc') handleImportIfc(file, sourceUpAxis)
-    else handleImport3D(file, sourceUpAxis)
+    if (kind === 'ifc') handleImportIfc(file, sourceUpAxis, name)
+    else handleImport3D(file, sourceUpAxis, name)
   }
 
   // Restores every persisted model on load (2026-07-09, per Maro: "if i hard
@@ -1835,6 +1879,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
       const applyTransform = (object: Object3D, t: ElementTransform | undefined) => {
         if (!t) return
+        // Pivot first (2026-07-12) — setPivot's own compensating
+        // translateX/Y/Z would otherwise be immediately overwritten by the
+        // position.set() below anyway, but running it first means that
+        // .set() correctly lands on the saved *final* authored position
+        // rather than fighting a pivot-driven position change applied
+        // after the fact. See elementPivot.ts's own header.
+        if (t.pivot_x !== null && t.pivot_y !== null && t.pivot_z !== null) {
+          setPivot(object, new Vector3(t.pivot_x, t.pivot_y, t.pivot_z))
+        }
         object.position.set(t.position_x, t.position_y, t.position_z)
         object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
         object.scale.set(t.scale_x, t.scale_y, t.scale_z)
@@ -2456,11 +2509,70 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   )
 
   const viewportObjects: ImportedObject[] = sceneObjects.map(o => ({
-    id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object,
+    id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id) && (!isolateMode || isolatedObjectIds.has(o.id)),
   }))
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
+
+  // Element Parenting / rigging (2026-07-12, per Maro's crane-rigging
+  // request: base -> jib -> trolley -> hook) — mesh-kind only, one parent
+  // per child, upsert-repoints (element_parents.py's own docstring on why,
+  // mirroring PathFollower). Viewport3D.tsx's own resolution effect
+  // (ModelObjects) does the actual three.js reparenting; this block is
+  // purely CRUD + the "don't combine with Follow Path" guard (see this
+  // session's own scope boundary — Mode C's toLocalPoint deliberately
+  // fights a moving parent, so an object can't be both a Path target and a
+  // rigged child at once).
+  //
+  const [elementParents, setElementParents] = useState<ElementParentType[]>([])
+  const [elementParentError, setElementParentError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listElementParents(selectedProject.id).then(eps => { if (!cancelled) setElementParents(eps) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  const elementParentErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  // Whatever's currently the "active" whole mesh-kind object — same
+  // candidate-target shape pathBindTarget elsewhere already uses, since
+  // both panels bind against "whatever you've got selected right now," not
+  // a separate picker.
+  const rigChildTarget = activeSceneObject?.kind === 'mesh'
+    ? { ref: activeSceneObject.name, label: activeSceneObject.name || 'Object' }
+    : null
+
+  const handleSetElementParent = async (parentElementRef: string) => {
+    if (!selectedProject || !rigChildTarget) return
+    if (pathFollowers.some(f => f.target_kind === 'mesh' && f.element_ref === rigChildTarget.ref)) {
+      setElementParentError('This element already follows a Path — unbind it first (Paths panel) before rigging it to a parent')
+      return
+    }
+    try {
+      setElementParentError(null)
+      const created = await upsertElementParent({
+        project_id: selectedProject.id, child_element_ref: rigChildTarget.ref, parent_element_ref: parentElementRef,
+      })
+      setElementParents(prev => [...prev.filter(ep => ep.child_element_ref !== rigChildTarget.ref), created])
+    } catch (err) {
+      setElementParentError(elementParentErrorMessage(err, 'Failed to set parent'))
+    }
+  }
+  const handleClearElementParent = async (id: string) => {
+    try {
+      setElementParentError(null)
+      await deleteElementParent(id)
+      setElementParents(prev => prev.filter(ep => ep.id !== id))
+    } catch (err) {
+      setElementParentError(elementParentErrorMessage(err, 'Failed to clear parent'))
+    }
+  }
+
   // Mirrors Viewport3D.tsx's own activeObject resolution (its TransformControls
   // gizmo target) so the Properties panel's number fields edit the exact
   // same thing the gizmo does (2026-07-08, per Maro: "the whole ifc model
@@ -2528,11 +2640,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         elementRef = getGuidFromExpressId(handle, expressId) ?? null
       }
       try {
+        // Carries object.userData.pivotPoint forward on *every* save, not
+        // just a Set Pivot edit itself (2026-07-12) — a plain gizmo drag
+        // must not silently clear a previously-set pivot back to null; see
+        // element_transform.py's own schema doc comment on why the backend
+        // can't distinguish "not provided" from "explicitly cleared" here.
+        const currentPivot = getPivot(object)
         const saved = await saveElementTransform({
           model3d_file_id: modelFileId, element_ref: elementRef,
           position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
           rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
           scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
+          pivot_x: currentPivot?.x ?? null, pivot_y: currentPivot?.y ?? null, pivot_z: currentPivot?.z ?? null,
         })
         elementTransformsRef.current = [
           ...elementTransformsRef.current.filter(t => !(t.model3d_file_id === saved.model3d_file_id && t.element_ref === saved.element_ref)),
@@ -2553,6 +2672,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleTransformChange = () => {
     setTransformTick(t => t + 1)
     persistActiveTransform()
+  }
+
+  // "Set Pivot" (2026-07-12) — see elementPivot.ts's own header. Shared by
+  // both the typed X/Y/Z fields (already-local-space point) and the
+  // viewport-click catcher (handlePickPivotPoint below, which does the
+  // world-to-local conversion first).
+  const handleSetPivotPoint = (point: Vector3 | null) => {
+    if (!activeTransformObject) return
+    setPivot(activeTransformObject, point)
+    setPivotPicking(false)
+    handleTransformChange()
+  }
+
+  // Converts the PathAddPointCatcher's world-space hit (Viewport3D.tsx,
+  // reused verbatim per its own header) into activeTransformObject's own
+  // local space — geometry.translate() and the compensating
+  // translateX/Y/Z inside elementPivot.ts's setPivot both operate in that
+  // space, the same one TransformPanel's Location fields already read/
+  // write.
+  const handlePickPivotPoint = (worldPoint: { x: number; y: number; z: number }) => {
+    if (!activeTransformObject) return
+    activeTransformObject.updateWorldMatrix(true, false)
+    const local = activeTransformObject.worldToLocal(new Vector3(worldPoint.x, worldPoint.y, worldPoint.z))
+    handleSetPivotPoint(local)
   }
 
   // Flushes a still-pending debounced transform save immediately if the
@@ -2765,6 +2908,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         },
       }
     }
+  }
+
+  // Set Pivot support for the active object (2026-07-12) — see
+  // TransformPanel.tsx's own PivotSupport header. Always constructed (not
+  // conditionally null like keyframes/pathProgress above) since every
+  // object supports pivoting; `point` itself is undefined until one's
+  // actually been set.
+  const pivotSupport: PivotSupport = {
+    point: activeTransformObject ? getPivot(activeTransformObject) : undefined,
+    picking: pivotPicking,
+    onTogglePicking: () => setPivotPicking(prev => !prev),
+    onChange: handleSetPivotPoint,
+    onReset: () => handleSetPivotPoint(null),
   }
 
   // Body per window key — WindowChrome (below) owns the shared header/dock-
@@ -3079,6 +3235,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (rigPanelOpen) {
+    dockablePanels.push({
+      id: 'rigging', label: 'Rigging', dock: rigPanelDock,
+      onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
+      content: (
+        <ElementRigPanel
+          elementParents={elementParents}
+          error={elementParentError}
+          childTarget={rigChildTarget}
+          selectedButUnsupported={!!activeSceneObject && activeSceneObject.kind !== 'mesh'}
+          meshOptions={meshImports.map(o => ({ ref: o.name, label: o.name || 'Object' }))}
+          onSetParent={handleSetElementParent}
+          onClearParent={handleClearElementParent}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -3150,6 +3323,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onAnnotationDragEnd={handleAnnotationDragEnd}
       varianceByElementKey={varianceByElementKey}
       clashByElementKey={clashByElementKey}
+      pivotPicking={pivotPicking}
+      onPickPivotPoint={handlePickPivotPoint}
+      elementParents={elementParents}
     />
   )
 
@@ -3237,6 +3413,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Clash Detective
         </button>
         <button
+          onClick={toggleRigPanel}
+          title="Rig one part as the child of another (crane base -> jib -> trolley -> hook) — rotating/moving the parent carries the child along"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            rigPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Rigging
+        </button>
+        <button
           onClick={toggleCompareBaseline}
           title="Dock a second, read-only viewport showing the same model animated from the currently-assigned baseline's dates, alongside this one"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
@@ -3298,6 +3483,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onApplyToLinkedMaterial={handleApplyToLinkedMaterial}
           keyframeSupport={keyframeSupport}
           pathProgress={pathProgressSupport}
+          pivot={pivotSupport}
           onChangeSourceUpAxis={axis => { if (activeObjectId) handleSetSourceUpAxis(activeObjectId, axis) }}
         />
         <SideDock side="left" panels={leftDockPanels} />

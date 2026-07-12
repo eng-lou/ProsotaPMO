@@ -21,6 +21,12 @@ export interface ElementTransform {
   scale_x: number
   scale_y: number
   scale_z: number
+  // "Set Pivot" (2026-07-12) — see elementPivot.ts's own header. null (all
+  // three, always together) means "use the source file's own original
+  // origin."
+  pivot_x: number | null
+  pivot_y: number | null
+  pivot_z: number | null
   created_at: string
   updated_at: string
 }
@@ -35,6 +41,9 @@ export interface TransformValues {
   scale_x: number
   scale_y: number
   scale_z: number
+  pivot_x: number | null
+  pivot_y: number | null
+  pivot_z: number | null
 }
 
 export async function listElementTransforms(projectId: string): Promise<ElementTransform[]> {

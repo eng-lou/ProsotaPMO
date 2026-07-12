@@ -20,6 +20,7 @@ from app.api.cost_rate_lines import router as cost_rate_lines_router
 from app.api.cost_variance_criteria import router as cost_variance_criteria_router
 from app.api.dock_layouts import router as dock_layouts_router
 from app.api.element_keyframes import router as element_keyframes_router
+from app.api.element_parents import router as element_parents_router
 from app.api.element_transforms import router as element_transforms_router
 from app.api.icd_action_items import router as icd_action_items_router
 from app.api.icd_comments import router as icd_comments_router
@@ -121,6 +122,7 @@ app.include_router(path_followers_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(annotations_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_tests_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_results_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(element_parents_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

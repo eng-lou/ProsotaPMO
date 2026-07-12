@@ -1336,3 +1336,112 @@ checked in-browser — worth checking specifically: create a test between
 two Collections with a known real overlap, confirm Run actually finds it
 and Approve survives a re-run, and confirm the viewport tint shows up
 (Clash Colours toggle, off by default like Variance Colours).
+
+## 2026-07-12 (later still) — Crane-style rigging: "Set Pivot" +
+## pivot-based parenting, no bones/IK
+
+Maro wanted mechanical animation (crane base -> jib -> trolley -> hook)
+and shared three Blender reference approaches: pivot-based parenting (no
+bones), bone/IK armatures, and formula-driven "drivers." Talked through
+the tradeoffs before touching code: bones/IK are for organic/deformable
+meshes (skinning, weight painting) and this app has no vertex-skinning
+system at all — a crane's parts are rigid bodies, so real three.js
+scene-graph parenting is the right analog, matching how Synchro/Navisworks
+rig equipment too. Drivers (e.g. a hoist cable auto-stretching with hook
+height) got scoped out as a genuine follow-up, not bundled in.
+
+Two research agents found the good news early: Mode A/B already write
+pure local-space `object.position/rotation/scale` every frame
+(`Viewport3D.tsx`'s `TimelinePlayback`) — real three.js parent-child
+nesting composes correctly under that with **zero changes** to existing
+animation logic. The one real gap Maro caught before any code was written:
+rotation/scale always pivots around an object's own local `(0,0,0)`,
+wherever its source file happened to place that, and this app had no tool
+to move that origin without moving the geometry — asked directly rather
+than assumed, and the answer ("no, I need an in-app pivot tool too")
+changed the shape of the whole pass, so it shipped as two parts.
+
+**Part A — Set Pivot** (`elementPivot.ts`): Blender's own "Origin to 3D
+Cursor." The one design choice worth recording: this is its own small,
+fully isolated snapshot (`userData.prePivotGeometry`/
+`prePivotChildPositions`/`prePivotPosition`), deliberately *not* reusing
+`elementBaseline.ts`'s own `originalGeometry`/`baselineTransform` — those
+already get repurposed by other features (baking, displacement
+subdivision) to mean "state before *that* operation," not "the literal
+as-imported file state," and pivot logic staying fully orthogonal avoided
+any risk of the two fighting over what "original" means. Always
+recomputes from that one lazily-captured snapshot rather than applying an
+incremental delta per call, so setting the pivot twice (or clearing it)
+never drifts. Reused `PathGizmo.tsx`'s `PathAddPointCatcher` verbatim a
+third time (Paths, then Annotations, now this) for click-to-pick-a-point
+— it already had zero Path-specific logic in it.
+
+A real persistence gotcha caught before it shipped: `pivot_x/y/z` are
+optional (`null` = no override) but `ElementTransform`'s save endpoint
+always applies the *full* payload it's sent, with no partial-patch
+semantics — if the frontend only sent pivot fields when the user was
+specifically editing pivot, an ordinary gizmo drag (which also calls the
+same save endpoint for position) would silently overwrite a previously-set
+pivot back to null. Fixed by always carrying `object.userData.pivotPoint`
+forward on *every* save regardless of what was actually being edited —
+tested directly (`test_pivot_fields_round_trip_and_survive_unrelated_saves`)
+rather than just trusting the frontend to always remember.
+
+**Part B — Element Parenting** (`elementRigging.ts`, `element_parent.py`):
+mesh-kind only, one parent per child, upsert-repoints exactly like
+`PathFollower` — reused that table's own established shape rather than
+`ModelElementLink`'s reject-with-409 one, since a child rigged to a new
+parent should repoint, not error (same "drag a different curve onto the
+constraint" reasoning). three.js's own `Object3D.add()` keeps a
+reparented child's *local* transform as-is, which visually jumps it unless
+that local transform happens to already be zero relative to the new
+parent — `attachPreservingWorldTransform` computes the child's current
+world matrix first, reparents, then decomposes
+`parent.matrixWorld⁻¹ × childWorldMatrix` back into position/quaternion/
+scale (Blender's own Ctrl+P "Keep Transform").
+
+A rigged child is deliberately never mounted via its own `<primitive>` in
+`ModelObjects`' flat mount loop — it just becomes a real three.js
+descendant of its parent's already-mounted Object3D, the same pattern this
+file already used for IFC sub-meshes (never individually JSX'd either).
+Caught one real regression from that change before it shipped: the
+whole-object hide/isolate `visible` flag was previously only ever applied
+via that same `<primitive visible={...}>` JSX prop, so a rigged child
+silently stopped responding to Hide/Isolate the moment it left the mount
+loop — fixed by setting `object.visible` directly in the same effect that
+does the reparenting, not just relying on the JSX prop that no longer
+applies to it.
+
+A second real gap, caught while writing `detachToSceneRoot` (clearing a
+rig relationship): `attachPreservingWorldTransform`'s own "decompose
+against the new parent's matrixWorld" trick needs a *live* Object3D to
+target, but a plain top-level (unrigged) object isn't mounted directly —
+it's wrapped in its own `<group rotation={axisCorrectionRotation(...)}>`,
+a fresh React element created new every render, not a stable reference
+this module could ever hold onto. Un-rigging can't reuse the attach
+function at all for that reason; `detachToSceneRoot` instead recomputes
+the same decompose against that wrapper's own rotation, derived from the
+same pure `axisCorrectionRotation()` call the mount loop itself uses, not
+a live reference to anything.
+
+Explicitly out of scope, not solved: Follow Path (Mode C) and rig-
+parenting don't combine on the same object — Mode C's `toLocalPoint`
+deliberately re-derives local position from an absolute *world*-space
+point every frame, which would fight a moving parent by design. Both
+FourD.tsx's own bind handlers now block the combination in either
+direction with a clear inline reason, rather than trying to resolve the
+interaction this pass.
+
+Backend: `element_transforms` gained three nullable columns
+(`74d904d469cd`), new `element_parents` table (`67c8a435d12f`) with a
+service-level cycle check (`_validate_no_cycle`, copied from
+`collection.py`'s own — same walk-up-the-chain shape, unrelated domains
+that happen to need the identical check) so two rigged parts can't
+endlessly parent each other. 16 new tests (pivot round-trip, upsert-
+repoints, self-parent rejected, cycle rejected) plus the existing suite —
+all pass. `tsc --noEmit`/`vite build` clean. Not yet manually checked in-
+browser — worth checking specifically: import two simple boxes, Set Pivot
+on one to a corner and confirm it now rotates around that corner, rig the
+second under the first and rotate the parent to confirm the child rides
+along with no jump at bind time, then keyframe the child's own Location
+and confirm it now moves relative to the (already-rotating) parent.

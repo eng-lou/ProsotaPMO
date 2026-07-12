@@ -5,7 +5,7 @@ import { ResettableNumberInput } from './ResettableNumberInput'
 import { TextureFields } from './TextureFields'
 import { MaterialPresetPicker } from './MaterialPresetPicker'
 import type { MaterialPreset, MaterialPresetConfig } from './materialPresets'
-import { TransformPanel, type GizmoMode, type KeyframeSupport, type PathProgressSupport } from './TransformPanel'
+import { TransformPanel, type GizmoMode, type KeyframeSupport, type PathProgressSupport, type PivotSupport } from './TransformPanel'
 import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
@@ -87,6 +87,7 @@ interface Props {
   onApplyToLinkedMaterial: (slot: TextureSlot) => void
   keyframeSupport: KeyframeSupport | null
   pathProgress: PathProgressSupport | null
+  pivot: PivotSupport
   onChangeSourceUpAxis: (axis: UpAxis) => void
 }
 
@@ -113,7 +114,7 @@ export function PropertiesPanel({
   materialPresets, materialPresetsLoading, activeMaterialPresetConfig, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
-  keyframeSupport, pathProgress, onChangeSourceUpAxis,
+  keyframeSupport, pathProgress, pivot, onChangeSourceUpAxis,
 }: Props) {
   const hdrInputRef = useRef<HTMLInputElement>(null)
   // Apply Transform's own confirmation (2026-07-09, per Maro's doubt that
@@ -324,7 +325,7 @@ export function PropertiesPanel({
           <TransformPanel
             object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange} upAxis={settings.upAxis}
             lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
-            keyframes={keyframeSupport} pathProgress={pathProgress} onFieldChange={onTransformChange}
+            keyframes={keyframeSupport} pathProgress={pathProgress} pivot={pivot} onFieldChange={onTransformChange}
           />
 
           <SectionHeader label="Material / Texture" />

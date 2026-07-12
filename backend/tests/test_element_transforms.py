@@ -103,6 +103,40 @@ async def test_delete_unknown_transform_404s(client: AsyncClient, project: Proje
     assert resp.status_code == 404
 
 
+async def test_pivot_fields_default_null(client: AsyncClient, project: Project):
+    file_id = await _create_model_file(client, project)
+    created = (await client.post("/api/v1/element-transforms/", json={"model3d_file_id": file_id, **_transform()})).json()
+    assert created["pivot_x"] is None
+    assert created["pivot_y"] is None
+    assert created["pivot_z"] is None
+
+
+async def test_pivot_fields_round_trip_and_survive_unrelated_saves(client: AsyncClient, project: Project):
+    # "Set Pivot" (2026-07-12) saves pivot_x/y/z alongside whatever
+    # position/rotation/scale currently is; a later save that's really just
+    # a gizmo drag on position must carry the same pivot forward rather
+    # than silently clearing it back to null (see FourD.tsx's own
+    # save-transform handler, which always re-sends the object's current
+    # userData.pivot).
+    file_id = await _create_model_file(client, project)
+
+    with_pivot = (await client.post("/api/v1/element-transforms/", json={
+        "model3d_file_id": file_id, **_transform(pivot_x=1.0, pivot_y=2.0, pivot_z=3.0),
+    })).json()
+    assert with_pivot["pivot_x"] == 1.0
+    assert with_pivot["pivot_y"] == 2.0
+    assert with_pivot["pivot_z"] == 3.0
+
+    moved = (await client.post("/api/v1/element-transforms/", json={
+        "model3d_file_id": file_id, **_transform(position_x=42.0, pivot_x=1.0, pivot_y=2.0, pivot_z=3.0),
+    })).json()
+    assert moved["id"] == with_pivot["id"]
+    assert moved["position_x"] == 42.0
+    assert moved["pivot_x"] == 1.0
+    assert moved["pivot_y"] == 2.0
+    assert moved["pivot_z"] == 3.0
+
+
 async def test_deleting_model_file_cascades_its_transforms(client: AsyncClient, project: Project):
     file_id = await _create_model_file(client, project)
     created = (await client.post("/api/v1/element-transforms/", json={"model3d_file_id": file_id, **_transform()})).json()
