@@ -258,6 +258,10 @@ interface Props {
   // GPU/CPU for a render nobody's looking at. Resumes instantly (no
   // Canvas/WebGL re-init) the moment this flips back to true.
   active: boolean
+  // Variance colour-coding (2026-07-12) — precomputed once in FourD.tsx,
+  // passed straight through to ModelObjects. See that component's own
+  // Props doc comment for the elementKey convention.
+  varianceByElementKey: Map<string, number>
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
@@ -269,6 +273,19 @@ const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
 // expressID-selected one, e.g. selected via the Project Overview tree/Mesh
 // Data Panel rather than an in-viewport click.
 const OBJECT_SELECTED_EMISSIVE = new THREE.Color(0xf59e0b)
+// Variance colour-coding (2026-07-12, per Maro: "Colour coded elements by
+// variance") — reuses the Scheduling module's own already-working
+// baseline feature (Activity.variance_days, set once a baseline is
+// assigned via "Assign Baseline" there) rather than building a second one
+// here. Red = behind (finished later than baselined), green = ahead —
+// magnitude-capped at VARIANCE_MAGNITUDE_CAP_DAYS so one wildly slipped
+// activity doesn't fully flatten its element to a solid colour, and
+// blended at a lighter weight than the real selection tiers above so
+// selecting a variance-tinted element still reads clearly on top of it.
+const VARIANCE_LATE_COLOR = new THREE.Color(0xef4444)
+const VARIANCE_EARLY_COLOR = new THREE.Color(0x22c55e)
+const VARIANCE_MAGNITUDE_CAP_DAYS = 30
+const VARIANCE_MAX_LERP = 0.5
 
 // Applies the render-mode/visibility/shadow settings to every mesh under an
 // imported object, and tints whichever mesh carries the currently-selected
@@ -277,6 +294,7 @@ const OBJECT_SELECTED_EMISSIVE = new THREE.Color(0xf59e0b)
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
+  varianceByElementKey,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -311,6 +329,14 @@ function ModelObjects({
   // See Viewport3D's own top-level Props doc comment on hiddenExpressIds —
   // same composite-key set, threaded straight through.
   hiddenExpressIds: Set<string>
+  // Variance colour-coding (2026-07-12) — precomputed once in FourD.tsx
+  // from modelElementLinks+activities, same elementKey convention
+  // customTextures already uses (whole object id for mesh-kind, or
+  // `${id}::${expressID}` for a specifically-linked IFC sub-element).
+  // Toggled via settings.showVarianceColors (ViewerSettings), not a
+  // separate prop — one more render-affecting viewer setting, same as
+  // showEdges/shadows/ambientOcclusion above it.
+  varianceByElementKey: Map<string, number>
 }) {
   const upAxis = settings.upAxis
   useEffect(() => {
@@ -540,6 +566,23 @@ function ModelObjects({
             const original = originals[i]
             if (overrides?.map) { mat.map = overrides.map.texture; mat.color.set(0xffffff) }
             else if (original) { mat.map = original.map; mat.color.copy(original.color) }
+
+            // Variance colour-coding (2026-07-12) — applied here,
+            // *underneath* the selection lerps just below, so selecting a
+            // variance-tinted element still reads as a real selection on
+            // top of it rather than the two competing. varianceKey mirrors
+            // customTextures' own ownerKey convention exactly: elementKey
+            // (an IFC sub-element's own `${id}::${expressID}`) when one
+            // applies, else the whole mesh-kind object's id.
+            if (settings.showVarianceColors) {
+              const varianceKey = elementKey ?? id
+              const varianceDays = varianceByElementKey.get(varianceKey)
+              if (varianceDays) {
+                const tint = varianceDays > 0 ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR
+                const magnitude = Math.min(1, Math.abs(varianceDays) / VARIANCE_MAGNITUDE_CAP_DAYS)
+                mat.color.lerp(tint, magnitude * VARIANCE_MAX_LERP)
+              }
+            }
             // Shifts the actual surface colour toward the selection tint,
             // on top of (not instead of) the emissive glow above — see this
             // block's own 2026-07-11 header note for why emissive alone
@@ -927,8 +970,14 @@ function applyPathFollow(target: ResolvedPathTarget, now: Date) {
   }
 }
 
-function TimelinePlayback({
+// Exported (2026-07-12, per Maro's "advanced 4D" baseline-vs-actual
+// compare request) so BaselineViewportPane.tsx can mount its own instance
+// against the same imported geometry (cloned — see sceneClone.ts), reading
+// bl_start/bl_finish instead of start/finish for Mode A. See dateField's
+// own header just below for exactly what that does and doesn't affect.
+export function TimelinePlayback({
   dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles, activeObjectId, onTick, paths, pathFollowers,
+  dateField = 'live',
 }: {
   dateRef: React.MutableRefObject<Date | null>
   paths: Path[]
@@ -942,6 +991,14 @@ function TimelinePlayback({
   ifcHandles: IfcModelHandle[]
   activeObjectId: string | null
   onTick: () => void
+  // 'baseline' (2026-07-12) — Mode A (the only animation source that reads
+  // Activity dates at all) resolves each link's window from
+  // activity.bl_start/bl_finish instead of activity.start/finish. Mode B
+  // (manual keyframes) and Mode C (Follow Path) aren't schedule-driven, so
+  // they resolve identically either way — a baseline pane showing the
+  // "planned" timeline still plays the same hand-keyframed/path-bound
+  // motion as the live pane, only the Activity-driven pieces differ.
+  dateField?: 'live' | 'baseline'
 }) {
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
   const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
@@ -979,7 +1036,16 @@ function TimelinePlayback({
       // logic: mesh-kind by filename, ifc-kind via GlobalId->expressID).
       for (const link of links) {
         const activity = activityById.get(link.activity_id)
-        if (!activity || !activity.start || !activity.finish) continue
+        if (!activity) continue
+        // dateField switch (2026-07-12) — see this component's own Props
+        // header. `window` is what actually flows into ResolvedTimelineLink
+        // below; pickActiveLink/computeAppliedAnimationStateAt only ever
+        // read .start/.finish off of it, with zero awareness of which
+        // source they came from.
+        const window = dateField === 'baseline'
+          ? { start: activity.bl_start, finish: activity.bl_finish }
+          : { start: activity.start, finish: activity.finish }
+        if (!window.start || !window.finish) continue
         const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
         if (!profile) continue
 
@@ -1005,7 +1071,7 @@ function TimelinePlayback({
         if (!object) continue
 
         const target = getOrCreate(object)
-        target.links.push({ activity, profile, axis: profile.axis })
+        target.links.push({ activity: window, profile, axis: profile.axis })
       }
 
       // Mode B — manual keyframes, entirely independent of the above: any
@@ -1091,7 +1157,7 @@ function TimelinePlayback({
 
     resolve()
     return () => { cancelled = true }
-  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers])
+  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField])
 
   // Tracks the last date keyframed transforms were actually applied for
   // (2026-07-09 fix, per Maro: "keyframing locks the model in place when
@@ -1272,6 +1338,7 @@ export function Viewport3D({
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
+  varianceByElementKey,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -1916,6 +1983,7 @@ export function Viewport3D({
             isolatedExpressIds={isolatedExpressIds}
             hiddenExpressIds={hiddenExpressIds}
             sectionBoxes={sectionBoxes}
+            varianceByElementKey={varianceByElementKey}
           />
           <SectionBoxGizmos
             boxes={sectionBoxes}

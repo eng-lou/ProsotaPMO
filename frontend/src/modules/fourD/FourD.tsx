@@ -61,6 +61,7 @@ import { PathsPanel } from './PathsPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
+import { BaselineViewportPane } from './BaselineViewportPane'
 import { ImportModelDialog } from './ImportModelDialog'
 import { UnloadModelDialog } from './UnloadModelDialog'
 import type { UpAxis } from './upAxis'
@@ -1160,6 +1161,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // SplitRow's own count-mismatch effect first populates them.
   const [topSplitRatios, setTopSplitRatios] = useState<number[]>([])
   const [bottomSplitRatios, setBottomSplitRatios] = useState<number[]>([])
+  // Baseline vs Actual compare (2026-07-12, per Maro's "advanced 4D"
+  // baselining/variance request) — a second, read-only BaselineViewportPane
+  // docked alongside the real Viewport3D via the same SplitRow used for
+  // the top/bottom window docks above. Deliberately plain localStorage,
+  // not folded into the backend DockLayoutConfig system those two ratios
+  // belong to — this is a per-browser view preference, not part of a named,
+  // shareable dock arrangement, and doesn't warrant its own backend schema
+  // change for a first pass.
+  const [compareBaselineOpen, setCompareBaselineOpen] = useState(() => {
+    try { return localStorage.getItem('prosota_4d_compare_baseline_open') === 'true' } catch { return false }
+  })
+  const toggleCompareBaseline = () => {
+    setCompareBaselineOpen(prev => {
+      const next = !prev
+      try { localStorage.setItem('prosota_4d_compare_baseline_open', String(next)) } catch { /* ignore */ }
+      return next
+    })
+  }
+  const [compareSplitRatios, setCompareSplitRatios] = useState<number[]>([])
 
   // Named, saved dock-window arrangements (2026-07-11, per Maro: "at the
   // top, allow me to save layout, edit, delete") — same active-config-on-
@@ -1328,6 +1348,56 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sectionBoxes, sceneObjects, ifcHandles])
+
+  // Variance colour-coding (2026-07-12, per Maro: "Colour coded elements
+  // by variance") — resolves each IFC-kind ModelElementLink's own GlobalId
+  // to an expressID the same async, own-lookup-table way
+  // sectionBoxElementIds above already does (mesh-kind links need no
+  // async resolution at all — element_ref is already the filename
+  // ModelObjects keys mesh-kind objects by).
+  const [ifcLinkKeys, setIfcLinkKeys] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc')
+    if (ifcLinks.length === 0) { setIfcLinkKeys({}); return }
+    let cancelled = false
+    ;(async () => {
+      const { getExpressIdFromGuid } = await import('./ifcModel')
+      if (cancelled) return
+      const next: Record<string, string> = {}
+      for (const link of ifcLinks) {
+        for (const handle of ifcHandles) {
+          const expressId = getExpressIdFromGuid(handle, link.element_ref)
+          if (expressId !== undefined) { next[link.id] = `ifc-${handle.modelID}::${expressId}`; break }
+        }
+      }
+      if (!cancelled) setIfcLinkKeys(next)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelElementLinks, ifcHandles])
+
+  // Keyed exactly like customTextures' own per-element overrides (whole
+  // mesh-kind object id, or `${objectId}::${expressID}` for a specific IFC
+  // sub-element) — Viewport3D.tsx's ModelObjects reads this straight
+  // through with zero further resolution needed. Only activities with a
+  // real, non-null variance_days contribute (no baseline assigned yet =
+  // no colour, not a false "on time" green).
+  const varianceByElementKey: Map<string, number> = useMemo(() => {
+    const map = new Map<string, number>()
+    const activityById = new Map(activities.map(a => [a.id, a]))
+    for (const link of modelElementLinks) {
+      const activity = activityById.get(link.activity_id)
+      if (!activity || activity.variance_days === null || activity.variance_days === undefined) continue
+      if (link.source_kind === 'mesh') {
+        const sceneObject = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
+        if (sceneObject) map.set(sceneObject.id, activity.variance_days)
+      } else if (link.source_kind === 'ifc') {
+        const key = ifcLinkKeys[link.id]
+        if (key) map.set(key, activity.variance_days)
+      }
+    }
+    return map
+  }, [modelElementLinks, activities, sceneObjects, ifcLinkKeys])
 
   // Joins each backend SectionBox (keyed by its own model3d_file_id) against
   // whichever currently-loaded SceneObject actually corresponds to that
@@ -2800,6 +2870,76 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
+  // Pulled out to a plain variable (2026-07-12, per the Compare Baseline
+  // feature below) rather than inlined in the JSX — needs to render in one
+  // of two different structural positions (standalone, or as SplitRow's
+  // first child alongside BaselineViewportPane) depending on
+  // compareBaselineOpen, and JSX itself can't express "reuse this exact
+  // element in two different spots" without either a variable or
+  // duplicating the entire prop list.
+  const viewport3DElement = (
+    <Viewport3D
+      key="primary"
+      settings={settings}
+      importedObjects={viewportObjects}
+      selectedExpressId={selectedExpressId}
+      selectedExpressIds={selectedExpressIds}
+      onSelect={handleSelectExpressId}
+      activeObjectId={activeObjectId}
+      selectedObjectIds={selectedObjectIds}
+      onSelectObject={handleSelectObject}
+      onSelectAll={handleSelectAll}
+      onBoxSelect={handleBoxSelect}
+      isolateMode={isolateMode}
+      isolatedObjectIds={isolatedObjectIds}
+      isolatedExpressIds={isolatedExpressIds}
+      hiddenExpressIds={hiddenExpressIds}
+      onToggleIsolate={handleToggleIsolate}
+      onShowAll={handleShowAll}
+      linkedActivitiesWidget={
+        <LinkedActivitiesWidget
+          activities={activities.filter(a => isolatedLinkedActivityIds.has(a.id))}
+          selectedActivityIds={selectedActivityIds}
+          onSelectActivity={handleSelectActivity}
+        />
+      }
+      gizmoMode={gizmoMode}
+      onTransformChange={handleTransformChange}
+      environmentUrl={customEnvironment?.url ?? null}
+      onEnvironmentError={handleEnvironmentError}
+      customTextures={customTextures}
+      timelineDateRef={timelineDateRef}
+      timelineSceneObjects={sceneObjects}
+      timelineActivities={activities}
+      timelineLinks={modelElementLinks}
+      timelineProfiles={animationProfiles.profiles}
+      timelineElementKeyframes={elementKeyframes.keyframes}
+      scheduleStart={timelineRange?.start ?? null}
+      scheduleEnd={timelineRange?.end ?? null}
+      ifcHandles={ifcHandles}
+      active={active}
+      sectionBoxes={resolvedSectionBoxes}
+      onSectionBoxDragMove={handleSectionBoxDragMove}
+      onSectionBoxDragEnd={handleSectionBoxDragEnd}
+      onSaveCameraView={handleSaveCameraView}
+      applyCameraViewRequest={applyCameraViewRequest}
+      paths={resolvedPaths}
+      pathFollowers={pathFollowers}
+      addingPointsForPathId={addingPointsForPathId}
+      onPathDragMove={handlePathDragMove}
+      onPathDragEnd={handlePathDragEnd}
+      onAddPathPoint={handleAddPathPoint}
+      annotations={resolvedAnnotations}
+      addingAnnotationKind={addingAnnotationKind}
+      onPlaceAnnotation={handlePlaceAnnotation}
+      selectedAnnotationId={selectedAnnotationId}
+      onSelectAnnotation={setSelectedAnnotationId}
+      onAnnotationDragMove={handleAnnotationDragMove}
+      onAnnotationDragEnd={handleAnnotationDragEnd}
+      varianceByElementKey={varianceByElementKey}
+    />
+  )
+
   if (!selectedProject) return null
 
   return (
@@ -2875,6 +3015,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           3D Notations
         </button>
+        <button
+          onClick={toggleCompareBaseline}
+          title="Dock a second, read-only viewport showing the same model animated from the currently-assigned baseline's dates, alongside this one"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            compareBaselineOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Compare Baseline
+        </button>
         <div className="w-px h-4 bg-gray-200 mx-1" />
         <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" onChange={handleFileSelected} className="hidden" />
         <button
@@ -2942,64 +3091,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             </>
           )}
 
-          <Viewport3D
-            settings={settings}
-            importedObjects={viewportObjects}
-            selectedExpressId={selectedExpressId}
-            selectedExpressIds={selectedExpressIds}
-            onSelect={handleSelectExpressId}
-            activeObjectId={activeObjectId}
-            selectedObjectIds={selectedObjectIds}
-            onSelectObject={handleSelectObject}
-            onSelectAll={handleSelectAll}
-            onBoxSelect={handleBoxSelect}
-            isolateMode={isolateMode}
-            isolatedObjectIds={isolatedObjectIds}
-            isolatedExpressIds={isolatedExpressIds}
-            hiddenExpressIds={hiddenExpressIds}
-            onToggleIsolate={handleToggleIsolate}
-            onShowAll={handleShowAll}
-            linkedActivitiesWidget={
-              <LinkedActivitiesWidget
-                activities={activities.filter(a => isolatedLinkedActivityIds.has(a.id))}
-                selectedActivityIds={selectedActivityIds}
-                onSelectActivity={handleSelectActivity}
-              />
-            }
-            gizmoMode={gizmoMode}
-            onTransformChange={handleTransformChange}
-            environmentUrl={customEnvironment?.url ?? null}
-            onEnvironmentError={handleEnvironmentError}
-            customTextures={customTextures}
-            timelineDateRef={timelineDateRef}
-            timelineSceneObjects={sceneObjects}
-            timelineActivities={activities}
-            timelineLinks={modelElementLinks}
-            timelineProfiles={animationProfiles.profiles}
-            timelineElementKeyframes={elementKeyframes.keyframes}
-            scheduleStart={timelineRange?.start ?? null}
-            scheduleEnd={timelineRange?.end ?? null}
-            ifcHandles={ifcHandles}
-            active={active}
-            sectionBoxes={resolvedSectionBoxes}
-            onSectionBoxDragMove={handleSectionBoxDragMove}
-            onSectionBoxDragEnd={handleSectionBoxDragEnd}
-            onSaveCameraView={handleSaveCameraView}
-            applyCameraViewRequest={applyCameraViewRequest}
-            paths={resolvedPaths}
-            pathFollowers={pathFollowers}
-            addingPointsForPathId={addingPointsForPathId}
-            onPathDragMove={handlePathDragMove}
-            onPathDragEnd={handlePathDragEnd}
-            onAddPathPoint={handleAddPathPoint}
-            annotations={resolvedAnnotations}
-            addingAnnotationKind={addingAnnotationKind}
-            onPlaceAnnotation={handlePlaceAnnotation}
-            selectedAnnotationId={selectedAnnotationId}
-            onSelectAnnotation={setSelectedAnnotationId}
-            onAnnotationDragMove={handleAnnotationDragMove}
-            onAnnotationDragEnd={handleAnnotationDragEnd}
-          />
+          {compareBaselineOpen ? (
+            <SplitRow ratios={compareSplitRatios} onRatiosChange={setCompareSplitRatios}>
+              {[
+                viewport3DElement,
+                <BaselineViewportPane
+                  key="baseline"
+                  importedObjects={viewportObjects}
+                  timelineSceneObjects={sceneObjects}
+                  ifcHandles={ifcHandles}
+                  upAxis={settings.upAxis}
+                  fieldOfView={settings.fieldOfView}
+                  clipStart={settings.clipStart}
+                  clipEnd={settings.clipEnd}
+                  timelineDateRef={timelineDateRef}
+                  activities={activities}
+                  links={modelElementLinks}
+                  profiles={animationProfiles.profiles}
+                  elementKeyframes={elementKeyframes.keyframes}
+                  paths={resolvedPaths}
+                  pathFollowers={pathFollowers}
+                />,
+              ]}
+            </SplitRow>
+          ) : viewport3DElement}
 
           {bottomWindows.length > 0 && (
             <>

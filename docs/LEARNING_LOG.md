@@ -1170,3 +1170,90 @@ Mode A's own resolution does, not worth it for a click handler yet — same
 "IFC sub-element identity is v1-out-of-scope" line this session has drawn
 several times already). `tsc --noEmit`/`vite build` clean; not yet
 manually checked in-browser.
+
+## 2026-07-12 (later still) — "Advanced 4D": baseline vs actual, brought
+## into the 3D viewport itself
+
+Maro asked for baselining/variance analysis in the 4D module. Turned out
+the *scheduling* half already existed end-to-end — `ScheduleBaseline`
+capture/assign, `Activity.bl_start`/`bl_finish`/`variance_days`, Gantt
+ghost bars, Activity Table columns, all built and working — confirmed by
+research before writing a line of code, so nothing there got rebuilt. What
+was actually missing was bringing that comparison *into the viewport*:
+colour-coding elements by variance, and a second, dockable, resizable 3D
+pane showing the same model animated from the baseline's dates instead of
+the live ones, side by side with the real one.
+
+**The one real technical question, thought through before building**: a
+`THREE.Object3D` can only belong to one scene graph, so the same imported
+mesh/IFC hierarchy can't be mounted into two `<Canvas>`es. Cloning beats
+re-importing (three.js already shares `.geometry`/`.material` by
+reference on `Mesh.copy()` — no GPU buffers get duplicated, only the
+lightweight scene-graph nodes) — but not via `Object3D.clone()` itself:
+its own `copy()` does `JSON.parse(JSON.stringify(source.userData))`, and
+by the time a mesh has been on screen for even a moment, `ModelObjects`
+has already hung real, non-JSON-serializable object references off
+`userData` (`standardMaterial`, `subdividedGeometry`, `edgesHelper`).
+`sceneClone.ts`'s `cloneSceneHierarchy()` walks the tree by hand instead —
+new Mesh/Group per node, geometry/material by reference, only the one
+genuinely safe userData key (`expressID`, a plain number) — sidestepping
+the risk rather than trying to sanitize three.js's own copy path.
+
+Mode A (Activity+AnimationProfile) turned out to be the *only* animation
+source that reads Activity dates at all — Mode B (manual keyframes) and
+Mode C (Follow Path) aren't schedule-driven, so a baseline pane plays them
+identically to the live pane automatically, no special-casing needed.
+`TimelinePlayback` (Viewport3D.tsx) got exactly one new prop,
+`dateField: 'live' | 'baseline'`, swapping which two Activity fields feed
+Mode A's own resolution window — everything downstream
+(`ResolvedTimelineLink`, `pickActiveLink`, `computeAppliedAnimationStateAt`)
+stayed untouched, since it already just consumes whichever dates got
+resolved in.
+
+**A real bug caught before it shipped, not after**: the new
+`BaselineViewportPane`'s own clone-cache `useMemo` initially listed
+`importedObjects` itself as a dependency alongside a content-based
+position/rotation/scale string. `FourD.tsx`'s own `viewportObjects` (what
+feeds *both* the primary viewport and this new pane) has always been a
+plain `.map()` recomputed fresh every render — fine for the primary
+viewport's own cheap per-render re-map, but including that ever-fresh
+array in this *specific* memo's dependency list would have made it
+recompute — re-cloning the *entire* scene hierarchy — on literally every
+render, since React reruns a memo the instant *any one* dependency's
+identity changes, regardless of whether the content-string one actually
+changed. Dropped the array from the dependency list entirely (the closure
+already reads the current `importedObjects` when the memo *does* run; the
+string alone is what should gate whether it runs at all) — caught by
+re-reading the diff before calling this done, not by anyone actually
+hitting the perf problem live.
+
+**A genuine editing mistake, caught immediately by diffing against `git
+HEAD` rather than trying to eyeball-fix a garbled multi-thousand-line JSX
+tree**: reusing the single `<Viewport3D>` invocation in two different
+structural positions (standalone, or as `SplitRow`'s first child) needs a
+plain variable, since JSX can't parametrize "render this exact element in
+either of two spots" without one — but the first attempt at extracting it
+went wrong mid-edit and left the file with a duplicated, half-orphaned
+copy of the whole prop block outside any return statement. Rather than
+trying to manually patch the mess, `git diff --stat` (a suspiciously
+large, pure-insertion diff) plus `git diff` itself (showing exactly which
+hunk was the bad one, since every other change that same edit pass made
+was correct and staged fine) made the actual damage obvious and let it get
+surgically removed in one clean revert, then redone properly: the
+`<Viewport3D>` JSX pulled out into a `const viewport3DElement = (...)`
+*before* the component's own `return`, referenced by both the
+`compareBaselineOpen` ternary's branches — one extraction, zero
+duplicated prop lists. Worth remembering: when a multi-part in-place edit
+goes visibly wrong, checking the diff against the last commit is a faster
+and safer way back to a known-good state than trying to hand-repair
+whatever's now on screen.
+
+Backend: zero changes — this entire feature reads data (`bl_start`/
+`bl_finish`/`variance_days`) the Scheduling module already fetches and
+returns on every `Activity`. Frontend `tsc --noEmit`/`vite build` clean.
+Not yet manually checked in-browser — same standing gap as always, and
+this time specifically worth checking: does the split stay usable/
+resizable, does toggling Variance Colours actually tint a baselined,
+behind-schedule element red, and does the baseline pane's own animation
+timing visibly diverge from the live pane wherever `start`/`finish` and
+`bl_start`/`bl_finish` actually differ.

@@ -55,6 +55,15 @@ export interface ViewerSettings {
   // as an option for anyone who'd rather match three.js/glTF's own native
   // convention.
   upAxis: 'y' | 'z'
+  // Schedule variance colour-coding (2026-07-12, per Maro: "Colour coded
+  // elements by variance" — 4D-native use of the Scheduling module's
+  // already-existing baseline/variance feature, Activity.variance_days,
+  // set once a baseline is assigned). Off by default, same "real GPU/visual
+  // cost worth opting into deliberately" caution as shadows/AO above — a
+  // model with no baseline assigned yet would just render everything
+  // untinted regardless, but the toggle itself should still default off so
+  // it doesn't surprise someone the first time a baseline does exist.
+  showVarianceColors: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -70,6 +79,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   ambientOcclusion: false,
   environmentBackground: true,
   upAxis: 'z',
+  showVarianceColors: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

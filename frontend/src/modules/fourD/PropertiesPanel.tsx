@@ -202,6 +202,14 @@ export function PropertiesPanel({
       <Row label="Ambient Occlusion">
         <input type="checkbox" checked={settings.ambientOcclusion} onChange={e => set('ambientOcclusion', e.target.checked)} />
       </Row>
+      <Row label="Variance Colours">
+        <input
+          type="checkbox"
+          checked={settings.showVarianceColors}
+          onChange={e => set('showVarianceColors', e.target.checked)}
+          title="Tint elements linked to a baselined Activity by variance_days — red behind schedule, green ahead"
+        />
+      </Row>
 
       <SectionHeader label="Environment" />
       <div className="px-3 pb-1.5">
