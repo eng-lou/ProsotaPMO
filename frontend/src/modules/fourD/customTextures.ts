@@ -1,6 +1,19 @@
 import * as THREE from 'three'
 
-export type TextureSlot = 'map' | 'metalnessMap' | 'roughnessMap' | 'normalMap'
+// aoMap/displacementMap (2026-07-11, per Maro) — both sample the exact same
+// primary UV set ('uv', not a separate 'uv2') as every other slot here, at
+// zero extra cost: three.js's Texture.channel defaults to 0, and channel 0
+// is 'uv' (verified directly in three.js's own WebGLPrograms.js
+// getChannel()/HAS_AOMAP wiring, not assumed) — aoMap has historically
+// needed a dedicated second UV set in many other engines/versions, but this
+// installed three.js (0.169) doesn't require one. displacementMap actually
+// moves vertices along their normal by the map's own luminance
+// (displacementScale, default 1) — genuinely limited on IFC geometry, which
+// is typically a handful of vertices per flat face (a simple box/plane) with
+// nothing to subdivide, so there's little for it to visibly displace beyond
+// nudging those few existing corners; still wired through for GLTF/OBJ/FBX
+// imports or any denser IFC mesh where it does have vertices to move.
+export type TextureSlot = 'map' | 'metalnessMap' | 'roughnessMap' | 'normalMap' | 'aoMap' | 'displacementMap'
 
 export interface TextureSlotValue {
   texture: THREE.Texture
@@ -57,11 +70,33 @@ export async function loadCustomTexture(file: File, slot: TextureSlot): Promise<
   return { texture, name: file.name, dataUri }
 }
 
+// Repeats the image across the surface instead of three.js's own default
+// (ClampToEdgeWrapping — one edge pixel smeared across everything past the
+// texture's own 0–1 UV range) — 2026-07-11, same "flat, detail-less" report
+// as ifcModel.ts's own box-projected-UV fix. This alone doesn't help IFC
+// geometry (which had no UV attribute to wrap against at all until that
+// fix), but a GLTF/OBJ/FBX import already carries its own real UVs from
+// its authoring tool, and any surface larger than the texture's own 0–1 UV
+// span was stretching/smearing rather than tiling even for those, before
+// this.
+// wrapMode: see this function's own original header. center: three.js
+// rotates a texture around its own (0,0) — the tile's corner — by default,
+// which reads as the whole tile swinging/sliding off-surface rather than
+// spinning in place; centering the pivot at (0.5, 0.5) first makes
+// TextureFields.tsx's own Tile Rotation field behave the way "rotate this
+// tile" actually implies (2026-07-11, per Maro: "also add Tile rotation").
+function applyTilingDefaults(texture: THREE.Texture) {
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  texture.center.set(0.5, 0.5)
+}
+
 async function loadTextureFromFile(file: File, slot: TextureSlot): Promise<THREE.Texture> {
   const url = URL.createObjectURL(file)
   try {
     const texture = await loader.loadAsync(url)
     texture.colorSpace = colorSpaceForSlot(slot)
+    applyTilingDefaults(texture)
     return texture
   } finally {
     URL.revokeObjectURL(url)
@@ -76,6 +111,7 @@ async function loadTextureFromFile(file: File, slot: TextureSlot): Promise<THREE
 export async function loadTextureFromDataUri(dataUri: string, slot: TextureSlot, name: string): Promise<TextureSlotValue> {
   const texture = await loader.loadAsync(dataUri)
   texture.colorSpace = colorSpaceForSlot(slot)
+  applyTilingDefaults(texture)
   return { texture, name, dataUri }
 }
 

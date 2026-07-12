@@ -22,10 +22,15 @@ export interface MaterialPresetConfig {
   metalnessMap: MaterialPresetSlot | null
   roughnessMap: MaterialPresetSlot | null
   normalMap: MaterialPresetSlot | null
+  // 2026-07-11, per Maro — mirrors the backend schema's own addition of
+  // these two fields (see material_preset.py's own header for why this is
+  // a safe, backward-compatible JSONB addition, not a migration).
+  aoMap: MaterialPresetSlot | null
+  displacementMap: MaterialPresetSlot | null
 }
 
 export const EMPTY_MATERIAL_PRESET_CONFIG: MaterialPresetConfig = {
-  map: null, metalnessMap: null, roughnessMap: null, normalMap: null,
+  map: null, metalnessMap: null, roughnessMap: null, normalMap: null, aoMap: null, displacementMap: null,
 }
 
 export interface MaterialPreset {
@@ -43,7 +48,7 @@ export interface MaterialPreset {
 // "merge this into customTextures for the active target," identical to a
 // fresh manual upload from FourD.tsx's own point of view.
 export async function loadPresetAsTextureSet(config: MaterialPresetConfig): Promise<CustomTextureSet> {
-  const slots: TextureSlot[] = ['map', 'metalnessMap', 'roughnessMap', 'normalMap']
+  const slots: TextureSlot[] = ['map', 'metalnessMap', 'roughnessMap', 'normalMap', 'aoMap', 'displacementMap']
   const result: CustomTextureSet = {}
   await Promise.all(slots.map(async slot => {
     const value = config[slot]
@@ -64,7 +69,10 @@ export function textureSetToPresetConfig(set: CustomTextureSet): MaterialPresetC
     const value = set[slot]
     return value ? { data_uri: value.dataUri, name: value.name } : null
   }
-  return { map: toSlot('map'), metalnessMap: toSlot('metalnessMap'), roughnessMap: toSlot('roughnessMap'), normalMap: toSlot('normalMap') }
+  return {
+    map: toSlot('map'), metalnessMap: toSlot('metalnessMap'), roughnessMap: toSlot('roughnessMap'), normalMap: toSlot('normalMap'),
+    aoMap: toSlot('aoMap'), displacementMap: toSlot('displacementMap'),
+  }
 }
 
 // Named, saved, per-project custom material presets (2026-07-09, per Maro:

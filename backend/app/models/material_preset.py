@@ -9,19 +9,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 
 # Mirrors frontend/src/modules/fourD/materialPresets.ts's MaterialPresetConfig
-# exactly. Each of the four PBR slots is either null (that slot isn't part of
-# this preset — applying it leaves that channel alone) or {data_uri, name}:
-# the uploaded image re-encoded as a base64 data: URI, directly usable as a
+# exactly. Each of the six PBR slots (2026-07-11: aoMap/displacementMap
+# joined the original four) is either null (that slot isn't part of this
+# preset — applying it leaves that channel alone) or {data_uri, name}: the
+# uploaded image re-encoded as a base64 data: URI, directly usable as a
 # THREE.TextureLoader source with no separate file-serving endpoint needed
 # (same reasoning as every other config blob in this app — stored as one
 # opaque JSONB unit, shape owned by the frontend). name is the original
 # filename, shown in the editor so re-opening a saved preset doesn't just
-# show four anonymous thumbnails.
+# show anonymous thumbnails.
 DEFAULT_CONFIG = {
     "map": None,
     "metalnessMap": None,
     "roughnessMap": None,
     "normalMap": None,
+    "aoMap": None,
+    "displacementMap": None,
 }
 
 

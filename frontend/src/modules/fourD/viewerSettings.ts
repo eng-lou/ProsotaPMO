@@ -4,8 +4,22 @@
 // profiles/baselines/date-colouring/legend yet, those need a schedule-
 // linkage data model that doesn't exist. Local/per-browser only, same
 // load/save-to-localStorage convention as resourcesLayout.ts.
+// 2026-07-11, per Maro comparing this app's render modes against Synchro's
+// own Wireframe/Hidden Line/Flat Shaded/Gouraud Shaded/Phong Shaded/Iray
+// dropdown (see renderModeMaterials.ts's own header for exactly how each is
+// achieved, and why true path-traced Iray-equivalent rendering isn't in
+// scope). Phong Shaded was tried and dropped same-day, per Maro: "leave
+// wireframe, hidden line, flat shaded and gouraud" — Gouraud alone already
+// covers "a non-PBR lighting model," so the extra Phong variant wasn't
+// worth the added complexity. 'shaded' — this app's original, only-ever
+// mode — is now the PBR tier ("Rendered" in the UI label), kept as the
+// string literal 'shaded' rather than renamed, so an existing
+// localStorage-persisted ViewerSettings from before this change still
+// resolves to a valid value with no migration needed.
+export type RenderMode = 'wireframe' | 'hiddenLine' | 'flat' | 'gouraud' | 'shaded'
+
 export interface ViewerSettings {
-  renderMode: 'shaded' | 'wireframe'
+  renderMode: RenderMode
   fieldOfView: number
   // Blender's View tab "Clip Start"/"Clip End" (2026-07-11, per Maro) — the
   // camera's near/far planes; anything closer than clipStart or farther

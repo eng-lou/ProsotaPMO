@@ -41,14 +41,21 @@ class ElementKeyframe(Base, TimestampMixin):
     see Viewport3D.tsx's TimelinePlayback for exactly how that split against
     an assigned AnimationProfile's own opacity/colour/transform works.
 
-    v1 scope: only ever written for source_kind="mesh" — TransformPanel's
-    "active object" selection for an IFC import is always the *whole
-    model* (for repositioning it against the site), but IFC links target
-    individual sub-elements by GlobalId; those two don't share an identity,
-    so the frontend disables keyframing for a selected IFC model rather
-    than fake a mapping that doesn't really exist. source_kind is still
-    stored per-row (matching ModelElementLink) so this doesn't need a
-    migration if that gap closes later."""
+    v1 scope: only ever written for source_kind="mesh" for ordinary
+    Transform fields (pos_x..scale_z) — TransformPanel's "active object"
+    selection for an IFC import is always the *whole model* (for
+    repositioning it against the site), but IFC links target individual
+    sub-elements by GlobalId; those two don't share an identity, so the
+    frontend disables keyframing for a selected IFC model rather than fake
+    a mapping that doesn't really exist. source_kind is still stored
+    per-row (matching ModelElementLink) so this doesn't need a migration if
+    that gap closes later.
+
+    source_kind="camera" (2026-07-11, added alongside path_follower.py) is
+    the one exception — always element_ref="", used only for the new
+    field="path_progress" (camera-path animation), never for ordinary
+    Transform fields, since the camera has no TransformPanel of its own to
+    key from in the first place."""
 
     __tablename__ = "element_keyframes"
     __table_args__ = (

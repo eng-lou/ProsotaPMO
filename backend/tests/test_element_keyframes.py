@@ -112,3 +112,33 @@ async def test_list_scoped_to_project(client: AsyncClient, db: AsyncSession, pro
     listing = (await client.get("/api/v1/element-keyframes/", params={"project_id": str(project.id)})).json()
     assert len(listing) == 1
     assert listing[0]["element_ref"] == "crane.glb"
+
+
+# path_progress / source_kind="camera" (2026-07-11) — added alongside
+# path_follower.py, see this module's own schema docstring on why these
+# reuse the exact same table/upsert-by-identity machinery as pos_x etc.
+async def test_path_progress_field_upserts_like_any_other(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id),
+        "source_kind": "mesh",
+        "element_ref": "crane.glb",
+        "field": "path_progress",
+        "date": "2026-01-01T00:00:00Z",
+        "value": 42,
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["field"] == "path_progress"
+    assert resp.json()["value"] == 42
+
+
+async def test_camera_source_kind_uses_empty_element_ref(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id),
+        "source_kind": "camera",
+        "element_ref": "",
+        "field": "path_progress",
+        "date": "2026-01-01T00:00:00Z",
+        "value": 0,
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source_kind"] == "camera"

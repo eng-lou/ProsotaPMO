@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Environment, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
+import { Environment, FlyControls, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig, type Axis } from './animationProfiles'
@@ -19,13 +19,21 @@ import type { ViewerSettings } from './viewerSettings'
 import type { GizmoMode } from './TransformPanel'
 import type { CustomTextureSet } from './customTextures'
 import { axisCorrectionRotation, resolveDisplayAxis, type UpAxis } from './upAxis'
-import { getOriginalMaterialSlots } from './elementBaseline'
+import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline'
+import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
+import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
 import type { SectionBoxBounds } from './sectionBoxes'
 import { SectionBoxGizmos } from './SectionBoxGizmo'
 import { SectionBoxCaps } from './SectionBoxCap'
 import type { CameraViewPose } from './cameraViews'
+import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
+import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
+import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
+import type { Path, PathPoint } from './paths'
+import type { PathFollower } from './pathFollowers'
+import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
 
 export interface ImportedObject {
   id: string
@@ -85,11 +93,20 @@ export interface ResolvedSectionBox {
 // `n8ao` together added ~100kb gzipped to the main chunk, for a toggle
 // that's off by default (see viewerSettings.ts's own ambientOcclusion
 // default) and may never be turned on in a given session.
+// aoSamples/denoiseSamples (2026-07-11) — real, verified quality knobs on
+// N8AO's own underlying pass (checked directly in
+// node_modules/@react-three/postprocessing's N8AOPostPass source, not
+// assumed): defaults are 16/8, boosted to 64/32 while genuinely idle — see
+// this file's own boostQuality state/comment for the "real-time path
+// tracer, scoped down" reasoning this serves.
 const AmbientOcclusionEffect = lazy(() =>
   import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
-    default: () => (
+    default: ({ boostQuality }: { boostQuality: boolean }) => (
       <EffectComposer enableNormalPass>
-        <N8AO aoRadius={1} intensity={2} distanceFalloff={1} />
+        <N8AO
+          aoRadius={1} intensity={2} distanceFalloff={1}
+          aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
+        />
       </EffectComposer>
     ),
   })),
@@ -204,6 +221,18 @@ interface Props {
   // a changing-prop-as-command needs no change to its own export shape.
   onSaveCameraView: (pose: CameraViewPose) => void
   applyCameraViewRequest: { pose: CameraViewPose; nonce: number } | null
+  // Paths / Follow Path (2026-07-11, per Maro's Blender curve reference —
+  // see path.py/path_follower.py's own docstrings). paths/pathFollowers are
+  // project-scoped, passed straight through like sectionBoxes above.
+  // addingPointsForPathId arms PathAddPointCatcher for exactly one path at a
+  // time (PathsPanel.tsx's own "+ Point" toggle) — null means click-to-add
+  // is off and ordinary selection/box-select behave as before.
+  paths: Path[]
+  pathFollowers: PathFollower[]
+  addingPointsForPathId: string | null
+  onPathDragMove: (pathId: string, points: PathPoint[]) => void
+  onPathDragEnd: (pathId: string, points: PathPoint[]) => void
+  onAddPathPoint: (pathId: string, point: PathPoint) => void
   // App.tsx's PersistentFourD keeps FourD mounted (CSS-hidden) rather than
   // unmounting it on navigation, so imported 3D/IFC data survives leaving
   // the tab (2026-07-11, per Maro). While hidden there's nothing to see, so
@@ -269,6 +298,17 @@ function ModelObjects({
 }) {
   const upAxis = settings.upAxis
   useEffect(() => {
+    // Scene-wide displacement-subdivision budget for this pass (2026-07-11,
+    // per Maro, mindful it "may lag our platform if abused" — see
+    // geometrySubdivision.ts's own header on why a per-mesh cap alone isn't
+    // enough: Apply to Linked can push one subdivision choice onto every
+    // element sharing a material at once). Decremented below as each
+    // subdivided mesh is encountered, cached or freshly computed alike —
+    // once it hits 0, any further mesh that would want subdivision falls
+    // back to its own unsubdivided geometry instead (displacement still
+    // applies, just coarser), rather than letting the scene's total
+    // triangle count grow without bound.
+    let remainingSubdivisionBudget = MAX_TOTAL_SUBDIVIDED_TRIANGLES
     for (const { id, kind, object } of objects) {
       const isObjectSelected = selectedObjectIds.has(id)
       const isObjectIsolated = isolatedObjectIds.has(id)
@@ -293,6 +333,45 @@ function ModelObjects({
         const elementOverride = elementKey !== null ? customTextures[elementKey] : undefined
         const overrides = elementOverride ?? customTextures[id]
         const ownerKey = elementOverride ? (elementKey as string) : id
+
+        // Displacement subdivision (2026-07-11, per Maro — see
+        // geometrySubdivision.ts's own header for the full reasoning: a
+        // displacement map needs more vertices than typical IFC/BREP
+        // geometry has to actually show detail). The requested level lives
+        // on the displacement texture's own userData (TextureFields.tsx's
+        // own Subdivision field mutates it directly) rather than in
+        // customTextures' own typed shape — same "read/write the live
+        // object" idiom Tile Size/Rotation already use on that same
+        // texture, and it means the setting travels with the texture
+        // automatically (cleared/replaced together, never orphaned).
+        // Cached per-mesh keyed by level so an unrelated customTextures
+        // change elsewhere (a different element's Tile Size, say) doesn't
+        // recompute this mesh's subdivision every single pass — only an
+        // actual level change does.
+        const displacementTexture = overrides?.displacementMap?.texture
+        const requestedSubdivisionLevel = (displacementTexture?.userData.subdivisionLevel as number | undefined) ?? 0
+        const baseGeometry = getOriginalGeometry(child)
+        if (requestedSubdivisionLevel > 0) {
+          let subdivided = child.userData.subdividedGeometry as THREE.BufferGeometry | undefined
+          if (child.userData.subdividedLevel !== requestedSubdivisionLevel || !subdivided) {
+            subdivided?.dispose()
+            subdivided = subdivideGeometry(baseGeometry, requestedSubdivisionLevel)
+            child.userData.subdividedGeometry = subdivided
+            child.userData.subdividedLevel = requestedSubdivisionLevel
+          }
+          const subdividedTriangles = triangleCount(subdivided)
+          const fitsInBudget = subdividedTriangles <= remainingSubdivisionBudget
+          if (fitsInBudget) {
+            remainingSubdivisionBudget -= subdividedTriangles
+            if (child.geometry !== subdivided) child.geometry = subdivided
+          } else if (child.geometry !== baseGeometry) {
+            child.geometry = baseGeometry
+          }
+        } else if (child.geometry !== baseGeometry) {
+          const stale = child.userData.subdividedGeometry as THREE.BufferGeometry | undefined
+          if (stale) { stale.dispose(); delete child.userData.subdividedGeometry; delete child.userData.subdividedLevel }
+          child.geometry = baseGeometry
+        }
 
         const isolatedOut = isolateMode && (
           isolatingSubElements ? !isolatedExpressIds.has(child.userData.expressID) : !isObjectIsolated
@@ -336,34 +415,100 @@ function ModelObjects({
         // write the restored original values into below; a mesh that's
         // *never* been touched at all skips cloning entirely (cheap — nothing
         // to restore, its material already shows the original values as-is).
-        const firstMat = Array.isArray(child.material) ? child.material[0] : child.material
+        // The real, canonical PBR material(s) for this mesh — stable across
+        // render-mode switches (2026-07-11, per Maro comparing this app's
+        // render modes against Synchro/Blender's own — see
+        // renderModeMaterials.ts's own header). Everything below this line
+        // used to read/write `child.material` directly, which was safe only
+        // because `child.material` was *always* the real material; now that
+        // a render mode can swap `child.material` to a Lambert/Phong/unlit
+        // stand-in for display, the clone-on-write override-ownership
+        // system and every property mutation below needs one place that
+        // keeps meaning "the real underlying material" regardless of what's
+        // actually on screen this frame. Captured once per mesh, the very
+        // first time this effect ever runs for it — before any render-mode
+        // swap could have touched child.material yet, so this initial
+        // capture is always correct — then always read from here after.
+        if (!child.userData.standardMaterial) child.userData.standardMaterial = child.material
+        let standardMaterial = child.userData.standardMaterial as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[]
+
+        const firstMat = Array.isArray(standardMaterial) ? standardMaterial[0] : standardMaterial
         const everCustomized = !!overrides || !!firstMat.userData.textureOverrideOwner
-        if (everCustomized && Array.isArray(child.material)) {
-          child.material = child.material.map(m => (m.userData.textureOverrideOwner === ownerKey ? m : (() => {
+        if (everCustomized && Array.isArray(standardMaterial)) {
+          standardMaterial = standardMaterial.map(m => (m.userData.textureOverrideOwner === ownerKey ? m : (() => {
             const clone = m.clone()
             clone.userData.textureOverrideOwner = ownerKey
             return clone
           })()))
-        } else if (everCustomized && child.material.userData.textureOverrideOwner !== ownerKey) {
-          child.material = child.material.clone()
-          child.material.userData.textureOverrideOwner = ownerKey
+          child.userData.standardMaterial = standardMaterial
+        } else if (everCustomized && !Array.isArray(standardMaterial) && standardMaterial.userData.textureOverrideOwner !== ownerKey) {
+          standardMaterial = standardMaterial.clone()
+          standardMaterial.userData.textureOverrideOwner = ownerKey
+          child.userData.standardMaterial = standardMaterial
         }
 
-        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        const materials = Array.isArray(standardMaterial) ? standardMaterial : [standardMaterial]
         const originals = getOriginalMaterialSlots(child)
+        const displayMaterials: THREE.Material[] = []
         materials.forEach((mat, i) => {
-          if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshBasicMaterial) {
-            mat.wireframe = settings.renderMode === 'wireframe'
-          }
-          if (mat instanceof THREE.MeshStandardMaterial) {
+          {
+            // wireframe/flatShading both apply on the real PBR material
+            // regardless of render mode (2026-07-11) — Wireframe/Flat
+            // Shaded stay on `standardMaterial` for display too (full PBR
+            // fidelity, just a different draw mode or normal
+            // interpolation), unlike Gouraud/Phong/Hidden Line below, which
+            // swap to a different material class entirely. flatShading is a
+            // shader-compile-time parameter (confirmed in three.js's own
+            // WebGLPrograms.js, not assumed) — needsUpdate only flips when
+            // it actually changes, not every frame.
+            const wantsWireframe = settings.renderMode === 'wireframe'
+            const wantsFlatShading = settings.renderMode === 'flat'
+            if (mat.flatShading !== wantsFlatShading) mat.needsUpdate = true
+            mat.wireframe = wantsWireframe
+            mat.flatShading = wantsFlatShading
+
             const isExpressSelected = child.userData.expressID === selectedExpressId
             const isExpressAlsoSelected = selectedExpressIds.has(child.userData.expressID)
-            // Priority: the one primary expressID-selected sub-element (most
-            // specific) beats any other selected sub-element of the same
-            // model, which beats a whole-object selection tint, which beats
-            // none.
-            if (isExpressSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 0.5 }
-            else if (isExpressAlsoSelected || isObjectSelected) { mat.emissive = OBJECT_SELECTED_EMISSIVE; mat.emissiveIntensity = 0.35 }
+            // Three real tiers, not two (2026-07-11 fix, per Maro: "I
+            // selected level 3 and IfcSlab... I get the overall highlight
+            // but not the 3 elements") — isExpressAlsoSelected (one of
+            // several specifically-picked elements, e.g. every IfcSlab on a
+            // storey via Select by Type) and isObjectSelected (this mesh's
+            // *whole model* merely contains a selection somewhere) used to
+            // share one identical amber treatment. Since picking specific
+            // elements always also marks their owning object selected
+            // (handleSelectExpressIds/handleSelectExpressId both call
+            // setSelectedObjectIds), those two conditions are true
+            // *together* on almost every real multi-select — every other
+            // mesh in the same model got the exact same amber wash as the
+            // 3 actually-picked slabs, so the 3 slabs never stood out from
+            // the other few hundred elements sharing that same object.
+            // isExpressAlsoSelected now gets the same strong blue as the
+            // primary pick (every individually-picked element is equally
+            // "selected" — there's no real reason the very last one clicked
+            // should look more special than the rest in a bulk pick), just
+            // very slightly dimmer so the true primary — TransformPanel's
+            // actual gizmo target — still reads as a hair brighter.
+            // isObjectSelected-only meshes (this object is active, but this
+            // particular mesh wasn't specifically picked) fall back to a
+            // deliberately much fainter amber cast, so it reads as
+            // background context rather than competing with the real
+            // selection.
+            //
+            // 2026-07-11 fix, per Maro: "you can barely tell i've selected 7
+            // elements" — additive emissive alone at these intensities
+            // barely registers against a bright, near-white shaded model
+            // (and is close to invisible on thin elements like IfcGrid
+            // lines, which have almost no screen area to glow from either
+            // way). Bumped intensity substantially, and — see the
+            // mat.color.lerp calls below, right after this material's real
+            // colour/map is set — the surface colour itself now shifts
+            // toward the selection tint too, not just an additive glow on
+            // top of it, so a selection reads as a real colour change even
+            // on a small/thin element.
+            if (isExpressSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 1.1 }
+            else if (isExpressAlsoSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 0.9 }
+            else if (isObjectSelected) { mat.emissive = OBJECT_SELECTED_EMISSIVE; mat.emissiveIntensity = 0.35 }
             else { mat.emissive = new THREE.Color(0x000000); mat.emissiveIntensity = 0 }
 
             // Manual texture override (2026-07-11, per Maro) — see
@@ -379,23 +524,77 @@ function ModelObjects({
             const original = originals[i]
             if (overrides?.map) { mat.map = overrides.map.texture; mat.color.set(0xffffff) }
             else if (original) { mat.map = original.map; mat.color.copy(original.color) }
+            // Shifts the actual surface colour toward the selection tint,
+            // on top of (not instead of) the emissive glow above — see this
+            // block's own 2026-07-11 header note for why emissive alone
+            // wasn't enough, and the isExpressSelected/isExpressAlsoSelected/
+            // isObjectSelected tiering note above for why these three now
+            // get three visibly different treatments instead of two. A
+            // 0.6/0.55 lerp on the two "specifically selected" tiers is
+            // heavy enough to read clearly against any base colour
+            // (including this real file's own tan/beige concrete, where the
+            // old single amber tier — a similarly warm hue — used to barely
+            // shift at all) without fully flattening the element to a solid
+            // highlight colour. The whole-object-only tier stays
+            // deliberately light (0.15) — background context, not
+            // competing with the real selection.
+            if (isExpressSelected) mat.color.lerp(SELECTED_EMISSIVE, 0.6)
+            else if (isExpressAlsoSelected) mat.color.lerp(SELECTED_EMISSIVE, 0.55)
+            else if (isObjectSelected) mat.color.lerp(OBJECT_SELECTED_EMISSIVE, 0.15)
             if (overrides?.metalnessMap) { mat.metalnessMap = overrides.metalnessMap.texture; mat.metalness = 1 }
             else if (original) { mat.metalnessMap = original.metalnessMap; mat.metalness = original.metalness }
             if (overrides?.roughnessMap) { mat.roughnessMap = overrides.roughnessMap.texture; mat.roughness = 1 }
             else if (original) { mat.roughnessMap = original.roughnessMap; mat.roughness = original.roughness }
             if (overrides?.normalMap) { mat.normalMap = overrides.normalMap.texture }
             else if (original) { mat.normalMap = original.normalMap }
+            // AO/Displacement (2026-07-11, per Maro) — same override-wins/
+            // fall-back-to-original shape as every slot above. Both sample
+            // the material's own primary UV set automatically (three.js
+            // Texture.channel defaults to 0 = 'uv', not a separate 'uv2' —
+            // see customTextures.ts's own TextureSlot header for how this
+            // was actually confirmed, not assumed), the same UV set
+            // ifcModel.ts's box-projected UVs already populate, so no
+            // further geometry work was needed to wire these in.
+            if (overrides?.aoMap) { mat.aoMap = overrides.aoMap.texture }
+            else if (original) { mat.aoMap = original.aoMap }
+            if (overrides?.displacementMap) { mat.displacementMap = overrides.displacementMap.texture }
+            else if (original) { mat.displacementMap = original.displacementMap }
             if (everCustomized) mat.needsUpdate = true
+
+            // Which material object actually gets displayed this frame
+            // (2026-07-11) — `mat` above (standardMaterial) has now
+            // absorbed every override/selection-tint mutation regardless of
+            // render mode, so it's always the correct *source* to display
+            // or to derive a Gouraud/Hidden Line stand-in from.
+            // Wireframe/Flat Shaded/Rendered(PBR) show `mat` itself
+            // (full PBR fidelity — see renderModeMaterials.ts's own header
+            // for why Gouraud can't preserve metalness/roughness).
+            if (settings.renderMode === 'gouraud') {
+              displayMaterials.push(getGouraudVariant(mat))
+            } else if (settings.renderMode === 'hiddenLine') {
+              const hiddenLineTint = HIDDEN_LINE_BASE_COLOR.clone()
+              if (isExpressSelected) hiddenLineTint.lerp(SELECTED_EMISSIVE, 0.6)
+              else if (isExpressAlsoSelected) hiddenLineTint.lerp(SELECTED_EMISSIVE, 0.55)
+              else if (isObjectSelected) hiddenLineTint.lerp(OBJECT_SELECTED_EMISSIVE, 0.15)
+              displayMaterials.push(getHiddenLineMaterial(mat, hiddenLineTint))
+            } else {
+              displayMaterials.push(mat)
+            }
           }
         })
+        child.material = displayMaterials.length > 1 ? displayMaterials : displayMaterials[0]
 
         // Edges overlay — a black wireframe LineSegments child, distinct from
         // "Render mode: Wireframe" (which replaces the shaded material
         // entirely) — this draws on top of shaded faces instead. Built once
         // per mesh and cached in userData so toggling it on/off repeatedly
-        // doesn't keep recomputing the edge geometry.
+        // doesn't keep recomputing the edge geometry. Forced on for Hidden
+        // Line regardless of the separate Edges checkbox (2026-07-11) — the
+        // whole point of that render mode is "line art over a flat
+        // occluder," not optional decoration.
         let edges = child.userData.edgesHelper as THREE.LineSegments | undefined
-        if (settings.showEdges) {
+        const wantsEdges = settings.showEdges || settings.renderMode === 'hiddenLine'
+        if (wantsEdges) {
           if (!edges) {
             edges = new THREE.LineSegments(
               new THREE.EdgesGeometry(child.geometry),
@@ -609,7 +808,21 @@ function collectStandardMaterials(object: THREE.Object3D): { material: THREE.Mes
   const found: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color }[] = []
   object.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
-    const materials = Array.isArray(child.material) ? child.material : [child.material]
+    // Reads child.userData.standardMaterial — the real, stable PBR material
+    // ModelObjects' own effect anchors there (2026-07-11, per Maro
+    // comparing this app's render modes against Synchro/Blender's own) —
+    // not child.material directly. Once a render mode other than
+    // Wireframe/Flat/Rendered can swap child.material to a Gouraud/Phong/
+    // Hidden Line stand-in (renderModeMaterials.ts), reading child.material
+    // here would silently find nothing to animate opacity/colour on for
+    // any element with one of those modes active: an `instanceof
+    // THREE.MeshStandardMaterial` check that used to always pass would
+    // start failing for every mesh currently displaying a different
+    // material class. Falls back to child.material for the (rare) case
+    // this runs before ModelObjects' own effect has ever established the
+    // anchor for a given mesh yet.
+    const source = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
+    const materials = Array.isArray(source) ? source : [source]
     for (const mat of materials) {
       if (mat instanceof THREE.MeshStandardMaterial) found.push({ material: mat, baseColor: mat.color.clone() })
     }
@@ -670,10 +883,58 @@ function applyKeyframedTransform(target: ResolvedTimelineTarget, now: Date, upAx
   }
 }
 
+// Mode C — Follow Path (2026-07-11, per Maro's Blender curve reference).
+// Deliberately mesh-kind only for this first pass, matching Mode B's own
+// existing v1 scope note just above (no stable per-sub-element identity for
+// IFC keyframing yet) — same reasoning applies to path_progress, and camera
+// binding is left for a later pass entirely (see this session's own scoping
+// decision). A target with no path_progress keyframes at all still resolves
+// (defaults to progress 0, the curve's own start point) so binding a path
+// is immediately visible rather than silently doing nothing until the first
+// keyframe is added.
+interface ResolvedPathTarget {
+  object: THREE.Object3D
+  curve: THREE.CatmullRomCurve3 | null
+  singlePoint: THREE.Vector3 | null
+  orientToPath: boolean
+  progressTrack: { date: Date; value: number }[]
+}
+
+// Path points are captured in world space (PathAddPointCatcher's own
+// raycast hit.point), but every imported object sits inside its own
+// up-axis-correction <group> (Viewport3D's per-object wrapper reconciling
+// sourceUpAxis against the live upAxis setting) — object.position is local
+// to *that* group, not world space. Skipped entirely whenever the two axes
+// already match (identity rotation, worldToLocal is a no-op), which is why
+// this only ever showed up with a source/display up-axis mismatch. lookAt
+// doesn't need the same treatment — three.js's own Object3D.lookAt already
+// converts its target through the parent's world matrix internally.
+function toLocalPoint(object: THREE.Object3D, worldPoint: THREE.Vector3): THREE.Vector3 {
+  if (!object.parent) return worldPoint
+  object.parent.updateWorldMatrix(true, false)
+  return object.parent.worldToLocal(worldPoint.clone())
+}
+
+function applyPathFollow(target: ResolvedPathTarget, now: Date) {
+  const progress = target.progressTrack.length > 0 ? (interpolateKeyframeTrack(target.progressTrack, now) ?? 0) : 0
+  if (target.curve) {
+    const point = pointAtProgress(target.curve, progress)
+    target.object.position.copy(toLocalPoint(target.object, point))
+    if (target.orientToPath) {
+      const tangent = tangentAtProgress(target.curve, progress)
+      target.object.lookAt(point.clone().add(tangent))
+    }
+  } else if (target.singlePoint) {
+    target.object.position.copy(toLocalPoint(target.object, target.singlePoint))
+  }
+}
+
 function TimelinePlayback({
-  dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles, activeObjectId, onTick,
+  dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles, activeObjectId, onTick, paths, pathFollowers,
 }: {
   dateRef: React.MutableRefObject<Date | null>
+  paths: Path[]
+  pathFollowers: PathFollower[]
   sceneObjects: TimelineSceneObject[]
   activities: Activity[]
   links: ModelElementLink[]
@@ -685,6 +946,7 @@ function TimelinePlayback({
   onTick: () => void
 }) {
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
+  const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -759,6 +1021,19 @@ function TimelinePlayback({
         if (so.kind !== 'mesh') continue
         const tracks: ResolvedTimelineTarget['keyframeTracks'] = {}
         for (const kf of elementKeyframes) {
+          // path_progress is Mode C's own field (see the Follow Path block
+          // below, which builds progressTrack from it directly) — never a
+          // real pos/rot/scale track. Left in here, this object would still
+          // qualify for a Mode B target (`Object.keys(tracks).length > 0`)
+          // with no pos_x/y/z entries of its own, and applyKeyframedTransform
+          // resets every axis with no track back to basePosition (2026-07-12
+          // fix, per Maro: "playing it doesnt move the object" — Mode B was
+          // stomping the path-bound position back to its pre-bind spot on
+          // every frame the date changed, right after Mode C had just set it
+          // correctly; only imperceptible during a single step/scrub because
+          // the very next unchanged-date frame let Mode C's unconditional
+          // reapply correct it again before the eye could catch it).
+          if (kf.field === 'path_progress') continue
           if (kf.source_kind !== 'mesh' || kf.element_ref !== so.name) continue
           const points = tracks[kf.field] ?? (tracks[kf.field] = [])
           points.push({ date: new Date(kf.date), value: kf.value })
@@ -767,8 +1042,37 @@ function TimelinePlayback({
         getOrCreate(so.object).keyframeTracks = tracks
       }
 
+      // Mode C — Follow Path (2026-07-11) — resolved separately from Mode
+      // A/B above rather than folded into ResolvedTimelineTarget: a path-
+      // bound object's position is computed directly from the curve, not
+      // offset from a captured basePosition the way keyframeTracks/profile
+      // offsets are, so it doesn't share that shape. Mesh-kind only this
+      // pass — see ResolvedPathTarget's own header.
+      const pathById = new Map(paths.map(p => [p.id, p]))
+      const nextPathTargets: ResolvedPathTarget[] = []
+      for (const follower of pathFollowers) {
+        if (follower.target_kind !== 'mesh') continue
+        const path = pathById.get(follower.path_id)
+        if (!path) continue
+        const so = sceneObjects.find(o => o.kind === 'mesh' && o.name === follower.element_ref)
+        if (!so) continue
+        const progressTrack: { date: Date; value: number }[] = []
+        for (const kf of elementKeyframes) {
+          if (kf.source_kind !== 'mesh' || kf.field !== 'path_progress' || kf.element_ref !== follower.element_ref) continue
+          progressTrack.push({ date: new Date(kf.date), value: kf.value })
+        }
+        nextPathTargets.push({
+          object: so.object,
+          curve: buildPathCurve(path.points, path.closed),
+          singlePoint: path.points.length === 1 ? new THREE.Vector3(path.points[0].x, path.points[0].y, path.points[0].z) : null,
+          orientToPath: follower.orient_to_path,
+          progressTrack,
+        })
+      }
+
       if (!cancelled) {
         targetsRef.current = [...byObject.values()]
+        pathTargetsRef.current = nextPathTargets
         // Immediately reflects the latest keyframe data (2026-07-09) —
         // adding/removing/editing a keyframe elsewhere (TransformPanel's
         // own keyframe dot) doesn't move the timeline's own date, so the
@@ -776,17 +1080,20 @@ function TimelinePlayback({
         // otherwise re-apply anything until the next actual scrub, leaving
         // a stale pose in the meantime. One-off, not per-frame — matches
         // Blender's own dependency-graph-updates-on-data-change behavior,
-        // not just frame-change.
+        // not just frame-change. Path targets get the same treatment.
         const now = dateRef.current
-        if (now) for (const target of targetsRef.current) {
-          if (Object.keys(target.keyframeTracks).length > 0) applyKeyframedTransform(target, now, upAxis)
+        if (now) {
+          for (const target of targetsRef.current) {
+            if (Object.keys(target.keyframeTracks).length > 0) applyKeyframedTransform(target, now, upAxis)
+          }
+          for (const target of nextPathTargets) applyPathFollow(target, now)
         }
       }
     }
 
     resolve()
     return () => { cancelled = true }
-  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles])
+  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers])
 
   // Tracks the last date keyframed transforms were actually applied for
   // (2026-07-09 fix, per Maro: "keyframing locks the model in place when
@@ -812,10 +1119,16 @@ function TimelinePlayback({
 
   useFrame(() => {
     const now = dateRef.current
-    if (!now || targetsRef.current.length === 0) return
+    if (!now || (targetsRef.current.length === 0 && pathTargetsRef.current.length === 0)) return
     const nowMs = now.getTime()
     const dateChanged = lastAppliedDateMs.current !== nowMs
     lastAppliedDateMs.current = nowMs
+
+    // Mode C — no dateChanged gate: unlike Mode A/B, a path-bound object's
+    // Location fields are locked read-only in TransformPanel (see
+    // PathProgressSupport's own header), so there's no manual-edit-vs-
+    // playback fight to guard against here — always safe to re-apply.
+    for (const target of pathTargetsRef.current) applyPathFollow(target, now)
 
     for (const target of targetsRef.current) {
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
@@ -944,6 +1257,7 @@ export function Viewport3D({
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd,
   onSaveCameraView, applyCameraViewRequest,
   scheduleStart, scheduleEnd,
+  paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -980,12 +1294,106 @@ export function Viewport3D({
   // the Canvas below; containerRef gives pixel-to-NDC conversion without
   // needing the renderer's own size.
   const [boxSelectMode, setBoxSelectMode] = useState(false)
+  // Fly Mode (2026-07-11, per Maro comparing this app's navigation against
+  // Blender's own camera view: "I can go into the camera mode and view it
+  // and navigate from inside the camera") — swaps OrbitControls (orbit
+  // around a fixed target point, this app's only navigation scheme until
+  // now) for drei's FlyControls (free 6-DOF movement: WASD + drag-to-look,
+  // no orbit pivot at all — matching Blender's own "Fly Navigation," as
+  // opposed to its ground-constrained "Walk Navigation"). Mutually
+  // exclusive by conditional rendering, not a shared ref — the two control
+  // schemes have fundamentally different state (OrbitControls has a
+  // `target` point to orbit around; FlyControls has none, just the
+  // camera's own free position/orientation), so Save View/Frame Selected
+  // (which read controlsRef.current.target) are disabled while flying
+  // rather than pointed at a ref that wouldn't mean the same thing.
+  const [flyMode, setFlyMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
   const cameraRef = useRef<THREE.Camera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  // "Real-time path tracer" was the actual ask, scoped down deliberately
+  // (2026-07-11, per Maro: "i just wont move around so it gives me a good
+  // preview") — true GPU path tracing needs a three.js version bump (this
+  // app is 11 minors behind what three-gpu-pathtracer's own peerDependencies
+  // require), a new WebGPU-only rendering pipeline, and three new
+  // dependencies, judged too risky given how much of this app's own code
+  // already reaches directly into three.js internals; Maro agreed to this
+  // lower-risk alternative instead. Delivers the same underlying want — a
+  // noticeably better-looking preview once the camera settles — by boosting
+  // the *existing* raster pipeline's own quality knobs (supersampling via
+  // Canvas's dpr, N8AO's aoSamples/denoiseSamples, shadow-map resolution)
+  // only while genuinely idle, since none of those are affordable to run at
+  // full strength during live orbiting. True path tracing (accurate global
+  // illumination, reflections, soft shadows from real light transport) is
+  // still not what this is — it's the existing look, just cleaner/sharper —
+  // an honest limitation worth remembering if this ever gets revisited.
+  //
+  // Tracks OrbitControls' own 'start'/'end' interaction events (fired by
+  // three.js's OrbitControls itself, not something built here) rather than
+  // polling — 'end' means the drag/zoom/pan that was happening has genuinely
+  // stopped, not just "no mouse movement this exact frame."
+  const [boostQuality, setBoostQuality] = useState(false)
+  useEffect(() => {
+    const controls = controlsRef.current
+    if (!controls) return
+    const onStart = () => setBoostQuality(false)
+    const onEnd = () => setBoostQuality(true)
+    controls.addEventListener('start', onStart)
+    controls.addEventListener('end', onEnd)
+    return () => {
+      controls.removeEventListener('start', onStart)
+      controls.removeEventListener('end', onEnd)
+    }
+  }, [])
+  // 2026-07-11 fix, caught while wiring in an explicit Resolution setting
+  // for Capture/Export Video (renderCaptureSettings.ts) — R3F's own dpr
+  // prop, given a [min, max] tuple, *clamps* window.devicePixelRatio into
+  // that range (confirmed directly in @react-three/fiber's own source,
+  // calculateDpr: `Math.min(Math.max(dpr[0], target), dpr[1])` where target
+  // is the real devicePixelRatio) — it does not multiply it. On a standard
+  // 1x desktop monitor (devicePixelRatio === 1, the common case on
+  // Windows), [1,3] and [1,2] both clamp to exactly 1 — boostQuality's own
+  // "supersampling boost while idle" from earlier today was a silent no-op
+  // on that hardware the whole time, only ever doing anything on an
+  // already-HiDPI display reporting >2. Fixed by computing a real
+  // multiplier instead of a clamp range: dprMultiplier below is 1
+  // (interactive), a modest 1.5 while merely idle (boostQuality), or
+  // whatever Capture/Export Video's own explicit Resolution setting asks
+  // for (captureDprMultiplier, 1/2/4×) when one of those is actually in
+  // flight — capped at 4 total either way so a deliberate 4× export on top
+  // of an already-HiDPI display can't ask the GPU for something absurd.
+  const [captureDprMultiplier, setCaptureDprMultiplier] = useState<number | null>(null)
+  const dprMultiplier = captureDprMultiplier ?? (boostQuality ? 1.5 : 1)
+  const dpr = Math.min(window.devicePixelRatio * dprMultiplier, 4)
+  // Drives N8AO's aoSamples/denoiseSamples and shadow-map resolution — true
+  // either while merely idle (boostQuality) or while a capture/export is
+  // actively forcing captureDprMultiplier, so a forced capture always gets
+  // the full quality treatment (AO/shadows included), not just the extra
+  // resolution.
+  const highQuality = boostQuality || captureDprMultiplier !== null
+  // HDR Background override for a capture/export (2026-07-11, per Maro:
+  // "give me the option to show hdr background when rendering/capturing")
+  // — null means "just use the live viewport's own ViewerSettings.
+  // environmentBackground, unchanged," matching every render before this
+  // feature existed; handleCaptureImage/handleExportVideo set this to
+  // renderCaptureSettings.showHdrBackground right before capturing
+  // (independent of whatever the live view is currently showing — e.g.
+  // background hidden for a cleaner working view, but wanted in the final
+  // output) and clear it back to null afterward.
+  const [captureBackgroundOverride, setCaptureBackgroundOverride] = useState<boolean | null>(null)
+  // Path helpers (curve line + control-point handles, PathGizmo.tsx) are a
+  // live-editing aid, not part of the model — forced off for the duration
+  // of a capture/still-export the same way captureBackgroundOverride forces
+  // HDR background on, per path.py's own `visible` docstring (2026-07-11).
+  const [hidePathHelpers, setHidePathHelpers] = useState(false)
+  const [renderCaptureSettings, setRenderCaptureSettings] = useState<RenderCaptureSettings>(loadRenderCaptureSettings)
+  const handleRenderCaptureSettingsChange = (next: RenderCaptureSettings) => {
+    setRenderCaptureSettings(next)
+    saveRenderCaptureSettings(next)
+  }
   // Disables OrbitControls for the duration of a Section Box face drag
   // (2026-07-09) — same reasoning as boxSelectMode above: a plain drag is
   // what OrbitControls uses to orbit, so it has to get out of the way
@@ -1046,18 +1454,42 @@ export function Viewport3D({
   // extra rendering work of its own. toBlob (not toDataURL) since it
   // doesn't block the main thread building a giant base64 string for
   // what's typically a multi-megapixel image.
+  //
+  // Always captures at boosted quality, plus whatever Capture/Export
+  // Video's own explicit Render/Capture Settings ask for (2026-07-11, per
+  // Maro: "include these options when i want to capture/render in the
+  // settings as well") — captureDprMultiplier/captureBackgroundOverride
+  // force resolution and HDR background to renderCaptureSettings'
+  // own values regardless of the live viewport's current idle/background
+  // state (setting either non-null also makes highQuality true, boosting
+  // AO/shadow quality along with it — see that variable's own comment),
+  // then waits a few *real* animation frames for all of that to actually
+  // land in a *drawn* frame before reading pixels back (a React state
+  // update here isn't synchronous with what's next painted to the canvas —
+  // capturing immediately would screenshot the pre-boost frame), then
+  // reverts both overrides back to null (idle-detection/live settings
+  // resume driving them normally).
   const handleCaptureImage = () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
-    canvas.toBlob(blob => {
-      if (!blob) return
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.png`
-      a.click()
-      URL.revokeObjectURL(url)
-    }, 'image/png')
+    const doCapture = () => {
+      canvas.toBlob(blob => {
+        if (!blob) return
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.png`
+        a.click()
+        URL.revokeObjectURL(url)
+        setCaptureDprMultiplier(null)
+        setCaptureBackgroundOverride(null)
+        setHidePathHelpers(false)
+      }, 'image/png')
+    }
+    setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
+    setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
+    setHidePathHelpers(true)
+    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(doCapture)))
   }
 
   // Camera Views (2026-07-10) — reads the live camera position + orbit
@@ -1092,6 +1524,14 @@ export function Viewport3D({
   // in ~durationMs regardless of the display's actual refresh rate) —
   // R3F's own default frameloop='always' is already redrawing every real
   // frame, so nothing here needs to force a render itself.
+  // fps/durationMs/resolution/HDR background now come from
+  // renderCaptureSettings (2026-07-11, per Maro: "implement the others
+  // also" — Export Video's own settings, alongside Capture's) instead of
+  // being fixed at 30fps/8s — same RenderCaptureSettingsPopover, same
+  // captureDprMultiplier/captureBackgroundOverride mechanism
+  // handleCaptureImage already uses, just held active for the whole export
+  // (not just a few frames) since this keeps redrawing continuously for
+  // durationMs rather than reading back a single frame.
   const handleExportVideo = async () => {
     if (isExportingVideo || !scheduleStart || !scheduleEnd) return
     const canvas = rendererRef.current?.domElement
@@ -1100,9 +1540,20 @@ export function Viewport3D({
     if (totalMs <= 0) return
 
     setIsExportingVideo(true)
+    setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
+    setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
+    setHidePathHelpers(true)
     try {
-      const fps = 30
-      const durationMs = 8000
+      // Same "wait a few real drawn frames" reasoning as handleCaptureImage
+      // — the boosted resolution/background/AO/shadow settings just forced
+      // above aren't guaranteed to be reflected in the very next frame
+      // captureStream happens to sample.
+      await new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      })
+
+      const fps = renderCaptureSettings.videoFps
+      const durationMs = renderCaptureSettings.videoDurationSec * 1000
       const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
       const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' })
       const chunks: Blob[] = []
@@ -1134,6 +1585,9 @@ export function Viewport3D({
       URL.revokeObjectURL(url)
     } finally {
       setIsExportingVideo(false)
+      setCaptureDprMultiplier(null)
+      setCaptureBackgroundOverride(null)
+      setHidePathHelpers(false)
     }
   }
 
@@ -1264,10 +1718,24 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleFrameSelected}
-          title="Frame Selected — move the camera to fit the current selection (or the whole scene if nothing's selected)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          disabled={flyMode}
+          title={flyMode ? 'Frame Selected — unavailable in Fly Mode (no orbit target to frame around)' : 'Frame Selected — move the camera to fit the current selection (or the whole scene if nothing\'s selected)'}
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Frame Selected
+        </button>
+        <button
+          onClick={() => setFlyMode(v => !v)}
+          title={
+            flyMode
+              ? 'Exit Fly Mode — return to orbit navigation'
+              : 'Fly Mode — navigate freely from inside the camera, Blender-style: drag to look around, WASD (+ R/F or Q/E) to move'
+          }
+          className={`text-xs px-2 py-1 rounded-md border shadow-sm ${
+            flyMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Fly Mode
         </button>
         <button
           onClick={handleCaptureImage}
@@ -1278,8 +1746,9 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleSaveCameraView}
-          title="Save Current View — bookmark this camera angle (see the Camera Views panel to jump back to it later)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          disabled={flyMode}
+          title={flyMode ? 'Save Current View — unavailable in Fly Mode (no orbit target to save)' : 'Save Current View — bookmark this camera angle (see the Camera Views panel to jump back to it later)'}
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Save View
         </button>
@@ -1289,12 +1758,13 @@ export function Viewport3D({
           title={
             !scheduleStart || !scheduleEnd
               ? 'Export Video — needs at least one scheduled/linked activity to know what date range to play'
-              : 'Export Video — records an 8s .webm of the timeline playing from schedule start to finish'
+              : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .webm at ${renderCaptureSettings.videoFps}fps of the timeline playing from schedule start to finish (see ⚙ Render/Capture Settings)`
           }
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isExportingVideo ? 'Recording…' : 'Export Video'}
         </button>
+        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} />
       </div>
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while
@@ -1317,6 +1787,10 @@ export function Viewport3D({
       <Canvas
         frameloop={active ? 'always' : 'never'}
         shadows={settings.shadows}
+        // Supersampling — see the dprMultiplier/dpr computation above (and
+        // its own 2026-07-11 fix note) for why this is a real multiplier of
+        // window.devicePixelRatio, not a [min,max] clamp range.
+        dpr={dpr}
         camera={{
           position: [8, 8, 8], up: [0, zUp ? 0 : 1, zUp ? 1 : 0],
           fov: settings.fieldOfView, near: settings.clipStart, far: settings.clipEnd,
@@ -1356,7 +1830,7 @@ export function Viewport3D({
             precision-per-unit would otherwise introduce. */}
         <directionalLight
           position={zUp ? [10, 10, 15] : [10, 15, 10]} intensity={1} castShadow={settings.shadows}
-          shadow-mapSize={[2048, 2048]} shadow-bias={-0.0005}
+          shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]} shadow-bias={-0.0005}
           shadow-camera-left={-100} shadow-camera-right={100} shadow-camera-top={100} shadow-camera-bottom={-100}
           shadow-camera-near={0.5} shadow-camera-far={300}
         />
@@ -1371,7 +1845,7 @@ export function Viewport3D({
                 this — same +90-about-X correction as everything else Y-up. */}
             <Environment
               files={activeEnvironmentUrl}
-              background={settings.environmentBackground}
+              background={captureBackgroundOverride ?? settings.environmentBackground}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
             />
@@ -1448,9 +1922,40 @@ export function Viewport3D({
             ifcHandles={ifcHandles}
             activeObjectId={activeObjectId}
             onTick={onTransformChange}
+            paths={paths}
+            pathFollowers={pathFollowers}
+          />
+          {!hidePathHelpers && (
+            <PathGizmos
+              paths={paths}
+              onDragStart={() => {}}
+              onDragMove={onPathDragMove}
+              onDragEnd={onPathDragEnd}
+            />
+          )}
+          <PathAddPointCatcher
+            active={addingPointsForPathId !== null}
+            upAxis={settings.upAxis}
+            onAddPoint={point => { if (addingPointsForPathId) onAddPathPoint(addingPointsForPathId, point) }}
           />
         </Suspense>
-        <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
+        {flyMode ? (
+          // movementSpeed in scene units/sec — set well above the library's
+          // own default of 1 (this app's own shadow-frustum sizing
+          // elsewhere notes real BIM models routinely span 50-200 units;
+          // at speed 1 crossing one would take minutes). dragToLook:
+          // requires holding the mouse button to look around (matching
+          // this app's existing OrbitControls-style click-drag
+          // interaction) rather than FlyControls' own default of
+          // always-look-on-any-mouse-move, which would fight with reaching
+          // for a toolbar button. Note the library's own Shift behaviour is
+          // the opposite of a typical "sprint" key — held Shift *slows*
+          // movement for fine control, not a speed boost; not something
+          // this wrapper changes.
+          <FlyControls makeDefault movementSpeed={20} rollSpeed={0.5} dragToLook />
+        ) : (
+          <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
+        )}
         {activeObject && (
           <TransformControls object={activeObject.object} mode={gizmoMode} onChange={onTransformChange} />
         )}
@@ -1461,7 +1966,7 @@ export function Viewport3D({
         )}
         {settings.ambientOcclusion && (
           <Suspense fallback={null}>
-            <AmbientOcclusionEffect />
+            <AmbientOcclusionEffect boostQuality={highQuality} />
           </Suspense>
         )}
       </Canvas>

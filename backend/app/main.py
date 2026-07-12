@@ -26,6 +26,8 @@ from app.api.gantt_layouts import router as gantt_layouts_router
 from app.api.material_presets import router as material_presets_router
 from app.api.model3d_files import router as model3d_files_router
 from app.api.model_element_links import router as model_element_links_router
+from app.api.path_followers import router as path_followers_router
+from app.api.paths import router as paths_router
 from app.api.periods import router as periods_router
 from app.api.project_letterhead import router as project_letterhead_router
 from app.api.projects import router as projects_router
@@ -111,6 +113,8 @@ app.include_router(camera_views_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(collections_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(collection_members_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(element_transforms_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(paths_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(path_followers_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

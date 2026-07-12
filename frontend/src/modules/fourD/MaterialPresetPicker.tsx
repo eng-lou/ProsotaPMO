@@ -25,6 +25,8 @@ const SLOTS: { key: TextureSlot; label: string }[] = [
   { key: 'metalnessMap', label: 'Metallic' },
   { key: 'roughnessMap', label: 'Roughness' },
   { key: 'normalMap', label: 'Normal' },
+  { key: 'aoMap', label: 'AO' },
+  { key: 'displacementMap', label: 'Displacement' },
 ]
 
 function EditorSlotRow({ label, value, onUpload, onClear }: {

@@ -23,8 +23,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     authorizationParams={{
       redirect_uri: window.location.origin,
       audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+      scope: 'openid profile email offline_access',
     }}
+    useRefreshTokens
+    cacheLocation="localstorage"
   >
+    {/* useRefreshTokens+localStorage: avoids relying on third-party-cookie iframe silent auth, which browsers increasingly block (see AuthTokenProvider.tsx) */}
     <React.StrictMode>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>

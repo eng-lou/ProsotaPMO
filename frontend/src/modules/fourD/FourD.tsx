@@ -24,7 +24,7 @@ import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type SourceKind } from './modelElementLinks'
 import { deleteModel3DFile, downloadModel3DFile, listModel3DFiles, uploadModel3DFile, type Model3DKind } from './model3dFiles'
 import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds } from './sectionBoxes'
-import { computeLocalBoundsForObject } from './sectionBoxGeometry'
+import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sectionBoxGeometry'
 import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel } from './SectionBoxPanel'
@@ -54,12 +54,16 @@ import { computeVisibleActivities, ScheduleWindow } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
 import { computeKeyframeRange, computeScheduleRange, padDegenerateRange, unionRanges } from './timelinePlayback'
-import type { GizmoMode, KeyframeSupport } from './TransformPanel'
+import type { GizmoMode, KeyframeSupport, PathProgressSupport } from './TransformPanel'
+import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
+import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
+import { PathsPanel } from './PathsPanel'
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
 import { ImportModelDialog } from './ImportModelDialog'
 import { UnloadModelDialog } from './UnloadModelDialog'
 import type { UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
+import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
 import { WindowChrome, type DockSide } from './WindowChrome'
 
 type WindowKey = 'schedule' | 'gantt' | 'tracking' | 'usage' | 'timeline'
@@ -99,6 +103,8 @@ const CAMERA_PANEL_OPEN_KEY = 'prosota_4d_camera_panel_open'
 const CAMERA_PANEL_DOCK_KEY = 'prosota_4d_camera_panel_dock'
 const COLLECTIONS_PANEL_OPEN_KEY = 'prosota_4d_collections_panel_open'
 const COLLECTIONS_PANEL_DOCK_KEY = 'prosota_4d_collections_panel_dock'
+const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
+const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -351,20 +357,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // identifier — expressIDs only mean anything within one web-ifc
       // session, see ifcModel.ts).
       let elementRef: string | null = null
-      let boundsTarget = target.object
+      let bounds: SectionBoxBounds
       if (target.kind === 'ifc' && selectedExpressId !== null) {
         const handle = getIfcHandleFor(target.id)
+        let found: Object3D | null = null
         if (handle) {
-          let found: Object3D | null = null
           handle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
-          if (found) {
-            boundsTarget = found
-            const { getElementInfo } = await import('./ifcModel')
-            elementRef = (await getElementInfo(handle, selectedExpressId)).globalId
-          }
         }
+        if (found && handle) {
+          const { getElementInfo } = await import('./ifcModel')
+          elementRef = (await getElementInfo(handle, selectedExpressId)).globalId
+          bounds = computeLocalBoundsForObject(found)
+        } else {
+          bounds = computeLocalBoundsForObject(target.object)
+        }
+      } else if (target.kind === 'ifc' && selectedExpressIds.size > 0) {
+        // Multi-element selection (e.g. a Collection) — see
+        // computeLocalBoundsForObjects's own header for why this exists.
+        const handle = getIfcHandleFor(target.id)
+        const found: Object3D[] = []
+        if (handle) {
+          handle.object.traverse(child => { if (selectedExpressIds.has(child.userData.expressID)) found.push(child) })
+        }
+        bounds = found.length > 0 ? computeLocalBoundsForObjects(target.object, found) : computeLocalBoundsForObject(target.object)
+      } else {
+        bounds = computeLocalBoundsForObject(target.object)
       }
-      const bounds = computeLocalBoundsForObject(boundsTarget)
       const box = await createSectionBox({ model3d_file_id: fileId, element_ref: elementRef, ...bounds })
       setSectionBoxes(prev => [...prev, box])
     } catch (err) {
@@ -571,6 +589,148 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setIsolateMode(true)
   }
 
+  // Paths / Follow Path (2026-07-11, per Maro's Blender curve reference:
+  // "in blender you can add a curve, edit it and set a path from point a to
+  // b... i can then place an object to follow that path") — project-scoped,
+  // persisted server-side (path.py/path_follower.py). Mesh targets only
+  // this pass — see PathFollower binding below and Viewport3D.tsx's own
+  // ResolvedPathTarget header for why (matches ElementKeyframe's own
+  // existing mesh-only v1 scope; camera binding is a later pass).
+  const [paths, setPaths] = useState<Path[]>([])
+  const [pathFollowers, setPathFollowers] = useState<PathFollower[]>([])
+  const [pathError, setPathError] = useState<string | null>(null)
+  const [addingPointsForPathId, setAddingPointsForPathId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listPaths(selectedProject.id).then(ps => { if (!cancelled) setPaths(ps) })
+    listPathFollowers(selectedProject.id).then(fs => { if (!cancelled) setPathFollowers(fs) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  const pathErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  const handleCreatePath = async () => {
+    if (!selectedProject) return
+    try {
+      setPathError(null)
+      const path = await createPath({ project_id: selectedProject.id })
+      setPaths(prev => [...prev, path])
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to create path'))
+    }
+  }
+
+  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible'>>) => {
+    try {
+      setPathError(null)
+      const updated = await updatePath(id, data)
+      setPaths(prev => prev.map(p => (p.id === id ? updated : p)))
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to update path'))
+    }
+  }
+  const handleRenamePath = (id: string, name: string) => handleUpdatePath(id, { name })
+  const handleTogglePathClosed = (id: string) => {
+    const path = paths.find(p => p.id === id)
+    if (path) handleUpdatePath(id, { closed: !path.closed })
+  }
+  const handleTogglePathVisible = (id: string) => {
+    const path = paths.find(p => p.id === id)
+    if (path) handleUpdatePath(id, { visible: !path.visible })
+  }
+  const handleDeletePath = async (id: string) => {
+    try {
+      setPathError(null)
+      await deletePath(id)
+      setPaths(prev => prev.filter(p => p.id !== id))
+      setPathFollowers(prev => prev.filter(f => f.path_id !== id))
+      if (addingPointsForPathId === id) setAddingPointsForPathId(null)
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setPaths(prev => prev.filter(p => p.id !== id))
+        return
+      }
+      setPathError(pathErrorMessage(err, 'Failed to delete path'))
+    }
+  }
+  const handleToggleAddPathPoints = (id: string) => {
+    setAddingPointsForPathId(prev => (prev === id ? null : id))
+  }
+  const handleRemoveLastPathPoint = (id: string) => {
+    const path = paths.find(p => p.id === id)
+    if (!path || path.points.length === 0) return
+    handleUpdatePath(id, { points: path.points.slice(0, -1) })
+  }
+  // Click-to-place (PathGizmo.tsx's PathAddPointCatcher) appends straight
+  // to the server copy — no local-only preview needed here since each click
+  // is already a discrete, deliberate action (unlike a continuous drag).
+  const handleAddPathPoint = (id: string, point: PathPoint) => {
+    const path = paths.find(p => p.id === id)
+    if (!path) return
+    handleUpdatePath(id, { points: [...path.points, point] })
+  }
+  // PathGizmo.tsx's own live-drag/commit for an existing control point —
+  // same local-preview-then-PATCH-on-release convention as
+  // draggingSectionBox below, so a drag doesn't spam a PATCH per pointer-
+  // move frame.
+  const [draggingPath, setDraggingPath] = useState<{ id: string; points: PathPoint[] } | null>(null)
+  const handlePathDragMove = (id: string, points: PathPoint[]) => setDraggingPath({ id, points })
+  const handlePathDragEnd = (id: string, points: PathPoint[]) => {
+    setDraggingPath(null)
+    handleUpdatePath(id, { points })
+  }
+  // Memoized (2026-07-12 fix, per Maro: path-follow animation freezes
+  // during Play, only catches up the instant it's paused) — same identity-
+  // churn bug as timelineRange above, one level further downstream: this
+  // plain .map() built a brand-new array on *every* render even when
+  // draggingPath was null (the overwhelmingly common case), and that fresh
+  // array is what Viewport3D forwards into TimelinePlayback's own paths
+  // prop — a dependency of its path-resolution effect. Selecting a scene
+  // object makes this whole component re-render on literally every
+  // animation frame (onTick -> setTransformTick, so TransformPanel's
+  // Location fields stay live), which was tearing that effect down and
+  // rebuilding it 60x/sec while playing, instead of leaving it alone
+  // between actual path edits.
+  const resolvedPaths: Path[] = useMemo(
+    () => paths.map(p => (draggingPath?.id === p.id ? { ...p, points: draggingPath.points } : p)),
+    [paths, draggingPath],
+  )
+
+  const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
+    if (!selectedProject) return
+    try {
+      setPathError(null)
+      const follower = await upsertPathFollower({ project_id: selectedProject.id, path_id: pathId, target_kind: targetKind, element_ref: elementRef })
+      setPathFollowers(prev => [...prev.filter(f => !(f.target_kind === targetKind && f.element_ref === elementRef)), follower])
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to bind path'))
+    }
+  }
+  const handleUnbindPathFollower = async (followerId: string) => {
+    try {
+      setPathError(null)
+      await deletePathFollower(followerId)
+      setPathFollowers(prev => prev.filter(f => f.id !== followerId))
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to unbind path'))
+    }
+  }
+  const handleTogglePathFollowerOrient = async (followerId: string) => {
+    const follower = pathFollowers.find(f => f.id === followerId)
+    if (!follower) return
+    try {
+      setPathError(null)
+      const updated = await updatePathFollower(followerId, { orient_to_path: !follower.orient_to_path })
+      setPathFollowers(prev => prev.map(f => (f.id === followerId ? updated : f)))
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to update path binding'))
+    }
+  }
+
   // Camera Views (2026-07-10, per Maro: "add camera too so i can capture
   // the model at different angles like blender") — project-scoped,
   // persisted server-side like everything else this session (see
@@ -656,9 +816,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // same one scrubber, not a schedule prerequisite for the other (that
   // prerequisite was exactly Maro's complaint: "adding a simple cube and i
   // cant do animation because its asking for a dated activity").
-  const scheduleRange = computeScheduleRange(activities)
-  const keyframeRange = computeKeyframeRange(elementKeyframes.keyframes)
-  const timelineRange = padDegenerateRange(unionRanges(scheduleRange, keyframeRange))
+  // Memoized (2026-07-11 fix, per Maro: "press play... doesn't work") —
+  // these were plain per-render calls, producing a brand-new Date-bearing
+  // object on *every* FourD.tsx render regardless of whether activities or
+  // keyframes actually changed. TimelineWindow's own play/pause
+  // requestAnimationFrame loop depends on scheduleStart/scheduleEnd by
+  // identity (see its own header — shared via prop, not state) to keep
+  // accumulating real elapsed time across frames; a fresh identity on every
+  // unrelated re-render tore that effect down and rebuilt it constantly,
+  // resetting its internal lastTimeRef to null before a meaningful delta
+  // could ever accumulate — Play looked like it did nothing, while a manual
+  // scrub (self-contained local state inside TimelineWindow, untouched by
+  // this) worked fine.
+  const timelineRange = useMemo(
+    () => padDegenerateRange(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes))),
+    [activities, elementKeyframes.keyframes],
+  )
   // Seeds the shared "current date" the moment there's anything to seed it
   // from — schedule or keyframes — falling back to today if there's neither
   // yet (2026-07-08, per Maro: keying a brand-new project's first-ever
@@ -815,6 +988,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Dockable Paths panel (2026-07-11, per Maro's Blender curve reference:
+  // "in blender you can add a curve... i can then place an object to follow
+  // that path") — same shared-side-dock treatment as Collections/Section
+  // Box/Camera Views/Animation Profiles above.
+  const [pathsPanelOpen, setPathsPanelOpen] = useState(() => loadPanelOpen(PATHS_PANEL_OPEN_KEY, false))
+  const togglePathsPanel = () => {
+    setPathsPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(PATHS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [pathsPanelDock, setPathsPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(PATHS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const togglePathsPanelDock = () => {
+    setPathsPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(PATHS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
   // Heights of the top/bottom window docks, in px — drag-resizable via
   // DockDivider.tsx between each dock and the viewport (2026-07-11, per
   // Maro: "the dividers separating the windows and the main the 3d
@@ -879,6 +1078,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // --- Import 3D / Import IFC + viewport state ---
   const [settings, setSettingsState] = useState<ViewerSettings>(loadViewerSettings)
   const setSettings = (next: ViewerSettings) => { setSettingsState(next); saveViewerSettings(next) }
+  // Auto/ft/m preference for IFC storey elevations (IfcDataPanel) and
+  // Location fields (TransformPanel) — owned here, not by either panel
+  // (2026-07-11, per Maro: "rewire units"), so both stay in sync live
+  // rather than only agreeing after a remount. Same load-on-mount/
+  // save-on-change shape as settings/setSettings just above.
+  const [ifcUnitDisplay, setIfcUnitDisplayState] = useState<IfcUnitDisplay>(loadIfcUnitDisplay)
+  const setIfcUnitDisplay = (next: IfcUnitDisplay) => { setIfcUnitDisplayState(next); saveIfcUnitDisplay(next) }
   const [customEnvironment, setCustomEnvironment] = useState<{ name: string; url: string } | null>(null)
   const [environmentError, setEnvironmentError] = useState<string | null>(null)
   const handleUploadEnvironment = async (file: File) => {
@@ -1104,7 +1310,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       })
       if (!stillLoaded) deleteModel3DFile(saved.id).catch(() => {})
     } catch (err) {
+      // Used to only console.error here (2026-07-11 fix, per a real
+      // incident: "imported, translated....gone on refresh" — the upload
+      // had actually failed, silently, with zero indication anywhere in
+      // the UI; the model displays fine locally regardless, since it's
+      // already in the live THREE.js scene before this background persist
+      // call even starts, so there was no way to tell "looks fine" apart
+      // from "looks fine but isn't actually saved" until the next reload.
+      // Surfaced as a real, visible error now, with as much of the actual
+      // failure reason as axios can give (HTTP status + backend detail if
+      // the request reached the server at all, or the raw network error
+      // if it never did) — needed to actually diagnose which one this is,
+      // not just know that *something* failed.
+      const detail = axios.isAxiosError(err)
+        ? (typeof err.response?.data?.detail === 'string'
+            ? `${err.response.status}: ${err.response.data.detail}`
+            : err.response
+              ? `HTTP ${err.response.status}`
+              : `Network error: ${err.message}`)
+        : err instanceof Error ? err.message : 'Unknown error'
       console.error('Failed to persist imported model — it will not survive a hard refresh', err)
+      setImportError(`"${file.name}" imported but failed to save to the server — it will NOT survive a refresh (${detail}). Try again, or check your connection.`)
     }
   }
 
@@ -1195,11 +1421,26 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!selectedProject) return
     let cancelled = false
     ;(async () => {
+      let listFailure: unknown = null
       const [files, transforms] = await Promise.all([
-        listModel3DFiles(selectedProject.id).catch(() => []),
-        listElementTransforms(selectedProject.id).catch(() => []),
+        listModel3DFiles(selectedProject.id).catch(err => { listFailure = err; return [] }),
+        listElementTransforms(selectedProject.id).catch(err => { listFailure ??= err; return [] }),
       ])
       if (cancelled) return
+      // Distinguishes "you genuinely have no saved models" from "the
+      // request to check failed" (2026-07-11) — these two used to look
+      // identical (both landed on an empty `files` array), which is
+      // exactly how a real 401/403 on refresh read as "no model loaded"
+      // with no error anywhere, even after the try/catch below got its own
+      // visible-error fix — there was nothing left in that loop to fail.
+      // Includes the real status/detail (not just a generic message) —
+      // the first version of this fix used a static string, which meant
+      // reproducing the bug again told us nothing new we didn't already
+      // know (2026-07-11, per Maro pasting back the exact static text).
+      if (listFailure) {
+        console.error('Failed to list persisted models/transforms', listFailure)
+        setImportError(`Failed to check for your saved models (${sectionBoxErrorMessage(listFailure, 'unknown error')}) — try refreshing again. If this keeps happening, try signing out and back in.`)
+      }
       elementTransformsRef.current = transforms
 
       const applyTransform = (object: Object3D, t: ElementTransform | undefined) => {
@@ -1258,7 +1499,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             }])
           }
         } catch (err) {
+          // Same silent-failure gap as persistModelFile's own 2026-07-11 fix
+          // (see its comment) — this loop's try/catch kept one bad file from
+          // taking the rest of the restore down, which is right, but the
+          // catch itself only ever logged to a console nobody watches. A
+          // real building IFC file is parsed by web-ifc for the very first
+          // time right here, client-side — none of this session's backend
+          // tests exercise real IFC parsing at all (they post placeholder
+          // bytes the server never opens), so a parse failure specific to a
+          // real file could only ever have shown up here, and never did.
           console.error(`Failed to restore persisted model "${file.name}"`, err)
+          const detail = err instanceof Error ? err.message : String(err)
+          setImportError(`"${file.name}" was saved but failed to restore on reload (${detail}).`)
         }
       }
     })()
@@ -1628,6 +1880,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleClearActiveTexture = (slot: TextureSlot) => {
     if (activeTextureKey) handleClearTexture(activeTextureKey, slot)
   }
+  // Tile Size/Rotation's own forced re-render (2026-07-11) — TextureFields.tsx
+  // mutates each slot's live THREE.Texture.repeat/.rotation directly (its
+  // own Props header explains why: the renderer reads both every frame
+  // regardless, no React state needs to own either number itself), so
+  // nothing about `customTextures` actually changed shape here — this only
+  // exists to give those fields' own controlled inputs a fresh top-level
+  // object reference to re-render from, same trick TransformPanel.tsx's
+  // onFieldChange uses for object.position. Deliberately not
+  // onTransformChange (which also queues a debounced save to the
+  // element_transform endpoint) — a texture edit has nothing to do with
+  // that.
+  const handleTextureFieldChange = () => setCustomTextures(prev => ({ ...prev }))
 
   // Material Preset library (2026-07-09, per Maro: "Save the default
   // materials for the whole model... I can then add a new preset which
@@ -1796,6 +2060,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   let activeTransformObject: Object3D | null = activeSceneObject?.object ?? null
   let isElementTransform = false
   const activeIfcHandle = activeSceneObject?.kind === 'ifc' ? getIfcHandleFor(activeObjectId) : null
+
+  // TransformPanel's own Location-field unit factor (2026-07-11, per Maro:
+  // "rewire units") — re-derived from the active IFC handle's own spatial
+  // tree root (same getLengthUnitToMetres call IfcDataPanel.tsx's own
+  // ModelItem already makes for its Spatial Decomposition list; a second,
+  // cheap getSpatialStructure round trip here rather than threading that
+  // panel's own per-model state across to this unrelated one). Stays null
+  // — TransformPanel's own no-op passthrough — for a plain mesh import,
+  // which has no IfcUnitAssignment to read at all.
+  const [activeIfcLengthUnitToMetres, setActiveIfcLengthUnitToMetres] = useState<number | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setActiveIfcLengthUnitToMetres(null)
+    if (!activeIfcHandle) return
+    import('./ifcModel').then(({ getSpatialTree, getLengthUnitToMetres }) => {
+      getSpatialTree(activeIfcHandle).then(tree => {
+        if (cancelled) return
+        setActiveIfcLengthUnitToMetres(getLengthUnitToMetres(activeIfcHandle, tree.expressID))
+      })
+    })
+    return () => { cancelled = true }
+  }, [activeIfcHandle])
   if (activeIfcHandle && selectedExpressId !== null) {
     let found: Object3D | null = null
     activeIfcHandle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
@@ -1890,6 +2176,70 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // — editing one specific slab's texture no longer touches the model's
   // own whole-object override, or any other element's.
   const activeTextureKey = isElementTransform && activeObjectId ? `${activeObjectId}::${selectedExpressId}` : activeObjectId
+
+  // Clear Materials (2026-07-11, per Maro: "add a clear materials button so
+  // i can bulk wipe materials back to imported default") — the existing per-
+  // slot ✕ button already restores one channel to its captured original
+  // (see this file's own handleClearTexture and elementBaseline.ts's own
+  // header on what "original" means), this just does all six at once
+  // instead of six separate clicks. Removing each key entirely (rather than
+  // looping handleClearTexture per slot, which would leave a now-empty `{}`
+  // CustomTextureSet sitting in state) matches handleUnloadModel's own
+  // disposeCustomTextureSet usage elsewhere in this file — "no override at
+  // all" and "an override object with every slot cleared" should be the
+  // exact same state, not two representations of it.
+  //
+  // 2026-07-11 fix, per Maro: "clear materials doesnt work on bulk" — the
+  // very first version only ever cleared activeTextureKey, the *one*
+  // primary/last-clicked element. A multi-element pick (e.g. Select by Type
+  // scoped to a storey — IfcDataPanel.tsx's own Spatial Decomposition
+  // feature) very much expects "clear" to mean every selected element, not
+  // just the one that happened to be clicked last — exactly the same
+  // bulk-target resolution handleApplyToLinkedMaterial above already solved
+  // for the same "one action, many selected elements" shape, so this reuses
+  // that identical `${activeObjectId}::${expressID}` per selectedExpressIds
+  // key construction. hasAnyActiveTextureOverride shares the same
+  // resolution so the button's own visibility can't disagree with what
+  // clicking it would actually clear (a second, follow-up fix to the same
+  // report — the button was still only checking the *primary* element's
+  // own textures, so it could stay hidden entirely when the primary
+  // happened to carry no override but other selected elements did).
+  //
+  // Deliberately declared here, after activeTextureKey/isElementTransform
+  // above rather than up near this file's other texture handlers
+  // (2026-07-11 fix, per a real crash: "Cannot access 'isElementTransform'
+  // before initialization") — hasAnyActiveTextureOverride calls
+  // resolveActiveTextureKeys() *immediately*, during render, unlike
+  // handleClearAllActiveTextures itself (only invoked later, on click,
+  // by which point the whole render's `let`/`const` chain has already run
+  // once top-to-bottom) — so it genuinely needs isElementTransform to
+  // already exist at the point this line executes, not just by the time a
+  // user clicks something.
+  const resolveActiveTextureKeys = (): string[] =>
+    isElementTransform && activeObjectId && selectedExpressIds.size > 0
+      ? [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
+      : activeTextureKey ? [activeTextureKey] : []
+  const hasAnyActiveTextureOverride = resolveActiveTextureKeys().some(key => {
+    const set = customTextures[key]
+    return set && Object.keys(set).length > 0
+  })
+  const handleClearAllActiveTextures = () => {
+    const keys = resolveActiveTextureKeys()
+    if (keys.length === 0) return
+    setCustomTextures(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const key of keys) {
+        const current = next[key]
+        if (!current) continue
+        disposeCustomTextureSet(current)
+        delete next[key]
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }
+
   // What's currently applied to the active element/object, in preset shape
   // — the starting point for "Save Current as Preset" (MaterialPresetPicker's
   // 💾 button).
@@ -1931,16 +2281,81 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   // Diamond markers on the Timeline scrubber (2026-07-08, per Maro's earlier
   // confirmed scoping answer: "Track markers on the Timeline window's
-  // scrubber") — every date the active object is keyed on, across all nine
-  // fields, deduped by day since several fields keyed on the same date is
-  // the common case and shouldn't draw overlapping markers.
-  const activeObjectKeyframeDates: Date[] = activeSceneObject?.kind === 'mesh'
-    ? [...new Set(
-        elementKeyframes.keyframes
-          .filter(k => k.source_kind === 'mesh' && k.element_ref === activeSceneObject.name)
-          .map(k => k.date.slice(0, 10)),
-      )].map(d => new Date(d))
-    : []
+  // scrubber") — every date the active object is keyed on, across all ten
+  // fields (nine transform + path_progress), grouped by day since several
+  // fields keyed on the same date is the common case and shouldn't draw
+  // overlapping markers. Each group carries its own full ElementKeyframe
+  // rows now, not just the bare date (2026-07-12, per Maro: "the keyframes
+  // on the timeline need to be movable, editable, deletable") — dragging or
+  // deleting a marker acts on every field keyed that day at once, the same
+  // "summary row" convention Blender's own dopesheet uses for a per-object
+  // track when multiple channels share a frame; editing a single field's own
+  // value already goes through TransformPanel's own per-field keyframe dot
+  // once you've jumped to that date (which clicking a marker already does).
+  const activeObjectKeyframesByDay: { date: Date; keyframes: ElementKeyframe[] }[] = useMemo(() => {
+    if (activeSceneObject?.kind !== 'mesh') return []
+    const byDay = new Map<string, ElementKeyframe[]>()
+    for (const k of elementKeyframes.keyframes) {
+      if (k.source_kind !== 'mesh' || k.element_ref !== activeSceneObject.name) continue
+      const day = k.date.slice(0, 10)
+      const group = byDay.get(day) ?? []
+      group.push(k)
+      byDay.set(day, group)
+    }
+    return [...byDay.entries()].map(([day, keyframes]) => ({ date: new Date(day), keyframes }))
+  }, [activeSceneObject, elementKeyframes.keyframes])
+
+  // Reschedules every field keyed on dayKeyframes' shared date to newDate —
+  // create-at-new-date-then-delete-old, upsert's own "insert or overwrite at
+  // this exact date" semantics have no separate "move" operation, matching
+  // element_keyframes.py's own POST route (no PATCH exists for this table).
+  const handleMoveKeyframes = async (dayKeyframes: ElementKeyframe[], newDate: Date) => {
+    for (const k of dayKeyframes) {
+      await elementKeyframes.upsert(k.source_kind, k.element_ref, k.field, newDate, k.value)
+      await elementKeyframes.remove(k.id)
+    }
+  }
+  const handleDeleteKeyframes = async (dayKeyframes: ElementKeyframe[]) => {
+    for (const k of dayKeyframes) await elementKeyframes.remove(k.id)
+  }
+
+  // Paths panel's "Bind selected" target (2026-07-11) — mesh-kind only
+  // this pass, same v1 scope as keyframeSupport just above (a mesh scene
+  // object's own filename is a stable identity; an IFC selection has no
+  // per-sub-element one yet). Whatever's currently the "active" whole
+  // object (same target TransformPanel itself edits), not a bulk/multi
+  // selection — a Path binds exactly one target.
+  const pathBindTarget = activeSceneObject?.kind === 'mesh'
+    ? { kind: 'mesh' as const, ref: activeSceneObject.name, label: activeSceneObject.name || 'Object' }
+    : null
+
+  // Path Progress support for the active object (2026-07-11) — mirrors
+  // keyframeSupport's own shape/gating exactly, just for the single
+  // path_progress field instead of the nine Transform ones. Only non-null
+  // when the active mesh object actually has a PathFollower binding —
+  // TransformPanel renders nothing extra otherwise.
+  let pathProgressSupport: PathProgressSupport | null = null
+  if (activeSceneObject?.kind === 'mesh' && timelineDateRef.current) {
+    const follower = pathFollowers.find(f => f.target_kind === 'mesh' && f.element_ref === activeSceneObject.name)
+    if (follower) {
+      const currentDate = timelineDateRef.current
+      const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+      const points = elementKeyframes.keyframes.filter(
+        k => k.source_kind === 'mesh' && k.field === 'path_progress' && k.element_ref === activeSceneObject.name,
+      )
+      const exact = points.find(p => sameDay(new Date(p.date), currentDate))
+      const value = exact ? exact.value : (points.length > 0 ? points[points.length - 1].value : 0)
+      pathProgressSupport = {
+        value,
+        keyState: exact ? 'exact' : points.length > 0 ? 'other' : 'none',
+        onChange: v => elementKeyframes.upsert('mesh', activeSceneObject.name, 'path_progress', currentDate, v),
+        onToggleKey: () => {
+          if (exact) elementKeyframes.remove(exact.id)
+          else elementKeyframes.upsert('mesh', activeSceneObject.name, 'path_progress', currentDate, value)
+        },
+      }
+    }
+  }
 
   // Body per window key — WindowChrome (below) owns the shared header/dock-
   // toggle/close, this is just what goes inside it (2026-07-11, per Maro:
@@ -2034,7 +2449,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             dateRef={timelineDateRef}
             activities={activities}
             links={modelElementLinks}
-            keyframeDates={activeObjectKeyframeDates}
+            keyframesByDay={activeObjectKeyframesByDay}
+            onMoveKeyframes={handleMoveKeyframes}
+            onDeleteKeyframes={handleDeleteKeyframes}
           />
         )
     }
@@ -2178,6 +2595,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (pathsPanelOpen) {
+    dockablePanels.push({
+      id: 'paths', label: 'Paths', dock: pathsPanelDock,
+      onToggleDock: togglePathsPanelDock, onClose: togglePathsPanel,
+      content: (
+        <PathsPanel
+          paths={resolvedPaths}
+          error={pathError}
+          addingPointsForPathId={addingPointsForPathId}
+          bindTarget={pathBindTarget}
+          followers={pathFollowers}
+          onCreate={handleCreatePath}
+          onRename={handleRenamePath}
+          onToggleClosed={handleTogglePathClosed}
+          onToggleVisible={handleTogglePathVisible}
+          onDelete={handleDeletePath}
+          onToggleAddPoints={handleToggleAddPathPoints}
+          onRemoveLastPoint={handleRemoveLastPathPoint}
+          onBind={pathId => { if (pathBindTarget) handleBindPathFollower(pathId, pathBindTarget.kind, pathBindTarget.ref) }}
+          onUnbind={handleUnbindPathFollower}
+          onToggleOrient={handleTogglePathFollowerOrient}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -2240,6 +2682,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           Collections
         </button>
+        <button
+          onClick={togglePathsPanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            pathsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Paths
+        </button>
         <div className="w-px h-4 bg-gray-200 mx-1" />
         <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" onChange={handleFileSelected} className="hidden" />
         <button
@@ -2271,10 +2721,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           } : null}
           isElementTransform={isElementTransform}
           onTransformChange={handleTransformChange}
+          lengthUnitToMetres={activeIfcLengthUnitToMetres}
+          unitDisplay={ifcUnitDisplay}
           gizmoMode={gizmoMode}
           onGizmoModeChange={setGizmoMode}
           activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
           onUploadTexture={handleUploadActiveTexture}
+          onTextureFieldChange={handleTextureFieldChange}
+          onClearAllTextures={handleClearAllActiveTextures}
+          hasAnyActiveTextureOverride={hasAnyActiveTextureOverride}
           onClearTexture={handleClearActiveTexture}
           materialPresets={materialPresets.presets}
           materialPresetsLoading={materialPresets.loading}
@@ -2287,6 +2742,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onSelectLinkedMaterial={handleSelectLinkedMaterial}
           onApplyToLinkedMaterial={handleApplyToLinkedMaterial}
           keyframeSupport={keyframeSupport}
+          pathProgress={pathProgressSupport}
           onChangeSourceUpAxis={axis => { if (activeObjectId) handleSetSourceUpAxis(activeObjectId, axis) }}
         />
         <SideDock side="left" panels={leftDockPanels} />
@@ -2345,6 +2801,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onSectionBoxDragEnd={handleSectionBoxDragEnd}
             onSaveCameraView={handleSaveCameraView}
             applyCameraViewRequest={applyCameraViewRequest}
+            paths={resolvedPaths}
+            pathFollowers={pathFollowers}
+            addingPointsForPathId={addingPointsForPathId}
+            onPathDragMove={handlePathDragMove}
+            onPathDragEnd={handlePathDragEnd}
+            onAddPathPoint={handleAddPathPoint}
           />
 
           {bottomWindows.length > 0 && (
@@ -2376,6 +2838,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onUnloadMesh={requestUnloadModel}
           selectedObjectIds={selectedObjectIds}
           onSelectObject={handleSelectObject}
+          unitDisplay={ifcUnitDisplay}
+          onUnitDisplayChange={setIfcUnitDisplay}
           activities={activities}
           modelElementLinks={modelElementLinks}
           animationProfiles={animationProfiles.profiles}

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
-import { captureBaseline, captureOriginalMaterialsRecursive } from './elementBaseline'
+import { captureBaseline, captureOriginalGeometryRecursive, captureOriginalMaterialsRecursive, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
 // "Import 3D" (2026-07-10, per Maro) — GLTF/GLB, OBJ, FBX via three.js's own
 // mature, stable loaders (already available through the `three` package
@@ -23,6 +23,10 @@ export async function loadModel3DFile(file: File): Promise<THREE.Object3D> {
   // (2026-07-09, per Maro: "when i change the material and delete the
   // material, it doesn't actually go back to the default").
   captureOriginalMaterialsRecursive(object)
+  // 2026-07-11, per Maro — see geometrySubdivision.ts's own header: same
+  // reasoning as captureOriginalMaterialsRecursive just above, recursive
+  // for the same reason (a mesh-kind import can contain many meshes).
+  captureOriginalGeometryRecursive(object)
   return object
 }
 
@@ -50,13 +54,7 @@ async function parseModel3DFile(ext: string | undefined, buffer: ArrayBuffer): P
 export function disposeObject3D(object: THREE.Object3D) {
   object.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
-    child.geometry.dispose()
-    const materials = Array.isArray(child.material) ? child.material : [child.material]
-    for (const mat of materials) {
-      for (const value of Object.values(mat)) {
-        if (value instanceof THREE.Texture) value.dispose()
-      }
-      mat.dispose()
-    }
+    disposeMeshGeometries(child)
+    disposeMeshMaterials(child, true)
   })
 }

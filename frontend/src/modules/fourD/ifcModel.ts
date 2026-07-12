@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { IfcAPI } from 'web-ifc'
-import { captureBaseline, captureOriginalMaterial } from './elementBaseline'
+import { captureBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
 // "Import IFC" (2026-07-10, per Maro — linked github.com/ThatOpen/engine_components
 // as "very important"). Uses web-ifc directly — the lower-level WASM parser
@@ -69,14 +69,46 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       const vertexCount = vertexData.length / 6
       const positions = new Float32Array(vertexCount * 3)
       const normals = new Float32Array(vertexCount * 3)
-      for (let v = 0, p = 0; v < vertexData.length; v += 6, p += 3) {
+      // Box-projected UVs (2026-07-11, per Maro: applied a concrete texture
+      // to slabs, got a flat, detail-less grey instead) — web-ifc's own
+      // interleaved vertex buffer is strictly position+normal, 6 floats per
+      // vertex (verified against a real file, see this file's own header);
+      // it carries no UV/texture-coordinate data at all, for any IFC
+      // geometry, ever. Without a `uv` attribute, three.js's
+      // MeshStandardMaterial has no coordinates to sample a `map` texture
+      // against and silently falls back to a flat, untextured surface —
+      // that flat grey slab was never a render-mode setting, it was a
+      // materially missing attribute. Generated here per-vertex from each
+      // vertex's own *local* position (stable under a later move/rotate,
+      // since TransformPanel edits the mesh's transform, not its geometry)
+      // using the dominant axis of that vertex's own normal to pick which
+      // two position components become U/V — the standard "box projection"
+      // technique for CAD/BREP geometry with no native UV unwrap. Exactly
+      // right (no seams) for the flat, axis-aligned faces that make up most
+      // structural BIM elements (slabs/walls/columns/beams); a genuinely
+      // curved face (this file has some curtain-wall panels) can show a
+      // seam where the dominant axis flips — true triplanar blending would
+      // avoid that, but needs a custom shader; deferred until it's actually
+      // reported as a problem. UVs are left in raw model-space units (1 UV
+      // unit = 1 raw unit, e.g. 1 foot for this file, see
+      // getLengthUnitToMetres's own header) rather than pre-scaled to some
+      // guessed tile size — TextureFields.tsx's own Tile Size control
+      // divides this back down via texture.repeat, so the actual visual
+      // tiling density is a live, adjustable choice, not baked in here.
+      const uvs = new Float32Array(vertexCount * 2)
+      for (let v = 0, p = 0, u = 0; v < vertexData.length; v += 6, p += 3, u += 2) {
         positions[p] = vertexData[v]; positions[p + 1] = vertexData[v + 1]; positions[p + 2] = vertexData[v + 2]
         normals[p] = vertexData[v + 3]; normals[p + 1] = vertexData[v + 4]; normals[p + 2] = vertexData[v + 5]
+        const nx = Math.abs(normals[p]), ny = Math.abs(normals[p + 1]), nz = Math.abs(normals[p + 2])
+        if (nx >= ny && nx >= nz) { uvs[u] = positions[p + 1]; uvs[u + 1] = positions[p + 2] }
+        else if (ny >= nx && ny >= nz) { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 2] }
+        else { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 1] }
       }
 
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+      geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
       geometry.setIndex(new THREE.BufferAttribute(indexData, 1))
 
       const material = new THREE.MeshStandardMaterial({
@@ -102,6 +134,12 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       // material and delete the material, it doesn't actually go back to
       // the default").
       captureOriginalMaterial(mesh)
+      // 2026-07-11, per Maro — see geometrySubdivision.ts's own header:
+      // Viewport3D.tsx swaps mesh.geometry to a subdivided copy whenever
+      // displacement mapping + a subdivision level are active on this
+      // element, and needs this snapshot to swap back to whenever they
+      // aren't.
+      captureOriginalGeometry(mesh)
       group.add(mesh)
 
       ifcGeom.delete()
@@ -172,12 +210,32 @@ export function getElementTypeName(handle: IfcModelHandle, expressID: number): s
   return handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.modelID, expressID))
 }
 
+// Per-type counts within one already-known set of leaf expressIDs (2026-07-11,
+// per Maro comparing against Bonsai/Blender's IFC panel — picking a storey
+// there scopes the Class>Type>Occurrence list to just that storey's own
+// elements, e.g. "IfcColumn 129" meaning 129 columns *on that level*, not
+// getTypeCounts' whole-model 249). Reuses getElementTypeName per id rather
+// than a new bulk web-ifc call — the input set here is one storey's worth of
+// elements (already resolved from the spatial tree client-side), nowhere
+// near getTypeCounts' whole-model GetLineIDsWithType scale.
+export function groupExpressIdsByType(handle: IfcModelHandle, expressIds: number[]): { typeName: string; ids: number[] }[] {
+  const groups = new Map<string, number[]>()
+  for (const id of expressIds) {
+    const typeName = getElementTypeName(handle, id)
+    const existing = groups.get(typeName)
+    if (existing) existing.push(id)
+    else groups.set(typeName, [id])
+  }
+  return [...groups.entries()]
+    .map(([typeName, ids]) => ({ typeName, ids }))
+    .sort((a, b) => b.ids.length - a.ids.length)
+}
+
 export function disposeIfcModel(handle: IfcModelHandle) {
   handle.object.traverse(child => {
     if (child instanceof THREE.Mesh) {
-      child.geometry.dispose()
-      if (Array.isArray(child.material)) child.material.forEach(m => m.dispose())
-      else child.material.dispose()
+      disposeMeshGeometries(child)
+      disposeMeshMaterials(child, false)
     }
   })
   handle.api.CloseModel(handle.modelID)
@@ -216,6 +274,54 @@ export async function getSpatialTree(handle: IfcModelHandle): Promise<IfcTreeNod
   return handle.api.properties.getSpatialStructure(handle.modelID, false) as unknown as Promise<IfcTreeNode>
 }
 
+// Prefix multipliers for a plain IfcSIUnit (metres, optionally prefixed) —
+// only reached when the project's own LENGTHUNIT isn't the
+// IfcConversionBasedUnit case handled below (getLengthUnitToMetres's own
+// header). Fixed by the IFC spec's own enumeration, not something that
+// needed verifying against a real file the way the conversion-based branch
+// did.
+const SI_PREFIX_TO_METRES: Record<string, number> = {
+  EXA: 1e18, PETA: 1e15, TERA: 1e12, GIGA: 1e9, MEGA: 1e6, KILO: 1e3,
+  HECTO: 1e2, DECA: 1e1, DECI: 1e-1, CENTI: 1e-2, MILLI: 1e-3,
+  MICRO: 1e-6, NANO: 1e-9, PICO: 1e-12, FEMTO: 1e-15, ATTO: 1e-18,
+}
+
+// The project's own declared length unit, as a single "how many metres is
+// one raw unit" factor (2026-07-11, per Maro comparing this app's storey
+// elevations against Bonsai's own feet-inch display for the same file —
+// see IfcDataPanel.tsx's formatElevation for what this feeds into).
+// Verified against a real file (2018_Hospital_Structural.ifc) via a Node
+// smoke test, not assumed from docs (this file's own header explains why
+// that matters) — its IFCPROJECT.UnitsInContext declares LENGTHUNIT as an
+// IfcConversionBasedUnit named "FOOT" with ConversionFactor.ValueComponent
+// = 0.3048, and the raw Elevation values already sitting on its storeys
+// (0, 19.5, 20, 35.5…) are exactly that project's own feet — confirmed by
+// matching Bonsai's own Level 1/Level 2 TOS/Level 2/… ordering for the same
+// file. A plain IfcSIUnit (metres, optionally milli/centi/kilo-prefixed)
+// has no ConversionFactor of its own — resolved via the fixed prefix table
+// above instead, per spec rather than another guess. Falls back to 1
+// (assume metres, IFC's own default unit) if no project or no LENGTHUNIT
+// entry is found — safer than inventing a factor.
+export function getLengthUnitToMetres(handle: IfcModelHandle, projectExpressID: number): number {
+  try {
+    const project = handle.api.GetLine(handle.modelID, projectExpressID, true) as {
+      UnitsInContext?: { Units?: Array<Record<string, any>> }
+    }
+    const units = project?.UnitsInContext?.Units
+    const lengthUnit = units?.find(u => u.UnitType?.value === 'LENGTHUNIT')
+    if (!lengthUnit) return 1
+    if (lengthUnit.ConversionFactor) {
+      const valueComponent = lengthUnit.ConversionFactor.ValueComponent
+      const factor = valueComponent?._representationValue ?? valueComponent?.value
+      return typeof factor === 'number' ? factor : 1
+    }
+    const prefix = lengthUnit.Prefix?.value as string | undefined
+    return prefix ? (SI_PREFIX_TO_METRES[prefix] ?? 1) : 1
+  } catch {
+    return 1
+  }
+}
+
 // IFC values arrive wrapped — simple types as {value}, measures (area/
 // length/volume/etc) as {_representationValue} — verified against real
 // property data (Pset_RoofCommon's ProjectedArea/TotalArea) during
@@ -242,6 +348,23 @@ function unwrapIfcValue(v: unknown): string {
 export async function getElementName(handle: IfcModelHandle, expressID: number): Promise<string> {
   const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
   return unwrapIfcValue(props.Name)
+}
+
+// A storey's own Elevation attribute, raw and unconverted (2026-07-11, per
+// Maro comparing against Bonsai/Blender's IFC panel — its Spatial
+// Decomposition list shows each storey's height). Not unit-converted to
+// feet/metres: that needs reading the model's own IfcUnitAssignment (Revit
+// exports are commonly millimetres, others metres), which nothing in this
+// codebase parses yet and couldn't be verified here against a real file (no
+// sample .ifc available in this environment, and this file's own header
+// explains why that verification step matters before trusting a web-ifc
+// property shape). Shown as whatever raw number the file itself stores, not
+// a guessed unit.
+export async function getElementElevation(handle: IfcModelHandle, expressID: number): Promise<string | null> {
+  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
+  if (props.Elevation === undefined || props.Elevation === null) return null
+  const value = unwrapIfcValue(props.Elevation)
+  return value === '—' ? null : value
 }
 
 export interface IfcPropertySetView {

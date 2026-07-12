@@ -7,7 +7,10 @@ import { api } from '@/lib/api'
 // one ModelElementLink, so a custom motion path is a property of the
 // element itself — this is what lets Mode B below work with zero Activity
 // involved at all).
-export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z'
+// path_progress (2026-07-11) — see path_follower.py's own docstring: reuses
+// this exact date-keyed shape for "how far along its bound Path a target
+// currently is," rather than a new value store of its own.
+export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z' | 'path_progress'
 
 export interface ElementKeyframe {
   id: string

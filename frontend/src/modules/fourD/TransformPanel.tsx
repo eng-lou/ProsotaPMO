@@ -4,6 +4,7 @@ import { ResettableNumberInput } from './ResettableNumberInput'
 import { resolveDisplayAxis, type UpAxis } from './upAxis'
 import { getBaseline } from './elementBaseline'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
+import { fromDisplayLength, lengthUnitSuffix, toDisplayLength, type IfcUnitDisplay } from './ifcUnitDisplay'
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale'
 
@@ -20,11 +21,41 @@ export interface KeyframeSupport {
   onToggle: (field: KeyframeField, currentValue: number) => void
 }
 
+// path_progress support for the active object (2026-07-11, per Maro's
+// Blender "Follow Path" reference — see path_follower.py's own docstring).
+// Reuses the exact same date-keyed keyframe dot convention as Location/
+// Rotation/Scale (KeyframeSupport above) rather than inventing a second
+// keying UI — only null when the active object has no PathFollower binding
+// at all, in which case this section doesn't render.
+export interface PathProgressSupport {
+  value: number
+  keyState: 'exact' | 'other' | 'none'
+  onChange: (v: number) => void
+  onToggleKey: () => void
+}
+
 interface Props {
   object: THREE.Object3D
   mode: GizmoMode
   onModeChange: (mode: GizmoMode) => void
   upAxis: UpAxis
+  // Non-null once this object is bound to a Path (paths.ts/pathFollowers.ts)
+  // — its position is then *derived* from path_progress each frame
+  // (Viewport3D.tsx's path-follow evaluation), so the ordinary Location
+  // fields below are locked read-only rather than left editable-but-
+  // constantly-overwritten.
+  pathProgress: PathProgressSupport | null
+  // Location field unit conversion (2026-07-11, per Maro: "rewire units" —
+  // extending IfcDataPanel's Auto/ft/m toggle here too). lengthUnitToMetres
+  // is null for a plain mesh import (no IfcUnitAssignment to read — see
+  // ifcModel.ts's getLengthUnitToMetres header), in which case every
+  // toDisplayLength/fromDisplayLength call below is a no-op passthrough and
+  // the suffix stays "m", exactly this panel's original, only behaviour.
+  // Only ever non-null for an IFC object, which — per keyframeSupport's own
+  // FourD.tsx header — never has keyframing enabled anyway, so there's no
+  // risk of a unit-converted number ever landing in stored keyframe data.
+  lengthUnitToMetres: number | null
+  unitDisplay: IfcUnitDisplay
   keyframes: KeyframeSupport | null
   // Forces a re-render after a field edit (2026-07-08 fix, per Maro: typed
   // 10 into a Location field, the model moved, but the field itself
@@ -139,7 +170,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, upAxis, keyframes, onFieldChange }: Props) {
+export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -172,26 +203,50 @@ export function TransformPanel({ object, mode, onModeChange, upAxis, keyframes, 
         ))}
       </div>
 
+      {pathProgress && (
+        <>
+          <SectionLabel label="Path" />
+          <Field
+            axisLabel="%"
+            value={pathProgress.value}
+            resetValue={0}
+            suffix=""
+            locked={false}
+            keyState={pathProgress.keyState}
+            onChange={v => pathProgress.onChange(Math.max(0, Math.min(100, v)))}
+            onToggleLock={() => {}}
+            onToggleKey={pathProgress.onToggleKey}
+          />
+        </>
+      )}
+
       {/* Fields always read X/Y/Z in that order; resolveDisplayAxis (upAxis.ts)
           is what actually points "Y"/"Z" at object.position.z/.y (Blender-
           style) instead of three.js's native .y/.z when upAxis is 'z'. */}
       <SectionLabel label="Location" />
+      {pathProgress && (
+        <p className="px-3 pb-1 text-[10px] text-gray-400">Position is driven by the bound path — edit points in the Paths panel.</p>
+      )}
       {AXES.map(axis => {
         const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'position')
         const field = `pos_${axis}` as KeyframeField
-        const displayValue = sign * object.position[localAxis]
+        // sign (the Z-up/Y-up axis remap, ±1) and the unit conversion below
+        // are both plain linear scalars, so composing them in either order
+        // round-trips correctly — display flips sign then converts unit;
+        // onChange inverts the unit conversion then flips sign back.
+        const displayValue = toDisplayLength(sign * object.position[localAxis], lengthUnitToMetres, unitDisplay)
         return (
           <Field
             key={`pos-${axis}`}
             axisLabel={axis.toUpperCase()}
             value={displayValue}
-            resetValue={sign * baseline.position[localAxis]}
-            suffix="m"
-            locked={!!locked[`pos-${axis}`]}
-            keyState={keyState(field)}
-            onChange={v => { object.position[localAxis] = sign * v; onFieldChange() }}
+            resetValue={toDisplayLength(sign * baseline.position[localAxis], lengthUnitToMetres, unitDisplay)}
+            suffix={lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}
+            locked={!!locked[`pos-${axis}`] || !!pathProgress}
+            keyState={pathProgress ? 'disabled' : keyState(field)}
+            onChange={v => { object.position[localAxis] = sign * fromDisplayLength(v, lengthUnitToMetres, unitDisplay); onFieldChange() }}
             onToggleLock={() => toggleLocked(`pos-${axis}`)}
-            onToggleKey={toggleKey(field, displayValue)}
+            onToggleKey={pathProgress ? null : toggleKey(field, displayValue)}
           />
         )
       })}

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { captureBaseline } from './elementBaseline'
+import { captureBaseline, captureOriginalGeometry } from './elementBaseline'
 
 // "Apply Transform" (2026-07-09, per Maro: "allow me to apply transforms to
 // the selected object. in essence zeroing out all transform parameters
@@ -46,6 +46,24 @@ export function applyTransformKeepPosition(object: THREE.Object3D): number {
     object.geometry = object.geometry.clone()
     object.geometry.applyMatrix4(bakeMatrix)
     affected = 1
+
+    // Whatever displacement subdivision (geometrySubdivision.ts) had
+    // computed for the *pre-bake* geometry no longer matches it — dropped
+    // rather than left stale, same "this is definitely wrong now, not just
+    // possibly outdated" reasoning as the edges-overlay drop just below.
+    // captureOriginalGeometry makes the freshly-baked geometry the new
+    // "original" going forward (same "whatever the fields now show
+    // genuinely *is* this object's own original state" principle this
+    // function's own header already applies to position/rotation/scale via
+    // captureBaseline below) — Viewport3D.tsx's own effect recomputes a
+    // fresh subdivision from *this* on its next pass if displacement is
+    // still active, rather than reapplying a cached copy that was built
+    // for a geometry that no longer exists.
+    const staleSubdivided = object.userData.subdividedGeometry as THREE.BufferGeometry | undefined
+    if (staleSubdivided) staleSubdivided.dispose()
+    delete object.userData.subdividedGeometry
+    delete object.userData.subdividedLevel
+    captureOriginalGeometry(object)
 
     // The edges overlay (ModelObjects' "Edges" visibility toggle in
     // Viewport3D.tsx) is a LineSegments child built from the pre-bake

@@ -66,17 +66,28 @@ export interface OriginalMaterialSlot {
   metalnessMap: THREE.Texture | null
   roughnessMap: THREE.Texture | null
   normalMap: THREE.Texture | null
+  // 2026-07-11, per Maro: AO + Displacement joining the existing 4 slots —
+  // always null here, same as every other map slot: nothing in ifcModel.ts
+  // or a freshly-loaded GLTF/OBJ/FBX ever sets these on import, so "the
+  // original" a cleared override restores to is genuinely just "no map,"
+  // not a guess.
+  aoMap: THREE.Texture | null
+  displacementMap: THREE.Texture | null
   metalness: number
   roughness: number
 }
 
 function snapshotMaterial(mat: THREE.Material): OriginalMaterialSlot {
   if (!(mat instanceof THREE.MeshStandardMaterial)) {
-    return { color: new THREE.Color(0xffffff), map: null, metalnessMap: null, roughnessMap: null, normalMap: null, metalness: 1, roughness: 1 }
+    return {
+      color: new THREE.Color(0xffffff), map: null, metalnessMap: null, roughnessMap: null, normalMap: null,
+      aoMap: null, displacementMap: null, metalness: 1, roughness: 1,
+    }
   }
   return {
     color: mat.color.clone(),
     map: mat.map, metalnessMap: mat.metalnessMap, roughnessMap: mat.roughnessMap, normalMap: mat.normalMap,
+    aoMap: mat.aoMap, displacementMap: mat.displacementMap,
     metalness: mat.metalness, roughness: mat.roughness,
   }
 }
@@ -96,4 +107,106 @@ export function captureOriginalMaterialsRecursive(object: THREE.Object3D) {
 
 export function getOriginalMaterialSlots(mesh: THREE.Mesh): OriginalMaterialSlot[] {
   return (mesh.userData.originalMaterials as OriginalMaterialSlot[] | undefined) ?? []
+}
+
+// Per-mesh "as imported" geometry snapshot (2026-07-11, per Maro: displacement
+// mapping needing subdivision to actually show detail — see
+// geometrySubdivision.ts's own header) — Viewport3D.tsx's ModelObjects
+// effect swaps `mesh.geometry` to a denser, subdivided copy whenever
+// displacement + a subdivision level are active, and back to whatever's
+// captured here whenever they aren't. A plain reference capture (not a
+// clone — nothing here ever mutates the original geometry in place;
+// subdivideGeometry always returns a brand-new BufferGeometry), taken once
+// at import time, same shape/timing as captureOriginalMaterial right above.
+// Re-captured by applyTransform.ts immediately after a bake for the exact
+// same reason captureBaseline is: baking permanently changes what "the
+// original" geometry actually is (the transform gets folded straight into
+// its vertex positions), so the *baked* geometry becomes the new original
+// going forward, not the pre-bake one.
+export function captureOriginalGeometry(mesh: THREE.Mesh) {
+  mesh.userData.originalGeometry = mesh.geometry
+}
+
+// Recurses through every Mesh in the subtree — same reasoning as
+// captureOriginalMaterialsRecursive above (a whole mesh-kind GLTF/OBJ/FBX
+// import can contain many meshes, unlike an IFC import where each mesh is
+// captured individually as it's created in ifcModel.ts's own loadIfcModel).
+export function captureOriginalGeometryRecursive(object: THREE.Object3D) {
+  object.traverse(child => { if (child instanceof THREE.Mesh) captureOriginalGeometry(child) })
+}
+
+export function getOriginalGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
+  return (mesh.userData.originalGeometry as THREE.BufferGeometry | undefined) ?? mesh.geometry
+}
+
+// Disposes every BufferGeometry this mesh might be holding onto, not just
+// whichever one is currently assigned to mesh.geometry (2026-07-11) — once
+// displacement+subdivision can swap mesh.geometry to a generated copy
+// (Viewport3D.tsx's own ModelObjects effect), a plain `mesh.geometry.dispose()`
+// on unload would free whichever one happens to be active at that moment
+// and silently leak the other one (the original, if currently showing
+// subdivided; the subdivided copy, if currently showing original) — this
+// disposes whichever of {current, captured original, cached subdivided}
+// actually exist, each only once even if the same object appears under more
+// than one of those roles (e.g. no subdivision was ever applied, so
+// `current` and `original` are literally the same object).
+export function disposeMeshGeometries(mesh: THREE.Mesh) {
+  const candidates = [mesh.geometry, mesh.userData.originalGeometry, mesh.userData.subdividedGeometry] as (THREE.BufferGeometry | undefined)[]
+  const disposed = new Set<THREE.BufferGeometry>()
+  for (const geometry of candidates) {
+    if (geometry && !disposed.has(geometry)) {
+      geometry.dispose()
+      disposed.add(geometry)
+    }
+  }
+}
+
+// Same "dispose every stand-in, not just whatever's currently displayed"
+// reasoning as disposeMeshGeometries above, for materials this time
+// (2026-07-11, per Maro comparing this app's render modes against
+// Synchro/Blender's own) — once a render mode can swap mesh.material to a
+// Gouraud/Hidden Line stand-in (renderModeMaterials.ts), disposing only
+// whatever mesh.material happens to be at unload time would leak the real
+// underlying PBR material (mesh.userData.standardMaterial, if a stand-in is
+// currently showing instead). Deduplicated the same way
+// disposeMeshGeometries is, since in most render modes (Wireframe/Flat/
+// Rendered) mesh.material *is* the standard material — the exact same
+// object, not a separate one to double-dispose.
+//
+// disposeTextures mirrors each call site's own pre-existing convention
+// (not a new choice introduced here): import3d.ts's own disposeObject3D
+// already swept every Texture off a material before disposing it (a plain
+// GLTF/OBJ/FBX mesh's material can carry its own embedded textures);
+// ifcModel.ts's disposeIfcModel never did, since a fresh IFC import's own
+// material never carries a texture at all — only a customTextures override
+// can add one, and those are tracked/disposed independently
+// (FourD.tsx's own disposeCustomTextureSet). A render-mode variant never
+// owns a *separate* texture of its own either way (getGouraudVariant only
+// ever assigns the same Texture references the standard material already
+// uses, never clones one) — so sweeping textures off it here would just be
+// a harmless no-op re-dispose of something already covered by sweeping the
+// standard material, not a second real texture.
+export function disposeMeshMaterials(mesh: THREE.Mesh, disposeTextures: boolean) {
+  const standard = mesh.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined
+  const standardList = standard ? (Array.isArray(standard) ? standard : [standard]) : []
+  const currentDisplay = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+  const variants: THREE.Material[] = []
+  for (const mat of standardList) {
+    for (const key of ['lambertVariant', 'hiddenLineVariant']) {
+      const variant = mat.userData[key] as THREE.Material | undefined
+      if (variant) variants.push(variant)
+    }
+  }
+
+  const disposed = new Set<THREE.Material>()
+  for (const mat of [...currentDisplay, ...standardList, ...variants]) {
+    if (!mat || disposed.has(mat)) continue
+    disposed.add(mat)
+    if (disposeTextures) {
+      for (const value of Object.values(mat)) {
+        if (value instanceof THREE.Texture) value.dispose()
+      }
+    }
+    mat.dispose()
+  }
 }

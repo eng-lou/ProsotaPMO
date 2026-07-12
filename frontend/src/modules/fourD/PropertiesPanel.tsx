@@ -5,10 +5,11 @@ import { ResettableNumberInput } from './ResettableNumberInput'
 import { TextureFields } from './TextureFields'
 import { MaterialPresetPicker } from './MaterialPresetPicker'
 import type { MaterialPreset, MaterialPresetConfig } from './materialPresets'
-import { TransformPanel, type GizmoMode, type KeyframeSupport } from './TransformPanel'
+import { TransformPanel, type GizmoMode, type KeyframeSupport, type PathProgressSupport } from './TransformPanel'
 import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
+import type { IfcUnitDisplay } from './ifcUnitDisplay'
 
 interface ActiveObject {
   id: string
@@ -42,11 +43,30 @@ interface Props {
   // fresh value — the *next* unrelated re-render (hover, blur, anything)
   // would snap the field back to whatever it showed at its own last render.
   onTransformChange: () => void
+  // Location field unit conversion, passed straight through to
+  // TransformPanel — see TransformPanel.tsx's own Props header for what
+  // null vs a real factor means (2026-07-11, per Maro: "rewire units").
+  lengthUnitToMetres: number | null
+  unitDisplay: IfcUnitDisplay
   gizmoMode: GizmoMode
   onGizmoModeChange: (mode: GizmoMode) => void
   activeObjectTextures: CustomTextureSet | undefined
   onUploadTexture: (slot: TextureSlot, file: File) => void
   onClearTexture: (slot: TextureSlot) => void
+  // Tile Size/Rotation's own forced-rerender, passed straight through to
+  // TextureFields — see its own Props header for why this is separate from
+  // onTransformChange (which also persists a transform save, meaningless
+  // for a texture edit).
+  onTextureFieldChange: () => void
+  // Clear Materials (2026-07-11) — passed straight through to TextureFields.
+  onClearAllTextures: () => void
+  // Whether *any* currently-selected element (not just the single primary
+  // one activeObjectTextures itself reflects) has a texture override —
+  // drives the Clear Materials button's own visibility, so it can't stay
+  // hidden just because the primary/last-clicked element happens to carry
+  // no override while other selected elements do (2026-07-11 fix, see
+  // FourD.tsx's own hasAnyActiveTextureOverride for the full story).
+  hasAnyActiveTextureOverride: boolean
   // Material Preset library (2026-07-09, per Maro: "Save the default
   // materials for the whole model... I can then add a new preset which
   // allows me to change the materials, i can save it, edit and delete") —
@@ -66,6 +86,7 @@ interface Props {
   onSelectLinkedMaterial: (slot: TextureSlot) => void
   onApplyToLinkedMaterial: (slot: TextureSlot) => void
   keyframeSupport: KeyframeSupport | null
+  pathProgress: PathProgressSupport | null
   onChangeSourceUpAxis: (axis: UpAxis) => void
 }
 
@@ -88,11 +109,11 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  activeObject, isElementTransform, onTransformChange, gizmoMode, onGizmoModeChange, activeObjectTextures, onUploadTexture, onClearTexture,
+  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, activeMaterialPresetConfig, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
-  keyframeSupport, onChangeSourceUpAxis,
+  keyframeSupport, pathProgress, onChangeSourceUpAxis,
 }: Props) {
   const hdrInputRef = useRef<HTMLInputElement>(null)
   // Apply Transform's own confirmation (2026-07-09, per Maro's doubt that
@@ -127,8 +148,11 @@ export function PropertiesPanel({
           onChange={e => set('renderMode', e.target.value as ViewerSettings['renderMode'])}
           className="text-xs border border-gray-300 rounded px-1.5 py-0.5"
         >
-          <option value="shaded">Shaded</option>
           <option value="wireframe">Wireframe</option>
+          <option value="hiddenLine">Hidden Line</option>
+          <option value="flat">Flat Shaded</option>
+          <option value="gouraud">Gouraud Shaded</option>
+          <option value="shaded">Rendered (PBR)</option>
         </select>
       </Row>
       <Row label="Up Axis">
@@ -283,7 +307,8 @@ export function PropertiesPanel({
           </div>
           <TransformPanel
             object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange} upAxis={settings.upAxis}
-            keyframes={keyframeSupport} onFieldChange={onTransformChange}
+            lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
+            keyframes={keyframeSupport} pathProgress={pathProgress} onFieldChange={onTransformChange}
           />
 
           <SectionHeader label="Material / Texture" />
@@ -298,6 +323,8 @@ export function PropertiesPanel({
           />
           <TextureFields
             textures={activeObjectTextures} onUploadTexture={onUploadTexture} onClearTexture={onClearTexture}
+            onFieldChange={onTextureFieldChange} lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
+            onClearAll={onClearAllTextures} hasAnyOverride={hasAnyActiveTextureOverride}
             linkedAvailable={linkedMaterialsAvailable}
             onSelectLinked={onSelectLinkedMaterial}
             onApplyToLinked={onApplyToLinkedMaterial}

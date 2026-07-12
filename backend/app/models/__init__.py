@@ -46,6 +46,8 @@ from app.models.model3d_file import Model3DFile
 from app.models.section_box import SectionBox
 from app.models.camera_view import CameraView
 from app.models.element_transform import ElementTransform
+from app.models.path import Path
+from app.models.path_follower import PathFollower
 
 __all__ = [
     "Base",
@@ -101,4 +103,6 @@ __all__ = [
     "SectionBox",
     "CameraView",
     "ElementTransform",
+    "Path",
+    "PathFollower",
 ]

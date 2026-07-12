@@ -19,6 +19,14 @@ class MaterialPresetConfig(BaseModel):
     metalnessMap: MaterialTextureSlot | None = None
     roughnessMap: MaterialTextureSlot | None = None
     normalMap: MaterialTextureSlot | None = None
+    # 2026-07-11, per Maro: AO + Displacement joining the existing 4 slots.
+    # Safe to add as plain optional fields, no migration — config is stored
+    # as JSONB (see this module's own docstring/model), so an existing
+    # preset saved before this change simply has no aoMap/displacementMap
+    # keys at all, and Pydantic defaults both to None on load rather than
+    # erroring.
+    aoMap: MaterialTextureSlot | None = None
+    displacementMap: MaterialTextureSlot | None = None
 
 
 class MaterialPresetCreate(BaseModel):

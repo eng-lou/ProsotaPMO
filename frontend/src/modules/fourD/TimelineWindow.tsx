@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
+import type { ElementKeyframe } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
 
 interface Props {
@@ -18,9 +19,15 @@ interface Props {
   links: ModelElementLink[]
   // Diamond markers (2026-07-08, per Maro's confirmed scoping answer:
   // "Track markers on the Timeline window's scrubber") — every date the
-  // currently-selected object is keyed on, across all its fields. Empty
-  // when nothing's selected or the selection isn't keyframeable (IFC).
-  keyframeDates: Date[]
+  // currently-selected object is keyed on, across all its fields, grouped by
+  // day (several fields sharing one date is the common case). Empty when
+  // nothing's selected or the selection isn't keyframeable (IFC). Movable/
+  // deletable as a group (2026-07-12, per Maro) — see onMoveKeyframes/
+  // onDeleteKeyframes below and FourD.tsx's own header on why a whole day's
+  // keyframes move or delete together rather than one field at a time.
+  keyframesByDay: { date: Date; keyframes: ElementKeyframe[] }[]
+  onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
+  onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
 }
 
 const SPEED_OPTIONS = [
@@ -55,13 +62,23 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // settings entity here, so "speed" is expressed directly as calendar days
 // per real second, continuously advanced via requestAnimationFrame while
 // playing rather than pre-baking discrete keyframes onto each object.
-export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities, links, keyframeDates }: Props) {
+export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [loop, setLoop] = useState(false)
   const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const [displayDate, setDisplayDate] = useState<Date | null>(dateRef.current)
   const rafRef = useRef<number | null>(null)
   const lastTimeRef = useRef<number | null>(null)
+  const trackRef = useRef<HTMLDivElement>(null)
+  // Drag-to-reschedule a keyframe marker (2026-07-12, per Maro: "the
+  // keyframes on the timeline need to be movable, editable, deletable") —
+  // dayKey identifies which marker's being dragged so its dot can preview at
+  // previewDate while the pointer moves, committed via onMoveKeyframes only
+  // on release. moved distinguishes a real drag from a plain click (which
+  // still just jumps the scrubber there, the marker's original behaviour) —
+  // without it, even a single-pixel jitter on mousedown would wrongly skip
+  // the click-to-jump path.
+  const [dragState, setDragState] = useState<{ dayKey: string; previewDate: Date; moved: boolean } | null>(null)
 
   // Seeds the shared date once a schedule range becomes available, if
   // nothing's set it yet (e.g. the very first time this window opens).
@@ -136,6 +153,47 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
     setCurrent(new Date(y, m - 1, d))
   }
 
+  // Same clientX -> date math as handleScrub's own slider, just driven by
+  // the marker track's own bounding rect instead of the <input type=range>'s
+  // built-in percentage, since a diamond isn't a native range control.
+  const dateFromClientX = (clientX: number): Date => {
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0) return current
+    const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    return clampToRange(new Date(scheduleStart.getTime() + pct * totalMs), scheduleStart, scheduleEnd)
+  }
+
+  const handleMarkerPointerDown = (group: { date: Date; keyframes: ElementKeyframe[] }) => (e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const dayKey = String(group.date.getTime())
+    const startX = e.clientX
+    setIsPlaying(false)
+    setDragState({ dayKey, previewDate: group.date, moved: false })
+
+    const handleMove = (ev: PointerEvent) => {
+      setDragState({ dayKey, previewDate: dateFromClientX(ev.clientX), moved: Math.abs(ev.clientX - startX) > 3 })
+    }
+    const handleUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      const moved = Math.abs(ev.clientX - startX) > 3
+      if (moved) {
+        onMoveKeyframes(group.keyframes, dateFromClientX(ev.clientX))
+      } else {
+        setCurrent(group.date)
+      }
+      setDragState(null)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+  }
+
+  const handleMarkerContextMenu = (group: { date: Date; keyframes: ElementKeyframe[] }) => (e: React.MouseEvent) => {
+    e.preventDefault()
+    onDeleteKeyframes(group.keyframes)
+  }
+
   return (
     <div className="h-full flex flex-col p-3 gap-2">
       <div className="flex items-center gap-1.5 flex-wrap">
@@ -167,7 +225,7 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
         />
       </div>
 
-      <div className="relative">
+      <div className="relative" ref={trackRef}>
         {linkedActivities.length > 0 && (
           <div className="relative h-3 mb-0.5">
             {linkedActivities.map(a => {
@@ -191,17 +249,21 @@ export function TimelineWindow({ scheduleStart, scheduleEnd, dateRef, activities
           onChange={e => handleScrub(Number(e.target.value))}
           className="w-full"
         />
-        {keyframeDates.length > 0 && (
+        {keyframesByDay.length > 0 && (
           <div className="relative h-2 mt-0.5 pointer-events-none">
-            {keyframeDates.map(d => {
-              const left = totalMs > 0 ? ((d.getTime() - scheduleStart.getTime()) / totalMs) * 100 : 0
+            {keyframesByDay.map(group => {
+              const dayKey = String(group.date.getTime())
+              const dragging = dragState?.dayKey === dayKey
+              const shownDate = dragging ? dragState.previewDate : group.date
+              const left = totalMs > 0 ? ((shownDate.getTime() - scheduleStart.getTime()) / totalMs) * 100 : 0
               if (left < 0 || left > 100) return null
               return (
                 <div
-                  key={d.getTime()}
-                  title={`Keyframed — ${formatDate(d)}`}
-                  onClick={() => { setIsPlaying(false); setCurrent(d) }}
-                  className="absolute top-0 w-2 h-2 bg-amber-500 border border-amber-600 rotate-45 -translate-x-1/2 pointer-events-auto cursor-pointer"
+                  key={dayKey}
+                  title={`Keyframed — ${formatDate(shownDate)} (drag to move, right-click to delete)`}
+                  onPointerDown={handleMarkerPointerDown(group)}
+                  onContextMenu={handleMarkerContextMenu(group)}
+                  className={`absolute top-0 w-2 h-2 bg-amber-500 border border-amber-600 rotate-45 -translate-x-1/2 pointer-events-auto cursor-grab active:cursor-grabbing ${dragging ? 'ring-2 ring-amber-300' : ''}`}
                   style={{ left: `${left}%` }}
                 />
               )

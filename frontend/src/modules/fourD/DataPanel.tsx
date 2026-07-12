@@ -4,6 +4,7 @@ import type { IfcModelHandle } from './ifcModel'
 import { IfcDataPanel } from './IfcDataPanel'
 import { MeshDataPanel, type MeshImportItem } from './MeshDataPanel'
 import type { ModelElementLink, SourceKind } from './modelElementLinks'
+import type { IfcUnitDisplay } from './ifcUnitDisplay'
 
 export type DataPanelTab = 'ifc' | '3d'
 
@@ -28,6 +29,11 @@ interface Props {
   onUnloadMesh: (id: string) => void
   selectedObjectIds: Set<string>
   onSelectObject: (id: string | null, additive?: boolean) => void
+  // Unit toggle for IfcDataPanel's Spatial Decomposition list — see
+  // FourD.tsx's own ifcUnitDisplay state for why it's owned there and just
+  // passed through here (2026-07-11, per Maro: "rewire units").
+  unitDisplay: IfcUnitDisplay
+  onUnitDisplayChange: (value: IfcUnitDisplay) => void
   activities: Activity[]
   modelElementLinks: ModelElementLink[]
   animationProfiles: AnimationProfile[]
@@ -62,7 +68,7 @@ interface Props {
 // panel doesn't otherwise touch linking itself.
 export function DataPanel({
   open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
-  meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject,
+  meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unitDisplay, onUnitDisplayChange,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: Props) {
   if (!open) {
@@ -126,6 +132,8 @@ export function DataPanel({
           onUnload={onUnloadIfc}
           selectedObjectIds={selectedObjectIds}
           onSelectWholeModel={selectWholeIfcModel}
+          unitDisplay={unitDisplay}
+          onUnitDisplayChange={onUnitDisplayChange}
           activities={activities}
           links={modelElementLinks}
           animationProfiles={animationProfiles}
