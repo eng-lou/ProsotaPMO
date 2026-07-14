@@ -29,6 +29,20 @@
   overflow: hidden;
 }
 
+/* Same enforcement, for the header row — GanttChart.tsx's own header div is a
+   static HEADER_HEIGHT (36px, see GanttChart.tsx), so if this table's real
+   <thead> row were ever allowed to render taller (a large header_font_size in
+   Layout, in particular — that's user-configurable and wasn't accounted for
+   here), every body row underneath it would start that much lower than the
+   Gantt pane's bars assume, throwing every row out of alignment by the same
+   constant offset (2026-07-14, per Maro: "the gantt and activity table in
+   the onscreen are misaligning again" — the tbody half of this exact fix
+   already existed, the thead half didn't). */
+.scheduling-grid thead th {
+  height: 36px;
+  overflow: hidden;
+}
+
 /* Resource Tracking's header/timeline panes (ResourceTrackingWidget.tsx) —
    both panes' own native horizontal scrollbars are hidden so neither can
    take up a different amount of space than the (never-scrollbarred) tree

@@ -34,7 +34,16 @@ export function ResourceUsageProfilePrintView({
   )
   const maxValue = Math.max(...barValues, limitValue, 1) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
-  const formatAxisValue = (value: number): string => unit === 'cost' ? `£${Math.round(value).toLocaleString()}` : String(Math.round(value))
+  // Abbreviated, not full comma-formatted — see the screen widget's own
+  // formatAxisValue for why (2026-07-14, per Maro).
+  const formatAxisValue = (value: number): string => {
+    const rounded = Math.round(value)
+    const abs = Math.abs(rounded)
+    const short = abs >= 1_000_000 ? `${(rounded / 1_000_000).toFixed(1)}M`
+      : abs >= 1_000 ? `${(rounded / 1_000).toFixed(1)}k`
+      : String(rounded)
+    return unit === 'cost' ? `£${short}` : short
+  }
 
   return (
     <div className="mb-8">
@@ -57,11 +66,21 @@ export function ResourceUsageProfilePrintView({
             <span className="text-gray-500 whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{axisLabel}</span>
           </div>
           <div className="relative flex-1">
+            {/* Top label top-aligned, not center-aligned like the rest —
+                see the screen widget's own comment on this same pattern
+                (2026-07-14, per Maro: overlapped the legend above it when
+                centred via -translate-y-1/2, since that pushes it half its
+                own height above this container's top edge). */}
             {Array.from({ length: GRIDLINE_COUNT + 1 }, (_, i) => {
               const value = (maxValue / GRIDLINE_COUNT) * i
               const bottom = (value / maxValue) * CHART_HEIGHT
+              const isTopLabel = i === GRIDLINE_COUNT
               return (
-                <span key={i} className="absolute right-1 -translate-y-1/2 text-gray-400" style={{ bottom }}>
+                <span
+                  key={i}
+                  className={`absolute right-1 text-gray-400 ${isTopLabel ? '' : '-translate-y-1/2'}`}
+                  style={isTopLabel ? { top: 0 } : { bottom }}
+                >
                   {formatAxisValue(value)}
                 </span>
               )

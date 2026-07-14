@@ -233,6 +233,10 @@ export interface Calendar {
   works_friday: boolean
   works_saturday: boolean
   works_sunday: boolean
+  // 2026-07-13, per Maro: every activity on this calendar starts exactly at
+  // day_start_time and finishes exactly at day_end_time, never mid-day — see
+  // scheduling_cpm.py's own _CalendarLookup.add_duration/subtract_duration.
+  whole_day_scheduling: boolean
   created_at: string
   updated_at: string
 }

@@ -116,7 +116,23 @@ function ClassificationFields({ values, setter }: { values: ResourceFormValues; 
   )
 }
 
+const COLLAPSED_STORAGE_KEY = 'prosota_resource_pool_collapsed'
+
 export function ResourcePoolWidget({ projectId, resources, calendars, onChange, onClose, selectedIds, onToggleSelected, layoutPrefs }: Props) {
+  // Collapsible (2026-07-14, per Maro: "make the resource pool collapsible")
+  // — this table alone can run to 25+ rows once a schedule's been generated,
+  // pushing Resource Tracking/Profile below it well down the page. Persisted
+  // like every other collapse-state in this app (e.g. Resource Tracking's
+  // own visible-columns Set) so it stays collapsed across reloads instead of
+  // needing to be re-collapsed on every visit.
+  const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_STORAGE_KEY) === 'true')
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev
+      localStorage.setItem(COLLAPSED_STORAGE_KEY, String(next))
+      return next
+    })
+  }
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<ResourceFormValues>(BLANK)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -191,11 +207,20 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
+        <button
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Expand' : 'Collapse'}
+          className="text-gray-400 hover:text-gray-600 text-xs w-4 flex-shrink-0"
+        >
+          {collapsed ? '▸' : '▾'}
+        </button>
         <div className="font-bold text-sm">Resource Pool</div>
         <div className="text-xs text-gray-400">Labour, equipment, material, subcontractors, cost &amp; crew — define here, assign to activities via Logic</div>
         {onClose && <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>}
       </div>
 
+      {!collapsed && (
+      <>
       <table className="w-full border-collapse mb-2" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
         <thead>
           <tr className="bg-gray-50 text-left text-gray-500">
@@ -378,6 +403,8 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
         </div>
       ) : (
         <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Resource</button>
+      )}
+      </>
       )}
     </div>
   )

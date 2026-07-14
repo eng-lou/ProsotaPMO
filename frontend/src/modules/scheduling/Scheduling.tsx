@@ -572,12 +572,14 @@ export function Scheduling() {
   const [resourcesPrintTrigger, setResourcesPrintTrigger] = useState(0)
 
   // Keeps Resource Tracking's and Resource Usage Profile's tree/timeline
-  // dividers lined up, and their timeline scroll positions mirrored both
-  // ways (2026-07-09, per Maro) — owned here since these are two sibling
-  // widgets. 516 = Tracking's own default 4 fixed columns + checkbox column,
-  // before Tracking's own effect reports its real current width on mount.
+  // dividers lined up (2026-07-09, per Maro) — owned here since these are
+  // two sibling widgets. 516 = Tracking's own default 4 fixed columns +
+  // checkbox column, before Tracking's own effect reports its real current
+  // width on mount. Their timeline scroll positions used to be mirrored
+  // both ways too; see ResourceTrackingWidget's own Props header comment
+  // for why that was dropped (2026-07-14, per Maro: "just make both
+  // independent at this point").
   const [resourcesLeftPaneWidth, setResourcesLeftPaneWidth] = useState(516)
-  const [resourcesScrollLeft, setResourcesScrollLeft] = useState(0)
 
   const resourcesTabData = useResourcesTabData(
     resources, resourceAssignments, activities, selectedResourceIds,
@@ -1095,16 +1097,47 @@ export function Scheduling() {
     )
   }
 
-  const [leftPaneWidth, setLeftPaneWidth] = useState<number | null>(() => {
+  // The Gantt pane beside this one is flex-1 with no minimum of its own, so
+  // an unbounded leftPaneWidth can squeeze it down to ~0px — invisible, and
+  // with its own resize divider pushed off past the right edge along with
+  // it, unreachable to drag back (2026-07-12 fix, per Maro: "what did you
+  // do to my gantt chart" — the chart wasn't touched, this divider had
+  // silently grown wide enough to hide it, with no way to recover short of
+  // clearing localStorage by hand). MIN_GANTT_PANE_WIDTH below is enforced
+  // both when *loading* a previously-saved width (so a value already stuck
+  // in someone's browser self-corrects on the next visit, not just future
+  // drags) and while dragging.
+  //
+  // The *real* trigger turned out to be a second, related bug (2026-07-12,
+  // same report — "you enabled all my columns so it pushed the gantt to
+  // the right"): whenever leftPaneWidth had never been manually dragged
+  // (null), the pane's style fell through to `width: undefined` — no
+  // explicit width at all — so with this pane's own flex-shrink:0, it
+  // sized itself to its *content's* natural width (every enabled column
+  // added together) instead of ever being capped, and being flex-shrink:0
+  // meant its flex-1 Gantt sibling was the only one left to absorb the
+  // compression, all the way down to nothing. DEFAULT_LEFT_PANE_WIDTH
+  // below closes that: the pane always gets a real, capped pixel width,
+  // dragged or not — and overflow-x is now `auto`, not `hidden` (was
+  // silently clipping instead of scrolling), so extra columns beyond that
+  // width are reachable by scrolling the activity table itself, per
+  // Maro's own explicit ask: "the activity can be scrollable if there are
+  // excess columns."
+  const MIN_GANTT_PANE_WIDTH = 240
+  const DEFAULT_LEFT_PANE_WIDTH = 700
+  const clampLeftPaneWidth = (width: number) => Math.max(320, Math.min(width, window.innerWidth - MIN_GANTT_PANE_WIDTH))
+  const [leftPaneWidth, setLeftPaneWidth] = useState<number>(() => {
     const saved = localStorage.getItem('prosota_scheduling_left_pane_width')
-    return saved ? Number(saved) : null
+    return clampLeftPaneWidth(saved ? Number(saved) : DEFAULT_LEFT_PANE_WIDTH)
   })
   const startPaneResize = (e: React.MouseEvent) => {
     const startWidth = leftPaneRef.current?.getBoundingClientRect().width ?? 700
+    const containerWidth = leftPaneRef.current?.parentElement?.getBoundingClientRect().width ?? window.innerWidth
+    const maxWidth = Math.max(320, containerWidth - MIN_GANTT_PANE_WIDTH)
     beginDrag(
-      deltaX => setLeftPaneWidth(Math.max(320, startWidth + deltaX)),
+      deltaX => setLeftPaneWidth(Math.min(maxWidth, Math.max(320, startWidth + deltaX))),
       () => setLeftPaneWidth(w => {
-        if (w !== null) localStorage.setItem('prosota_scheduling_left_pane_width', String(w))
+        localStorage.setItem('prosota_scheduling_left_pane_width', String(w))
         return w
       }),
     )(e)
@@ -2091,6 +2124,7 @@ export function Scheduling() {
             buckets={resourcesTabData.buckets}
             spreadByResource={resourcesTabData.spreadByResource}
             loading={resourcesTabData.loading}
+            spreadFetchError={resourcesTabData.spreadFetchError}
             onRefetchResource={resourcesTabData.refetchResource}
             unit={resourcesUnit}
             layoutPrefs={resourcesLayoutPrefs}
@@ -2101,8 +2135,6 @@ export function Scheduling() {
             collapsedIds={collapsedResourceIds}
             onToggleCollapsed={toggleResourceCollapsed}
             onLeftPaneWidthChange={setResourcesLeftPaneWidth}
-            scrollLeft={resourcesScrollLeft}
-            onScrollLeftChange={setResourcesScrollLeft}
           />
           <ResourceUsageProfileWidget
             calendars={calendars}
@@ -2117,8 +2149,6 @@ export function Scheduling() {
             onToggleResourceSelected={toggleResourceSelected}
             selectedActivityIds={selectedActivityIds}
             leftPaneWidth={resourcesLeftPaneWidth}
-            scrollLeft={resourcesScrollLeft}
-            onScrollLeftChange={setResourcesScrollLeft}
           />
         </>
       )}
@@ -2610,12 +2640,18 @@ export function Scheduling() {
         <div
           ref={leftPaneRef}
           onScroll={e => ganttRef.current?.setScrollTop(e.currentTarget.scrollTop)}
-          className="overflow-y-auto overflow-x-hidden shrink-0"
+          // overflow-x-auto, not -hidden (2026-07-12 fix — see
+          // leftPaneWidth's own header) — extra columns beyond this pane's
+          // own width scroll within it instead of being silently clipped
+          // or forcing the pane itself to grow and squeeze the Gantt pane.
+          className="overflow-y-auto overflow-x-auto shrink-0"
           // A fixed height (not max-height) on purpose: the Gantt pane beside it
           // has no scrollbar of its own, so it can't "shrink to fit" a shorter
           // list the way this pane's overflow-y:auto naturally would — both
           // sides need the same, unconditional number to stay comparable.
-          style={{ height: topPaneHeight, width: leftPaneWidth ?? undefined }}
+          // width is always a real pixel value now, never undefined — see
+          // leftPaneWidth's own header on why that mattered.
+          style={{ height: topPaneHeight, width: leftPaneWidth }}
         >
           <table
             className="scheduling-grid text-sm border-collapse table-fixed"
@@ -2706,14 +2742,28 @@ export function Scheduling() {
               </tr>
             </thead>
             <tbody>
-              {visibleActivities.map(a => {
+              {visibleActivities.map((a, rowIndex) => {
                 const editingField = editingCell?.id === a.id ? editingCell.field : null
                 return (
                 <tr
                   key={a.id}
                   ref={el => { if (el) rowRefs.current.set(a.id, el); else rowRefs.current.delete(a.id) }}
-                  style={{ height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a) }}
-                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
+                  style={{
+                    height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a),
+                    // box-shadow, not a real border-bottom — SchedulingPrintView.tsx
+                    // already found and documented this exact failure mode: a real
+                    // per-row border can add a hair of sub-pixel height in some
+                    // browsers' border-collapse handling, which silently accumulates
+                    // over hundreds of rows into the table drifting taller than the
+                    // Gantt pane's analytic `i * GANTT_ROW_HEIGHT` math assumes —
+                    // print switched to box-shadow for exactly this reason, but this
+                    // on-screen grid never got the same fix (2026-07-14, per Maro:
+                    // "the gantt and activity table in the onscreen are misaligning
+                    // again" — worse the deeper into a long schedule you scroll,
+                    // matching accumulated drift rather than a one-off offset).
+                    boxShadow: rowIndex === visibleActivities.length - 1 ? undefined : 'inset 0 -1px 0 #f3f4f6',
+                  }}
+                  className={`hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
                 >
                   <td className="px-2 py-1 no-print">
                     <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
@@ -2777,7 +2827,7 @@ export function Scheduling() {
                   </td>
                   {isColumnVisible('type') && (
                     <td
-                      className="px-3 py-1 text-gray-600"
+                      className="px-3 py-1 text-gray-600 whitespace-nowrap overflow-hidden text-ellipsis"
                       onDoubleClick={() => startEdit(a, 'activity_type')}
                       title={a.activity_type === 'wbs_summary' ? 'Computed automatically from its children — remove/outdent them to change this' : undefined}
                     >

@@ -78,7 +78,15 @@ export const PRINT_PERIOD_COL_WIDTH = 60
 // axis you have the time periods"). Resource Tracking reserves an identical
 // blank column in the same spot so the two tables' period columns still
 // land under each other despite Profile's own gutter.
-export const RESOURCE_CHART_Y_AXIS_WIDTH = 40
+//
+// 56, not the original 40 — the vertical "Hours"/"Days"/"£" title takes a
+// fixed 14px of this, leaving only 26px for the actual gridline value
+// numbers next to it; a real 5-digit value (e.g. "28710", easily reached on
+// a multi-resource, multi-year project) is wider than that at any readable
+// font size and overflowed left into the title text (2026-07-14, per Maro,
+// screenshot showing "28710" overlapping "Hours"). 56 leaves ~42px for the
+// numbers, comfortable for 5 digits plus the leading £ symbol in Cost view.
+export const RESOURCE_CHART_Y_AXIS_WIDTH = 56
 
 const PRINT_TABLES_STORAGE_KEY = 'prosota_resources_print_tables'
 export function loadResourcesPrintTables(): Set<ResourcesPrintTable> {

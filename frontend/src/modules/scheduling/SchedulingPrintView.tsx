@@ -199,6 +199,23 @@ function xGeometryPct(start: string | null, finish: string | null, isMilestone: 
 // table's real rendered pixel width (see the file-level comment).
 const STUB_PX = CONNECTOR_STUB
 
+// No browser API can tell JS how many rows actually land on one printed
+// page — window.print() blocks the JS thread for the whole print flow, and
+// even a 'beforeprint' listener measures 0 real width at that point (see the
+// SchedulingPrintView file-level comment). So "same page" can only ever be
+// approximated: this is a conservative floor tuned against the smallest
+// paper size this app is realistically printed on (A4/Letter landscape,
+// this app's own 1.3in @page bottom margin, repeating header) — two
+// activities within this many rows of each other are safe to connect on
+// virtually any paper size; farther apart, a page break becomes plausible
+// enough that drawing the line risks a connector running diagonally through
+// unrelated bars on the page(s) in between (2026-07-14, per Maro: "something
+// broke... gantt chart... print version only" — screenshot showed exactly
+// that zigzag). Trade-off, accepted: on larger paper (A3/A2/A1), some
+// genuinely same-page long-distance connectors are now skipped rather than
+// drawn — strictly better than drawing them wrong.
+const PLAUSIBLE_ROWS_PER_PRINT_PAGE = 10
+
 // Adds a fixed pixel offset to an already-resolved CSS position (a plain
 // percentage, or another calc()/min()/max() expression) — used to build the
 // stub jogs below without ever needing to know the base's actual pixel value.
@@ -572,6 +589,7 @@ export function SchedulingPrintView({
           const predGeo = geometryById.get(r.predecessor_id)
           const succGeo = geometryById.get(r.successor_id)
           if (predIndex === undefined || succIndex === undefined || !predGeo || !succGeo) return null
+          if (Math.abs(predIndex - succIndex) > PLAUSIBLE_ROWS_PER_PRINT_PAGE) return null
           const predCenterY = HEADER_HEIGHT + predIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
           const succCenterY = HEADER_HEIGHT + succIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
           const x1LocalPct = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? predGeo.leftPct : predGeo.rightPct

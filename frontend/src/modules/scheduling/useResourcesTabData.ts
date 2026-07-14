@@ -20,6 +20,7 @@ export function useResourcesTabData(
 ) {
   const [spreadByResource, setSpreadByResource] = useState<Map<string, ResourceSpread>>(new Map())
   const [loading, setLoading] = useState(true)
+  const [spreadFetchError, setSpreadFetchError] = useState<string | null>(null)
 
   const activitiesById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
 
@@ -78,18 +79,47 @@ export function useResourcesTabData(
     async function load() {
       if (trackedResources.length === 0) {
         setSpreadByResource(new Map())
+        setSpreadFetchError(null)
         setLoading(false)
         return
       }
       setLoading(true)
-      const entries = await Promise.all(trackedResources.map(async r => {
+      // Promise.allSettled, not Promise.all (2026-07-13 fix, per Maro:
+      // "some resources are still not showing on the resource tracking" —
+      // Promise.all rejects the *whole batch* the instant any single
+      // resource's request fails, e.g. a 404 for a resource that existed a
+      // moment ago but got cleaned up mid-regeneration (the app's own log
+      // shows exactly this: DELETE /model-element-links/... 404s from an
+      // earlier schedule being replaced) — with no catch anywhere in this
+      // function, that one failure silently dropped the update for every
+      // OTHER resource in the same batch too, since setSpreadByResource
+      // never ran at all. Each resource's fetch is now isolated: one
+      // failing resource shows blank (indexSpread(undefined) is the
+      // existing, correct "no data yet" fallback), the rest still update.
+      const results = await Promise.allSettled(trackedResources.map(async r => {
         const { data } = await api.get<ResourceSpread>('/api/v1/resource-assignment-spreads/', {
           params: { resource_id: r.id, start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
         })
         return [r.id, data] as const
       }))
       if (!cancelled) {
-        setSpreadByResource(new Map(entries))
+        const entries = results.flatMap(r => r.status === 'fulfilled' ? [r.value] : [])
+        const failedCount = results.length - entries.length
+        // Merge into the existing map, don't replace it (2026-07-14 fix, per
+        // Maro: "unchecked it shows no values... if checked, it shows them"
+        // — checking a resource narrows trackedResources down to just that
+        // one, this effect refetches only it, and a wholesale replace here
+        // wiped out every other already-fetched resource's data from the
+        // map. Unchecking widened trackedResources back out, but until
+        // *that* refetch finished, spreadByResource only had the single
+        // checked resource's entry — every other (correctly loaded a moment
+        // earlier) resource rendered blank in the meantime, with no error,
+        // because nothing actually failed — its data was just discarded for
+        // no reason. Merging means a fetch for a narrower resource set can
+        // only ever add/update entries, never destroy previously-fetched
+        // ones still sitting in the map for resources outside this batch.
+        setSpreadByResource(prev => new Map([...prev, ...entries]))
+        setSpreadFetchError(failedCount > 0 ? `Failed to load resource tracking data for ${failedCount} of ${results.length} resource(s)` : null)
         setLoading(false)
       }
     }
@@ -107,7 +137,7 @@ export function useResourcesTabData(
 
   return {
     trackedResources, assignmentsByResource, rangeStart, rangeEnd, buckets,
-    spreadByResource, loading, refetchResource,
+    spreadByResource, loading, spreadFetchError, refetchResource,
   }
 }
 
