@@ -14,14 +14,11 @@ import type { Activity, ActivityRelationship, Calendar, Resource, ResourceAssign
 import { disposeObject3D, loadModel3DFile } from './import3d'
 import { loadCustomEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
-import {
-  loadPresetAsTextureSet, textureSetToPresetConfig, useMaterialPresets,
-  EMPTY_MATERIAL_PRESET_CONFIG, type MaterialPresetConfig,
-} from './materialPresets'
+import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
-import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type SourceKind } from './modelElementLinks'
+import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind, type SourceKind } from './modelElementLinks'
 import { deleteModel3DFile, downloadModel3DFile, listModel3DFiles, uploadModel3DFile, type Model3DKind } from './model3dFiles'
 import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds } from './sectionBoxes'
 import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sectionBoxGeometry'
@@ -31,10 +28,13 @@ import { SectionBoxPanel } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { CameraViewPanel } from './CameraViewPanel'
 import {
-  addCollectionMember, createCollection, deleteCollection, listCollections, updateCollection,
+  addCollectionMember, createCollection, deleteCollection, listCollections, removeCollectionMember, updateCollection,
   type Collection as CollectionType, type CollectionMember,
 } from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
+import { listElementSplits, type ElementSplit } from './elementSplits'
+import { regenerateSplitTargets } from './elementSplitTargets'
+import { SplitByLevelPanel } from './SplitByLevelPanel'
 import { listElementTransforms, saveElementTransform, type ElementTransform } from './elementTransforms'
 import { resolveSelectionToMemberRefs } from './collectionResolvers'
 import { useAnimationProfiles } from './animationProfiles'
@@ -72,6 +72,7 @@ import { resolveMembersToElements, findClashes, type ClashSceneObject } from './
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
 import { BaselineViewportPane } from './BaselineViewportPane'
 import { ImportModelDialog } from './ImportModelDialog'
+import { IfcScheduleWizard } from './IfcScheduleWizard'
 import { UnloadModelDialog } from './UnloadModelDialog'
 import type { UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
@@ -115,6 +116,8 @@ const CAMERA_PANEL_OPEN_KEY = 'prosota_4d_camera_panel_open'
 const CAMERA_PANEL_DOCK_KEY = 'prosota_4d_camera_panel_dock'
 const COLLECTIONS_PANEL_OPEN_KEY = 'prosota_4d_collections_panel_open'
 const COLLECTIONS_PANEL_DOCK_KEY = 'prosota_4d_collections_panel_dock'
+const SPLIT_PANEL_OPEN_KEY = 'prosota_4d_split_panel_open'
+const SPLIT_PANEL_DOCK_KEY = 'prosota_4d_split_panel_dock'
 const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
 const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
@@ -287,7 +290,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject])
 
-  const handleLinkElement = async (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => {
+  const handleLinkElement = async (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => {
     try {
       setLinkError(null)
       const link = await createModelElementLink({ activity_id: activityId, source_kind: sourceKind, element_ref: elementRef, element_label: elementLabel })
@@ -473,6 +476,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject])
 
+  // "Split an element by level" (2026-07-15, per Maro) — project-scoped,
+  // persisted server-side (element_split.py). Same fetch-on-project-change
+  // shape as Collections/ModelElementLink above; the actual slice
+  // generation (elementSplitTargets.ts) reacts to this state further below,
+  // once ifcHandles is declared.
+  const [elementSplits, setElementSplits] = useState<ElementSplit[]>([])
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listElementSplits(selectedProject.id).then(s => { if (!cancelled) setElementSplits(s) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+  const refreshElementSplits = () => {
+    if (!selectedProject) return
+    listElementSplits(selectedProject.id).then(setElementSplits)
+  }
+
+  // Exposed so SplitByLevelPanel.tsx can refetch after auto-creating its own
+  // "Splits" collection on commit (2026-07-15, per Maro: "add the original
+  // its slices in a collection") — mirrors refreshElementSplits above.
+  const refreshCollections = () => {
+    if (!selectedProject) return
+    listCollections(selectedProject.id).then(setCollections)
+  }
+
   const collectionErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
     return err instanceof Error ? err.message : fallback
@@ -549,13 +577,50 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // "Remove Selected from Collection" (2026-07-15, per Maro: "just realised
+  // there's not remove selected from collection") — exact inverse of Add
+  // Selected above: same resolveSelectionToMemberRefs call to get the
+  // current selection's own (source_kind, element_ref) identity, matched
+  // against this *specific* collection's own members (not a flattened
+  // subtree — mirrors Add Selected's own single-collection scope, so
+  // removing from a parent never reaches into a sub-collection's separate
+  // membership). Elements in the selection that aren't actually in this
+  // collection are silently skipped, same permissive shape as Add
+  // Selected's own 409-is-a-no-op handling — the point is "remove whatever
+  // of the selection *is* here," not to error over the rest.
+  const handleRemoveSelectedFromCollection = async (collectionId: string) => {
+    const collection = collections.find(c => c.id === collectionId)
+    if (!collection) return
+    const handle = getIfcHandleFor(activeIfcModelId)
+    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    if (drafts.length === 0) return
+    const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
+    const toRemove = collection.members.filter(m => draftKeys.has(`${m.source_kind}::${m.element_ref}`))
+    if (toRemove.length === 0) return
+    setCollectionError(null)
+    const removedIds = new Set<string>()
+    for (const member of toRemove) {
+      try {
+        await removeCollectionMember(member.id)
+        removedIds.add(member.id)
+      } catch (err) {
+        setCollectionError(collectionErrorMessage(err, 'Failed to remove some elements from the collection'))
+      }
+    }
+    if (removedIds.size > 0) {
+      setCollections(prev => prev.map(c => (
+        c.id === collectionId ? { ...c, members: c.members.filter(m => !removedIds.has(m.id)) } : c
+      )))
+    }
+  }
+
   // Select/Hide/Isolate by collection (2026-07-11) — recurse into nested
   // sub-collections, same as Blender's own outliner (right-click "Select
   // Objects" on a collection selects its sub-collections' contents too) —
   // matches the "Doors" example from Maro's own request: a parent
   // collection with per-floor sub-collections should still isolate every
   // door at once, not just whichever happen to be direct members.
-  const flattenCollectionMemberRefs = (collectionId: string): { source_kind: SourceKind; element_ref: string }[] => {
+  const flattenCollectionMemberRefs = (collectionId: string): { source_kind: SourceKind | 'ifc_split'; element_ref: string }[] => {
     const subtreeIds = new Set<string>([collectionId])
     const stack = [collectionId]
     while (stack.length > 0) {
@@ -584,6 +649,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
   }
 
+  // Per-member select (2026-07-15, per Maro: "i want to be able select each
+  // element in the split collection") — same resolution as
+  // handleSelectCollection above, just scoped to one (source_kind,
+  // element_ref) pair instead of a whole collection's flattened
+  // membership, and *does* set a single "primary" element (there's exactly
+  // one, unlike the bulk case), so IfcDataPanel's Object Information
+  // actually shows something for it.
+  const handleSelectCollectionMember = async (member: { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string }) => {
+    const { objectIds, expressIds } = await resolveElementRefsToTargets([member], sceneObjects, ifcHandles)
+    if (objectIds.size === 0 && expressIds.size === 0) return
+    setSelectedObjectIds(objectIds)
+    setSelectedExpressIds(expressIds)
+    setSelectedExpressId(expressIds.size === 1 ? [...expressIds][0] : null)
+    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
+    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
+    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
+  }
+
   const handleHideCollection = async (collectionId: string) => {
     const refs = flattenCollectionMemberRefs(collectionId)
     const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
@@ -596,6 +679,57 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const meshObjectIds = [...objectIds].filter(id => !id.startsWith('ifc-'))
     if (meshObjectIds.length > 0) setHiddenIds(prev => new Set([...prev, ...meshObjectIds]))
     if (expressKeys.size > 0) setHiddenExpressIds(prev => new Set([...prev, ...expressKeys]))
+  }
+
+  // Unhide (2026-07-15, per Maro) — exact inverse of handleHideCollection
+  // above: removes this collection's own members from hiddenIds/
+  // hiddenExpressIds instead of adding to them. Deliberately narrow (only
+  // this collection's own membership, same resolution as Hide) rather than
+  // Show All's "clear everything" — a collection someone else hid stays
+  // hidden if it isn't part of what got unhidden.
+  const handleUnhideCollection = async (collectionId: string) => {
+    const refs = flattenCollectionMemberRefs(collectionId)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const meshObjectIds = [...objectIds].filter(id => !id.startsWith('ifc-'))
+    if (meshObjectIds.length > 0) {
+      setHiddenIds(prev => {
+        const next = new Set(prev)
+        meshObjectIds.forEach(id => next.delete(id))
+        return next
+      })
+    }
+    if (expressKeys.size > 0) {
+      setHiddenExpressIds(prev => {
+        const next = new Set(prev)
+        expressKeys.forEach(key => next.delete(key))
+        return next
+      })
+    }
+  }
+
+  // Hide Selected (2026-07-15, per Maro) — the viewport toolbar's own
+  // equivalent of the Collections panel's per-collection Hide button above,
+  // just sourced from whatever's currently selected instead of a
+  // collection's membership list. Same two-Set split: specific IFC
+  // sub-elements (selectedExpressIds, non-empty only alongside a single
+  // activeObjectId — see resolveActiveTextureKeys' own comment on why this
+  // codebase already treats that pairing as the one-active-model
+  // assumption) go to hiddenExpressIds under their composite key; any
+  // *other* selected whole objects (a plain mesh import, or a second model
+  // picked up via ctrl-click alongside sub-elements of the first) go to
+  // hiddenIds. A whole-object-only selection (Select All, or a plain mesh
+  // click) has no expressIds at all, so it falls straight to the second
+  // branch instead.
+  const handleHideSelected = () => {
+    if (selectedObjectIds.size === 0 && selectedExpressIds.size === 0) return
+    if (activeObjectId && selectedExpressIds.size > 0) {
+      const expressKeys = [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
+      setHiddenExpressIds(prev => new Set([...prev, ...expressKeys]))
+      const wholeObjectIds = [...selectedObjectIds].filter(id => id !== activeObjectId)
+      if (wholeObjectIds.length > 0) setHiddenIds(prev => new Set([...prev, ...wholeObjectIds]))
+    } else if (selectedObjectIds.size > 0) {
+      setHiddenIds(prev => new Set([...prev, ...selectedObjectIds]))
+    }
   }
 
   const handleIsolateCollection = async (collectionId: string) => {
@@ -1111,6 +1245,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Dockable Split by Level panel (2026-07-15, per Maro) — same shared-
+  // side-dock treatment as Collections/Section Box/Camera Views above.
+  const [splitPanelOpen, setSplitPanelOpen] = useState(() => loadPanelOpen(SPLIT_PANEL_OPEN_KEY, false))
+  const toggleSplitPanel = () => {
+    setSplitPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(SPLIT_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [splitPanelDock, setSplitPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(SPLIT_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleSplitPanelDock = () => {
+    setSplitPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(SPLIT_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
   // Dockable Paths panel (2026-07-11, per Maro's Blender curve reference:
   // "in blender you can add a curve... i can then place an object to follow
   // that path") — same shared-side-dock treatment as Collections/Section
@@ -1383,6 +1541,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const getIfcHandleFor = (objectId: string | null | undefined): IfcModelHandle | null =>
     ifcHandles.find(h => `ifc-${h.modelID}` === objectId) ?? null
 
+  // Regenerates every level-slice clone whenever the loaded IFC models or
+  // the split configuration change (2026-07-15) — see elementSplitTargets.ts's
+  // own header for why this is a full rebuild each time, not an incremental
+  // diff. Bumps sceneObjects afterward (a trivial new-array-same-contents
+  // set) purely to give Viewport3D.tsx's ModelObjects effect a fresh
+  // `objects` identity to react to — it already re-derives viewportObjects
+  // fresh off sceneObjects on every render, but has no other way to notice
+  // this effect just imperatively added new mesh children to a handle it
+  // already holds a reference to (mutating handle.object doesn't itself
+  // trigger a React re-render the way setState does).
+  useEffect(() => {
+    if (ifcHandles.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      for (const handle of ifcHandles) await regenerateSplitTargets(handle, elementSplits, settings.upAxis)
+      if (!cancelled) setSceneObjects(prev => [...prev])
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ifcHandles, elementSplits, settings.upAxis])
+
+  const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false)
+
   // Resolves each element-scoped SectionBox's own GlobalId (element_ref)
   // to an expressID within whichever specific IFC model it belongs to
   // (2026-07-09, per-element scoping) — async (needs web-ifc, dynamic-
@@ -1432,7 +1613,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const { getExpressIdFromGuid } = await import('./ifcModel')
       if (cancelled) return
       const next: Record<string, string> = {}
-      for (const link of ifcLinks) {
+      // Yielded every 200 links (2026-07-15, per Maro: "its very laggy...
+      // this model only had 5k plus elements") — Generate Schedule creates
+      // one ifc-kind ModelElementLink per linked element, so a real
+      // structural+architectural run can mean thousands of rows here; each
+      // one calls getExpressIdFromGuid, a synchronous native WASM call, and
+      // this loop used to run every one of them back-to-back with no
+      // yield — a real main-thread freeze on every modelElementLinks/
+      // ifcHandles change (right after generation, on project load, ...).
+      // Same chunking idiom ifcScheduleExtraction.ts's own bulk WASM reads
+      // and Viewport3D.tsx's TimelinePlayback resolver now both use.
+      for (let i = 0; i < ifcLinks.length; i++) {
+        if (i > 0 && i % 200 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0))
+          if (cancelled) return
+        }
+        const link = ifcLinks[i]
         for (const handle of ifcHandles) {
           const expressId = getExpressIdFromGuid(handle, link.element_ref)
           if (expressId !== undefined) { next[link.id] = `ifc-${handle.modelID}::${expressId}`; break }
@@ -1466,6 +1662,49 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
     return map
   }, [modelElementLinks, activities, sceneObjects, ifcLinkKeys])
+
+  // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
+  // been 4d linked to an activity yet") — the "already linked" side of that
+  // check, split the same mesh/ifc way varianceByElementKey already is (and
+  // reusing the same ifcLinkKeys resolution rather than re-resolving
+  // GlobalId->expressID again). annotation-kind links aren't scene geometry
+  // at all, so they never contribute here.
+  const linkedMeshObjectIds: Set<string> = useMemo(() => {
+    const set = new Set<string>()
+    for (const link of modelElementLinks) {
+      if (link.source_kind !== 'mesh') continue
+      const sceneObject = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
+      if (sceneObject) set.add(sceneObject.id)
+    }
+    return set
+  }, [modelElementLinks, sceneObjects])
+  const linkedIfcElementKeys: Set<string> = useMemo(() => {
+    const set = new Set<string>()
+    for (const link of modelElementLinks) {
+      if (link.source_kind !== 'ifc') continue
+      const key = ifcLinkKeys[link.id]
+      if (key) set.add(key)
+    }
+    return set
+  }, [modelElementLinks, ifcLinkKeys])
+
+  // Replaces the current selection, same convention as handleSelectAll —
+  // Viewport3D.tsx's handleSelectUnassigned already filtered to
+  // visible/unlinked objects and elements, this just applies the result the
+  // same way handleBoxSelect applies its own matches (see that handler's
+  // own comment on why a loop over per-id setters would clobber itself).
+  const handleSelectUnassigned = (objectIds: string[], expressIdsByObject: Map<string, number[]>) => {
+    if (objectIds.length === 0 && expressIdsByObject.size === 0) return
+    const allExpressIds = [...expressIdsByObject.values()].flat()
+    setSelectedExpressIds(new Set(allExpressIds))
+    setSelectedExpressId(allExpressIds.length ? allExpressIds[allExpressIds.length - 1] : null)
+    setSelectedObjectIds(new Set([...objectIds, ...expressIdsByObject.keys()]))
+    const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : objectIds[objectIds.length - 1]
+    if (lastObjectId) {
+      setActiveObjectId(lastObjectId)
+      if (expressIdsByObject.has(lastObjectId)) setActiveIfcModelId(lastObjectId)
+    }
+  }
 
   // Clash Detective (2026-07-12, per Maro's Navisworks reference screenshot)
   // — reuses Collections as a test's two selection sets (see clash_test.py's
@@ -1537,9 +1776,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setClashRunProgress({ testId, done: 0, total: 0 })
     try {
       const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
-      const elementsA = await resolveMembersToElements(collectionA.members, clashSceneObjects, ifcHandles)
+      // Clash Detective doesn't understand level-slices yet (2026-07-15,
+      // deliberately out of scope for that feature's own first pass — see
+      // elementSplitTargets.ts's own header) — filtered out here rather
+      // than widening sceneClash.ts's own real/mesh-only element type, so a
+      // slice-containing Collection degrades to "clash-test its non-slice
+      // members" instead of a type error or a runtime crash.
+      const nonSplitMembers = (members: typeof collectionA.members) =>
+        members.filter((m): m is typeof m & { source_kind: 'ifc' | 'mesh' } => m.source_kind !== 'ifc_split')
+      const elementsA = await resolveMembersToElements(nonSplitMembers(collectionA.members), clashSceneObjects, ifcHandles)
       const selfTest = collectionA.id === collectionB.id
-      const elementsB = selfTest ? elementsA : await resolveMembersToElements(collectionB.members, clashSceneObjects, ifcHandles)
+      const elementsB = selfTest ? elementsA : await resolveMembersToElements(nonSplitMembers(collectionB.members), clashSceneObjects, ifcHandles)
       const found = await findClashes(elementsA, elementsB, test.test_type, test.tolerance_mm, selfTest, (done, total) => {
         setClashRunProgress({ testId, done, total })
       })
@@ -2025,6 +2272,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleSelectAll = () => {
+    // Isolated to a specific element subset — Select All picks up exactly
+    // what's currently isolated/visible instead of jumping back out to "the
+    // whole model(s)" (2026-07-15, per Maro: "same with select all", same
+    // fix as box-select's own element-level rework above — Isolate already
+    // hides everything else, so "all" and "the isolated subset" mean the
+    // same thing on screen). isolatedExpressIds is implicitly scoped to
+    // whichever one IFC model was active when Isolate was switched on (see
+    // isolatedExpressIds' own declaration comment) — activeIfcModelId is
+    // that same model.
+    if (isolateMode && isolatedExpressIds.size > 0 && activeIfcModelId) {
+      const expressIds = [...isolatedExpressIds]
+      setSelectedExpressIds(new Set(expressIds))
+      setSelectedExpressId(expressIds[expressIds.length - 1])
+      setSelectedObjectIds(new Set([...isolatedObjectIds, activeIfcModelId]))
+      setActiveObjectId(activeIfcModelId)
+      return
+    }
     const ids = sceneObjects.map(o => o.id)
     setSelectedObjectIds(new Set(ids))
     setActiveObjectId(ids.length ? ids[ids.length - 1] : null)
@@ -2039,14 +2303,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Box-select (2026-07-08, per Maro: "select box in viewport") always adds
   // to the current selection, same as Blender's default B-key behaviour —
-  // Viewport3D.tsx resolves which objects fall inside the dragged rectangle
-  // and hands back the id list in one batch (never loops handleSelectObject
-  // per id — each of those calls would read the same stale
-  // selectedObjectIds from this closure and clobber each other).
-  const handleBoxSelect = (ids: string[]) => {
-    if (ids.length === 0) return
-    setSelectedObjectIds(prev => new Set([...prev, ...ids]))
-    setActiveObjectId(ids[ids.length - 1])
+  // Viewport3D.tsx resolves which objects/elements fall inside the dragged
+  // rectangle and hands back both in one batch (never loops
+  // handleSelectObject/handleSelectExpressId per id — each of those calls
+  // would read the same stale selectedObjectIds/selectedExpressIds from this
+  // closure and clobber each other).
+  //
+  // expressIdsByObject (2026-07-14 fix, per Maro: "boc select doesnt select
+  // elements, just object") — Viewport3D.tsx now hit-tests individual IFC
+  // elements inside the drag rectangle instead of only ever resolving to the
+  // whole model; every matched element's parent model still gets ensured
+  // (not toggled) into selectedObjectIds too, same convention
+  // handleSelectExpressId already uses, so it shows up (gizmo, highlight) in
+  // the viewport the same way a single element click already does.
+  const handleBoxSelect = (objectIds: string[], expressIdsByObject: Map<string, number[]>) => {
+    if (objectIds.length === 0 && expressIdsByObject.size === 0) return
+    const allExpressIds = [...expressIdsByObject.values()].flat()
+    if (allExpressIds.length > 0) {
+      setSelectedExpressIds(prev => new Set([...prev, ...allExpressIds]))
+      setSelectedExpressId(allExpressIds[allExpressIds.length - 1])
+    }
+    setSelectedObjectIds(prev => new Set([...prev, ...objectIds, ...expressIdsByObject.keys()]))
+    const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : objectIds[objectIds.length - 1]
+    if (lastObjectId) {
+      setActiveObjectId(lastObjectId)
+      if (expressIdsByObject.has(lastObjectId)) setActiveIfcModelId(lastObjectId)
+    }
   }
 
   // Selects an IFC sub-element — shared by both the Project Overview tree
@@ -2368,11 +2650,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // the element's true original material (elementBaseline.ts) is never
   // touched by it either way.
   const materialPresets = useMaterialPresets(selectedProject?.id)
-  const handleApplyMaterialPreset = async (config: MaterialPresetConfig) => {
+  const handleApplyMaterialPreset = async (preset: MaterialPreset) => {
     if (!activeTextureKey) return
     try {
       setTextureError(null)
-      const textureSet = await loadPresetAsTextureSet(config)
+      const textureSet = await loadPresetAsTextureSet(preset)
       setCustomTextures(prev => ({ ...prev, [activeTextureKey]: { ...prev[activeTextureKey], ...textureSet } }))
     } catch {
       setTextureError('Failed to load material preset')
@@ -2793,12 +3075,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     })
   }
 
-  // What's currently applied to the active element/object, in preset shape
-  // — the starting point for "Save Current as Preset" (MaterialPresetPicker's
-  // 💾 button).
-  const activeMaterialPresetConfig = activeTextureKey && customTextures[activeTextureKey]
-    ? textureSetToPresetConfig(customTextures[activeTextureKey])
-    : EMPTY_MATERIAL_PRESET_CONFIG
   // Select Linked / Apply to Linked only make sense for one specific IFC
   // sub-element — see handleSelectLinkedMaterial's own comment above.
   const linkedMaterialsAvailable = isElementTransform && !!activeIfcHandle
@@ -2979,6 +3255,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             buckets={resourcesTabData.buckets}
             spreadByResource={resourcesTabData.spreadByResource}
             loading={resourcesTabData.loading}
+            spreadFetchError={resourcesTabData.spreadFetchError}
             onRefetchResource={resourcesTabData.refetchResource}
             unit="hours"
             layoutPrefs={layoutPrefs}
@@ -3159,9 +3436,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onReparent={handleReparentCollection}
           onDelete={handleDeleteCollection}
           onAddSelected={handleAddSelectedToCollection}
+          onRemoveSelected={handleRemoveSelectedFromCollection}
           onSelect={handleSelectCollection}
           onHide={handleHideCollection}
+          onUnhide={handleUnhideCollection}
           onIsolate={handleIsolateCollection}
+          onSelectMember={handleSelectCollectionMember}
+        />
+      ),
+    })
+  }
+  if (splitPanelOpen) {
+    dockablePanels.push({
+      id: 'split', label: 'Split by Level', dock: splitPanelDock,
+      onToggleDock: toggleSplitPanelDock, onClose: toggleSplitPanel,
+      content: (
+        <SplitByLevelPanel
+          projectId={selectedProject?.id ?? ''}
+          handle={activeIfcHandle}
+          selectedExpressIds={selectedExpressIds}
+          elementSplits={elementSplits}
+          collections={collections}
+          onCollectionsChanged={refreshCollections}
+          upAxis={settings.upAxis}
+          onClose={toggleSplitPanel}
+          onSplitsChanged={refreshElementSplits}
         />
       ),
     })
@@ -3275,12 +3574,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onSelectObject={handleSelectObject}
       onSelectAll={handleSelectAll}
       onBoxSelect={handleBoxSelect}
+      linkedObjectIds={linkedMeshObjectIds}
+      linkedElementKeys={linkedIfcElementKeys}
+      onSelectUnassigned={handleSelectUnassigned}
       isolateMode={isolateMode}
       isolatedObjectIds={isolatedObjectIds}
       isolatedExpressIds={isolatedExpressIds}
       hiddenExpressIds={hiddenExpressIds}
       onToggleIsolate={handleToggleIsolate}
       onShowAll={handleShowAll}
+      onHideSelected={handleHideSelected}
       linkedActivitiesWidget={
         <LinkedActivitiesWidget
           activities={activities.filter(a => isolatedLinkedActivityIds.has(a.id))}
@@ -3389,6 +3692,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Collections
         </button>
         <button
+          onClick={toggleSplitPanel}
+          title="Split a selected element by level — cut a tall vertical element into independently-linkable, independently-animating per-storey pieces"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            splitPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Split by Level
+        </button>
+        <button
           onClick={togglePathsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
             pathsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -3441,6 +3753,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           ⬆ Import Model
         </button>
         {importing && <span className="text-xs text-gray-400">Importing…</span>}
+        {ifcHandles.length > 0 && (
+          <button
+            onClick={() => setScheduleWizardOpen(true)}
+            title="Scan the loaded IFC model's structural elements and generate a first-draft, resource-loaded schedule from them"
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          >
+            Generate Schedule
+          </button>
+        )}
         {importError && <span className="text-xs text-red-600">{importError}</span>}
         {textureError && <span className="text-xs text-red-600">{textureError}</span>}
         {linkError && <span className="text-xs text-red-600">{linkError}</span>}
@@ -3473,7 +3794,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClearTexture={handleClearActiveTexture}
           materialPresets={materialPresets.presets}
           materialPresetsLoading={materialPresets.loading}
-          activeMaterialPresetConfig={activeMaterialPresetConfig}
           onApplyMaterialPreset={handleApplyMaterialPreset}
           onCreateMaterialPreset={materialPresets.create}
           onUpdateMaterialPreset={materialPresets.update}
@@ -3568,6 +3888,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           kind={pendingImport.kind}
           onConfirm={handleConfirmImport}
           onCancel={() => setPendingImport(null)}
+        />
+      )}
+      {scheduleWizardOpen && selectedProject && period && (
+        <IfcScheduleWizard
+          models={ifcHandles.map(handle => ({
+            handle,
+            name: sceneObjects.find(o => o.id === `ifc-${handle.modelID}`)?.name ?? handle.object.name ?? 'Imported Model',
+          }))}
+          collections={collections}
+          calendars={calendars}
+          projectId={selectedProject.id}
+          schedulePeriodId={period.id}
+          onCancel={() => setScheduleWizardOpen(false)}
+          onGenerated={() => {
+            setScheduleWizardOpen(false)
+            refreshSchedule()
+            listModelElementLinks(selectedProject.id).then(links => setModelElementLinks(links))
+          }}
         />
       )}
       {pendingUnload && (

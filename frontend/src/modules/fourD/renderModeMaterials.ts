@@ -63,6 +63,19 @@ export function getGouraudVariant(source: THREE.MeshStandardMaterial): THREE.Mes
     variant.flatShading = source.flatShading
     variant.needsUpdate = true
   }
+  // A real bug, caught 2026-07-15 (per Maro: a split element's slice
+  // clone rendered at full, uncut height) — Section Box and split-by-level
+  // clipping both work by setting `clippingPlanes` directly on a mesh's
+  // *real* MeshStandardMaterial (Viewport3D.tsx / elementSplitTargets.ts),
+  // but this function was never told about them: it built/re-synced a
+  // separate MeshLambertMaterial `variant` object without ever copying
+  // `source.clippingPlanes` onto it, so any render mode besides the
+  // default 'shaded'/Wireframe/Flat Shaded (which display `source` itself,
+  // not this variant) silently dropped clipping entirely, regardless of
+  // whether a Section Box or split existed. Plain reference copy, not a
+  // clone — clippingPlanes are already swapped wholesale (never mutated in
+  // place) by both callers above, so sharing the array is safe.
+  variant.clippingPlanes = source.clippingPlanes
   return variant
 }
 
@@ -87,7 +100,36 @@ export function getHiddenLineMaterial(source: THREE.MeshStandardMaterial, tintCo
   variant.transparent = source.transparent
   variant.opacity = source.opacity
   variant.side = source.side
+  // Same clippingPlanes gap as getGouraudVariant above, same fix.
+  variant.clippingPlanes = source.clippingPlanes
   return variant
 }
 
 export const HIDDEN_LINE_BASE_COLOR = new THREE.Color(0xe5e7eb)
+
+// A real bug, caught 2026-07-13 (per Maro: "variant.color.copy is not a
+// function" — clicking a material preset crashed the whole viewport).
+// THREE.Material.prototype.copy() — called internally by .clone() — does
+// `this.userData = JSON.parse(JSON.stringify(source.userData))` (confirmed
+// directly in three.js's own Material.js, not assumed). Viewport3D.tsx
+// clones a mesh's standardMaterial whenever a texture override/material
+// preset first applies to a specific element (a per-element material
+// needs its own identity, separate from whatever's shared by every other
+// element still using the file's original material) — and if that
+// material's userData already held a cached lambertVariant/
+// hiddenLineVariant (real THREE.Material instances, set by
+// getGouraudVariant/getHiddenLineMaterial above whenever Gouraud/Hidden
+// Line render mode had been used even once before), the JSON round-trip
+// silently turns them into plain objects that still *look* present
+// (`variant.color` exists) but aren't real Color instances anymore
+// (`.copy` doesn't exist on a plain `{r,g,b}`) — exactly the same bug
+// class this app already caught once for Object3D.clone() (see
+// sceneClone.ts's own header), just not this specific call site. Call
+// this on any material clone that might carry these keys, so
+// getGouraudVariant/getHiddenLineMaterial's own `if (!variant)` check
+// correctly detects "no cache yet" and builds a fresh, real one instead of
+// trusting the JSON-mangled copy.
+export function clearClonedRenderModeVariantCache(material: THREE.Material) {
+  delete material.userData.lambertVariant
+  delete material.userData.hiddenLineVariant
+}

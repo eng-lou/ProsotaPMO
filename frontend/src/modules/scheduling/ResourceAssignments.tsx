@@ -18,8 +18,17 @@ function formatCurrency(value: string) {
   return `£${Number(value).toLocaleString()}`
 }
 
+// 'crew' is time-based too (2026-07-08, per Maro: "crew occupies an
+// activity's time the same way labour/equipment does") — the backend's own
+// copy of this same rule (resource_costing.py, resource_assignment_spread.py's
+// _TIME_BASED_TYPES) already includes it; this frontend copy never got
+// updated to match, so a crew assignment's "Qty / Utilisation" column fell
+// through to the material-style `${quantity} ${unit}` display instead —
+// quantity is genuinely null for a crew assignment (only utilisation_pct
+// applies), rendering the literal text "null day" (2026-07-13, per Maro's
+// own screenshot of exactly that).
 function isTimeBased(type: ResourceType): boolean {
-  return type === 'labour' || type === 'equipment'
+  return type === 'labour' || type === 'equipment' || type === 'crew'
 }
 
 function singleTimeBasedAssignment(assignments: ResourceAssignment[]): ResourceAssignment | null {

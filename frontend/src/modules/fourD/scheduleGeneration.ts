@@ -100,6 +100,18 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
       crewName: 'Footings Formwork Crew', crewSize: 3, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 900,
     } },
   ],
+  // Individual rebar bars/mesh sheets (2026-07-15, per Maro, after a real
+  // structural export's "Select Unassigned" turned up 149 of these with no
+  // category at all — see ifcScheduleExtraction.ts's own header on why
+  // this is its own category rather than folded into whichever pour each
+  // bar belongs to) — a single generic placement phase, count-based like
+  // Footings/Columns/Beams (a bar is a discrete countable thing, not an
+  // area), same "editable defaults, not a certified takeoff" contract.
+  Reinforcement: [
+    { key: 'place', label: 'Place Reinforcement', rate: {
+      crewName: 'Rebar Crew', crewSize: 4, productivityPerCrewDay: 150, unit: 'each', costPerCrewDay: 1400,
+    } },
+  ],
   Columns: [
     { key: 'erect', label: 'Erect Steel Columns', rate: {
       crewName: 'Steel Erection Crew', crewSize: 6, productivityPerCrewDay: 6, unit: 'each', costPerCrewDay: 2400,
@@ -265,7 +277,7 @@ export interface StoreyGroup {
 // summed from ifcScheduleExtraction.ts's own per-element bounding-box
 // quantity.
 const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
-  'Footings', 'Columns', 'Beams',
+  'Footings', 'Reinforcement', 'Columns', 'Beams',
   'Structural Members', 'Stairs', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
 ])
 

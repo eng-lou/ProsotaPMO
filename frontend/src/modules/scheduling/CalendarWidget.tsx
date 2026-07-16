@@ -53,6 +53,9 @@ function CalendarEnvelopeFields({
           />
         </label>
       </div>
+      <p className="text-[11px] text-gray-400">
+        Every activity on this calendar starts at Day Starts and finishes at Day Ends — never mid-day.
+      </p>
     </>
   )
 }
@@ -75,6 +78,7 @@ interface NewCalendarValues {
   works_friday: boolean
   works_saturday: boolean
   works_sunday: boolean
+  whole_day_scheduling: boolean
 }
 
 const BLANK_NEW_CALENDAR: NewCalendarValues = {
@@ -88,6 +92,10 @@ const BLANK_NEW_CALENDAR: NewCalendarValues = {
   works_friday: true,
   works_saturday: false,
   works_sunday: false,
+  // Always true (2026-07-13, per Maro: "i dont want that option, let it be
+  // whole day by default" — no longer a user-facing toggle, see
+  // CalendarEnvelopeFields' own note next to Day starts/Day ends).
+  whole_day_scheduling: true,
 }
 
 export function CalendarWidget({ projectId, calendars, onChange, onClose }: Props) {
@@ -164,6 +172,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
       works_friday: newCalendar.works_friday,
       works_saturday: newCalendar.works_saturday,
       works_sunday: newCalendar.works_sunday,
+      whole_day_scheduling: newCalendar.whole_day_scheduling,
     })
     setCreating(false)
     setNewCalendar(BLANK_NEW_CALENDAR)
@@ -185,6 +194,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
       works_friday: c.works_friday,
       works_saturday: c.works_saturday,
       works_sunday: c.works_sunday,
+      whole_day_scheduling: c.whole_day_scheduling,
     })
   }
 
@@ -203,6 +213,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
         works_friday: editCalendar.works_friday,
         works_saturday: editCalendar.works_saturday,
         works_sunday: editCalendar.works_sunday,
+        whole_day_scheduling: editCalendar.whole_day_scheduling,
       })
     } catch (err) {
       setEditCalendarError(apiErrorDetail(err) ?? 'Could not save that calendar — check your connection and try again.')
@@ -232,6 +243,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
       works_friday: calendar.works_friday,
       works_saturday: calendar.works_saturday,
       works_sunday: calendar.works_sunday,
+      whole_day_scheduling: calendar.whole_day_scheduling,
       breaks: breaksRes.data.map(b => ({ label: b.label, start_time: b.start_time, end_time: b.end_time })),
       exceptions: exceptionsRes.data.map(e => ({
         label: e.label, start_date: e.start_date, end_date: e.end_date, is_working: e.is_working,
@@ -265,6 +277,7 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
         works_friday: parsed.works_friday ?? true,
         works_saturday: parsed.works_saturday ?? false,
         works_sunday: parsed.works_sunday ?? false,
+        whole_day_scheduling: parsed.whole_day_scheduling ?? true,
       })
       await Promise.all([
         ...(parsed.breaks ?? []).map(b => api.post('/api/v1/calendar-breaks/', { calendar_id: created.id, ...b })),

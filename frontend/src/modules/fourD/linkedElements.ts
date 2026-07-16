@@ -1,5 +1,6 @@
 import type { IfcModelHandle } from './ifcModel'
 import type { ModelElementLink } from './modelElementLinks'
+import { getSplitExpressId } from './splitElementRefs'
 
 // A scene object as far as this module needs it — just enough to resolve a
 // mesh-kind link's element_ref (a filename) back to its own scene-object id;
@@ -71,7 +72,7 @@ async function resolveInAnyHandle(
 // instead of duplicating it. resolveActivityLinksToIsolationTargets below
 // is now a thin wrapper around this.
 export async function resolveElementRefsToTargets(
-  refs: { source_kind: 'ifc' | 'mesh'; element_ref: string }[],
+  refs: { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string }[],
   sceneObjects: LinkableSceneObject[],
   ifcHandles: IfcModelHandle[],
 ): Promise<ResolvedIsolationTarget> {
@@ -87,6 +88,20 @@ export async function resolveElementRefsToTargets(
     if (ref.source_kind === 'mesh') {
       const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === ref.element_ref)
       if (match) objectIds.add(match.id)
+    } else if (ref.source_kind === 'ifc_split') {
+      // A level-slice — same resolution shape as the real-ifc branch below,
+      // just against the synthetic expressID map (splitElementRefs.ts)
+      // instead of a real GlobalId, so it doesn't need `ifcModel` loaded at
+      // all (getSplitExpressId is a plain synchronous lookup).
+      for (const handle of ifcHandles) {
+        const expressId = getSplitExpressId(handle, ref.element_ref)
+        if (expressId === undefined) continue
+        const objectId = `ifc-${handle.modelID}`
+        expressIds.add(expressId)
+        objectIds.add(objectId)
+        expressKeys.add(`${objectId}::${expressId}`)
+        break
+      }
     } else if (ifcModel) {
       const resolved = await resolveInAnyHandle(ifcHandles, ref.element_ref, ifcModel)
       if (resolved) {
@@ -108,10 +123,18 @@ export async function resolveActivityLinksToIsolationTargets(
 ): Promise<ResolvedIsolationTarget> {
   // source_kind="annotation" links (2026-07-12) aren't scene objects —
   // Isolate has nothing to resolve them to, so they're excluded here rather
-  // than passed through.
-  const relevant = links.filter(l => activityIds.has(l.activity_id) && l.source_kind !== 'annotation')
+  // than passed through. The remaining kinds (ifc/mesh/ifc_split) are all
+  // real scene targets resolveElementRefsToTargets already knows how to
+  // handle — explicit filter+narrow instead of the blanket `as 'ifc'|'mesh'`
+  // cast this used to have, which would have silently misrouted an
+  // ifc_split link as a real ifc one (no compile error, since a cast
+  // bypasses that check entirely).
+  const relevant = links.filter(
+    (l): l is ModelElementLink & { source_kind: 'ifc' | 'mesh' | 'ifc_split' } =>
+      activityIds.has(l.activity_id) && l.source_kind !== 'annotation',
+  )
   return resolveElementRefsToTargets(
-    relevant.map(l => ({ source_kind: l.source_kind as 'ifc' | 'mesh', element_ref: l.element_ref })),
+    relevant.map(l => ({ source_kind: l.source_kind, element_ref: l.element_ref })),
     sceneObjects, ifcHandles,
   )
 }
@@ -150,6 +173,15 @@ export async function resolveIsolationTargetsToActivityIds(
       // lookup) before checking isolatedObjectIds.
       const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
       if (match && isolatedObjectIds.has(match.id)) activityIds.add(link.activity_id)
+    } else if (link.source_kind === 'ifc_split') {
+      for (const handle of ifcHandles) {
+        const expressId = getSplitExpressId(handle, link.element_ref)
+        if (expressId === undefined) continue
+        const modelObjectId = `ifc-${handle.modelID}`
+        const wholeModelIsolated = isolatedObjectIds.has(modelObjectId) && isolatedExpressIds.size === 0
+        if (wholeModelIsolated || isolatedExpressIds.has(expressId)) activityIds.add(link.activity_id)
+        break
+      }
     } else if (ifcModel) {
       const resolved = await resolveInAnyHandle(ifcHandles, link.element_ref, ifcModel)
       if (!resolved) continue

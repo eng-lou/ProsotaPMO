@@ -204,6 +204,44 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
     }
   }
 
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
+  // Bulk delete (2026-07-15, per Maro: "add bulk delete all resources in
+  // the resource pool") — no backend bulk-delete endpoint exists (nor is
+  // one worth adding just for this: the per-resource DELETE already does
+  // the one thing that matters, refusing a resource still assigned to an
+  // activity with a 422 — see app/services/resource.py's own
+  // delete_resource), so this just loops the same DELETE call this row's
+  // own handleDelete already makes, one at a time, and reports whichever
+  // ones got skipped instead of failing the whole batch on the first
+  // still-assigned resource. Own confirm key, distinct from the per-row
+  // one just above — dismissing "don't ask again" on a single delete
+  // shouldn't silently skip the warning for wiping the entire pool.
+  const handleDeleteAll = async () => {
+    if (resources.length === 0) return
+    if (!(await confirmWithDontAsk(
+      'scheduling.resource-delete-all',
+      `Delete all ${resources.length} resource${resources.length === 1 ? '' : 's'} in the pool? Any resource still assigned to an activity will be skipped — remove those assignments first.`,
+    ))) return
+    setBulkDeleting(true)
+    const skipped: string[] = []
+    for (const r of resources) {
+      try {
+        await api.delete(`/api/v1/resources/${r.id}`)
+      } catch {
+        skipped.push(r.name)
+      }
+    }
+    setBulkDeleting(false)
+    await onChange()
+    if (skipped.length > 0) {
+      window.alert(
+        `Deleted ${resources.length - skipped.length} of ${resources.length} resources.\n`
+        + `Still assigned to an activity, skipped: ${skipped.join(', ')}`,
+      )
+    }
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
@@ -216,7 +254,17 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
         </button>
         <div className="font-bold text-sm">Resource Pool</div>
         <div className="text-xs text-gray-400">Labour, equipment, material, subcontractors, cost &amp; crew — define here, assign to activities via Logic</div>
-        {onClose && <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>}
+        {!collapsed && resources.length > 0 && (
+          <button
+            onClick={handleDeleteAll}
+            disabled={bulkDeleting}
+            title="Delete every resource in the pool (skips any still assigned to an activity)"
+            className="ml-auto text-xs text-gray-400 hover:text-red-600 disabled:opacity-50"
+          >
+            {bulkDeleting ? 'Deleting…' : 'Delete All'}
+          </button>
+        )}
+        {onClose && <button onClick={onClose} className={`${!collapsed && resources.length > 0 ? '' : 'ml-auto'} text-gray-400 hover:text-gray-600 text-sm`}>✕</button>}
       </div>
 
       {!collapsed && (

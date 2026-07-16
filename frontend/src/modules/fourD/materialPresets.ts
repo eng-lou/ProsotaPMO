@@ -1,78 +1,65 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
-import { loadTextureFromDataUri } from './customTextures'
+import { loadTextureFromBlob } from './customTextures'
 import type { CustomTextureSet, TextureSlot } from './customTextures'
 
-export { fileToDataUri } from './customTextures'
-
-// Mirrors backend app/schemas/material_preset.py's MaterialPresetConfig
-// exactly. Each slot is either null (not part of this preset — applying it
-// leaves that channel untouched on whatever it's applied to) or a saved
-// image, stored as a data: URI directly in the preset's own JSONB config
-// (see material_preset.py's model docstring for why: no separate
-// file-upload/serving endpoint needed, consistent with every other
-// config-blob entity in this app).
-export interface MaterialPresetSlot {
-  data_uri: string
+// Frontend for material_preset.py/material_preset_texture.py's backend
+// (2026-07-13 fix — was previously one JSONB `config` blob per preset,
+// each slot a base64 data: URI embedded directly in it; a real 8K texture
+// blew straight through Postgres's own 256MB-per-JSONB-element ceiling.
+// Each slot is now a real file on disk, referenced by id/name only here —
+// see material_preset_texture.py's own docstring for the full incident).
+export interface MaterialPresetTexture {
+  id: string
+  slot: TextureSlot
   name: string
-}
-
-export interface MaterialPresetConfig {
-  map: MaterialPresetSlot | null
-  metalnessMap: MaterialPresetSlot | null
-  roughnessMap: MaterialPresetSlot | null
-  normalMap: MaterialPresetSlot | null
-  // 2026-07-11, per Maro — mirrors the backend schema's own addition of
-  // these two fields (see material_preset.py's own header for why this is
-  // a safe, backward-compatible JSONB addition, not a migration).
-  aoMap: MaterialPresetSlot | null
-  displacementMap: MaterialPresetSlot | null
-}
-
-export const EMPTY_MATERIAL_PRESET_CONFIG: MaterialPresetConfig = {
-  map: null, metalnessMap: null, roughnessMap: null, normalMap: null, aoMap: null, displacementMap: null,
 }
 
 export interface MaterialPreset {
   id: string
   project_id: string
   name: string
-  config: MaterialPresetConfig
+  textures: MaterialPresetTexture[]
   created_at: string
   updated_at: string
 }
 
-// Turns a saved preset's stored data: URIs back into live THREE.Texture
-// objects wired up the same shape TextureFields.tsx/customTextures.ts
-// already work with (CustomTextureSet) — so applying a preset is just
-// "merge this into customTextures for the active target," identical to a
-// fresh manual upload from FourD.tsx's own point of view.
-export async function loadPresetAsTextureSet(config: MaterialPresetConfig): Promise<CustomTextureSet> {
-  const slots: TextureSlot[] = ['map', 'metalnessMap', 'roughnessMap', 'normalMap', 'aoMap', 'displacementMap']
+// Per-slot lookup, derived from `textures` — the editor/display convenience
+// shape every consumer of this module actually wants, not a second stored
+// representation of the same data.
+export type MaterialPresetConfig = Partial<Record<TextureSlot, MaterialPresetTexture>>
+
+export function textureListToConfig(textures: MaterialPresetTexture[]): MaterialPresetConfig {
+  const config: MaterialPresetConfig = {}
+  for (const t of textures) config[t.slot] = t
+  return config
+}
+
+export const EMPTY_MATERIAL_PRESET_CONFIG: MaterialPresetConfig = {}
+
+// Fetches each present slot's actual image bytes from the new download
+// endpoint (an authenticated blob fetch, same shape model3dFiles.ts's own
+// downloadModel3DFile already uses) and turns each into a live THREE.Texture,
+// same TextureSlotValue shape loadCustomTexture already returns — applying
+// a preset is indistinguishable from a fresh manual upload from this point
+// on, same as before this fix.
+export async function loadPresetAsTextureSet(preset: MaterialPreset): Promise<CustomTextureSet> {
   const result: CustomTextureSet = {}
-  await Promise.all(slots.map(async slot => {
-    const value = config[slot]
-    if (!value) return
-    result[slot] = await loadTextureFromDataUri(value.data_uri, slot, value.name)
+  await Promise.all(preset.textures.map(async t => {
+    const res = await api.get<Blob>(`/api/v1/material-presets/${preset.id}/textures/${t.slot}`, { responseType: 'blob' })
+    result[t.slot] = await loadTextureFromBlob(res.data, t.slot, t.name)
   }))
   return result
 }
 
-// The reverse of loadPresetAsTextureSet — reads whatever's *currently
-// applied* (a live CustomTextureSet, whose TextureSlotValue already carries
-// the original data: URI alongside its decoded texture, see
-// customTextures.ts's own header) back into preset-shaped config, so "Save
-// Current as Preset" (MaterialPresetPicker.tsx's 💾 button) never needs a
-// lossy canvas re-encode of an already-decoded image.
-export function textureSetToPresetConfig(set: CustomTextureSet): MaterialPresetConfig {
-  const toSlot = (slot: TextureSlot): MaterialPresetSlot | null => {
-    const value = set[slot]
-    return value ? { data_uri: value.dataUri, name: value.name } : null
+function buildFormData(name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots?: TextureSlot[]): FormData {
+  const form = new FormData()
+  form.append('name', name)
+  if (clearedSlots !== undefined) form.append('cleared_slots', clearedSlots.join(','))
+  for (const [slot, blob] of Object.entries(files)) {
+    if (blob) form.append(slot, blob, slot)
   }
-  return {
-    map: toSlot('map'), metalnessMap: toSlot('metalnessMap'), roughnessMap: toSlot('roughnessMap'), normalMap: toSlot('normalMap'),
-    aoMap: toSlot('aoMap'), displacementMap: toSlot('displacementMap'),
-  }
+  return form
 }
 
 // Named, saved, per-project custom material presets (2026-07-09, per Maro:
@@ -103,14 +90,25 @@ export function useMaterialPresets(projectId: string | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  const create = async (name: string, config: MaterialPresetConfig): Promise<MaterialPreset> => {
-    const { data } = await api.post<MaterialPreset>('/api/v1/material-presets/', { project_id: projectId, name, config })
+  // multipart/form-data, not JSON (2026-07-13 fix) — see this module's own
+  // header. project_id/name arrive as plain form fields alongside up to six
+  // optional texture files, mirroring model3dFiles.ts's own
+  // uploadModel3DFile.
+  const create = async (name: string, files: Partial<Record<TextureSlot, Blob>>): Promise<MaterialPreset> => {
+    const form = buildFormData(name, files)
+    form.append('project_id', projectId ?? '')
+    const { data } = await api.post<MaterialPreset>('/api/v1/material-presets/', form)
     await load()
     return data
   }
 
-  const update = async (presetId: string, name: string, config: MaterialPresetConfig) => {
-    await api.patch(`/api/v1/material-presets/${presetId}`, { name, config })
+  // clearedSlots explicitly nulls a slot with no replacement file; any
+  // slot in neither `files` nor `clearedSlots` is left completely
+  // untouched server-side — renaming a preset with several large existing
+  // textures doesn't re-upload any of them.
+  const update = async (presetId: string, name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots: TextureSlot[]) => {
+    const form = buildFormData(name, files, clearedSlots)
+    await api.patch(`/api/v1/material-presets/${presetId}`, form)
     await load()
   }
 

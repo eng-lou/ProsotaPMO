@@ -104,8 +104,8 @@ async function loadTextureFromFile(file: File, slot: TextureSlot): Promise<THREE
 }
 
 // Same loader, but from a data: URI already in memory rather than a fresh
-// File — materialPresets.ts's own loadPresetAsTextureSet uses this to turn
-// a saved preset's stored image back into a live THREE.Texture, without
+// File — used when a texture set is seeded from something already decoded
+// client-side (a File just picked, or a Blob converted below), without
 // going through URL.createObjectURL/revokeObjectURL at all (nothing to
 // revoke — a data: URI isn't a Blob handle).
 export async function loadTextureFromDataUri(dataUri: string, slot: TextureSlot, name: string): Promise<TextureSlotValue> {
@@ -113,6 +113,25 @@ export async function loadTextureFromDataUri(dataUri: string, slot: TextureSlot,
   texture.colorSpace = colorSpaceForSlot(slot)
   applyTilingDefaults(texture)
   return { texture, name, dataUri }
+}
+
+// A Blob already in memory rather than a fresh File — materialPresets.ts's
+// own loadPresetAsTextureSet uses this to turn a saved preset's texture
+// (fetched from its own real-file download endpoint, 2026-07-13 fix — see
+// material_preset_texture.py's own header) back into a live THREE.Texture,
+// same TextureSlotValue shape as loadCustomTexture/loadTextureFromDataUri.
+// Reads the Blob into a data: URI first (FileReader works on any Blob, not
+// just a File) so dataUri stays populated uniformly regardless of source —
+// linkedMaterials.ts's own override-equality check and "Save Current as
+// Preset" both already depend on every TextureSlotValue carrying one.
+export async function loadTextureFromBlob(blob: Blob, slot: TextureSlot, name: string): Promise<TextureSlotValue> {
+  const dataUri = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read texture'))
+    reader.readAsDataURL(blob)
+  })
+  return loadTextureFromDataUri(dataUri, slot, name)
 }
 
 export function disposeCustomTextureSet(set: CustomTextureSet) {

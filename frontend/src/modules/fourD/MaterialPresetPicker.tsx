@@ -1,22 +1,26 @@
 import { useRef, useState } from 'react'
+import axios from 'axios'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import {
-  EMPTY_MATERIAL_PRESET_CONFIG, fileToDataUri,
-  type MaterialPreset, type MaterialPresetConfig, type MaterialPresetSlot,
+  EMPTY_MATERIAL_PRESET_CONFIG, textureListToConfig,
+  type MaterialPreset, type MaterialPresetConfig,
 } from './materialPresets'
-import type { TextureSlot } from './customTextures'
+import type { CustomTextureSet, TextureSlot } from './customTextures'
 
 interface Props {
   presets: MaterialPreset[]
   loading: boolean
-  // The config currently applied to the active element/object, if any —
-  // used as the starting point for "Save Current as Preset" (2026-07-09,
+  // The texture set currently applied to the active element/object, if
+  // any — the starting point for "Save Current as Preset" (2026-07-09,
   // per Maro: after an Apply to Linked edit, "I can then save this as a
-  // preset").
-  currentConfig: MaterialPresetConfig
-  onApply: (config: MaterialPresetConfig) => void
-  onCreate: (name: string, config: MaterialPresetConfig) => Promise<MaterialPreset>
-  onUpdate: (presetId: string, name: string, config: MaterialPresetConfig) => Promise<void>
+  // preset"). The live CustomTextureSet, not a converted config — each
+  // slot's own dataUri gets converted into a real Blob to upload
+  // (2026-07-13 fix, see materialPresets.ts's own header on why textures
+  // are real files now, not embedded JSON).
+  currentTextures: CustomTextureSet
+  onApply: (preset: MaterialPreset) => void
+  onCreate: (name: string, files: Partial<Record<TextureSlot, Blob>>) => Promise<MaterialPreset>
+  onUpdate: (presetId: string, name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots: TextureSlot[]) => Promise<void>
   onDelete: (presetId: string) => Promise<void>
 }
 
@@ -29,8 +33,8 @@ const SLOTS: { key: TextureSlot; label: string }[] = [
   { key: 'displacementMap', label: 'Displacement' },
 ]
 
-function EditorSlotRow({ label, value, onUpload, onClear }: {
-  label: string; value: MaterialPresetSlot | null; onUpload: (file: File) => void; onClear: () => void
+function EditorSlotRow({ label, name, onUpload, onClear }: {
+  label: string; name: string | null; onUpload: (file: File) => void; onClear: () => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   return (
@@ -51,9 +55,9 @@ function EditorSlotRow({ label, value, onUpload, onClear }: {
         onClick={() => inputRef.current?.click()}
         className="flex-1 min-w-0 text-left text-[11px] text-gray-600 truncate border border-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-50"
       >
-        {value?.name ?? 'None'}
+        {name ?? 'None'}
       </button>
-      {value && <button onClick={onClear} title="Clear" className="text-gray-400 hover:text-red-600 text-xs shrink-0">✕</button>}
+      {name && <button onClick={onClear} title="Clear" className="text-gray-400 hover:text-red-600 text-xs shrink-0">✕</button>}
     </div>
   )
 }
@@ -70,47 +74,87 @@ function EditorSlotRow({ label, value, onUpload, onClear }: {
 // has no active override) — applying/switching/deleting a preset only ever
 // changes the current customTextures override, so the original is always
 // one "None"/clear away.
-export function MaterialPresetPicker({ presets, loading, currentConfig, onApply, onCreate, onUpdate, onDelete }: Props) {
+export function MaterialPresetPicker({ presets, loading, currentTextures, onApply, onCreate, onUpdate, onDelete }: Props) {
   const [editingId, setEditingId] = useState<'new' | string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [draftConfig, setDraftConfig] = useState<MaterialPresetConfig>(EMPTY_MATERIAL_PRESET_CONFIG)
+  // What's actually already saved server-side for this preset, frozen at
+  // the moment editing started (2026-07-13 fix) — diffed against the live
+  // draftConfig on Save to compute clearedSlots (a slot that was here at
+  // the start but is null now, with no replacement upload). Empty for a
+  // brand-new preset — nothing exists server-side yet to "clear".
+  const [originalConfig, setOriginalConfig] = useState<MaterialPresetConfig>(EMPTY_MATERIAL_PRESET_CONFIG)
+  // Real Blobs for slots that need uploading this save — a freshly-picked
+  // File (handleUploadSlot) or a Blob extracted from "Save Current as
+  // Preset"'s own live dataUris (startNew below). A slot absent here that's
+  // *also* absent from clearedSlots-at-save-time means "leave this slot
+  // exactly as it already is," the whole point of this split (2026-07-13
+  // fix — see materialPresets.ts's own header).
+  const [draftFiles, setDraftFiles] = useState<Partial<Record<TextureSlot, Blob>>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const startNew = (seed: MaterialPresetConfig) => {
+  const startNew = async (seed: CustomTextureSet) => {
     setEditingId('new')
     setDraftName('')
-    setDraftConfig(seed)
+    setOriginalConfig(EMPTY_MATERIAL_PRESET_CONFIG)
     setError(null)
+    const config: MaterialPresetConfig = {}
+    const files: Partial<Record<TextureSlot, Blob>> = {}
+    await Promise.all(Object.entries(seed).map(async ([slot, value]) => {
+      if (!value) return
+      config[slot as TextureSlot] = { id: '', slot: slot as TextureSlot, name: value.name }
+      files[slot as TextureSlot] = await (await fetch(value.dataUri)).blob()
+    }))
+    setDraftConfig(config)
+    setDraftFiles(files)
   }
   const startEdit = (preset: MaterialPreset) => {
     setEditingId(preset.id)
     setDraftName(preset.name)
-    setDraftConfig(preset.config)
+    const config = textureListToConfig(preset.textures)
+    setDraftConfig(config)
+    setOriginalConfig(config)
+    setDraftFiles({})
     setError(null)
   }
   const cancelEdit = () => setEditingId(null)
 
-  const handleUploadSlot = async (slot: TextureSlot, file: File) => {
-    try {
-      const data_uri = await fileToDataUri(file)
-      setDraftConfig(prev => ({ ...prev, [slot]: { data_uri, name: file.name } }))
-    } catch {
-      setError('Failed to read image file')
-    }
+  const handleUploadSlot = (slot: TextureSlot, file: File) => {
+    setDraftConfig(prev => ({ ...prev, [slot]: { id: '', slot, name: file.name } }))
+    setDraftFiles(prev => ({ ...prev, [slot]: file }))
   }
-  const handleClearSlot = (slot: TextureSlot) => setDraftConfig(prev => ({ ...prev, [slot]: null }))
+  const handleClearSlot = (slot: TextureSlot) => {
+    setDraftConfig(prev => ({ ...prev, [slot]: null }))
+    setDraftFiles(prev => { const next = { ...prev }; delete next[slot]; return next })
+  }
 
   const handleSave = async () => {
     if (!draftName.trim()) { setError('Name is required'); return }
     setSaving(true)
     setError(null)
     try {
-      if (editingId === 'new') await onCreate(draftName.trim(), draftConfig)
-      else if (editingId) await onUpdate(editingId, draftName.trim(), draftConfig)
+      // A slot that was present when editing started but is null now, with
+      // no replacement queued in draftFiles, needs an explicit clear —
+      // anything else (still present, or has a fresh file) is handled by
+      // draftFiles/being simply left out of both, per the backend's own
+      // "untouched unless mentioned" contract (material_presets.py).
+      const clearedSlots = SLOTS.map(s => s.key).filter(slot => originalConfig[slot] && !draftConfig[slot] && !draftFiles[slot])
+      if (editingId === 'new') await onCreate(draftName.trim(), draftFiles)
+      else if (editingId) await onUpdate(editingId, draftName.trim(), draftFiles, clearedSlots)
       setEditingId(null)
-    } catch {
-      setError('Failed to save preset')
+    } catch (err) {
+      // Was a bare "Failed to save preset" with the real error discarded
+      // entirely (2026-07-13 fix, per Maro saving a preset with several 8K
+      // textures — the config's data: URIs can add up to a genuinely large
+      // request body, and there was no way to tell "too large"/"timed out"/
+      // "server rejected it" apart without this). Same
+      // axios.isAxiosError-then-fall-back-to-message shape every other
+      // error handler in this module already uses (FourD.tsx's own
+      // collectionErrorMessage/clashErrorMessage/etc.).
+      const detail = axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string' ? err.response.data.detail : null
+      const status = axios.isAxiosError(err) ? err.response?.status ?? (err.code === 'ECONNABORTED' ? 'timeout' : err.message) : null
+      setError(detail ? `Failed to save preset: ${detail}` : status ? `Failed to save preset (${status})` : 'Failed to save preset')
     } finally {
       setSaving(false)
     }
@@ -136,7 +180,7 @@ export function MaterialPresetPicker({ presets, loading, currentConfig, onApply,
           <EditorSlotRow
             key={slot.key}
             label={slot.label}
-            value={draftConfig[slot.key]}
+            name={draftConfig[slot.key]?.name ?? null}
             onUpload={file => handleUploadSlot(slot.key, file)}
             onClear={() => handleClearSlot(slot.key)}
           />
@@ -166,8 +210,8 @@ export function MaterialPresetPicker({ presets, loading, currentConfig, onApply,
           disabled={loading}
           onChange={e => {
             const value = e.target.value
-            if (value === '__new__') startNew(EMPTY_MATERIAL_PRESET_CONFIG)
-            else if (value) onApply(presets.find(p => p.id === value)!.config)
+            if (value === '__new__') startNew({})
+            else if (value) onApply(presets.find(p => p.id === value)!)
             e.target.value = ''
           }}
           className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5"
@@ -177,7 +221,7 @@ export function MaterialPresetPicker({ presets, loading, currentConfig, onApply,
           <option value="__new__">+ New preset…</option>
         </select>
         <button
-          onClick={() => startNew(currentConfig)}
+          onClick={() => startNew(currentTextures)}
           title="Save the currently applied materials as a new preset"
           className="text-xs px-1.5 py-0.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
         >

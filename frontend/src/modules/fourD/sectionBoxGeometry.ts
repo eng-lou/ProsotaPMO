@@ -95,3 +95,44 @@ function localClipPlanes(bounds: SectionBoxBounds): THREE.Plane[] {
 export function computeWorldClipPlanes(bounds: SectionBoxBounds, matrixWorld: THREE.Matrix4): THREE.Plane[] {
   return localClipPlanes(bounds).map(p => p.applyMatrix4(matrixWorld))
 }
+
+// One level-slice's clip planes, for "split an element by level"
+// (2026-07-15, per Maro — see elementSplitTargets.ts's own header for the
+// full "clipped virtual slice, not real geometry" design this belongs to).
+//
+// Deliberately built DIRECTLY in world space, with no Plane.applyMatrix4
+// against any mesh/handle transform at all — unlike computeWorldClipPlanes
+// above (whose bounds are legitimately local to one target, so it needs the
+// local-to-world step), a "cut at this real elevation" has no single
+// element it's relative to. An earlier version of this function assumed a
+// raw elevation value lived in the IFC file's own local Z-up frame and
+// transformed it through handle.object.matrixWorld — wrong on a real file:
+// upAxis.ts's own header notes real IFC imports come back Y-up from
+// web-ifc's own geometry extraction just as often as Z-up (verified
+// directly against this app's own reference file, not assumed), so which
+// *local* axis means "elevation" varies per import and isn't reliably Z.
+// three.js's own material.clippingPlanes are natively world-space per its
+// own docs, so the fix is to skip local space entirely: the
+// caller resolves elevations from each mesh's own already-correct
+// matrixWorld (the same transform that already renders everything in the
+// right place on screen), and this function just needs to know which
+// *world* axis is "up" right now (upAxis, the scene's own live display
+// setting — always correct once the axis-correction wrapper has been
+// applied, regardless of any one file's own native convention).
+//
+// worldMin/worldMax are raw scene units (the file's own declared unit,
+// e.g. feet, since geometry is never rescaled to metres at import — see
+// loadIfcModel's own header) along that axis — already resolved from this
+// slice's stored metres-in-cut_elevations_m by the caller (ifcModel.ts's
+// getLengthUnitToMetres, inverted). `null` on either side means
+// "unbounded" — the bottommost/topmost slice of a split has no lower/upper
+// cut at all.
+export function worldSlicePlanes(
+  worldMin: number | null, worldMax: number | null, upAxis: 'y' | 'z',
+): THREE.Plane[] {
+  const normal = upAxis === 'y' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1)
+  const planes: THREE.Plane[] = []
+  if (worldMin !== null) planes.push(new THREE.Plane(normal.clone(), -worldMin))
+  if (worldMax !== null) planes.push(new THREE.Plane(normal.clone().negate(), worldMax))
+  return planes
+}

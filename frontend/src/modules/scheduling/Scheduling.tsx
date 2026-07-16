@@ -3,7 +3,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
-import { resourceLabelForActivity } from '@/lib/resourceLabel'
+import { groupAssignmentsByActivityId, resourceLabelForActivity } from '@/lib/resourceLabel'
 import { activityRowBackground, FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, type GanttFontFamily, type GanttStyle } from '@/lib/ganttLayout'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { evaluateFilter, useSchedulingFilters } from '@/lib/schedulingFilters'
@@ -23,6 +23,8 @@ import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
+import { downloadP6Xml } from './exportP6'
+import { P6ImportDialog } from './P6ImportDialog'
 import { GanttChart, GANTT_ROW_HEIGHT, HEADER_HEIGHT, type GanttChartHandle } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
 import { LayoutWidget } from './LayoutWidget'
@@ -155,7 +157,14 @@ export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
 // grouping" convention, so the outline/indentation stays intact.
 type SortKey = ResizableColumnKey
 
-function sortValue(a: Activity, key: SortKey, resourceAssignments: ResourceAssignment[]): string | number | null {
+// resourceAssignments params below take the pre-grouped Map
+// (groupAssignmentsByActivityId, resourceLabel.ts), not the raw array — see
+// that helper's own 2026-07-15 header for why: these run once per activity
+// on every sort/group pass over a list that can run to a couple thousand
+// rows after a real Generate Schedule, and an O(n) `.filter()` per call
+// there is exactly the "O(activities × assignments), redone on every
+// render" pattern that was freezing this page.
+function sortValue(a: Activity, key: SortKey, resourceAssignments: Map<string, ResourceAssignment[]>): string | number | null {
   switch (key) {
     case 'code': return a.code
     case 'wbs': return a.wbs_path
@@ -174,7 +183,7 @@ function sortValue(a: Activity, key: SortKey, resourceAssignments: ResourceAssig
     case 'sub_critical': return a.sub_is_critical === null ? null : a.sub_is_critical ? 1 : 0
     case 'pct_complete': return a.pct_complete !== null ? Number(a.pct_complete) : null
     case 'resources': {
-      const names = resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name)
+      const names = (resourceAssignments.get(a.id) ?? []).map(ra => ra.resource_name)
       return names.length ? names.join(', ') : null
     }
     case 'bac': return a.bac !== null ? Number(a.bac) : null
@@ -193,7 +202,7 @@ function sortValue(a: Activity, key: SortKey, resourceAssignments: ResourceAssig
 
 // Nulls always sort last regardless of direction (a blank Start/Var/etc. isn't
 // "smaller" than a real value, it's unknown/not-yet-applicable).
-function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: ResourceAssignment[]): number {
+function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: Map<string, ResourceAssignment[]>): number {
   const av = sortValue(a, key, resourceAssignments)
   const bv = sortValue(b, key, resourceAssignments)
   if (av === null && bv === null) return 0
@@ -219,7 +228,7 @@ const GROUP_TYPE_LABELS: Record<Activity['activity_type'], string> = {
 }
 
 function groupKeyFor(
-  a: Activity, groupBy: GroupByField, resourceAssignments: ResourceAssignment[], calendars: Calendar[]
+  a: Activity, groupBy: GroupByField, resourceAssignments: Map<string, ResourceAssignment[]>, calendars: Calendar[]
 ): string {
   switch (groupBy) {
     case 'resource': return resourceLabelForActivity(a.id, resourceAssignments)
@@ -381,7 +390,7 @@ export function Scheduling() {
   const { selectedProject } = useProject()
   const {
     variant: activeVariant, variants: scheduleVariants, period, loading: periodLoading, error: periodError,
-    refetch: refetchPeriod, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
+    refetch: refetchPeriod, refetchVariants, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
     promoteBaselineToVariant,
   } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead, refetch: refetchLetterhead } = useProjectLetterhead(selectedProject?.id)
@@ -474,14 +483,30 @@ export function Scheduling() {
     setCollapsedIds(new Set())
     persistCollapsed(new Set())
   }
+  // Two lookup maps, built once per activities/resourceAssignments change
+  // rather than re-scanned per activity (2026-07-15, per Maro: "its very
+  // laggy" — a real generate-schedule-sized activity list, a few hundred to
+  // a couple thousand rows across a deep WBS, froze the whole tab). Every
+  // place below that used to do `activities.find(...)` or
+  // `resourceAssignments.filter(...)` inside a per-row/per-activity pass
+  // now does an O(1) Map lookup instead.
+  const activityById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
+  const assignmentsByActivityId = useMemo(() => groupAssignmentsByActivityId(resourceAssignments), [resourceAssignments])
+
   // True if any ancestor (parent, grandparent, ...) is currently collapsed —
   // walks parent_id against the *full* activity list (not visibleActivities),
   // same reasoning as sortedSiblingsOf below: the real hierarchy, regardless
-  // of what a search/filter is hiding.
+  // of what a search/filter is hiding. Was `activities.find(...)` per
+  // ancestor hop (2026-07-15 fix, per Maro — see activityById's own header
+  // above): for every activity in a deep WBS, that meant walking the chain
+  // *and* linear-scanning the full activity list at every hop — O(n² ×
+  // depth) across the whole visibleActivities pass, redone on every
+  // keystroke in the search box. activityById turns each hop into an O(1)
+  // lookup.
   const isHiddenByCollapse = (a: Activity): boolean => {
     let current = a
     while (current.parent_id) {
-      const parent = activities.find(x => x.id === current.parent_id)
+      const parent = activityById.get(current.parent_id)
       if (!parent) return false
       if (collapsedIds.has(parent.id)) return true
       current = parent
@@ -570,6 +595,16 @@ export function Scheduling() {
   }
   const [resourcesPageSetupOpen, setResourcesPageSetupOpen] = useState(false)
   const [resourcesPrintTrigger, setResourcesPrintTrigger] = useState(0)
+  // Export's own dropdown (2026-07-15, per Maro: "its stupid ui/ux to hide
+  // that in the page setup, that was meant for print not export" — the
+  // which-tables-to-include checkboxes used to live only inside the
+  // collapsed Page Setup panel, which is genuinely about print-specific
+  // concerns (letterhead, print font) and has nothing to do with a one-off
+  // Export click. Same table selection is still shared with Print (both
+  // legitimately mean "which tables"), but Export now has its own directly-
+  // visible control instead of silently inheriting whatever Page Setup last
+  // left checked.
+  const [resourcesExportOpen, setResourcesExportOpen] = useState(false)
 
   // Keeps Resource Tracking's and Resource Usage Profile's tree/timeline
   // dividers lined up (2026-07-09, per Maro) — owned here since these are
@@ -669,6 +704,14 @@ export function Scheduling() {
   )
 
   const handleResourcesExport = async () => {
+    // A workbook needs at least one sheet — every table unchecked (possible
+    // now that "Select all" makes it easy to get back from) would otherwise
+    // hand exceljs an empty tables Set and either throw or hand back a
+    // corrupt .xlsx with no visible error at all.
+    if (resourcesPrintTables.size === 0) {
+      window.alert('Check at least one table in Page Setup before exporting.')
+      return
+    }
     await downloadResourcesExcel({
       tables: resourcesPrintTables, projectName: selectedProject?.name ?? 'Project',
       resources: printScopedResources, calendars,
@@ -1061,6 +1104,35 @@ export function Scheduling() {
   const printColumnWidths: Record<ResizableColumnKey, number> = { ...PRINT_COLUMN_DEFAULTS, ...(letterhead?.print_column_widths ?? {}) }
   const printUdfColumnWidth = letterhead?.print_udf_column_width ?? PRINT_UDF_COLUMN_DEFAULT_WIDTH
   const [printPreviewOpen, setPrintPreviewOpen] = useState(false)
+  // Export to P6 (2026-07-15, per Maro: "so I can directly export from
+  // prosota and p6 can import my file") — a single "Download .xml" button;
+  // this used to be a dropdown offering XER or XML, but XER was removed
+  // 2026-07-16 (per Maro: "stick to xml. remove the xer functionality
+  // completely") once XML alone was confirmed working end-to-end against a
+  // real P6 install, so there's no longer a format choice to make.
+  const [p6Exporting, setP6Exporting] = useState(false)
+  const handleP6Export = async () => {
+    if (!period) return
+    const projectName = selectedProject?.name ?? 'Project'
+    setP6Exporting(true)
+    try {
+      await downloadP6Xml(period.id, projectName)
+    } finally {
+      setP6Exporting(false)
+    }
+  }
+  // Import from P6 (2026-07-16, per Maro: "time for the import workflow")
+  // — always lands in a brand new Schedule Variant (p6_import.py's own
+  // header), so switching to it after a successful import is an explicit
+  // choice in the dialog itself, not automatic — refetchVariants (list-only)
+  // first so the variant picker's own list includes it before selectVariant
+  // runs. Deliberately NOT refetchPeriod/bootstrap here (2026-07-16 fix,
+  // found on a real EC00610 import — bootstrap re-settles onto the
+  // restored/master variant and swallows its own errors into a generic
+  // "Failed to load schedule" state that nothing then clears, even once the
+  // very next selectVariant(v) call below succeeds and the imported
+  // schedule is actually showing correctly).
+  const [p6ImportOpen, setP6ImportOpen] = useState(false)
 
   // Resizable columns + the pane divider — both drag-to-resize with the same
   // "attach document listeners on mousedown, detach on mouseup, persist on
@@ -1308,7 +1380,7 @@ export function Scheduling() {
     const result: Activity[] = []
     const visit = (parentId: string | null) => {
       const siblings = [...(byParent.get(parentId) ?? [])]
-        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, resourceAssignments))
+        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, assignmentsByActivityId))
       for (const a of siblings) {
         result.push(a)
         visit(a.id)
@@ -1322,7 +1394,7 @@ export function Scheduling() {
       for (const a of activities) if (!seen.has(a.id)) result.push(a)
     }
     return result
-  }, [activities, sortColumn, sortDirection, resourceAssignments])
+  }, [activities, sortColumn, sortDirection, assignmentsByActivityId])
 
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -1378,11 +1450,11 @@ export function Scheduling() {
     if (groupBy === 'none') return []
     const map = new Map<string, Activity[]>()
     for (const a of visibleActivities) {
-      const key = groupKeyFor(a, groupBy, resourceAssignments, calendars)
+      const key = groupKeyFor(a, groupBy, assignmentsByActivityId, calendars)
       map.set(key, [...(map.get(key) ?? []), a])
     }
     return [...map.entries()].sort(([x], [y]) => x.localeCompare(y))
-  }, [visibleActivities, groupBy, resourceAssignments, calendars])
+  }, [visibleActivities, groupBy, assignmentsByActivityId, calendars])
 
   if (!selectedProject) return null
 
@@ -2028,9 +2100,50 @@ export function Scheduling() {
                 title="Shared logo/header/footer, print font, and which table(s) to include when printing/exporting"
                 className={`text-xs px-2 py-1 rounded border ${resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
               >Page Setup</button>
-              <button onClick={handleResourcesExport} className="text-xs px-2 py-1 rounded border bg-white text-gray-600 border-gray-300 hover:bg-gray-50">
-                Export
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setResourcesExportOpen(o => !o)}
+                  title="Choose which tables to include, then download"
+                  className={`text-xs px-2 py-1 rounded border ${
+                    resourcesExportOpen ? 'bg-gray-900 text-white border-gray-900'
+                    : resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  ⇩ Export{resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? ` (${resourcesPrintTables.size}/${ALL_RESOURCES_PRINT_TABLES.length})` : ''}
+                </button>
+                {resourcesExportOpen && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-64 space-y-2">
+                    <div className="text-[10px] text-gray-400">Which tables to include in the downloaded .xlsx (also used by Print).</div>
+                    <div className="flex flex-col gap-1.5">
+                      {ALL_RESOURCES_PRINT_TABLES.map(table => (
+                        <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600">
+                          <input type="checkbox" checked={resourcesPrintTables.has(table)} onChange={() => toggleResourcesPrintTable(table)} />
+                          {RESOURCES_PRINT_TABLE_LABELS[table]}
+                        </label>
+                      ))}
+                    </div>
+                    {resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length && (
+                      <button
+                        onClick={() => {
+                          const all = new Set(ALL_RESOURCES_PRINT_TABLES)
+                          setResourcesPrintTablesState(all)
+                          saveResourcesPrintTables(all)
+                        }}
+                        className="text-[11px] text-blue-600 hover:text-blue-700"
+                      >
+                        Select all
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { handleResourcesExport(); setResourcesExportOpen(false) }}
+                      className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      ⇩ Download .xlsx
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -2051,18 +2164,21 @@ export function Scheduling() {
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Print Options</div>
                 <div className="text-[11px] text-gray-500 mb-3">
                   {selectedResourceIds.size === 0 && selectedActivityIds.size === 0
-                    ? 'Nothing checked below — printing/exporting all resources.'
+                    ? 'No resources/activities checked — printing/exporting all resources.'
                     : selectedActivityIds.size > 0
                       ? `Scoped to ${selectedActivityIds.size} checked activit${selectedActivityIds.size === 1 ? 'y' : 'ies'} (and its resource${printScopedResources.length === 1 ? '' : 's'}).`
                       : `Scoped to ${selectedResourceIds.size} checked resource${selectedResourceIds.size === 1 ? '' : 's'}.`}
                 </div>
-                <div className="flex items-center gap-4 flex-wrap mb-3">
-                  {ALL_RESOURCES_PRINT_TABLES.map(table => (
-                    <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600">
-                      <input type="checkbox" checked={resourcesPrintTables.has(table)} onChange={() => toggleResourcesPrintTable(table)} />
-                      {RESOURCES_PRINT_TABLE_LABELS[table]}
-                    </label>
-                  ))}
+                {/* Which tables to include lives in the Export ▾ dropdown
+                    above now, not here (2026-07-15, per Maro: "that was
+                    meant for print not export") — Page Setup stays about
+                    genuinely print-specific things (letterhead, print
+                    font); Print reads the exact same shared selection, just
+                    summarized read-only here instead of a second editable
+                    copy of the same checkboxes. */}
+                <div className="text-[11px] text-gray-500 mb-3">
+                  Tables: {ALL_RESOURCES_PRINT_TABLES.filter(t => resourcesPrintTables.has(t)).map(t => RESOURCES_PRINT_TABLE_LABELS[t]).join(', ') || 'none checked'}
+                  {' '}— change via the <span className="font-medium text-gray-600">Export ▾</span> button above.
                 </div>
                 {resourcesPrintTables.has('profile') && (
                   <div className="flex items-center gap-3 flex-wrap mb-3 text-[11px] text-gray-500">
@@ -2395,6 +2511,21 @@ export function Scheduling() {
           ⇩ Export ({visibleActivities.length})
         </button>
         <button
+          onClick={handleP6Export}
+          disabled={p6Exporting}
+          title="Download this schedule as a Primavera P6-importable PMXML file"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {p6Exporting ? 'Generating…' : '⇩ Export to P6'}
+        </button>
+        <button
+          onClick={() => setP6ImportOpen(true)}
+          title="Import a Primavera P6 PMXML (.xml) export into a brand new Schedule Variant"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+        >
+          ⇧ Import from P6
+        </button>
+        <button
           onClick={() => setPrintPreviewOpen(true)}
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
           title="Review column widths/layout before printing the activity list (respecting search/filters)."
@@ -2563,6 +2694,18 @@ export function Scheduling() {
             onClose={() => setPasteWidgetOpen(false)}
           />
         </div>
+      )}
+
+      {p6ImportOpen && (
+        <P6ImportDialog
+          projectId={selectedProject.id}
+          onClose={() => setP6ImportOpen(false)}
+          onImported={async v => {
+            await refetchVariants()
+            await selectVariant(v)
+            setP6ImportOpen(false)
+          }}
+        />
       )}
 
       {letterheadWidgetOpen && letterhead && (
@@ -2968,7 +3111,7 @@ export function Scheduling() {
                     </td>
                   )}
                   {isColumnVisible('resources') && (() => {
-                    const assigned = resourceAssignments.filter(ra => ra.activity_id === a.id)
+                    const assigned = assignmentsByActivityId.get(a.id) ?? []
                     const names = assigned.map(ra => ra.resource_name).join(', ')
                     return (
                       <td
@@ -3101,7 +3244,7 @@ export function Scheduling() {
                         <td className="px-3 py-1.5 text-gray-500">{a.start ? formatDateTime(a.start, false) : '—'}</td>
                         <td className="px-3 py-1.5 text-gray-500">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
                         <td className="px-3 py-1.5 text-right text-gray-500">{formatDuration(a.duration_days)}</td>
-                        <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, resourceAssignments)}</td>
+                        <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, assignmentsByActivityId)}</td>
                         <td className="px-3 py-1.5">
                           {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Critical</span>}
                           {a.is_critical === false && <span className="text-gray-300 text-xs">—</span>}

@@ -20,6 +20,26 @@ async def _anchor(db: AsyncSession, period: SchedulePeriod) -> None:
     await db.commit()
 
 
+async def _use_hour_precision(client: AsyncClient, project: Project) -> str:
+    """Every calendar defaults to whole_day_scheduling=True now (2026-07-13,
+    per Maro: "let it be whole day by default... i dont want that option" —
+    no longer a user-facing toggle, but the underlying per-calendar field and
+    the CPM engine's own conditional branch are both still real and still
+    tested, see test_scheduling_cpm_whole_day.py). The tests in this file
+    that specifically exercise sub-day mechanics (lunch breaks, partial-day
+    exceptions, a lag landing mid-day) opt the lazily-seeded Standard
+    Calendar back into hour-precision explicitly, via a direct PATCH — that
+    remains a fully supported API call even with no UI control left for it —
+    so their own real intent (does a break/exception genuinely change a
+    computed clock time) keeps being exercised regardless of what the new
+    default is."""
+    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
+    standard_id = calendars.json()[0]["id"]
+    resp = await client.patch(f"/api/v1/calendars/{standard_id}", json={"whole_day_scheduling": False})
+    assert resp.status_code == 200, resp.text
+    return standard_id
+
+
 async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, task_name: str, **overrides) -> dict:
     payload = {"project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": task_name}
     payload.update(overrides)
@@ -70,6 +90,7 @@ async def test_fs_chain_pushes_successor_start(client: AsyncClient, db: AsyncSes
 
 async def test_fs_lag_delays_successor_further(client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod):
     await _anchor(db, live_schedule_period)
+    await _use_hour_precision(client, project)
     a = await _create_activity(client, project, live_schedule_period, "Excavation", duration_hours=40)
     b = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=40)
     await _link(client, a, b, lag_hours=16)
@@ -368,8 +389,7 @@ async def test_partial_day_exception_removes_a_morning_hour(
     """Phase 10: a partial-day exception (e.g. "08:00-09:00 non-working") should
     genuinely change a computed finish time, not just display as a label."""
     await _anchor(db, live_schedule_period)
-    calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
-    standard_id = calendars.json()[0]["id"]
+    standard_id = await _use_hour_precision(client, project)
 
     await client.post("/api/v1/calendar-exceptions/", json={
         "calendar_id": standard_id, "label": "Late start (delivery)",
@@ -389,6 +409,7 @@ async def test_calendar_break_is_excluded_from_working_time(
     client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
     await _anchor(db, live_schedule_period)
+    await _use_hour_precision(client, project)
     calendars = await client.get("/api/v1/calendars/", params={"project_id": str(project.id)})
     standard = calendars.json()[0]
     assert float(standard["hours_per_day"]) == 8.0  # 08:00-17:00 minus the seeded 12:00-13:00 lunch

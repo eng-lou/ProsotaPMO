@@ -28,6 +28,14 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
   }
 
   const selectVariant = async (v: ScheduleVariant) => {
+    // Clears any error left over from an earlier failed bootstrap() — found
+    // 2026-07-16 via a real P6 import: bootstrap's own try/catch sets error
+    // to a generic "Failed to load schedule" and nothing ever cleared it
+    // again, so a *subsequent, successful* selectVariant call (e.g.
+    // switching into a schedule a P6 import just created) still left that
+    // stale message on screen even though the new variant's own period had
+    // loaded correctly.
+    setError(null)
     setVariant(v)
     if (projectId) sessionStorage.setItem(STORAGE_PREFIX + projectId, v.id)
     await loadPeriodFor(v)
@@ -119,7 +127,7 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
 
   return {
     variant, variants, period, loading, error,
-    refetch: bootstrap, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
+    refetch: bootstrap, refetchVariants, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
     promoteBaselineToVariant,
   }
 }

@@ -34,6 +34,14 @@ async def _linked_element(client: AsyncClient, project: Project, period: Period)
     return linked[0] if linked else None
 
 
+async def _linked_element_for_activity(client: AsyncClient, project: Project, period: Period, activity_id: str) -> dict:
+    resp = await client.get("/api/v1/cost-elements/", params={"project_id": str(project.id), "period_id": str(period.id)})
+    assert resp.status_code == 200
+    matches = [e for e in resp.json() if e["source"] == "schedule" and e["linked_activity_id"] == activity_id]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
 async def test_activity_with_no_resources_has_null_evm(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     activity = await _create_activity(client, project, live_schedule_period, "Unresourced task")
     resp = await client.get(f"/api/v1/activities/{activity['id']}")
@@ -207,3 +215,80 @@ async def test_activity_list_includes_evm(client: AsyncClient, project: Project,
     assert resp.status_code == 200
     row = next(a for a in resp.json() if a["id"] == activity["id"])
     assert float(row["bac"]) == 100.0
+
+
+async def test_wbs_summary_rolls_up_evm_from_children_not_averaged(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """A WBS summary/root activity is never itself linked to a Cost Element —
+    only leaf tasks get resourced — so its own EVM used to sit permanently
+    blank (Maro: "rollup the bac and eac and etc"). BAC/AC/PV/EV must sum
+    across children (the only EVM quantities PMBOK treats as additive across
+    a WBS); every other figure (CV/SV/CPI/SPI/EAC/ETC) must be *recomputed*
+    from those summed totals, never averaged from the children's own
+    ratios — this test picks two children with deliberately different CPI
+    (0.5 and 10/9) specifically so an incorrect "average the ratios"
+    implementation would produce a materially different, easily-caught wrong
+    number instead of accidentally landing close to the correct cumulative
+    EV/AC rollup."""
+    wbs = await _create_activity(client, project, live_schedule_period, "Structure", activity_type="wbs_summary")
+
+    # Child A: BAC = 1 day * 100% * 100/day = 100.
+    child_a = await _create_activity(client, project, live_schedule_period, "Task A", parent_id=wbs["id"], duration_hours=8)
+    resource_a = await _create_resource(client, project, rate="100")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": child_a["id"], "resource_id": resource_a["id"], "utilisation_pct": "100",
+    })
+    # Child B: BAC = 10 days * 100% * 1000/day = 10000.
+    child_b = await _create_activity(client, project, live_schedule_period, "Task B", parent_id=wbs["id"], duration_hours=80)
+    resource_b = await _create_resource(client, project, rate="1000")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": child_b["id"], "resource_id": resource_b["id"], "utilisation_pct": "100",
+    })
+
+    await client.patch(f"/api/v1/activities/{child_a['id']}", json={"pct_complete": "100"})
+    await client.patch(f"/api/v1/activities/{child_b['id']}", json={"pct_complete": "100"})
+    element_a = await _linked_element_for_activity(client, project, live_period, child_a["id"])
+    element_b = await _linked_element_for_activity(client, project, live_period, child_b["id"])
+    await client.patch(f"/api/v1/cost-elements/{element_a['id']}", json={"actuals": "200"})   # EV 100, AC 200 -> CPI 0.5
+    await client.patch(f"/api/v1/cost-elements/{element_b['id']}", json={"actuals": "9000"})  # EV 10000, AC 9000 -> CPI 10/9
+
+    resp = await client.get("/api/v1/activities/", params={
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+    })
+    assert resp.status_code == 200
+    rows = {row["id"]: row for row in resp.json()}
+    parent = rows[wbs["id"]]
+
+    assert float(parent["bac"]) == 100.0 + 10000.0
+    assert float(parent["ac"]) == 200.0 + 9000.0
+    assert float(parent["ev"]) == 100.0 + 10000.0
+    assert float(parent["cv"]) == (100.0 + 10000.0) - (200.0 + 9000.0)
+
+    # Cumulative CPI = total EV / total AC, NOT a mean of the children's own
+    # CPI (0.5 and 10/9 averages to ~0.806 — a badly wrong rollup that
+    # understates this WBS's real, dollar-weighted cost performance, which
+    # is actually much closer to on-budget since the $10000 child dominates).
+    correct_cpi = round((100.0 + 10000.0) / (200.0 + 9000.0), 4)
+    wrong_averaged_cpi = round((0.5 + 10 / 9) / 2, 4)
+    assert abs(float(parent["cpi"]) - correct_cpi) < 0.001
+    assert abs(float(parent["cpi"]) - wrong_averaged_cpi) > 0.05
+    assert float(parent["eac"]) == round((100.0 + 10000.0) / correct_cpi, 2)
+
+
+async def test_wbs_summary_with_no_costed_children_stays_null(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """No child anywhere in the subtree has a resourced BAC — the WBS summary
+    must stay blank, not roll up to a false £0 (same "leave it blank rather
+    than fake a number" rule every other EVM field in this codebase follows)."""
+    wbs = await _create_activity(client, project, live_schedule_period, "Structure", activity_type="wbs_summary")
+    await _create_activity(client, project, live_schedule_period, "Task A", parent_id=wbs["id"], duration_hours=8)
+
+    resp = await client.get("/api/v1/activities/", params={
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+    })
+    assert resp.status_code == 200
+    row = next(a for a in resp.json() if a["id"] == wbs["id"])
+    for field in ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc"):
+        assert row[field] is None, field

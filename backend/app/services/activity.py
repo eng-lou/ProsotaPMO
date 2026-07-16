@@ -30,7 +30,7 @@ from app.schemas.activity import (
 )
 from app.schemas.reassessment import ReassessmentCreate
 from app.services import cost_sync, scheduling_cpm
-from app.services.cost_element import compute_schedule_linked_evm
+from app.services.cost_element import compute_schedule_linked_evm, rollup_evm_from_totals
 from app.services.reassessment import create_reassessment
 from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
@@ -95,6 +95,48 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         evm = compute_schedule_linked_evm(element, a.start, a.finish, data_date)
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
+
+
+def _sum_if_any(values: list[Decimal | None]) -> Decimal | None:
+    """None if every value is None (no cost data anywhere in this subtree —
+    stays blank, same "leave it blank rather than fake a zero" rule
+    _attach_evm_fields above already documents), otherwise the sum of
+    whichever ones are actually set. A WBS summary with, say, structural
+    activities costed and architectural ones not yet resourced still gets a
+    real partial rollup rather than going blank the moment *any* sibling
+    lacks a cost element."""
+    present = [v for v in values if v is not None]
+    return sum(present, Decimal(0)).quantize(Decimal("0.01")) if present else None
+
+
+def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | None, list[Activity]]) -> None:
+    """Sums each WBS summary's own BAC/AC/PV/EV from its direct children,
+    then re-derives CV/SV/CPI/SPI/EAC/ETC from those summed totals via
+    rollup_evm_from_totals (app/services/cost_element.py — see that
+    function's own header for why summing is correct for BAC/AC/PV/EV but
+    every other EVM figure has to be *recomputed*, never summed or averaged
+    directly). 2026-07-15, per Maro: "rollup the bac and eac and etc" — a
+    WBS summary/root activity never has its own linked Cost Element (only
+    leaf task activities get resourced by Generate Schedule or manual
+    assignment), so _attach_evm_fields above always left every wbs_summary
+    row blank; this fills them in from what's actually underneath.
+
+    `ordered` must already be in the parent-before-children DFS order
+    list_activities produces (_dfs_order) — walked here in *reverse*, which
+    for that specific shape guarantees every descendant of a node (and, if
+    itself a WBS summary, that node's own already-computed rollup) is
+    visited before the node itself, standing in for a real post-order walk
+    without a second recursive traversal."""
+    for a in reversed(ordered):
+        if a.activity_type != "wbs_summary":
+            continue
+        kids = children.get(a.id, [])
+        bac = _sum_if_any([k.bac for k in kids])
+        ac = _sum_if_any([k.ac for k in kids])
+        pv = _sum_if_any([k.pv for k in kids])
+        ev = _sum_if_any([k.ev for k in kids])
+        for field, value in rollup_evm_from_totals(bac, ac, pv, ev).items():
+            setattr(a, field, value)
 
 
 async def _require_live_schedule_period(db: AsyncSession, schedule_period_id: uuid.UUID) -> SchedulePeriod:
@@ -188,6 +230,7 @@ async def list_activities(
     # tree client-side — see docs/SCHEDULING_MODULE_PLAN.md Phase 2.
     ordered = _dfs_order(activities)
     await _attach_evm_fields(db, ordered)
+    _rollup_wbs_evm_fields(ordered, _build_children_map(activities))
     return ordered
 
 
@@ -378,18 +421,32 @@ async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) 
 
     assign_codes(None, "")
 
+    # Post-order: every descendant is fully resolved (recursing first) before
+    # a node reads its own children's start/finish/pct_complete — the
+    # aggregation used to run as a separate flat loop over `activities` in
+    # plain DB-query order, which happened to work for a single level of WBS
+    # nesting (a task's dates are already real by the time its one parent is
+    # reached) but silently read a *stale* pre-pass value whenever a WBS
+    # summary's own children were themselves WBS summaries not yet
+    # (re)computed later in that same flat pass — e.g. a root WBS wrapping
+    # several storey WBS summaries, each wrapping task-level activities
+    # (2026-07-13, per Maro: a bulk-generated root activity's own rolled-up
+    # dates looked completely disconnected from its storeys' real range).
+    # This recursive walk (the empty skeleton it replaces was seemingly an
+    # earlier, abandoned attempt at exactly this — `by_id` below was already
+    # sitting there unused) is correct for any nesting depth, since a
+    # parent's aggregation always runs strictly after all of its
+    # descendants', regardless of the order `activities` came back from the
+    # DB in.
+    by_id = {a.id: a for a in activities}
+
     def rollup(node_id: uuid.UUID) -> None:
         for child in children.get(node_id, []):
             rollup(child.id)
-
-    by_id = {a.id: a for a in activities}
-    for root in children.get(None, []):
-        rollup(root.id)
-
-    for node in activities:
+        node = by_id[node_id]
         if node.activity_type != "wbs_summary":
-            continue
-        kids = children.get(node.id, [])
+            return
+        kids = children.get(node_id, [])
         starts = [k.start for k in kids if k.start is not None]
         finishes = [k.finish for k in kids if k.finish is not None]
         node.start = min(starts) if starts else None
@@ -410,6 +467,9 @@ async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) 
         else:
             node.pct_complete = None
         _apply_computed_fields(node)
+
+    for root in children.get(None, []):
+        rollup(root.id)
 
     # Refresh only the rows this pass actually modified — captured as a set of
     # ids *before* commit, since committing clears SQLAlchemy's dirty-tracking.

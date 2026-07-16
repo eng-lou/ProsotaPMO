@@ -1445,3 +1445,208 @@ on one to a corner and confirm it now rotates around that corner, rig the
 second under the first and rotate the parent to confirm the child rides
 along with no jump at bind time, then keyframe the child's own Location
 and confirm it now moves relative to the (already-rotating) parent.
+
+## 2026-07-13 — Four real bugs found via actual manual testing, in one
+## session: pivot picking, duplicate filenames, the Scheduling Gantt
+## chart, and a material-preset crash + storage ceiling
+
+Maro actually tested the pivot/rigging feature above, and it surfaced two
+real, independent bugs immediately:
+
+**Pivot-picking hit the gizmo, not the model.** ("pick in viewport is very
+bad") — TransformControls' own move/rotate/scale handles are real,
+raycastable Object3Ds sitting right on top of whatever's selected, and the
+pivot-pick catcher (`PathAddPointCatcher`, reused a third time) had no
+reason to know to skip them, unlike its own curve/handle meshes which are
+already tagged and excluded. Fixed by tagging the gizmo itself
+`userData.isPathGizmo = true` via a ref callback on `<TransformControls>` —
+reuses the exact existing exclusion check, benefits Paths/Annotations
+placement too (same latent bug, just less likely to be hit there).
+
+**Duplicate filenames broke Rigging silently.** ("you enabled all my
+columns" — an unrelated theory that turned out to be the real filename
+issue instead) — two files both literally named `Untitled.glb` (a common
+default export name) are indistinguishable everywhere this app identifies
+a mesh-kind element by name: Collections, Paths, links, and now Rigging.
+The Rigging panel's own "which objects can be a parent" filter excludes
+whatever's currently selected by name — with two identically-named
+objects, that filtered out *both*, leaving nothing to pick and no
+explanation why. Real fix, not a workaround: `ImportModelDialog.tsx` now
+has an editable Name field, pre-filled from the file's own name — this *is*
+the element's identity going forward (`uploadModel3DFile`'s `name` param
+already existed on the backend for exactly this, just never had a text
+input wired to it).
+
+**The Scheduling Gantt chart "disappeared."** Two rounds — the first fix
+(capping a *dragged* pane-width value) treated the wrong variable; the
+real mechanism only showed up once Maro described the actual trigger
+("you enabled all my columns"): the activity-table pane's width fell
+through to `undefined` (no explicit width at all) whenever it had never
+been manually dragged, so with `flex-shrink: 0` on that pane, it sized
+itself to fit *every enabled column's* content — and its `flex-1` Gantt
+sibling was the only side left to absorb the squeeze, down to nothing. Two
+real fixes together: the pane always gets a real, capped pixel width now
+(dragged or not, so Gantt space is structurally protected regardless of
+column count), and `overflow-x` changed from `hidden` to `auto` so extra
+columns scroll within the table pane instead of being silently clipped
+with no way to reach them — matching Maro's own explicit fix request
+verbatim ("the activity can be scrollable if there are excess columns").
+Worth remembering: the first fix attempt was plausible-sounding but wrong
+because it was reasoned from the *symptom* (chart squeezed) without yet
+reading the actual layout code — the second, correct fix only came from
+actually reading `Scheduling.tsx`'s own flex/overflow setup, not guessing
+harder at the same symptom.
+
+**A real crash, `variant.color.copy is not a function`, clicking a
+material preset.** Root cause, confirmed by reading three.js's own
+`Material.js` source directly, not assumed: `Material.prototype.copy()`
+(called internally by `.clone()`) does `this.userData =
+JSON.parse(JSON.stringify(source.userData))`. `Viewport3D.tsx` clones a
+mesh's standard material whenever a texture override/preset first applies
+to one specific element — and if that material's `userData` already held
+a cached Gouraud/Hidden-Line render-mode variant (a real `THREE.Material`
+instance, populated automatically the first time either mode is used),
+the JSON round-trip silently turned it into a plain object that still
+*looks* present but is missing its prototype methods. The exact same bug
+class this app already caught once for `Object3D.clone()` (`sceneClone.ts`
+'s own header), just not this specific call site — fixed by explicitly
+deleting the two cache keys off any cloned material
+(`clearClonedRenderModeVariantCache`), so the variant getters correctly
+detect "no cache yet" and rebuild a real one instead of trusting a
+JSON-mangled copy.
+
+**Material Presets couldn't store real textures at all.** The crash above
+led straight into the actual blocker: saving a preset with a genuine 8K
+texture failed with `total size of jsonb object elements exceeds the
+maximum of 268435455 bytes` — Postgres's own hard 256MB-per-JSONB-element
+ceiling, and the Base Color slot's base64 data alone was ~300MB. Presets
+stored every texture slot as an inline base64 `data_uri` directly in a
+JSONB `config` column — fine for small images, architecturally wrong for
+real ones. Confirmed via direct query *before* touching anything that
+three real presets already had genuine data saved this way (`conc` ~77MB
+config, `concrete dirty` ~247MB, `Metal` ~128MB) — this had to be a data
+migration, not just a schema change, or that real work gets silently
+destroyed. Real fix: `MaterialPresetTexture`, one row per (preset, slot),
+real files on local disk via the exact same `model3d_storage.py` helpers
+`Model3DFile` already uses (reused directly, not reimplemented) — the
+create/update API became multipart (mirrors `model3d_files.py`'s own
+upload endpoint) with a `cleared_slots` field so renaming a preset with
+several large textures doesn't require re-uploading any of them. The
+migration itself decodes and extracts each existing preset's embedded
+`data_uri` to a real file *before* dropping the `config` column, one
+preset at a time (not the whole table in memory at once, given the
+confirmed sizes) — verified directly afterward, not just assumed: all 9
+extracted files exist on disk with byte-for-byte matching sizes against
+their new DB rows, and all three original presets (`conc`/`concrete
+dirty`/`Metal`) list correctly through the new service layer.
+
+Also surfaced and fixed along the way: both `MaterialPresetPicker.tsx`'s
+save-preset error handler and its own earlier sibling were silently
+discarding the real error entirely (`catch { setError('Failed to save
+preset') }`) — the exact same "was silently swallowed with nothing at
+all" bug class this project has hit and fixed repeatedly this session
+alone; without surfacing the real status/detail, the actual Postgres
+ceiling above would never have been findable from the browser at all.
+
+Backend: 11 new/rewritten material-preset tests (multipart upload/
+download round-trip, `cleared_slots` clears without touching other slots,
+an omitted slot stays untouched on update, delete cascades both DB rows
+and disk files) — all pass, alongside the full existing suite. Frontend
+`tsc --noEmit`/`vite build` clean throughout. Not yet re-tested live in
+the browser for this specific round — worth checking: pivot-pick a point
+on the actual model surface (not the gizmo) and confirm it lands correctly;
+import two files with the same default name, give one a distinct name in
+the dialog, and confirm Rigging can see both; toggle every Scheduling
+column on and confirm the Gantt chart stays fully visible and the table
+scrolls instead; re-save the "conc" preset with its original 8K texture
+and confirm it now succeeds where it hard-failed before.
+
+## 2026-07-13 — IFC Schedule Wizard: a first-draft schedule generated straight from a model
+
+**What got built:** a wizard, launched from the 4D toolbar once an IFC
+model is loaded, that scans a model's structural elements (columns, beams,
+slabs, footings, foundation walls) and turns them into a real, editable,
+resource-loaded schedule in one step — a WBS summary per storey, a work
+activity per storey+category, FS sequencing within and between storeys,
+crew resources with editable productivity rates, and every element already
+linked to its activity (no separate manual linking step afterward).
+Researched directly against a real file first (`2018_Hospital_Structural.ifc`)
+rather than assumed from docs: Revit bakes real construction data straight
+into each element's own `Name` attribute (`'W-Wide Flange:W21X50:...'`,
+`'Floor:6" Concrete on 3" Metal Deck:...'`) — a cheap attribute read, not a
+slow property-set walk, and `web-ifc` has no bulk per-element property API
+at all to fall back on anyway. Confirmed with Maro up front: productivity
+rates are **editable defaults**, not invented-silently and not
+blank-by-default — the wizard proposes typical rates, reviewed/adjusted
+before anything commits.
+
+**No bulk-create existed anywhere in this app.** Every Activity/
+ActivityRelationship/Resource/ResourceAssignment insert was one-row-at-a-
+time, and both `create_activity` and `create_relationship` individually
+trigger a full CPM recompute per call — a naive loop generating a few
+hundred rows would've been both slow and structurally wrong (recomputing a
+still-incomplete schedule hundreds of times over). New
+`schedule_bulk_generate.py` persists a whole staged payload (temp
+string-ids for cross-references, resolved to real client-generated UUIDs
+as each row is built) in one transaction, with the CPM/hierarchy recompute
+deferred to run exactly once at the very end — same "frontend computes the
+domain math, backend just persists it" split Material Presets/Clash
+Detective already established.
+
+**Two real bugs, caught by the tests written for this, not guessed:**
+1. A resourced activity's cost budget came back `0.00`. Cause:
+   `compute_assignment_budget` prices a crew assignment off
+   `activity.duration_days`, which only gets populated by the CPM pass —
+   and the cost-sync loop was running *before* that pass, pricing
+   everything off a still-null duration. Fix: moved cost-sync to run after
+   the final hierarchy/CPM recompute, not before.
+2. A deliberately-cyclic relationship payload correctly returned a 422,
+   but the activities it should have rejected turned up persisted anyway.
+   Cause: the cycle check (`would_create_cycle`) does its own DB query,
+   which triggers SQLAlchemy's autoflush and pushes every earlier
+   `db.add()` in the batch to the database — not committed, but no longer
+   just sitting safely in memory either. An explicit `db.rollback()` on
+   the exception path fixed the underlying leak but broke something
+   subtler: this app's own test fixtures share *one* database session
+   across a whole test (so `project`/`live_schedule_period` stay valid
+   across multiple requests), and a rollback expires every ORM object in
+   that shared session, not just the ones this request touched — a later
+   fixture access in the same test then tried to silently refetch from the
+   database outside of an async context and crashed. Real fix: validate
+   *everything* (structure, temp-id references, and relationship cycles,
+   the last via an in-memory graph check against relationships fetched
+   once up front) **before a single `db.add()` happens**, so a rejected
+   batch never touches the session at all — no autoflush, no rollback, no
+   expired fixtures, and a cleaner story than "roll back cleanly" anyway
+   ("never start" beats "start and undo").
+
+**A dynamic-import convention nearly got broken.** `ifcModel.ts` (which
+pulls in `web-ifc`, a large WASM-adjacent library) has always been kept
+out of the main JS bundle by being dynamic-`import()`ed everywhere it's
+used, never imported at the top of a file. The new
+`ifcScheduleExtraction.ts` initially imported it statically for
+convenience — `vite build` caught it immediately with a real warning
+("dynamically imported ... but also statically imported ... will not move
+module into another chunk"), and the main bundle nearly doubled in size
+(6.87MB) as a result. Fixed by switching to a type-only import
+(`import type`, erased at compile time) plus a dynamic `import('./ifcModel')`
+inside the one async function that actually needs it — same idiom
+`FourD.tsx`/`IfcDataPanel.tsx` already use. Worth remembering: `tsc
+--noEmit` alone wouldn't have caught this at all (types were correct
+either way) — only an actual production build surfaces bundle-splitting
+regressions.
+
+**Verified, not just written:** backend — 8 new tests plus the two fixes
+above, full suite 647/647 passing (was 639 before this feature). Frontend
+— `tsc --noEmit` and `vite build` both clean, and the bundle-splitting fix
+confirmed by rebuilding and seeing `ifcModel.ts` back in its own separate
+chunk. Extraction counts checked directly against the real reference file
+via a raw STEP-format grep (not run in a browser, since none is available
+here): 15 footings, 249 columns, 2011 beams, 612 slabs, 28 foundation
+walls, 17 storeys — exactly matching what the wizard's own bulk per-type
+queries would return. **Not yet tested live in an actual browser** — still
+worth doing before relying on this: open the reference file, run the
+wizard end to end, confirm the Rates & Crews step recomputes durations
+live as a rate is edited, and confirm Generate produces a schedule in the
+Scheduling module with correct WBS nesting and the new activities already
+linked to their IFC elements with no extra manual step.

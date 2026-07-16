@@ -1,5 +1,6 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react'
+import { forwardRef, memo, useImperativeHandle, useMemo, useRef } from 'react'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
+import { groupAssignmentsByActivityId } from '@/lib/resourceLabel'
 import { formatDateTime } from './dateTime'
 import { computeTimeMarks, DAY_WIDTH_BY_ZOOM, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
 import { isMilestoneType, type Activity, type ActivityRelationship, type ResourceAssignment } from './types'
@@ -9,11 +10,22 @@ import { isMilestoneType, type Activity, type ActivityRelationship, type Resourc
 // name/resources/finish are individually switched on in GanttStyle into one
 // string, rather than three separately-positioned labels that would need
 // their own collision/stacking logic.
-export function buildBarLabel(a: Activity, style: GanttStyle, resourceAssignments: ResourceAssignment[]): string {
+//
+// resourceAssignments accepts either the raw array (SchedulingPrintView.tsx's
+// own direct call, a lower-frequency print path) or a pre-grouped Map from
+// groupAssignmentsByActivityId (2026-07-15 — what this file's own render
+// loop below now builds once and reuses per bar, instead of this function
+// re-filtering the *entire* assignments list on every single bar/activity —
+// see resourceLabel.ts's own header on why that's a real O(activities ×
+// assignments) freeze on a generate-schedule-sized project).
+export function buildBarLabel(a: Activity, style: GanttStyle, resourceAssignments: ResourceAssignment[] | Map<string, ResourceAssignment[]>): string {
   const parts: string[] = []
   if (style.show_label_name) parts.push(a.task_name)
   if (style.show_label_resource) {
-    const names = resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name)
+    const matches = Array.isArray(resourceAssignments)
+      ? resourceAssignments.filter(ra => ra.activity_id === a.id)
+      : resourceAssignments.get(a.id) ?? []
+    const names = matches.map(ra => ra.resource_name)
     if (names.length > 0) parts.push(names.join(', '))
   }
   if (style.show_label_finish) parts.push(formatDateTime(a.finish, style.show_time_of_day))
@@ -140,7 +152,17 @@ export interface GanttChartHandle {
   setScrollTop: (scrollTop: number) => void
 }
 
-export const GanttChart = forwardRef<GanttChartHandle, {
+// memo()'d (2026-07-15, per Maro: "its very laggy") — Scheduling.tsx is one
+// large component managing dozens of independent pieces of state (column
+// widths, dialogs, editing state, ...); without a memo boundary here, any of
+// those unrelated state changes re-executes this component's *entire* body
+// (activities.map() over every bar/milestone/connector/baseline shape, no
+// windowing) even when none of its own props actually changed. Internal
+// geometry/baselineGeometry/criticalById were already useMemo'd, but that
+// only skips recomputing the *data* those loops read — the loops (and their
+// JSX) still re-ran every time. Safe as a pure bail-out: forwardRef's own
+// ref identity is unaffected by wrapping in memo.
+export const GanttChart = memo(forwardRef<GanttChartHandle, {
   activities: Activity[]
   relationships?: ActivityRelationship[]
   // Only needed for the show_label_resource toggle — omitted entirely
@@ -183,6 +205,10 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       if (bodyWrapperRef.current) bodyWrapperRef.current.style.transform = `translateY(${-scrollTop}px)`
     },
   }), [])
+
+  // Built once per resourceAssignments change, not once per bar — see
+  // buildBarLabel's own 2026-07-15 header.
+  const assignmentsByActivityId = useMemo(() => groupAssignmentsByActivityId(resourceAssignments), [resourceAssignments])
 
   const dayWidth = DAY_WIDTH_BY_ZOOM[zoom]
 
@@ -407,7 +433,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           // already master-critical, that's already the more prominent signal
           // and a second ring would just be redundant noise on top of it.
           const subCritical = style.show_sub_critical && a.sub_is_critical === true && !critical
-          const label = buildBarLabel(a, style, resourceAssignments)
+          const label = buildBarLabel(a, style, assignmentsByActivityId)
           const isSelected = selectedActivityIds?.has(a.id) ?? false
           const selectionRing = isSelected ? `0 0 0 2px #2563eb` : undefined
           const handleBarClick = onSelectActivity
@@ -511,4 +537,4 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       ) : body}
     </div>
   )
-})
+}))

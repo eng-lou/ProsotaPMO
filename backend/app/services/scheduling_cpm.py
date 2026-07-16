@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict, deque
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -231,7 +231,18 @@ class _CalendarLookup:
         no duration is consumed inside it even on an otherwise-working day, so
         an activity suspended mid-flight has its Finish pushed out by the full
         gap once it resumes, rather than the gap silently overlapping its
-        planned working time."""
+        planned working time.
+
+        Whole-day calendars (calendar.whole_day_scheduling, 2026-07-13 per
+        Maro) skip the minute-level walk below — see _add_duration_whole_day
+        — but still honour suspend_date/resume_date: a whole day is either
+        fully available or fully skipped (whole-day mode has no concept of
+        a partial day either way), rather than dropping the gap entirely
+        (an earlier version of this branch ignored suspend/resume outright,
+        caught by test_scheduling_cpm_suspend_resume.py once whole-day
+        became every calendar's own default)."""
+        if calendar.whole_day_scheduling:
+            return self._add_duration_whole_day(calendar, start, duration_hours, suspend_date, resume_date)
         cur = self.snap_forward(calendar, start)
         if duration_hours <= 0:
             return cur
@@ -259,7 +270,10 @@ class _CalendarLookup:
         suspend_date: datetime | None = None, resume_date: datetime | None = None,
     ) -> datetime:
         """The instant duration_hours of working time before finish (the backward-pass
-        mirror of add_duration) — same suspend_date/resume_date carve-out."""
+        mirror of add_duration) — same suspend_date/resume_date carve-out, and
+        the same whole-day-calendar branch (_subtract_duration_whole_day)."""
+        if calendar.whole_day_scheduling:
+            return self._subtract_duration_whole_day(calendar, finish, duration_hours, suspend_date, resume_date)
         cur = self.snap_backward(calendar, finish)
         if duration_hours <= 0:
             return cur
@@ -282,16 +296,163 @@ class _CalendarLookup:
             cur = datetime.combine(cur.date() - timedelta(days=1), time(23, 59))
         raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
 
+    def _is_available_whole_day(
+        self, calendar: Calendar, d: date, suspend_date: datetime | None, resume_date: datetime | None,
+    ) -> bool:
+        """A working day that's also NOT wholly-or-partly inside a
+        suspend/resume gap — whole-day mode has no notion of a partial day,
+        so any overlap at all (not just a full-day overlap) takes the whole
+        day out of consideration, unlike the hour-precision path's own
+        _exclude_suspend_window, which carves out only the overlapping
+        minutes."""
+        if not self.is_working_day(calendar, d):
+            return False
+        if suspend_date is None or resume_date is None:
+            return True
+        day_start = datetime.combine(d, calendar.day_start_time)
+        day_end = datetime.combine(d, calendar.day_end_time)
+        return day_end <= suspend_date or day_start >= resume_date
+
+    def _add_duration_whole_day(
+        self, calendar: Calendar, start: datetime, duration_hours: Decimal,
+        suspend_date: datetime | None = None, resume_date: datetime | None = None,
+    ) -> datetime:
+        """add_duration's whole-day-calendar branch (2026-07-13, per Maro:
+        "there are activities starting by 16:30 one day and ending 11:00
+        another even though i set the calendar... ensure the generated
+        activities use it" — traced the hour-precision math as correct, but
+        Maro wants day-only granularity instead). Every result lands on
+        exactly day_start_time or day_end_time, never mid-day.
+
+        `start`'s own day counts as "already spent" (push to the next
+        working day) whenever its time-of-day is past day_start_time — e.g.
+        a predecessor on a different, hour-precision calendar finished mid-
+        afternoon, or a lag pushed past the morning; a fresh whole day is
+        needed regardless of how much of *this* day would technically still
+        be free. Otherwise this day itself is the first of the days
+        consumed below."""
+        cur_date = start.date()
+        if start.time() > calendar.day_start_time:
+            cur_date += timedelta(days=1)
+        for _ in range(_MAX_DAY_STEPS):
+            if self._is_available_whole_day(calendar, cur_date, suspend_date, resume_date):
+                break
+            cur_date += timedelta(days=1)
+        else:
+            raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
+
+        if duration_hours <= 0:
+            return datetime.combine(cur_date, calendar.day_start_time)
+
+        hours_per_day = self.hours_per_day(calendar)
+        if hours_per_day <= 0:
+            raise HTTPException(status_code=422, detail="Calendar has no working hours in a day")
+        # Rounds up — a whole-day calendar has no concept of a partial day,
+        # so any nonzero remainder still occupies a full extra day (same
+        # rule a lag/lead inherits automatically via offset_hours, since it
+        # also routes through this method).
+        days_needed = int((duration_hours / hours_per_day).to_integral_value(rounding=ROUND_CEILING))
+        days_needed = max(days_needed, 1)
+
+        remaining = days_needed
+        for _ in range(_MAX_DAY_STEPS):
+            if self._is_available_whole_day(calendar, cur_date, suspend_date, resume_date):
+                remaining -= 1
+                if remaining == 0:
+                    return datetime.combine(cur_date, calendar.day_end_time)
+            cur_date += timedelta(days=1)
+        raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
+
+    def _subtract_duration_whole_day(
+        self, calendar: Calendar, finish: datetime, duration_hours: Decimal,
+        suspend_date: datetime | None = None, resume_date: datetime | None = None,
+    ) -> datetime:
+        """subtract_duration's whole-day-calendar branch — the exact backward
+        mirror of _add_duration_whole_day (own docstring has the full
+        rationale)."""
+        cur_date = finish.date()
+        if finish.time() < calendar.day_end_time:
+            cur_date -= timedelta(days=1)
+        for _ in range(_MAX_DAY_STEPS):
+            if self._is_available_whole_day(calendar, cur_date, suspend_date, resume_date):
+                break
+            cur_date -= timedelta(days=1)
+        else:
+            raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
+
+        if duration_hours <= 0:
+            return datetime.combine(cur_date, calendar.day_end_time)
+
+        hours_per_day = self.hours_per_day(calendar)
+        if hours_per_day <= 0:
+            raise HTTPException(status_code=422, detail="Calendar has no working hours in a day")
+        days_needed = int((duration_hours / hours_per_day).to_integral_value(rounding=ROUND_CEILING))
+        days_needed = max(days_needed, 1)
+
+        remaining = days_needed
+        for _ in range(_MAX_DAY_STEPS):
+            if self._is_available_whole_day(calendar, cur_date, suspend_date, resume_date):
+                remaining -= 1
+                if remaining == 0:
+                    return datetime.combine(cur_date, calendar.day_start_time)
+            cur_date -= timedelta(days=1)
+        raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
+
     def offset_hours(self, calendar: Calendar, dt: datetime, hours: Decimal) -> datetime:
         """Move dt by signed working hours — the lag/lead application used throughout
         the forward/backward pass. Positive moves forward (a lag/wait); negative moves
         backward (a lead/overlap). hours=0 snaps dt to the next working instant if it
         isn't already one — e.g. an FS successor at zero lag starts the moment its
         predecessor finishes, or the next working instant after that if the
-        predecessor's finish landed at/after a day's working envelope closes."""
+        predecessor's finish landed at/after a day's working envelope closes.
+
+        Whole-day calendars get their own branch (2026-07-13), not
+        add_duration/subtract_duration directly: this method's result is
+        always fed onward as a *start*-type candidate (its own docstring —
+        "successor starts the moment its predecessor finishes"), so it must
+        always land on day_start_time. add_duration/subtract_duration's
+        whole-day branches intentionally do the opposite (day_end_time/
+        day_start_time respectively) because *they* are answering "what's
+        the finish of N hours of real work" — a genuinely different
+        question from "what's the next available start after waiting N
+        hours." Conflating the two here originally sent a 2-hour lag
+        through add_duration's finish-producing whole-day math and got back
+        a same-day 16:00 instead of the intended next-whole-day 08:00 —
+        caught by this file's own test_scheduling_cpm_whole_day.py."""
+        if calendar.whole_day_scheduling:
+            return self._offset_hours_whole_day(calendar, dt, hours)
         if hours >= 0:
             return self.add_duration(calendar, dt, hours)
         return self.subtract_duration(calendar, dt, -hours)
+
+    def _offset_hours_whole_day(self, calendar: Calendar, dt: datetime, hours: Decimal) -> datetime:
+        cur_date = dt.date()
+        if dt.time() > calendar.day_start_time:
+            cur_date += timedelta(days=1)
+        for _ in range(_MAX_DAY_STEPS):
+            if self.is_working_day(calendar, cur_date):
+                break
+            cur_date += timedelta(days=1)
+        else:
+            raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
+
+        if hours == 0:
+            return datetime.combine(cur_date, calendar.day_start_time)
+
+        hours_per_day = self.hours_per_day(calendar)
+        if hours_per_day <= 0:
+            raise HTTPException(status_code=422, detail="Calendar has no working hours in a day")
+        extra_days = int((abs(hours) / hours_per_day).to_integral_value(rounding=ROUND_CEILING))
+        extra_days = max(extra_days, 1)
+        step = timedelta(days=1) if hours > 0 else -timedelta(days=1)
+        remaining = extra_days
+        for _ in range(_MAX_DAY_STEPS):
+            cur_date += step
+            if self.is_working_day(calendar, cur_date):
+                remaining -= 1
+                if remaining == 0:
+                    return datetime.combine(cur_date, calendar.day_start_time)
+        raise HTTPException(status_code=422, detail="Calendar has no working time in the searched range")
 
     def working_hours_between(self, calendar: Calendar, a: datetime, b: datetime) -> Decimal:
         """Signed working-hour count from a to b. 0 if equal.

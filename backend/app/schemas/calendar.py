@@ -23,6 +23,9 @@ class CalendarBase(BaseModel):
     works_friday: bool = True
     works_saturday: bool = False
     works_sunday: bool = False
+    # See app/models/calendar.py's own docstring on this field — defaults
+    # True, no longer surfaced as a user-facing toggle.
+    whole_day_scheduling: bool = True
 
     @model_validator(mode="after")
     def end_after_start(self) -> "CalendarBase":
@@ -47,6 +50,7 @@ class CalendarUpdate(BaseModel):
     works_friday: bool | None = None
     works_saturday: bool | None = None
     works_sunday: bool | None = None
+    whole_day_scheduling: bool | None = None
 
 
 class CalendarResponse(CalendarBase):

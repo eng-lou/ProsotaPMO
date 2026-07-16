@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
@@ -26,7 +27,17 @@ export function ProjectSelector() {
   const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
       .then(r => { setProjects(r.data); setError(null) })
-      .catch(() => setError('Failed to load projects'))
+      .catch(err => {
+        // Was a bare "Failed to load projects" with the real error
+        // discarded entirely — same swallowed-error bug class this app has
+        // hit and fixed repeatedly (MaterialPresetPicker.tsx's own
+        // handleSave, FourD.tsx's collectionErrorMessage/clashErrorMessage);
+        // without the real status/detail, a backend outage (as opposed to,
+        // say, an auth problem) is indistinguishable from the browser.
+        const detail = axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string' ? err.response.data.detail : null
+        const status = axios.isAxiosError(err) ? err.response?.status ?? (err.code === 'ECONNABORTED' ? 'timeout' : err.message) : null
+        setError(detail ? `Failed to load projects: ${detail}` : status ? `Failed to load projects (${status})` : 'Failed to load projects')
+      })
       .finally(() => setLoading(false))
 
   useEffect(() => {

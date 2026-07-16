@@ -3,7 +3,7 @@ import type { AnimationProfile } from './animationProfiles'
 import type { IfcModelHandle } from './ifcModel'
 import { IfcDataPanel } from './IfcDataPanel'
 import { MeshDataPanel, type MeshImportItem } from './MeshDataPanel'
-import type { ModelElementLink, SourceKind } from './modelElementLinks'
+import type { ModelElementLink, ModelElementLinkSourceKind } from './modelElementLinks'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
 
 export type DataPanelTab = 'ifc' | '3d'
@@ -37,7 +37,7 @@ interface Props {
   activities: Activity[]
   modelElementLinks: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }

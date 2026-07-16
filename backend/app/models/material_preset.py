@@ -3,29 +3,10 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import ForeignKey, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
-
-# Mirrors frontend/src/modules/fourD/materialPresets.ts's MaterialPresetConfig
-# exactly. Each of the six PBR slots (2026-07-11: aoMap/displacementMap
-# joined the original four) is either null (that slot isn't part of this
-# preset — applying it leaves that channel alone) or {data_uri, name}: the
-# uploaded image re-encoded as a base64 data: URI, directly usable as a
-# THREE.TextureLoader source with no separate file-serving endpoint needed
-# (same reasoning as every other config blob in this app — stored as one
-# opaque JSONB unit, shape owned by the frontend). name is the original
-# filename, shown in the editor so re-opening a saved preset doesn't just
-# show anonymous thumbnails.
-DEFAULT_CONFIG = {
-    "map": None,
-    "metalnessMap": None,
-    "roughnessMap": None,
-    "normalMap": None,
-    "aoMap": None,
-    "displacementMap": None,
-}
 
 
 class MaterialPreset(Base, TimestampMixin):
@@ -45,11 +26,18 @@ class MaterialPreset(Base, TimestampMixin):
     without losing anything: the *original* imported material is captured
     separately, client-side, in each mesh's own userData at import time
     (frontend/src/modules/fourD/elementBaseline.ts's originalMaterial
-    sibling), never touched by applying/switching presets."""
+    sibling), never touched by applying/switching presets.
+
+    Each of the six PBR slots' actual image lives in a MaterialPresetTexture
+    row (material_preset_texture.py), not inline here — this table used to
+    hold every slot as a base64 data: URI directly in a `config` JSONB
+    column, which a real 8K texture blew straight through Postgres's own
+    256MB-per-JSONB-element ceiling on (2026-07-13 fix, see that model's own
+    docstring for the full incident and the one-time data migration that
+    extracted the presets that had already saved real data that way)."""
 
     __tablename__ = "material_presets"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=lambda: dict(DEFAULT_CONFIG))

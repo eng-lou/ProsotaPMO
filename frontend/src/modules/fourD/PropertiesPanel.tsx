@@ -4,7 +4,7 @@ import type { CustomTextureSet, TextureSlot } from './customTextures'
 import { ResettableNumberInput } from './ResettableNumberInput'
 import { TextureFields } from './TextureFields'
 import { MaterialPresetPicker } from './MaterialPresetPicker'
-import type { MaterialPreset, MaterialPresetConfig } from './materialPresets'
+import type { MaterialPreset } from './materialPresets'
 import { TransformPanel, type GizmoMode, type KeyframeSupport, type PathProgressSupport, type PivotSupport } from './TransformPanel'
 import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
@@ -73,10 +73,9 @@ interface Props {
   // see MaterialPresetPicker.tsx's own header for the full design.
   materialPresets: MaterialPreset[]
   materialPresetsLoading: boolean
-  activeMaterialPresetConfig: MaterialPresetConfig
-  onApplyMaterialPreset: (config: MaterialPresetConfig) => void
-  onCreateMaterialPreset: (name: string, config: MaterialPresetConfig) => Promise<MaterialPreset>
-  onUpdateMaterialPreset: (presetId: string, name: string, config: MaterialPresetConfig) => Promise<void>
+  onApplyMaterialPreset: (preset: MaterialPreset) => void
+  onCreateMaterialPreset: (name: string, files: Partial<Record<TextureSlot, Blob>>) => Promise<MaterialPreset>
+  onUpdateMaterialPreset: (presetId: string, name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots: TextureSlot[]) => Promise<void>
   onDeleteMaterialPreset: (presetId: string) => Promise<void>
   // Select Linked / Apply to Linked, per channel (2026-07-09, per Maro) —
   // see linkedMaterials.ts's own header. Only available with one specific
@@ -111,7 +110,7 @@ function SectionHeader({ label }: { label: string }) {
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
   activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
-  materialPresets, materialPresetsLoading, activeMaterialPresetConfig, onApplyMaterialPreset,
+  materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
   keyframeSupport, pathProgress, pivot, onChangeSourceUpAxis,
@@ -332,7 +331,7 @@ export function PropertiesPanel({
           <MaterialPresetPicker
             presets={materialPresets}
             loading={materialPresetsLoading}
-            currentConfig={activeMaterialPresetConfig}
+            currentTextures={activeObjectTextures ?? {}}
             onApply={onApplyMaterialPreset}
             onCreate={onCreateMaterialPreset}
             onUpdate={onUpdateMaterialPreset}

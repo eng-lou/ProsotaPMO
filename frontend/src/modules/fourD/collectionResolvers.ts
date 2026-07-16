@@ -1,8 +1,9 @@
 import type { IfcModelHandle } from './ifcModel'
 import type { LinkableSceneObject } from './linkedElements'
+import { getSplitElementRef } from './splitElementRefs'
 
 export interface MemberRefDraft {
-  source_kind: 'ifc' | 'mesh'
+  source_kind: 'ifc' | 'mesh' | 'ifc_split'
   element_ref: string
   element_label: string
 }
@@ -43,6 +44,18 @@ export async function resolveSelectionToMemberRefs(
   if (activeIfcHandle && selectedExpressIds.size > 0) {
     const { getGuidFromExpressId, getElementTypeName } = await import('./ifcModel')
     for (const expressId of selectedExpressIds) {
+      // A level-slice's expressID is synthetic — never a real web-ifc line
+      // id, so getGuidFromExpressId/getElementTypeName below would be
+      // calling into web-ifc with a made-up number (undefined at best,
+      // an uncaught native-binding throw at worst — see this function's
+      // own review notes). Checked first via the same synthetic-id map
+      // elementSplitTargets.ts populates; falls through to the real-GUID
+      // path below for every ordinary element.
+      const splitRef = getSplitElementRef(activeIfcHandle, expressId)
+      if (splitRef) {
+        drafts.push({ source_kind: 'ifc_split', element_ref: splitRef, element_label: `Slice (${splitRef.slice(-12)})` })
+        continue
+      }
       const guid = getGuidFromExpressId(activeIfcHandle, expressId)
       if (!guid) continue
       const typeName = getElementTypeName(activeIfcHandle, expressId)

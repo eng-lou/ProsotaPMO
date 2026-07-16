@@ -160,6 +160,29 @@ def _cost_side_evm(
     return cv, cpi, eac, etc
 
 
+def rollup_evm_from_totals(
+    bac: Decimal | None, ac: Decimal | None, pv: Decimal | None, ev: Decimal | None
+) -> dict[str, Decimal | None]:
+    """SV/SPI/CV/CPI/EAC/ETC from already-*summed* BAC/AC/PV/EV — a WBS
+    summary's own EVM (app/services/activity.py's _rollup_wbs_evm_fields,
+    2026-07-15, per Maro: "rollup the bac and eac and etc"). BAC/PV/EV/AC are
+    the only EVM quantities that are ever valid to sum across a WBS
+    (PMBOK) — every other figure here is a *ratio* or a value derived from
+    one, and must be recomputed fresh from the summed totals at the level
+    it's being read, never summed or averaged directly: a WBS with a $100
+    task at CPI 0.5 next to a $1,000,000 task at CPI 1.0 rolls up to a
+    cumulative CPI of ~0.9998 (999,900/1,000,000... in this made-up example,
+    roughly EV/AC at the WBS level), not (0.5+1.0)/2 = 0.75 — averaging the
+    ratios themselves would silently misrepresent which task actually drives
+    the WBS's real cost performance. SV/SPI aren't part of _cost_side_evm
+    (that function is BAC/AC/EV only, no PV) so computed here directly with
+    the exact same formula _schedule_evm uses per-element."""
+    sv = (ev - pv).quantize(_MONEY) if ev is not None and pv is not None else None
+    spi = (ev / pv).quantize(_RATIO) if ev is not None and pv is not None and pv != 0 else None
+    cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
+    return {"bac": bac, "ac": ac, "pv": pv, "ev": ev, "cv": cv, "sv": sv, "cpi": cpi, "spi": spi, "eac": eac, "etc": etc}
+
+
 def compute_schedule_linked_evm(
     element: CostElement, start: datetime | None, finish: datetime | None, data_date: datetime
 ) -> dict[str, Decimal | None]:

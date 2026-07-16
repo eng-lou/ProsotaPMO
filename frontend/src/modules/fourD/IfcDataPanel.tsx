@@ -10,8 +10,9 @@ import { ElementLinkFields } from './ElementLinkFields'
 // defeated FourD.tsx's own dynamic one).
 import type { IfcElementInfo, IfcModelHandle, IfcTreeNode } from './ifcModel'
 import type { AnimationProfile } from './animationProfiles'
-import type { ModelElementLink, SourceKind } from './modelElementLinks'
+import type { ModelElementLink, ModelElementLinkSourceKind } from './modelElementLinks'
 import { isFeetUnit, toDisplayLength, type IfcUnitDisplay } from './ifcUnitDisplay'
+import { getSplitElementRef, parseSplitElementRef } from './splitElementRefs'
 
 interface Props {
   // Every currently-loaded IFC model (2026-07-09, per federated/assembly
@@ -64,7 +65,7 @@ interface Props {
   activities: Activity[]
   links: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
@@ -79,6 +80,27 @@ interface Props {
 function collectLeafExpressIds(node: IfcTreeNode): number[] {
   if (node.children.length === 0) return [node.expressID]
   return node.children.flatMap(collectLeafExpressIds)
+}
+
+// A level-slice's own "Object Information" (2026-07-15) — the parent's
+// real property sets still genuinely apply (it's the same physical
+// element, just clipped to one level's range), so this fetches those via
+// the parent's own real expressID (parsed back out of the slice's
+// `${parentGlobalId}::split:N` ref) rather than inventing placeholder
+// values, then swaps in just enough to make clear which slice this is.
+// globalId is deliberately left as the *slice's own* ref (not the
+// parent's) — ElementLinkFields/Activity Link below key off elementInfo's
+// own globalId field, and a slice needs to link independently of its
+// parent and every sibling slice.
+async function loadSplitElementInfo(handle: IfcModelHandle, splitRef: string, syntheticExpressId: number): Promise<IfcElementInfo> {
+  const parsed = parseSplitElementRef(splitRef)
+  const { getElementInfo, getExpressIdFromGuid } = await import('./ifcModel')
+  const parentExpressId = parsed ? getExpressIdFromGuid(handle, parsed.parentGlobalId) : undefined
+  if (!parsed || parentExpressId === undefined) {
+    return { expressID: syntheticExpressId, type: 'Level Slice', name: splitRef, globalId: splitRef, objectType: '', tag: '', predefinedType: '', propertySets: [] }
+  }
+  const parentInfo = await getElementInfo(handle, parentExpressId)
+  return { ...parentInfo, expressID: syntheticExpressId, type: `${parentInfo.type} — Level Slice ${parsed.index + 1}`, globalId: splitRef }
 }
 
 // Every IFCBUILDINGSTOREY node anywhere in the tree, at whatever depth
@@ -238,7 +260,7 @@ function ModelItem({
   onSelectWholeModel: (additive: boolean) => void
   unitDisplay: IfcUnitDisplay
   activities: Activity[]; links: ModelElementLink[]; animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }) {
@@ -328,8 +350,20 @@ function ModelItem({
     if (!isActiveModel || selectedExpressId === null) return
     let cancelled = false
     setLoadingElement(true)
-    import('./ifcModel')
-      .then(({ getElementInfo }) => getElementInfo(handle, selectedExpressId))
+    // A level-slice's expressID is synthetic, not a real web-ifc line id
+    // (elementSplitTargets.ts) — calling getElementInfo with it directly
+    // would hit real web-ifc property lookups against a made-up number
+    // (unhandled-rejection-then-blank-panel at best, garbage values at
+    // worst — see this session's own review notes). Checked first via the
+    // same synthetic-id map that module populates; when it IS a slice,
+    // shows the *parent's* real properties instead (the slice is that same
+    // physical element, just clipped — its Psets genuinely still apply),
+    // with just the type/id swapped to make clear which slice this is.
+    const splitRef = getSplitElementRef(handle, selectedExpressId)
+    const load = splitRef
+      ? loadSplitElementInfo(handle, splitRef, selectedExpressId)
+      : import('./ifcModel').then(({ getElementInfo }) => getElementInfo(handle, selectedExpressId))
+    load
       .then(info => { if (!cancelled) setElementInfo(info) })
       .finally(() => { if (!cancelled) setLoadingElement(false) })
     return () => { cancelled = true }
@@ -485,14 +519,24 @@ function ModelItem({
 
               <div className="space-y-1">
                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Activity Link</div>
-                <ElementLinkFields
-                  activities={activities}
-                  links={links.filter(l => l.source_kind === 'ifc' && l.element_ref === elementInfo.globalId)}
-                  animationProfiles={animationProfiles}
-                  onLink={activityId => onLinkElement('ifc', elementInfo.globalId, `${elementInfo.type}: ${elementInfo.name}`, activityId)}
-                  onUnlink={onUnlinkElement}
-                  onAssignProfile={onAssignProfile}
-                />
+                {(() => {
+                  // A slice's globalId here is deliberately its own split
+                  // ref, not a real GlobalId (loadSplitElementInfo above) —
+                  // detecting that is exactly parseSplitElementRef's job,
+                  // real IFC GlobalIds never match it.
+                  const isSlice = parseSplitElementRef(elementInfo.globalId) !== null
+                  const sourceKind = isSlice ? 'ifc_split' : 'ifc'
+                  return (
+                    <ElementLinkFields
+                      activities={activities}
+                      links={links.filter(l => l.source_kind === sourceKind && l.element_ref === elementInfo.globalId)}
+                      animationProfiles={animationProfiles}
+                      onLink={activityId => onLinkElement(sourceKind, elementInfo.globalId, `${elementInfo.type}: ${elementInfo.name}`, activityId)}
+                      onUnlink={onUnlinkElement}
+                      onAssignProfile={onAssignProfile}
+                    />
+                  )
+                })()}
               </div>
             </div>
           )}

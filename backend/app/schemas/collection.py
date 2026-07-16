@@ -8,7 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CollectionMemberBase(BaseModel):
-    source_kind: Literal["ifc", "mesh"]
+    # "ifc_split" (2026-07-15) — one level-slice of a split element, see
+    # ModelElementLinkBase's own comment in model_element_link.py for the
+    # identity shape.
+    source_kind: Literal["ifc", "mesh", "ifc_split"]
     element_ref: str = Field(min_length=1, max_length=300)
     element_label: str = Field(min_length=1, max_length=300)
 

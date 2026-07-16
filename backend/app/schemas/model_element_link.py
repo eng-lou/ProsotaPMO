@@ -10,8 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class ModelElementLinkBase(BaseModel):
     activity_id: uuid.UUID
     # "annotation" (2026-07-12) — element_ref is an Annotation row's own id,
-    # see model_element_link.py's own docstring.
-    source_kind: Literal["ifc", "mesh", "annotation"]
+    # see model_element_link.py's own docstring. "ifc_split" (2026-07-15) —
+    # one level-slice of an element recorded in ElementSplit
+    # (element_split.py); element_ref is that parent's GlobalId plus a
+    # `::split:<index>` suffix, never a real IFC entity's own identity.
+    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split"]
     element_ref: str = Field(min_length=1, max_length=300)
     element_label: str = Field(min_length=1, max_length=300)
 

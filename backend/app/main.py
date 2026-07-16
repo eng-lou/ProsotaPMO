@@ -21,6 +21,7 @@ from app.api.cost_variance_criteria import router as cost_variance_criteria_rout
 from app.api.dock_layouts import router as dock_layouts_router
 from app.api.element_keyframes import router as element_keyframes_router
 from app.api.element_parents import router as element_parents_router
+from app.api.element_splits import router as element_splits_router
 from app.api.element_transforms import router as element_transforms_router
 from app.api.icd_action_items import router as icd_action_items_router
 from app.api.icd_comments import router as icd_comments_router
@@ -30,6 +31,8 @@ from app.api.gantt_layouts import router as gantt_layouts_router
 from app.api.material_presets import router as material_presets_router
 from app.api.model3d_files import router as model3d_files_router
 from app.api.model_element_links import router as model_element_links_router
+from app.api.p6_export import router as p6_export_router
+from app.api.p6_import import router as p6_import_router
 from app.api.path_followers import router as path_followers_router
 from app.api.paths import router as paths_router
 from app.api.periods import router as periods_router
@@ -44,6 +47,7 @@ from app.api.risk_criteria import router as risk_criteria_router
 from app.api.risk_mitigation_actions import router as risk_mitigation_actions_router
 from app.api.risks import router as risks_router
 from app.api.schedule_baselines import router as schedule_baselines_router
+from app.api.schedule_bulk_generate import router as schedule_bulk_generate_router
 from app.api.schedule_periods import router as schedule_periods_router
 from app.api.schedule_subprojects import router as schedule_subprojects_router
 from app.api.schedule_variants import router as schedule_variants_router
@@ -96,6 +100,9 @@ app.include_router(icd_action_items_router, prefix="/api/v1", dependencies=_auth
 app.include_router(icd_comments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(reassessments_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(schedule_baselines_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(schedule_bulk_generate_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(p6_export_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(p6_import_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(project_letterhead_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(gantt_layouts_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(scheduling_quality_criteria_router, prefix="/api/v1", dependencies=_auth)
@@ -123,6 +130,7 @@ app.include_router(annotations_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_tests_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_results_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(element_parents_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(element_splits_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

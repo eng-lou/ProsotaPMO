@@ -42,6 +42,7 @@ from app.models.model_element_link import ModelElementLink
 from app.models.dock_layout import DockLayout
 from app.models.element_keyframe import ElementKeyframe
 from app.models.material_preset import MaterialPreset
+from app.models.material_preset_texture import MaterialPresetTexture
 from app.models.model3d_file import Model3DFile
 from app.models.section_box import SectionBox
 from app.models.camera_view import CameraView
@@ -52,6 +53,7 @@ from app.models.annotation import Annotation
 from app.models.clash_test import ClashTest
 from app.models.clash_result import ClashResult
 from app.models.element_parent import ElementParent
+from app.models.element_split import ElementSplit
 
 __all__ = [
     "Base",
@@ -103,6 +105,7 @@ __all__ = [
     "DockLayout",
     "ElementKeyframe",
     "MaterialPreset",
+    "MaterialPresetTexture",
     "Model3DFile",
     "SectionBox",
     "CameraView",
@@ -113,4 +116,5 @@ __all__ = [
     "ClashTest",
     "ClashResult",
     "ElementParent",
+    "ElementSplit",
 ]

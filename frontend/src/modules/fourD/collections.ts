@@ -11,7 +11,7 @@ import { api } from '@/lib/api'
 export interface CollectionMember {
   id: string
   collection_id: string
-  source_kind: 'ifc' | 'mesh'
+  source_kind: 'ifc' | 'mesh' | 'ifc_split'
   element_ref: string
   element_label: string
   created_at: string
@@ -56,7 +56,7 @@ export async function deleteCollection(id: string): Promise<void> {
 
 export async function addCollectionMember(data: {
   collection_id: string
-  source_kind: 'ifc' | 'mesh'
+  source_kind: 'ifc' | 'mesh' | 'ifc_split'
   element_ref: string
   element_label: string
 }): Promise<CollectionMember> {

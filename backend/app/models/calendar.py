@@ -41,6 +41,19 @@ class Calendar(Base, TimestampMixin):
     works_friday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     works_saturday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     works_sunday: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 2026-07-13, per Maro: every activity starts exactly at day_start_time
+    # and finishes exactly at day_end_time, never mid-day — "its common
+    # sense if i set the day envelope and net hours/day." Originally shipped
+    # as an opt-in per-calendar toggle; Maro asked for that toggle removed
+    # the same day ("i dont want that option, let it be whole day by
+    # default") — defaults to True now, and the frontend (CalendarWidget.tsx)
+    # no longer exposes any way to turn it off. The column and the CPM
+    # engine's own conditional branch (scheduling_cpm.py's
+    # _CalendarLookup.add_duration/subtract_duration/offset_hours) were
+    # deliberately left in place rather than ripped out — both are already
+    # tested and correct, and there's no user-facing way left to ever set
+    # this False again, so keeping the mechanism costs nothing.
+    whole_day_scheduling: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class CalendarBreak(Base, TimestampMixin):

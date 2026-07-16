@@ -10,7 +10,13 @@ export type SourceKind = 'ifc' | 'mesh'
 // own link-to-activity UI) deals exclusively in real mesh/IFC geometry and
 // should keep statically rejecting anything else; only ModelElementLink's
 // own source_kind actually needs the third option.
-export type ModelElementLinkSourceKind = SourceKind | 'annotation'
+// "ifc_split" (2026-07-15) — element_ref is a level-slice's own synthetic
+// ref (`${parentGlobalId}::split:N`, see elementSplitTargets.ts's own
+// header), not a real IFC element's GlobalId. Note CollectionMember
+// (collections.ts) widens its *own* independently-declared source_kind
+// literal to include this too — it's not derived from SourceKind either,
+// so both need updating in step whenever a new kind is added.
+export type ModelElementLinkSourceKind = SourceKind | 'annotation' | 'ifc_split'
 
 export interface ModelElementLink {
   id: string

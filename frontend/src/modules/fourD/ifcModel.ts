@@ -350,6 +350,31 @@ export async function getElementName(handle: IfcModelHandle, expressID: number):
   return unwrapIfcValue(props.Name)
 }
 
+// Name + PredefinedType in one getItemProperties call (2026-07-13, for the
+// IFC Schedule Wizard's own classifier — see ifcScheduleExtraction.ts's own
+// header) — verified against the real reference file
+// (2018_Hospital_Structural.ifc) that PredefinedType matters far more than
+// raw IFC type alone for a Revit export: 538 of its 612 IfcSlab elements
+// are 'Pile Cap-9 Pile:...' foundation elements with
+// PredefinedType=.BASESLAB., not floor slabs, and Revit exported them as
+// IfcSlab rather than IfcFooting anyway — only 74 are genuine .FLOOR.
+// slabs. PredefinedType is IFC's own semantic tag for exactly this
+// distinction, not a guess off the element's own free-text Name the way
+// ifcScheduleExtraction.ts's material classifier already has to be for
+// steel/concrete (no equivalent enum exists for that axis). Returns null
+// when the element's own IFC type carries no PredefinedType attribute at
+// all (verified: IfcColumn/IfcBeam/IfcWallStandardCase in IFC2X3 have none)
+// rather than a guessed default.
+export async function getElementNameAndPredefinedType(
+  handle: IfcModelHandle, expressID: number,
+): Promise<{ name: string; predefinedType: string | null }> {
+  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
+  const predefinedType = props.PredefinedType === undefined || props.PredefinedType === null
+    ? null
+    : unwrapIfcValue(props.PredefinedType)
+  return { name: unwrapIfcValue(props.Name), predefinedType }
+}
+
 // A storey's own Elevation attribute, raw and unconverted (2026-07-11, per
 // Maro comparing against Bonsai/Blender's IFC panel — its Spatial
 // Decomposition list shows each storey's height). Not unit-converted to

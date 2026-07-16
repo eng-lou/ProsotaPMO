@@ -1,0 +1,400 @@
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
+
+from fastapi import HTTPException
+
+# Same namespace p6_export_xml.py writes — confirmed against two real files
+# (the original EC00610 - B1.xml reference and P6's own re-export of a
+# Prosota-generated schedule, Snowdon-3.xml) that this doesn't vary by P6
+# version in a way that would break a fixed namespace string; if a future
+# file uses a different version number in the URI, this needs widening to a
+# version-agnostic match rather than a hardcoded string.
+_NS = "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"
+
+
+def _tag(name: str) -> str:
+    return f"{{{_NS}}}{name}"
+
+
+def _text(el: ET.Element | None, name: str) -> str | None:
+    if el is None:
+        return None
+    child = el.find(_tag(name))
+    if child is None or child.text is None:
+        return None
+    return child.text
+
+
+def _decimal(el: ET.Element | None, name: str) -> Decimal | None:
+    raw = _text(el, name)
+    if raw is None:
+        return None
+    try:
+        return Decimal(raw)
+    except InvalidOperation:
+        return None
+
+
+def _datetime(el: ET.Element | None, name: str) -> datetime | None:
+    raw = _text(el, name)
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+@dataclass
+class ParsedCalendarException:
+    start_date: date
+    end_date: date
+    is_working: bool
+    start_time: time | None
+    end_time: time | None
+
+
+@dataclass
+class ParsedCalendar:
+    object_id: str
+    name: str
+    is_default: bool
+    # A single representative working day's own envelope — derived from
+    # whichever weekday has the most WorkTime segments (an unusual real
+    # calendar could vary genuinely by weekday; Prosota's own Calendar model
+    # has no way to express that, so this picks one representative day
+    # rather than silently averaging or picking arbitrarily the first one
+    # found, which could land on a day with only a partial pattern).
+    day_start: time
+    day_end: time
+    breaks: list[tuple[time, time]]
+    works: dict[int, bool]  # P6 day-of-week 1..7 (Sunday..Saturday) -> working
+    exceptions: list[ParsedCalendarException]
+
+
+@dataclass
+class ParsedWbs:
+    object_id: str
+    parent_object_id: str | None
+    name: str
+    code: str
+    commentary: str | None
+
+
+@dataclass
+class ParsedUdfValue:
+    udf_type_object_id: str
+    text: str | None = None
+    number: Decimal | None = None
+    date_value: datetime | None = None
+
+
+@dataclass
+class ParsedActivity:
+    object_id: str
+    wbs_object_id: str | None
+    calendar_object_id: str | None
+    code: str
+    name: str
+    activity_type: str  # task | start_milestone | finish_milestone
+    duration_hours: Decimal
+    start: datetime | None
+    finish: datetime | None
+    actual_start: datetime | None
+    actual_finish: datetime | None
+    pct_complete: Decimal
+    constraint_type: str | None  # Prosota's own asap/alap/snet/... code, already reverse-mapped
+    constraint_date: datetime | None
+    commentary: str | None
+    udf_values: list[ParsedUdfValue]
+
+
+@dataclass
+class ParsedRelationship:
+    predecessor_object_id: str
+    successor_object_id: str
+    relationship_type: str  # FS | SS | FF | SF
+    lag_hours: Decimal
+
+
+@dataclass
+class ParsedResource:
+    object_id: str
+    name: str
+    resource_type: str  # Prosota's labour/material/equipment
+    calendar_object_id: str | None
+    # Resolved from the matching top-level <ResourceRate> after both are
+    # gathered (a resource with no rate row at all just gets rate=0, same
+    # "leave it blank rather than fake a number" pattern the rest of this
+    # app already follows — see p6_import.py's own header). is_hourly says
+    # whether this needs day-rate conversion on the way into Prosota's own
+    # Resource.rate (labour/equipment types are priced per hour in P6,
+    # Prosota prices them per day).
+    rate_per_unit: Decimal | None = None
+    is_hourly: bool = True
+
+
+@dataclass
+class ParsedAssignment:
+    activity_object_id: str
+    resource_object_id: str
+    planned_units: Decimal  # hours (labour/equipment) or a plain quantity (material)
+
+
+@dataclass
+class ParsedUdfType:
+    object_id: str
+    subject_area: str  # Activity | WBS | Resource (P6's own <SubjectArea> value)
+    title: str
+    data_type: str  # Prosota's own text/number/integer/cost/start_date/finish_date
+
+
+@dataclass
+class ParsedP6Schedule:
+    project_name: str
+    calendars: list[ParsedCalendar] = field(default_factory=list)
+    wbs_nodes: list[ParsedWbs] = field(default_factory=list)
+    activities: list[ParsedActivity] = field(default_factory=list)
+    relationships: list[ParsedRelationship] = field(default_factory=list)
+    resources: list[ParsedResource] = field(default_factory=list)
+    assignments: list[ParsedAssignment] = field(default_factory=list)
+    udf_types: list[ParsedUdfType] = field(default_factory=list)
+    # Human-readable notes on anything the file contained that Prosota has
+    # no model for, or a real file's actual values genuinely couldn't be
+    # mapped cleanly — surfaced in the import summary rather than silently
+    # dropped (same "unmatched_codes" transparency pattern
+    # schedule_variant.py's own promote_variant already established).
+    skipped: list[str] = field(default_factory=list)
+
+
+_DAY_NAME_TO_P6_DAY = {
+    "Sunday": 1, "Monday": 2, "Tuesday": 3, "Wednesday": 4, "Thursday": 5, "Friday": 6, "Saturday": 7,
+}
+
+# Reverse of p6_export_xml.py's own _TASK_TYPE_NAMES/_RELATIONSHIP_TYPE_NAMES/
+# _RESOURCE_TYPE_NAMES/p6_export.py's _CONSTRAINT_TYPE_MAP — same real PMXML
+# vocabulary, just read instead of written. Any <Type>/<ResourceType>/
+# <PrimaryConstraintType> value not in these maps falls back to a sane
+# default and gets a note in `skipped` rather than raising — a real external
+# P6 file (unlike our own round-tripped export) can use activity types this
+# app has no equivalent for at all (Level of Effort, WBS Summary bars, ...).
+_ACTIVITY_TYPE_BY_NAME = {
+    "Task Dependent": "task", "Resource Dependent": "task", "Level of Effort": "task",
+    "Start Milestone": "start_milestone", "Finish Milestone": "finish_milestone",
+}
+_RELATIONSHIP_TYPE_BY_NAME = {
+    "Finish to Start": "FS", "Start to Start": "SS", "Finish to Finish": "FF", "Start to Finish": "SF",
+}
+_RESOURCE_TYPE_BY_NAME = {"Labor": "labour", "Material": "material", "Nonlabor": "equipment"}
+_CONSTRAINT_TYPE_BY_NAME = {
+    "As Late As Possible": "alap", "Start On or After": "snet", "Start On or Before": "snlt",
+    "Mandatory Start": "ms", "Mandatory Finish": "mf", "Finish On or Before": "fnlt", "Finish On or After": "fnet",
+}
+
+
+def _parse_calendar(el: ET.Element, skipped: list[str]) -> ParsedCalendar:
+    object_id = _text(el, "ObjectId") or ""
+    works: dict[int, bool] = {}
+    day_windows: dict[int, list[tuple[time, time]]] = {}
+    week = el.find(_tag("StandardWorkWeek"))
+    if week is not None:
+        for day_el in week.findall(_tag("StandardWorkHours")):
+            day_name = _text(day_el, "DayOfWeek") or ""
+            p6_day = _DAY_NAME_TO_P6_DAY.get(day_name)
+            if p6_day is None:
+                continue
+            segments = [
+                (time.fromisoformat(_text(wt, "Start") or "00:00:00"), time.fromisoformat(_text(wt, "Finish") or "00:00:00"))
+                for wt in day_el.findall(_tag("WorkTime"))
+                if _text(wt, "Start") is not None
+            ]
+            works[p6_day] = len(segments) > 0
+            if segments:
+                day_windows[p6_day] = sorted(segments, key=lambda s: s[0])
+
+    # Representative day — whichever working day has the most segments
+    # (most likely to include a lunch-break split, so its own breaks are
+    # captured rather than picking a day that happens to have none).
+    if day_windows:
+        rep_day = max(day_windows, key=lambda d: len(day_windows[d]))
+        rep_segments = day_windows[rep_day]
+        day_start = rep_segments[0][0]
+        day_end = rep_segments[-1][1]
+        breaks = [(rep_segments[i][1], rep_segments[i + 1][0]) for i in range(len(rep_segments) - 1)]
+    else:
+        day_start, day_end, breaks = time(8, 0), time(17, 0), []
+        skipped.append(f"Calendar '{_text(el, 'Name')}' has no working days at all — defaulted to 08:00-17:00 Mon-Fri.")
+
+    exceptions: list[ParsedCalendarException] = []
+    exceptions_el = el.find(_tag("HolidayOrExceptions"))
+    if exceptions_el is not None:
+        for ex_el in exceptions_el.findall(_tag("HolidayOrException")):
+            d = _datetime(ex_el, "Date")
+            if d is None:
+                continue
+            wt = ex_el.find(_tag("WorkTime"))
+            is_working = wt is not None and _text(wt, "Start") is not None
+            exceptions.append(ParsedCalendarException(
+                start_date=d.date(), end_date=d.date(), is_working=is_working,
+                start_time=time.fromisoformat(_text(wt, "Start") or "00:00:00") if is_working else None,
+                end_time=time.fromisoformat(_text(wt, "Finish") or "00:00:00") if is_working else None,
+            ))
+
+    return ParsedCalendar(
+        object_id=object_id, name=_text(el, "Name") or "Imported Calendar",
+        is_default=_text(el, "IsDefault") == "1",
+        day_start=day_start, day_end=day_end, breaks=breaks, works=works, exceptions=exceptions,
+    )
+
+
+def _parse_udf_value(udf_el: ET.Element) -> ParsedUdfValue | None:
+    type_object_id = _text(udf_el, "TypeObjectId")
+    if type_object_id is None:
+        return None
+    text = _text(udf_el, "TextValue")
+    if text is not None:
+        return ParsedUdfValue(udf_type_object_id=type_object_id, text=text)
+    number = _decimal(udf_el, "NumericValue")
+    if number is not None:
+        return ParsedUdfValue(udf_type_object_id=type_object_id, number=number)
+    date_value = _datetime(udf_el, "DateValue")
+    if date_value is not None:
+        return ParsedUdfValue(udf_type_object_id=type_object_id, date_value=date_value)
+    # <IndicatorValue> (a fixed enum-like token, e.g. "Green"/"Yellow") has
+    # no clean Prosota equivalent to round-trip into (its own 8-state
+    # indicator set is a different vocabulary) — carried through as plain
+    # text, same "lossy but not wrong, still readable" choice
+    # p6_export.py's own _udf_data_type makes for the same field going the
+    # other direction.
+    indicator = _text(udf_el, "IndicatorValue")
+    if indicator is not None:
+        return ParsedUdfValue(udf_type_object_id=type_object_id, text=indicator)
+    return None
+
+
+def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
+    type_name = _text(el, "Type") or "Task Dependent"
+    activity_type = _ACTIVITY_TYPE_BY_NAME.get(type_name)
+    if activity_type is None:
+        activity_type = "task"
+        skipped.append(f"Activity '{_text(el, 'Name')}' has unsupported Type \"{type_name}\" — imported as a plain task.")
+
+    constraint_name = _text(el, "PrimaryConstraintType")
+    constraint_type = _CONSTRAINT_TYPE_BY_NAME.get(constraint_name) if constraint_name else None
+    if constraint_name and constraint_type is None:
+        skipped.append(f"Activity '{_text(el, 'Name')}' has unsupported constraint \"{constraint_name}\" — imported with no constraint.")
+
+    udf_values = [v for v in (_parse_udf_value(u) for u in el.findall(_tag("UDF"))) if v is not None]
+
+    return ParsedActivity(
+        object_id=_text(el, "ObjectId") or "", wbs_object_id=_text(el, "WBSObjectId"),
+        calendar_object_id=_text(el, "CalendarObjectId"),
+        code=_text(el, "Id") or "", name=_text(el, "Name") or "Imported Activity",
+        activity_type=activity_type, duration_hours=_decimal(el, "PlannedDuration") or Decimal(0),
+        start=_datetime(el, "StartDate") or _datetime(el, "PlannedStartDate"),
+        finish=_datetime(el, "FinishDate") or _datetime(el, "PlannedFinishDate"),
+        actual_start=_datetime(el, "ActualStartDate"), actual_finish=_datetime(el, "ActualFinishDate"),
+        pct_complete=_decimal(el, "PercentComplete") or Decimal(0),
+        constraint_type=constraint_type, constraint_date=_datetime(el, "PrimaryConstraintDate"),
+        commentary=_text(el, "Notes"), udf_values=udf_values,
+    )
+
+
+def parse_pmxml(data: bytes) -> ParsedP6Schedule:
+    """Parses raw PMXML bytes into an intermediate structure — pure parsing,
+    no DB access, so a malformed/unsupported file fails cleanly (422) before
+    p6_import.py ever opens a transaction. See this module's own header for
+    the structural facts (Calendar/Resource top-level, WBS/Activity/
+    Relationship/ResourceAssignment nested inside <Project>) confirmed
+    directly against real P6 files while building the export side."""
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=422, detail=f"Not a well-formed XML file: {exc}") from exc
+
+    project_els = root.findall(_tag("Project"))
+    if not project_els:
+        raise HTTPException(status_code=422, detail="No <Project> element found — not a recognisable PMXML export.")
+    project_el = project_els[0]
+    skipped: list[str] = []
+    if len(project_els) > 1:
+        skipped.append(f"File contains {len(project_els)} projects — only the first (\"{_text(project_el, 'Id')}\") was imported.")
+
+    out = ParsedP6Schedule(project_name=_text(project_el, "Id") or _text(project_el, "Name") or "Imported Project", skipped=skipped)
+
+    for cal_el in root.findall(_tag("Calendar")):
+        out.calendars.append(_parse_calendar(cal_el, skipped))
+
+    rates_by_resource: dict[str, Decimal] = {}
+    for rate_el in root.findall(_tag("ResourceRate")):
+        resource_object_id = _text(rate_el, "ResourceObjectId")
+        price = _decimal(rate_el, "PricePerUnit")
+        if resource_object_id is not None and price is not None:
+            # A resource can carry several dated rates (rate history) —
+            # takes the last one found, same "one current rate, not a
+            # history" simplification p6_export.py's own RSRCRATE/
+            # ResourceRate writer already makes for the opposite direction.
+            rates_by_resource[resource_object_id] = price
+
+    for rsrc_el in root.findall(_tag("Resource")):
+        type_name = _text(rsrc_el, "ResourceType") or "Labor"
+        resource_type = _RESOURCE_TYPE_BY_NAME.get(type_name)
+        if resource_type is None:
+            resource_type = "labour"
+            skipped.append(f"Resource '{_text(rsrc_el, 'Name')}' has unsupported ResourceType \"{type_name}\" — imported as labour.")
+        object_id = _text(rsrc_el, "ObjectId") or ""
+        out.resources.append(ParsedResource(
+            object_id=object_id, name=_text(rsrc_el, "Name") or "Imported Resource",
+            resource_type=resource_type, calendar_object_id=_text(rsrc_el, "CalendarObjectId"),
+            rate_per_unit=rates_by_resource.get(object_id), is_hourly=resource_type != "material",
+        ))
+
+    for udf_type_el in root.findall(_tag("UDFType")):
+        subject_area = _text(udf_type_el, "SubjectArea") or "Activity"
+        data_type_name = _text(udf_type_el, "DataType") or "Text"
+        data_type = {"Double": "number", "Integer": "integer", "Cost": "cost", "Date": "start_date"}.get(data_type_name, "text")
+        out.udf_types.append(ParsedUdfType(
+            object_id=_text(udf_type_el, "ObjectId") or "", subject_area=subject_area,
+            title=_text(udf_type_el, "Title") or "Imported Field", data_type=data_type,
+        ))
+
+    for wbs_el in project_el.findall(_tag("WBS")):
+        out.wbs_nodes.append(ParsedWbs(
+            object_id=_text(wbs_el, "ObjectId") or "", parent_object_id=_text(wbs_el, "ParentObjectId"),
+            name=_text(wbs_el, "Name") or "Imported WBS", code=_text(wbs_el, "Code") or "",
+            commentary=_text(wbs_el, "Description"),
+        ))
+
+    for activity_el in project_el.findall(_tag("Activity")):
+        out.activities.append(_parse_activity(activity_el, skipped))
+
+    for rel_el in project_el.findall(_tag("Relationship")):
+        pred = _text(rel_el, "PredecessorActivityObjectId")
+        succ = _text(rel_el, "SuccessorActivityObjectId")
+        if pred is None or succ is None:
+            continue
+        type_name = _text(rel_el, "Type") or "Finish to Start"
+        rel_type = _RELATIONSHIP_TYPE_BY_NAME.get(type_name)
+        if rel_type is None:
+            rel_type = "FS"
+            skipped.append(f"A relationship has unsupported Type \"{type_name}\" — imported as Finish-to-Start.")
+        out.relationships.append(ParsedRelationship(
+            predecessor_object_id=pred, successor_object_id=succ,
+            relationship_type=rel_type, lag_hours=_decimal(rel_el, "Lag") or Decimal(0),
+        ))
+
+    for asg_el in project_el.findall(_tag("ResourceAssignment")):
+        activity_object_id = _text(asg_el, "ActivityObjectId")
+        resource_object_id = _text(asg_el, "ResourceObjectId")
+        if activity_object_id is None or resource_object_id is None:
+            continue
+        out.assignments.append(ParsedAssignment(
+            activity_object_id=activity_object_id, resource_object_id=resource_object_id,
+            planned_units=_decimal(asg_el, "PlannedUnits") or Decimal(0),
+        ))
+
+    return out

@@ -12,6 +12,7 @@ import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProf
 // a static value import here would defeat that (and did, briefly: pulled
 // web-ifc into the main chunk, ~2.95MB -> 6.6MB, before this fix).
 import type { IfcModelHandle } from './ifcModel'
+import { getSplitExpressId } from './elementSplitTargets'
 import type { ModelElementLink } from './modelElementLinks'
 import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type ResolvedTimelineLink } from './timelinePlayback'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
@@ -23,7 +24,7 @@ import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
-import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
+import { clearClonedRenderModeVariantCache, getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
 import type { SectionBoxBounds } from './sectionBoxes'
@@ -143,7 +144,27 @@ interface Props {
   selectedObjectIds: Set<string>
   onSelectObject: (id: string | null, additive?: boolean) => void
   onSelectAll: () => void
-  onBoxSelect: (ids: string[]) => void
+  // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
+  // been 4d linked to an activity yet") — linkedObjectIds is which whole
+  // mesh-kind objects already have a ModelElementLink; linkedElementKeys is
+  // the composite `${objectId}::${expressID}` set for already-linked IFC
+  // sub-elements (FourD.tsx resolves both once, the same way
+  // varianceByElementKey's own ifcLinkKeys already does, rather than
+  // re-resolving GlobalId->expressID here). Replaces the current selection
+  // (same convention as onSelectAll) rather than adding to it — it's a
+  // toolbar action, not a drag gesture.
+  linkedObjectIds: Set<string>
+  linkedElementKeys: Set<string>
+  onSelectUnassigned: (objectIds: string[], expressIdsByObject: Map<string, number[]>) => void
+  // objectIds: whole-object matches (mesh-kind imports, which have no finer
+  // sub-element concept). expressIdsByObject: individual IFC sub-elements
+  // matched *within* an ifc-kind import, keyed by that import's object id —
+  // box-select now hit-tests each element's own bounds inside an IFC model
+  // rather than only the model's aggregate bounding box (2026-07-14, per
+  // Maro: "boc select doesnt select elements, just object"), matching the
+  // granularity a single click on an IFC mesh already gives via onSelect's
+  // own expressID.
+  onBoxSelect: (objectIds: string[], expressIdsByObject: Map<string, number[]>) => void
   // Isolate Selected / Show All (2026-07-08, per Maro: "isolate selected,
   // show view focus on selected, show all") — isolateMode is FourD.tsx
   // state (not local to this component) since it also has to affect
@@ -170,6 +191,12 @@ interface Props {
   hiddenExpressIds: Set<string>
   onToggleIsolate: () => void
   onShowAll: () => void
+  // Hide Selected (2026-07-15, per Maro) — pushes the current selection
+  // into FourD.tsx's own hiddenIds/hiddenExpressIds (it owns that state,
+  // same "just hand over a ready callback" split as onToggleIsolate/
+  // onShowAll above), rather than replacing what's visible the way Isolate
+  // does — additive, so hiding a second batch doesn't un-hide the first.
+  onHideSelected: () => void
   // "Linked Activities" widget (2026-07-09, per Maro) — pre-built by
   // FourD.tsx (it owns the async activity-link resolution) and just handed
   // over as a ready-made node to render alongside the Isolate/Show All
@@ -439,7 +466,65 @@ function ModelObjects({
   )
   const rootObjects = objects.filter(o => !riggedChildIds.has(o.id))
 
+  // Selection-only scoping (2026-07-15, per Maro: "its very laggy... this
+  // model only had 5k plus elements and its struggling") — this effect used
+  // to redo its *entire* per-mesh pass (subdivision, texture overrides,
+  // variance/clash colour, render-mode variant sync, edges) for every mesh
+  // in the loaded model(s) on every single click, because a click changes
+  // selectedExpressId/selectedExpressIds/selectedObjectIds, which are (and
+  // have to stay) real effect deps. On a real structural/architectural file
+  // that's thousands of meshes (one THREE.Mesh per *geometry piece*, not
+  // per element — ifcModel.ts's own loadIfcModel — so "5k elements" is
+  // often 10-20k actual meshes) getting fully recomputed for a change that
+  // only ever affects a handful of them.
+  //
+  // heavyDepsRef holds the previous run's *references* for every input
+  // this effect reads besides selection itself. Reference (not deep)
+  // equality is deliberate and safe in both directions: these are either
+  // useMemo'd (varianceByElementKey/clashByElementKey) or only ever
+  // replaced wholesale on a real change (objects, customTextures) in
+  // FourD.tsx, so an unchanged input reliably keeps the same reference —
+  // but if that assumption is ever wrong for some future input, the only
+  // failure mode is falling back to a full pass (heavyChanged stays true),
+  // never a wrongly-skipped mesh.
+  const heavyDepsRef = useRef<unknown[] | null>(null)
+  const prevSelectionRef = useRef<{ expressId: number | null; expressIds: Set<number>; objectIds: Set<string> }>({
+    expressId: null, expressIds: new Set(), objectIds: new Set(),
+  })
+
   useEffect(() => {
+    const heavyDeps = [
+      objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
+      settings.showClashColors, settings.shadows, upAxis, customTextures, isolateMode, isolatedObjectIds,
+      isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
+    ]
+    const heavyChanged = heavyDepsRef.current === null
+      || heavyDeps.length !== heavyDepsRef.current.length
+      || heavyDeps.some((v, i) => v !== heavyDepsRef.current![i])
+    heavyDepsRef.current = heavyDeps
+
+    // Symmetric difference against the previous run's selection — every
+    // expressID/objectId whose *membership* actually flipped, plus (since
+    // it drives its own distinct emissive tier, isExpressSelected vs
+    // isExpressAlsoSelected below) the old and new `selectedExpressId`
+    // even when both were already members of `selectedExpressIds`. Only
+    // meaningful when heavyChanged is false — a full pass touches
+    // everything regardless, so there's no need to compute this otherwise.
+    const prevSel = prevSelectionRef.current
+    const touchedExpressIds = new Set<number>()
+    const touchedObjectIds = new Set<string>()
+    if (!heavyChanged) {
+      if (selectedExpressId !== prevSel.expressId) {
+        if (selectedExpressId !== null) touchedExpressIds.add(selectedExpressId)
+        if (prevSel.expressId !== null) touchedExpressIds.add(prevSel.expressId)
+      }
+      for (const eid of selectedExpressIds) if (!prevSel.expressIds.has(eid)) touchedExpressIds.add(eid)
+      for (const eid of prevSel.expressIds) if (!selectedExpressIds.has(eid)) touchedExpressIds.add(eid)
+      for (const oid of selectedObjectIds) if (!prevSel.objectIds.has(oid)) touchedObjectIds.add(oid)
+      for (const oid of prevSel.objectIds) if (!selectedObjectIds.has(oid)) touchedObjectIds.add(oid)
+    }
+    prevSelectionRef.current = { expressId: selectedExpressId, expressIds: new Set(selectedExpressIds), objectIds: new Set(selectedObjectIds) }
+
     // Scene-wide displacement-subdivision budget for this pass (2026-07-11,
     // per Maro, mindful it "may lag our platform if abused" — see
     // geometrySubdivision.ts's own header on why a per-mesh cap alone isn't
@@ -450,6 +535,14 @@ function ModelObjects({
     // back to its own unsubdivided geometry instead (displacement still
     // applies, just coarser), rather than letting the scene's total
     // triangle count grow without bound.
+    // NOTE: on a selection-only pass (heavyChanged false), skipped meshes
+    // don't re-decrement this — their own subdivision state is untouched
+    // either way, so the only soft consequence is the budget check for
+    // whichever *few* meshes do get touched this pass not accounting for
+    // subdivided triangles already committed by meshes sitting this pass
+    // out. Displacement+subdivision is a niche feature; an occasional
+    // slightly-generous budget on a selection-only pass is an accepted
+    // trade for not walking every mesh on every click.
     let remainingSubdivisionBudget = MAX_TOTAL_SUBDIVIDED_TRIANGLES
     for (const { id, kind, object } of objects) {
       const isObjectSelected = selectedObjectIds.has(id)
@@ -460,8 +553,35 @@ function ModelObjects({
       // object instead (see this component's own isolateMode doc comment
       // above).
       const isolatingSubElements = isolateMode && kind === 'ifc' && isolatedExpressIds.size > 0
+      // Skip this whole object's traversal outright on a selection-only
+      // pass if neither it nor anything specific within it changed
+      // selection membership — the cheapest possible skip, before even
+      // walking its mesh tree.
+      if (!heavyChanged && !touchedObjectIds.has(id) && touchedExpressIds.size === 0) continue
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
+        // Split-by-level's own live preview planes (SplitByLevelPanel.tsx)
+        // are plain MeshBasicMaterial quads added straight into
+        // handle.object, not real IFC/split elements — this whole effect's
+        // per-mesh pass assumes a MeshStandardMaterial with a real
+        // expressID (selection tint, render-mode variants, clipping,
+        // visibility) and would otherwise silently stomp the preview's own
+        // opacity/position/visibility or set irrelevant properties on a
+        // material type that doesn't have them. Left completely alone here
+        // — the panel owns their full lifecycle itself.
+        if (child.userData.isSplitPreview) return
+        // The actual per-mesh skip (2026-07-15) — see this effect's own
+        // header above. Only reached when heavyChanged is false (a real
+        // selection-only pass); a mesh sits this pass out unless its own
+        // expressID or its owning object's id is one of the ones whose
+        // selection membership just changed, in which case every one of
+        // its properties below is already correct from the last full/
+        // relevant pass and touching it again would be pure waste.
+        if (!heavyChanged) {
+          const meshExpressId = child.userData.expressID as number | undefined
+          const relevant = touchedObjectIds.has(id) || (meshExpressId !== undefined && touchedExpressIds.has(meshExpressId))
+          if (!relevant) return
+        }
         // Per-element override wins over the whole-object one (2026-07-09
         // fix, per Maro: "changing a material for one element still changes
         // the whole") — FourD.tsx now writes a specific IFC sub-element's
@@ -523,7 +643,24 @@ function ModelObjects({
         // (`!hiddenIds.has(o.id) && (!isolateMode || ...)`), just at the
         // sub-element granularity (2026-07-11, for Collections).
         const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
-        child.visible = settings.showFaces && !isolatedOut && !isChildHidden
+        // Split-away (2026-07-15) — an original element's own mesh stays
+        // out of the normal render set once elementSplitTargets.ts has
+        // generated independent per-level slices for it (tagged directly
+        // on this mesh's own userData when that happens, not threaded
+        // through as a prop — see that module's own header), the same way
+        // a manually-Hidden element already does.
+        const baseVisible = settings.showFaces && !isolatedOut && !isChildHidden && !child.userData.isSplitAway
+        // Cached alongside the real assignment below (2026-07-15) — this
+        // effect only reruns on its own dependency list (settings/isolate/
+        // hidden state), never on the timeline's own date, so
+        // TimelinePlayback's own useFrame (below, runs every animation
+        // frame) needs somewhere durable to read "should this be visible
+        // for non-animation reasons" from, in order to combine it with the
+        // animation's own opacity each tick without re-deriving the whole
+        // showFaces/isolate/hidden formula itself or fighting this effect
+        // over `.visible` outright.
+        child.userData.baseVisible = baseVisible
+        child.visible = baseVisible
         child.castShadow = settings.shadows
         child.receiveShadow = settings.shadows
         // Materials aren't necessarily unique per mesh — GLTF/OBJ/FBX
@@ -579,12 +716,14 @@ function ModelObjects({
         if (everCustomized && Array.isArray(standardMaterial)) {
           standardMaterial = standardMaterial.map(m => (m.userData.textureOverrideOwner === ownerKey ? m : (() => {
             const clone = m.clone()
+            clearClonedRenderModeVariantCache(clone)
             clone.userData.textureOverrideOwner = ownerKey
             return clone
           })()))
           child.userData.standardMaterial = standardMaterial
         } else if (everCustomized && !Array.isArray(standardMaterial) && standardMaterial.userData.textureOverrideOwner !== ownerKey) {
           standardMaterial = standardMaterial.clone()
+          clearClonedRenderModeVariantCache(standardMaterial)
           standardMaterial.userData.textureOverrideOwner = ownerKey
           child.userData.standardMaterial = standardMaterial
         }
@@ -770,12 +909,34 @@ function ModelObjects({
             child.add(edges)
           }
           edges.visible = true
+          // A real bug, caught 2026-07-15 alongside the same gap in
+          // getGouraudVariant/getHiddenLineMaterial (renderModeMaterials.ts)
+          // — this LineBasicMaterial is its own separate material instance,
+          // never the mesh's real standardMaterial, so a split's (or
+          // Section Box's) clippingPlanes were never reaching it: the black
+          // edge outline kept drawing at full, uncut length even once the
+          // shaded faces underneath were correctly clipped. Synced from
+          // materials[0] (the real per-mesh material every clip source
+          // above already writes onto) on every pass, not just at creation
+          // — cheap, and correctly picks up a split committed *after* the
+          // edges overlay already existed for this mesh.
+          ;(edges.material as THREE.LineBasicMaterial).clippingPlanes = materials[0]?.clippingPlanes ?? null
         } else if (edges) {
           edges.visible = false
         }
       })
     }
-  }, [objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, customTextures, isolateMode, hiddenExpressIds])
+    // Narrowed from the whole `settings` object (2026-07-15) — this effect
+    // only ever reads the fields listed below (upAxis is destructured
+    // separately above); depending on the whole object meant tweaking an
+    // unrelated setting (Field of View, Clip Start/End, Grid, Axis
+    // Indicator — none of which this effect touches at all) still forced a
+    // full re-pass over every mesh in the loaded model(s).
+  }, [
+    objects, selectedExpressId, selectedExpressIds, selectedObjectIds, customTextures, isolateMode, hiddenExpressIds,
+    settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors, settings.showClashColors,
+    settings.shadows, upAxis,
+  ])
 
   // Section Box clipping is applied every frame here, not inside the
   // effect above (2026-07-09 fix, per Maro: "if i move the object midway
@@ -836,6 +997,13 @@ function ModelObjects({
         }
         const materials = Array.isArray(child.material) ? child.material : [child.material]
         materials.forEach(mat => { mat.clippingPlanes = clipPlanes.length > 0 ? clipPlanes : null })
+
+        // The edges overlay's own LineBasicMaterial was never included
+        // here (2026-07-13, per Maro: "i noticed it was the case with
+        // sections as well") — a section box cut the shaded faces but left
+        // the black wireframe sticking out past the cut plane untouched.
+        const edges = child.userData.edgesHelper as THREE.LineSegments | undefined
+        if (edges) (edges.material as THREE.LineBasicMaterial).clippingPlanes = clipPlanes.length > 0 ? clipPlanes : null
       })
     }
     prevTrackedIds.current = currentIds
@@ -861,7 +1029,26 @@ function ModelObjects({
     // reaches onPointerMissed and clears selection if there's nothing else
     // there at all, exactly as if the hidden mesh were never part of the
     // scene to begin with.
-    if (e.object instanceof THREE.Mesh && !e.object.visible) return
+    // Hard rule (2026-07-15, per Maro: "if any element is hidden i
+    // shouldnt be able to click... make sure this is a hard set rule") —
+    // the check above this comment used to only look at e.object's own
+    // `.visible`, which misses a real, confirmed case: toggling a whole
+    // model's own visibility checkbox sets `.visible = false` only on that
+    // model's top-level group (the <primitive visible={...}> prop further
+    // down), never cascading it onto each individual child mesh's own
+    // flag — three.js's Raycaster doesn't check ancestor visibility either
+    // (only the specific hit object's own, same gap this file's own
+    // isolate-click-through comment already describes for one mesh), so a
+    // whole hidden model stayed fully clickable even though nothing of it
+    // was ever drawn. Walking the full parent chain closes that gap
+    // uniformly for every reason something can be invisible — Hide,
+    // Isolate, whole-model visibility, animation-hidden, split-away — all
+    // of them already work by setting `.visible = false` *somewhere* in
+    // this chain, so this one walk is the single hard rule covering all of
+    // them instead of a special case per mechanism.
+    for (let node: THREE.Object3D | null = e.object; node; node = node.parent) {
+      if (!node.visible) return
+    }
     e.stopPropagation()
     const additive = e.ctrlKey || e.metaKey
     let target: THREE.Object3D | null = e.object
@@ -951,14 +1138,31 @@ interface ResolvedTimelineTarget {
   // object regardless of its type. object.traverse() visits the object
   // itself first, then every descendant, so this one collection correctly
   // covers both shapes.)
-  materials: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color }[]
+  // `mesh` alongside each material (2026-07-13, per Maro: Gouraud/Hidden
+  // Line render modes don't animate, and Hidden Line's own edges overlay
+  // "just static" during playback) — needed so the per-frame sync below
+  // can also reach that mesh's own cached render-mode variant
+  // (userData.standardMaterial.userData.lambertVariant/hiddenLineVariant,
+  // renderModeMaterials.ts) and edges overlay (userData.edgesHelper,
+  // ModelObjects' own effect above), neither of which is `material` itself.
+  materials: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[]
   keyframeTracks: Partial<Record<KeyframeField, { date: Date; value: number }[]>>
 }
 
 const DEG_TO_RAD = Math.PI / 180
+// Below this, an element counts as "animation-hidden" for both rendering
+// and click-through purposes (2026-07-15, per Maro: "if elements are
+// hidden due to the animation... it still selects it" — three.js's
+// Raycaster never looks at opacity, only `.visible` (see handleClick's own
+// comment on the equivalent isolate case), so a faded-to-nothing element
+// was still fully clickable and could block whatever's actually behind it.
+// A small epsilon rather than a strict `=== 0` check catches the
+// imperceptibly-faint tail of an ease curve too, not just the exact
+// endpoint.
+const ANIMATION_VISIBILITY_EPSILON = 0.02
 
-function collectStandardMaterials(object: THREE.Object3D): { material: THREE.MeshStandardMaterial; baseColor: THREE.Color }[] {
-  const found: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color }[] = []
+function collectStandardMaterials(object: THREE.Object3D): { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] {
+  const found: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] = []
   object.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
     // Reads child.userData.standardMaterial — the real, stable PBR material
@@ -977,7 +1181,7 @@ function collectStandardMaterials(object: THREE.Object3D): { material: THREE.Mes
     const source = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
     const materials = Array.isArray(source) ? source : [source]
     for (const mat of materials) {
-      if (mat instanceof THREE.MeshStandardMaterial) found.push({ material: mat, baseColor: mat.color.clone() })
+      if (mat instanceof THREE.MeshStandardMaterial) found.push({ material: mat, baseColor: mat.color.clone(), mesh: child })
     }
   })
   return found
@@ -1127,6 +1331,56 @@ export function TimelinePlayback({
       const ifcModel = links.some(l => l.source_kind === 'ifc') && ifcHandles.length > 0 ? await import('./ifcModel') : null
       if (cancelled) return
 
+      // Indexed once per handle rather than re-walked per link (2026-07-15
+      // fix, per Maro: "on the first frame I expect to see nothing... these
+      // elements... are visible" — the previous resolution below called
+      // `handle.object.traverse()` — a full walk of the *entire* IFC
+      // model's object graph — once for every single ModelElementLink row,
+      // to find that one link's own mesh. For a real project (the Snowdon
+      // sample has 1,158 links across a few-thousand-element model) that's
+      // millions of node visits done synchronously in this one effect,
+      // easily taking long enough that every linked element still showed
+      // its native, fully-opaque just-imported material — precisely
+      // matching "the whole model appears on day one" — well past the
+      // point a user would have already looked and screenshotted it, even
+      // though the per-frame opacity math (computeAppliedAnimationStateAt)
+      // was always correct the moment it actually got applied. Building
+      // one expressID->mesh map per handle up front turns that into a
+      // single traverse per handle plus a plain Map lookup per link.
+      // Array per expressID, not a single mesh (2026-07-15 fix, per Maro:
+      // "these framing elements... stay solid at every date" — verified
+      // against the real Snowdon file: loadIfcModel (ifcModel.ts) creates
+      // one THREE.Mesh per *geometry piece* under an element, not one per
+      // element — a complex element like an open-web bar joist truss comes
+      // back from web-ifc as a single expressID with dozens of separate
+      // geometries (chords, web members, ...), each its own Mesh, all
+      // tagged with that same shared expressID. A `Map<number, Object3D>`
+      // can only ever remember the *last* one visited, silently dropping
+      // every other piece — so only one truss member out of ~31 ever
+      // actually got wired into the animation system, while the rest sat
+      // at their native, fully-opaque imported material forever, reading
+      // as "the whole joist never animates." A simple single-piece column
+      // or beam (the common case) still gets a one-element array here, so
+      // this changes nothing for the elements that already worked.
+      const expressIdIndexByHandle = new Map<IfcModelHandle, Map<number, THREE.Object3D[]>>()
+      const getExpressIdIndex = (handle: IfcModelHandle): Map<number, THREE.Object3D[]> => {
+        let index = expressIdIndexByHandle.get(handle)
+        if (!index) {
+          index = new Map()
+          handle.object.traverse(child => {
+            const expressID = child.userData.expressID as number | undefined
+            if (expressID === undefined) return
+            const existing = index!.get(expressID)
+            if (existing) existing.push(child); else index!.set(expressID, [child])
+          })
+          expressIdIndexByHandle.set(handle, index)
+        }
+        return index
+      }
+      // Same anti-pattern for mesh-kind links — `sceneObjects.find(...)` per
+      // link is O(links * sceneObjects) — fixed the same way, by name.
+      const meshByName = new Map(sceneObjects.filter(o => o.kind === 'mesh').map(o => [o.name, o.object]))
+
       const byObject = new Map<THREE.Object3D, ResolvedTimelineTarget>()
       const getOrCreate = (object: THREE.Object3D): ResolvedTimelineTarget => {
         let target = byObject.get(object)
@@ -1146,7 +1400,25 @@ export function TimelinePlayback({
 
       // Mode A — schedule-driven, via ModelElementLink (unchanged resolution
       // logic: mesh-kind by filename, ifc-kind via GlobalId->expressID).
-      for (const link of links) {
+      //
+      // Yielded every 200 links (2026-07-15, per Maro: schedule generation
+      // against a real IFC model creates one ModelElementLink per linked
+      // element — thousands on a real structural+architectural run — and
+      // every ifc-kind one here calls ifcModel.getExpressIdFromGuid, a
+      // synchronous native WASM call. Run back-to-back with no yield, this
+      // loop used to block the main thread for the entire batch in one go
+      // any time this effect's deps changed (activities/links update after
+      // Generate Schedule, on project load, ...) — same chunked-progress
+      // idiom extractScheduleElements (ifcScheduleExtraction.ts) already
+      // uses for its own bulk per-element WASM reads, just without a
+      // visible progress bar here since this always resolves in the
+      // background rather than inside a wizard step.
+      for (let linkIndex = 0; linkIndex < links.length; linkIndex++) {
+        if (linkIndex > 0 && linkIndex % 200 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0))
+          if (cancelled) return
+        }
+        const link = links[linkIndex]
         const activity = activityById.get(link.activity_id)
         if (!activity) continue
         // dateField switch (2026-07-12) — see this component's own Props
@@ -1161,9 +1433,33 @@ export function TimelinePlayback({
         const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
         if (!profile) continue
 
-        let object: THREE.Object3D | null = null
+        // One link can resolve to *several* mesh pieces (see
+        // getExpressIdIndex's own header above) — every piece gets the
+        // exact same {activity, profile, axis} pushed onto its own
+        // ResolvedTimelineTarget, so each one independently computes the
+        // identical per-frame state off its own captured base pose and
+        // moves/fades in lockstep with its siblings, reconstructing the
+        // whole element's animation instead of just one arbitrary member
+        // of it.
+        let objects: THREE.Object3D[] = []
         if (link.source_kind === 'mesh') {
-          object = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)?.object ?? null
+          const mesh = meshByName.get(link.element_ref)
+          if (mesh) objects = [mesh]
+        } else if (link.source_kind === 'ifc_split') {
+          // A level-slice (elementSplitTargets.ts) — its clone mesh(es)
+          // already live in the same handle.object tree as everything
+          // else, tagged with a synthetic (not real) expressID, so the
+          // *only* thing different here is resolving element_ref via that
+          // module's own map instead of ifcModel.getExpressIdFromGuid;
+          // getExpressIdIndex below finds it exactly the same way it finds
+          // a real element, since the clone genuinely has
+          // userData.expressID set.
+          for (const handle of ifcHandles) {
+            const expressId = getSplitExpressId(handle, link.element_ref)
+            if (expressId === undefined) continue
+            const matches = getExpressIdIndex(handle).get(expressId)
+            if (matches && matches.length > 0) { objects = matches; break }
+          }
         } else if (ifcModel) {
           // Tries each loaded IFC model in turn for a GlobalId match
           // (2026-07-09, per federated/assembly modeling) — a link doesn't
@@ -1174,16 +1470,16 @@ export function TimelinePlayback({
           for (const handle of ifcHandles) {
             const expressId = ifcModel.getExpressIdFromGuid(handle, link.element_ref)
             if (expressId === undefined) continue
-            handle.object.traverse(child => {
-              if (!object && child.userData.expressID === expressId) object = child
-            })
-            if (object) break
+            const matches = getExpressIdIndex(handle).get(expressId)
+            if (matches && matches.length > 0) { objects = matches; break }
           }
         }
-        if (!object) continue
+        if (objects.length === 0) continue
 
-        const target = getOrCreate(object)
-        target.links.push({ activity: window, profile, axis: profile.axis })
+        for (const object of objects) {
+          const target = getOrCreate(object)
+          target.links.push({ activity: window, profile, axis: profile.axis })
+        }
       }
 
       // Mode B — manual keyframes, entirely independent of the above: any
@@ -1321,12 +1617,68 @@ export function TimelinePlayback({
       // Opacity/colour always come from the profile alone (if any) — never
       // fought over by keyframeTracks, which only ever cover transform.
       if (state) {
-        for (const { material, baseColor } of target.materials) {
+        for (const { material, baseColor, mesh } of target.materials) {
           material.transparent = state.opacity < 1
           material.opacity = state.opacity
           if (state.color) material.color.set(state.color)
           else material.color.copy(baseColor)
           material.needsUpdate = true
+
+          // Combined with ModelObjects' own showFaces/isolate/hidden verdict
+          // (cached on mount/settings-change as userData.baseVisible, since
+          // that effect never reruns on its own just because the timeline's
+          // date changed) rather than overwriting `.visible` outright — a
+          // manually-Hidden element must stay hidden even mid-animation,
+          // and an animation-hidden element must stay unclickable even
+          // when nothing else is hiding it. Every frame, so leaving the
+          // "before start" pose (or scrubbing back into it) reliably
+          // re-hides a mesh some other effect had last set visible.
+          mesh.visible = (mesh.userData.baseVisible ?? true) && state.opacity > ANIMATION_VISIBILITY_EPSILON
+
+          // Gouraud/Hidden Line render modes display a cached variant
+          // derived from this material (renderModeMaterials.ts's own
+          // getGouraudVariant/getHiddenLineMaterial), not this material
+          // itself — normally re-synced by ModelObjects' own effect above,
+          // but that effect's dependency list doesn't include the
+          // timeline's date, so a pure playback tick never re-runs it
+          // (2026-07-13, per Maro: "gouraud render mode doesnt go with the
+          // animation... i'll need to go back to flat and back to gouraud
+          // before it works" — toggling render modes force-reruns that
+          // effect, which is why it "works as still"). Propagated here
+          // every frame instead so both variants stay live during Play,
+          // not just at the moment they're (re)built.
+          const lambertVariant = material.userData.lambertVariant as THREE.MeshLambertMaterial | undefined
+          if (lambertVariant) {
+            lambertVariant.transparent = material.transparent
+            lambertVariant.opacity = material.opacity
+            lambertVariant.color.copy(material.color)
+          }
+          const hiddenLineVariant = material.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
+          if (hiddenLineVariant) {
+            // Hidden Line's own colour is a fixed selection tint, not the
+            // element's real colour (getHiddenLineMaterial's own header) —
+            // only opacity/transparency need to track playback here.
+            hiddenLineVariant.transparent = material.transparent
+            hiddenLineVariant.opacity = material.opacity
+          }
+
+          // The black EdgesGeometry overlay (ModelObjects' own effect
+          // above) has its own separate LineBasicMaterial, set once at
+          // creation and otherwise untouched — so an element fading out
+          // per the 4D sequence used to keep its edges fully opaque and
+          // visible regardless (2026-07-13, per Maro: "hidden lines shows
+          // the edges match the sequence and are just static... the faces
+          // go through this process but not the edges"). Faded the same
+          // way the face material itself is, rather than toggling
+          // `.visible` (which is exclusively owned by the settings-driven
+          // showEdges/renderMode effect above — touching it here would
+          // fight that effect instead of cooperating with it).
+          const edges = mesh.userData.edgesHelper as THREE.LineSegments | undefined
+          if (edges) {
+            const edgesMaterial = edges.material as THREE.LineBasicMaterial
+            edgesMaterial.transparent = state.opacity < 1
+            edgesMaterial.opacity = state.opacity
+          }
         }
       }
     }
@@ -1441,7 +1793,8 @@ function ClippingSetup() {
 // re-renders both.
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, linkedActivitiesWidget,
+  onSelectAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
+  linkedObjectIds, linkedElementKeys, onSelectUnassigned,
   gizmoMode, onTransformChange,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
@@ -1833,13 +2186,38 @@ export function Viewport3D({
         const ndcXMax = (xMax / rect.width) * 2 - 1
         const ndcYMax = -(yMin / rect.height) * 2 + 1
         const ndcYMin = -(yMax / rect.height) * 2 + 1
-        const matched: string[] = []
+        const matchedObjectIds: string[] = []
+        const expressIdsByObject = new Map<string, number[]>()
+        const inRect = (v: THREE.Vector3) => v.z < 1 && v.x >= ndcXMin && v.x <= ndcXMax && v.y >= ndcYMin && v.y <= ndcYMax
         // Skip currently-hidden objects (2026-07-09 fix, per Maro's isolate
         // report — same underlying gap: box-select projects each object's
         // *world position*, not a raycast, so it never checked `.visible`
         // either, and could box-select a whole object isolate had hidden).
-        for (const { id, object, visible } of importedObjects) {
+        for (const { id, object, kind, visible } of importedObjects) {
           if (!visible) continue
+          // IFC imports: hit-test each *element's* own bounds individually
+          // (2026-07-14 fix, per Maro: "boc select doesnt select elements,
+          // just object") — matches the granularity a single click on an
+          // IFC mesh already gives (onSelect's expressID), instead of only
+          // ever resolving to the whole model regardless of how tightly the
+          // box was drawn around a handful of elements. Mesh-kind imports
+          // have no sub-element concept at all, so they keep the earlier
+          // whole-object behaviour below.
+          if (kind === 'ifc') {
+            const matchedIds: number[] = []
+            object.traverse(child => {
+              if (!(child instanceof THREE.Mesh) || !child.visible) return
+              const expressID = child.userData.expressID as number | undefined
+              if (expressID === undefined) return
+              const box = new THREE.Box3().setFromObject(child)
+              if (box.isEmpty()) return
+              const center = box.getCenter(new THREE.Vector3())
+              center.project(camera)
+              if (inRect(center)) matchedIds.push(expressID)
+            })
+            if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
+            continue
+          }
           // Bounds of only the currently-*visible* meshes within this object
           // (2026-07-11 fix, per Maro: "when i isolate then box select, it
           // doesnt work") — THREE.Box3.setFromObject includes every mesh's
@@ -1851,21 +2229,45 @@ export function Viewport3D({
           // screen, so a box drawn around what's visible could never
           // contain that stale center point. Building the box mesh-by-mesh
           // from only what's actually visible fixes this for both isolate
-          // and the newer per-element hide, without needing a full
-          // expressID-granular box-select rewrite.
+          // and the newer per-element hide.
           const box = new THREE.Box3()
           object.traverse(child => { if (child instanceof THREE.Mesh && child.visible) box.expandByObject(child) })
           if (box.isEmpty()) continue
           const center = box.getCenter(new THREE.Vector3())
           center.project(camera)
-          if (center.z < 1 && center.x >= ndcXMin && center.x <= ndcXMax && center.y >= ndcYMin && center.y <= ndcYMax) {
-            matched.push(id)
-          }
+          if (inRect(center)) matchedObjectIds.push(id)
         }
-        onBoxSelect(matched)
+        onBoxSelect(matchedObjectIds, expressIdsByObject)
       }
     }
     setDragRect(null)
+  }
+
+  // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
+  // been 4d linked to an activity yet") — same visible-element enumeration
+  // as box-select's own IFC branch above (element-by-element for ifc-kind,
+  // whole object for mesh-kind, both gated on .visible so isolated/hidden
+  // elements are never offered up), just matched against "not already
+  // linked" instead of "inside the dragged rectangle".
+  const handleSelectUnassigned = () => {
+    const matchedObjectIds: string[] = []
+    const expressIdsByObject = new Map<string, number[]>()
+    for (const { id, object, kind, visible } of importedObjects) {
+      if (!visible) continue
+      if (kind === 'ifc') {
+        const matchedIds: number[] = []
+        object.traverse(child => {
+          if (!(child instanceof THREE.Mesh) || !child.visible) return
+          const expressID = child.userData.expressID as number | undefined
+          if (expressID === undefined) return
+          if (!linkedElementKeys.has(`${id}::${expressID}`)) matchedIds.push(expressID)
+        })
+        if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
+        continue
+      }
+      if (!linkedObjectIds.has(id)) matchedObjectIds.push(id)
+    }
+    onSelectUnassigned(matchedObjectIds, expressIdsByObject)
   }
 
   return (
@@ -1883,6 +2285,13 @@ export function Viewport3D({
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
         >
           Select All
+        </button>
+        <button
+          onClick={handleSelectUnassigned}
+          title="Select every visible element that hasn't been linked to a schedule activity yet"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+        >
+          Select Unassigned
         </button>
         <button
           onClick={() => setBoxSelectMode(v => !v)}
@@ -1908,6 +2317,22 @@ export function Viewport3D({
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
         >
           Show All
+        </button>
+        <button
+          onClick={onHideSelected}
+          disabled={selectedObjectIds.size === 0 && selectedExpressIds.size === 0}
+          title="Hide Selected — hide the current selection (Show All brings it back)"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Hide
+        </button>
+        <button
+          onClick={() => { onSelect(null); onSelectObject(null) }}
+          disabled={selectedObjectIds.size === 0 && selectedExpressIds.size === 0}
+          title="Deselect All — clear the current selection"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Deselect All
         </button>
         <button
           onClick={handleFrameSelected}

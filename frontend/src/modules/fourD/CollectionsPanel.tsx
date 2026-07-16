@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Collection } from './collections'
+import type { Collection, CollectionMember } from './collections'
 
 interface Props {
   collections: Collection[]
@@ -10,9 +10,20 @@ interface Props {
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
   onAddSelected: (id: string) => void
+  onRemoveSelected: (id: string) => void
   onSelect: (id: string) => void
   onHide: (id: string) => void
+  onUnhide: (id: string) => void
   onIsolate: (id: string) => void
+  // Per-member select (2026-07-15, per Maro: "i want to be able select each
+  // element in the split collection, i should see and be able to select 6
+  // slices and the original one") — the bulk `onSelect` above always
+  // selects a collection's *entire* membership at once; this is the one
+  // new thing that was actually missing: browsing/clicking one specific
+  // member on its own, same granularity IfcDataPanel's own click-an-
+  // element-in-the-tree already gives, just scoped to a Collection's own
+  // membership instead of the model's spatial tree.
+  onSelectMember: (member: CollectionMember) => void
 }
 
 // "Move to…" reparent picker, not drag-and-drop (2026-07-11) — a plain
@@ -41,7 +52,7 @@ function descendantIds(collections: Collection[], rootId: string): Set<string> {
 // descendant silently act on its *ancestor's* id instead of its own).
 function CollectionNode({
   collection, allCollections, depth, canAddSelected,
-  onCreate, onRename, onReparent, onDelete, onAddSelected, onSelect, onHide, onIsolate,
+  onCreate, onRename, onReparent, onDelete, onAddSelected, onRemoveSelected, onSelect, onHide, onUnhide, onIsolate, onSelectMember,
 }: {
   collection: Collection
   allCollections: Collection[]
@@ -52,9 +63,12 @@ function CollectionNode({
   onReparent: (id: string, parentCollectionId: string | null) => void
   onDelete: (id: string) => void
   onAddSelected: (id: string) => void
+  onRemoveSelected: (id: string) => void
   onSelect: (id: string) => void
   onHide: (id: string) => void
+  onUnhide: (id: string) => void
   onIsolate: (id: string) => void
+  onSelectMember: (member: CollectionMember) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(collection.name)
@@ -77,7 +91,7 @@ function CollectionNode({
     <div>
       <div className="px-3 py-2" style={{ paddingLeft: `${12 + depth * 16}px` }}>
         <div className="flex items-center gap-1.5">
-          {children.length > 0 ? (
+          {children.length > 0 || collection.members.length > 0 ? (
             <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 w-3 shrink-0" title={expanded ? 'Collapse' : 'Expand'}>
               {expanded ? '▾' : '▸'}
             </button>
@@ -142,6 +156,14 @@ function CollectionNode({
             Hide
           </button>
           <button
+            onClick={() => onUnhide(collection.id)}
+            disabled={!hasAnyMembers}
+            title="Unhide every element in this collection"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Unhide
+          </button>
+          <button
             onClick={() => onIsolate(collection.id)}
             disabled={!hasAnyMembers}
             title="Isolate — show only this collection's elements"
@@ -157,7 +179,37 @@ function CollectionNode({
           >
             ⊕ Add Selected
           </button>
+          <button
+            onClick={() => onRemoveSelected(collection.id)}
+            disabled={!canAddSelected || collection.members.length === 0}
+            title={canAddSelected ? 'Remove the current viewport selection from this collection' : 'Select something in the viewport first'}
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            ⊖ Remove Selected
+          </button>
         </div>
+        {/* Individual members — click one to select just that one element
+            in the viewport, the same granularity clicking it directly in
+            the 3D view or IFC Data tree already gives (2026-07-15). Kept
+            under the same expand/collapse toggle as sub-collections, not a
+            separate one — a "leaf" collection like a single split
+            element's own sub-collection has members but no children, and
+            still needs the arrow to show up at all (see this component's
+            own expand-arrow condition above). */}
+        {expanded && collection.members.length > 0 && (
+          <div className="mt-1 space-y-0.5" style={{ paddingLeft: '18px' }}>
+            {collection.members.map(member => (
+              <button
+                key={member.id}
+                onClick={() => onSelectMember(member)}
+                title={`Select ${member.element_label}`}
+                className="block w-full text-left text-[11px] text-gray-500 hover:text-blue-700 hover:bg-gray-50 rounded px-1 py-0.5 truncate"
+              >
+                {member.element_label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {expanded && children.map(child => (
         <CollectionNode
@@ -171,9 +223,12 @@ function CollectionNode({
           onReparent={onReparent}
           onDelete={onDelete}
           onAddSelected={onAddSelected}
+          onRemoveSelected={onRemoveSelected}
           onSelect={onSelect}
           onHide={onHide}
+          onUnhide={onUnhide}
           onIsolate={onIsolate}
+          onSelectMember={onSelectMember}
         />
       ))}
     </div>
@@ -187,7 +242,8 @@ function CollectionNode({
 // SideDock.tsx owns the outer chrome, same as
 // AnimationProfilePanel/SectionBoxPanel/CameraViewPanel.
 export function CollectionsPanel({
-  collections, error, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected, onSelect, onHide, onIsolate,
+  collections, error, canAddSelected, onCreate, onRename, onReparent, onDelete, onAddSelected, onRemoveSelected, onSelect, onHide, onUnhide, onIsolate,
+  onSelectMember,
 }: Props) {
   const roots = collections.filter(c => c.parent_collection_id === null)
 
@@ -222,9 +278,12 @@ export function CollectionsPanel({
               onReparent={onReparent}
               onDelete={onDelete}
               onAddSelected={onAddSelected}
+              onRemoveSelected={onRemoveSelected}
               onSelect={onSelect}
               onHide={onHide}
+              onUnhide={onUnhide}
               onIsolate={onIsolate}
+              onSelectMember={onSelectMember}
             />
           ))}
         </div>

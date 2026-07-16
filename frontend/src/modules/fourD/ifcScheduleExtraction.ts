@@ -26,20 +26,49 @@ import type { IfcModelHandle, IfcTreeNode } from './ifcModel'
 // connection hardware that don't match a curtain-wall name pattern land
 // here rather than being silently dropped.
 export type ScheduleCategory =
-  | 'Footings' | 'Columns' | 'Beams' | 'Slabs' | 'Walls'
+  | 'Footings' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls'
   | 'Structural Members' | 'Stairs' | 'Roofs' | 'Curtain Walls' | 'Windows' | 'Doors' | 'Railings'
   | 'Coverings' | 'Furnishings'
 
 export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory }[] = [
   { ifcType: 'IfcFooting', category: 'Footings' },
+  // Individual reinforcement (2026-07-15, per Maro, after "Select
+  // Unassigned" on a real structural export turned up 149 IfcReinforcingBar
+  // elements — Revit's own per-bar rebar export, distinct from the
+  // Footings/Walls/Slabs concrete they reinforce) — its own category rather
+  // than silently folded into whichever pour it belongs to, since nothing
+  // here parses IfcRelContainedInSpatialStructure/aggregation to actually
+  // know which one that is; a first-draft "Place Reinforcement" activity
+  // per storey (like every other category) at least gets it linked and
+  // animating, freely re-sequenced/re-rated in the wizard same as anything
+  // else. IfcReinforcingMesh alongside it for the same reason (fabric mesh
+  // reinforcement, same export idiom, just not present in this particular
+  // file).
+  { ifcType: 'IfcReinforcingBar', category: 'Reinforcement' },
+  { ifcType: 'IfcReinforcingMesh', category: 'Reinforcement' },
   { ifcType: 'IfcColumn', category: 'Columns' },
   { ifcType: 'IfcBeam', category: 'Beams' },
   { ifcType: 'IfcSlab', category: 'Slabs' },
   { ifcType: 'IfcWallStandardCase', category: 'Walls' },
+  // Plain IfcWall alongside its StandardCase sibling (2026-07-15, same
+  // report as above — 13 real concrete walls in the same file came back as
+  // plain IfcWall, not IfcWallStandardCase: Revit exports a wall with a
+  // non-rectangular/stepped profile, e.g. a parapet upstand, this way
+  // instead). Same category either way — the two IFC classes mean
+  // "how is this wall's profile described," not "is it structurally a
+  // different kind of wall."
+  { ifcType: 'IfcWall', category: 'Walls' },
   // Raw default bucket only — extractScheduleElements re-buckets a
   // curtain-wall-named member/plate into 'Curtain Walls' below.
   { ifcType: 'IfcMember', category: 'Structural Members' },
   { ifcType: 'IfcPlate', category: 'Structural Members' },
+  // Generic catch-all IFC type (2026-07-15, same report — 50 elements here
+  // were connection hardware/embeds, e.g. "SCN_Embed"/"SCN_HAS:3/8" anchor
+  // bolts, exported as IfcBuildingElementProxy because they don't map
+  // cleanly to any more specific IFC class) — lands in the same
+  // "bracing/connection hardware" bucket IfcMember/IfcPlate already use
+  // above, which is exactly what these are.
+  { ifcType: 'IfcBuildingElementProxy', category: 'Structural Members' },
   { ifcType: 'IfcStair', category: 'Stairs' },
   { ifcType: 'IfcStairFlight', category: 'Stairs' },
   { ifcType: 'IfcRoof', category: 'Roofs' },
@@ -61,8 +90,13 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
 // floor edges/stairs already in place), then interior finishes only once
 // enclosed, furnishings last. Drives both scheduleGeneration.ts's
 // within-storey relationships and the Review step's own display order.
+// Reinforcement (2026-07-15) sits right after Footings — rebar cages go in
+// before the pour that encases them, same "before the concrete" position
+// real reinforcement takes across footings/walls/slabs alike; a
+// first-draft placement, freely reordered per project in the wizard same
+// as every other category here.
 export const CATEGORY_ORDER: ScheduleCategory[] = [
-  'Footings', 'Columns', 'Beams', 'Slabs', 'Walls',
+  'Footings', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls',
   'Structural Members', 'Stairs', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Railings',
   'Coverings', 'Furnishings',
 ]

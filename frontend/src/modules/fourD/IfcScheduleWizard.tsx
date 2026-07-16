@@ -11,8 +11,15 @@ import {
 } from './scheduleGeneration'
 
 interface Props {
-  handle: IfcModelHandle | null
-  modelName: string
+  // Every currently-loaded IFC model, not just the active one (2026-07-15,
+  // per Maro: "assuming i add two ifc files and i hit generate, give me the
+  // option of generating from both or one... it scans both but only
+  // generated the architectural. cant i do both?" — the wizard used to be
+  // handed a single `handle`, hardcoded in FourD.tsx to whichever model was
+  // active or else just ifcHandles[0], so a second imported file was never
+  // reachable at all regardless of what the user picked). The Source step
+  // below lets the user check/uncheck which of these actually get scanned.
+  models: { handle: IfcModelHandle; name: string }[]
   collections: Collection[]
   calendars: Calendar[]
   projectId: string
@@ -43,9 +50,24 @@ type Step = 'source' | 'extract' | 'rates' | 'review'
 //   next heuristic gap turns out to be, and isn't limited to the five
 //   structural types either, since a collection can hold anything.
 // Both paths converge on the same Rates & Crews / Review & Commit steps.
-export function IfcScheduleWizard({ handle, modelName, collections, calendars, projectId, schedulePeriodId, onCancel, onGenerated }: Props) {
+export function IfcScheduleWizard({ models, collections, calendars, projectId, schedulePeriodId, onCancel, onGenerated }: Props) {
   const [step, setStep] = useState<Step>('source')
   const [source, setSource] = useState<Source | null>(null)
+  // Defaults to every loaded model selected — matches this app's usual
+  // "editable default, not forced choice" convention (same shape as the
+  // rates table below defaulting to industry-typical values): the common
+  // case (one file, or "yes, scan everything I've imported") needs zero
+  // extra clicks, and unchecking one is a single click for the "just the
+  // architectural" case.
+  const [selectedModelIds, setSelectedModelIds] = useState<Set<number>>(() => new Set(models.map(m => m.handle.modelID)))
+  const toggleModel = (modelID: number) => {
+    setSelectedModelIds(prev => {
+      const next = new Set(prev)
+      if (next.has(modelID)) next.delete(modelID); else next.add(modelID)
+      return next
+    })
+  }
+  const selectedModels = models.filter(m => selectedModelIds.has(m.handle.modelID))
 
   const [extracting, setExtracting] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
@@ -88,13 +110,46 @@ export function IfcScheduleWizard({ handle, modelName, collections, calendars, p
     setStep('rates')
   }
 
+  // Scans every *checked* model in turn, not just the first/active one
+  // (2026-07-15, per Maro), concatenating their elements before grouping —
+  // GlobalId is unique across files (verified: web-ifc's own GUID
+  // generation follows the IFC spec's global-uniqueness guarantee, not
+  // scoped per-file), so a structural + architectural pair's elements
+  // merge safely into one combined list with no risk of one file's
+  // expressID colliding with another's (findMeshesForExpressId inside
+  // extractScheduleElements is always scoped to its own handle.object, and
+  // downstream linking always resolves by globalId, never a bare
+  // expressID, across every loaded handle — see linkedElements.ts).
+  // groupByStorey then buckets by storeyName string, so same-named storeys
+  // across the two files (e.g. both call it "Level 1") merge into one
+  // group for free; differently-named storeys just land as separate
+  // groups, same "first draft, freely reorganised after" contract this
+  // wizard already has for everything else.
   const runExtract = async () => {
-    if (!handle) return
+    if (selectedModels.length === 0) return
     setExtracting(true)
     setExtractError(null)
     setProgress({ done: 0, total: 0 })
     try {
-      const found = await extractScheduleElements(handle, (done, total) => setProgress({ done, total }))
+      // Each model's own progress callback only knows its own candidate
+      // count — tracked per-model here and summed on every tick so the one
+      // progress bar reads as "N of the combined total across every
+      // checked file," not resetting/jumping between files.
+      const perModelProgress = selectedModels.map(() => ({ done: 0, total: 0 }))
+      const reportCombined = () => {
+        setProgress({
+          done: perModelProgress.reduce((sum, p) => sum + p.done, 0),
+          total: perModelProgress.reduce((sum, p) => sum + p.total, 0),
+        })
+      }
+      const found: ExtractedElement[] = []
+      for (let i = 0; i < selectedModels.length; i++) {
+        const fromThisModel = await extractScheduleElements(selectedModels[i].handle, (done, total) => {
+          perModelProgress[i] = { done, total }
+          reportCombined()
+        })
+        found.push(...fromThisModel)
+      }
       setElements(found)
       const grouped = groupByStorey(found)
       setStoreys(grouped)
@@ -107,10 +162,15 @@ export function IfcScheduleWizard({ handle, modelName, collections, calendars, p
     }
   }
 
+  // The root WBS activity's own name (2026-07-15) — every checked model's
+  // name joined, so a structural + architectural run reads as "Structural +
+  // Architectural" rather than silently only naming one of them.
+  const rootName = selectedModels.map(m => m.name).join(' + ') || 'Imported Model'
+
   const categoryNames = storeys ? usedCategoryNames(storeys) : []
   const phaseRows: PhaseRow[] = storeys ? usedPhaseRows(storeys) : []
   const { staged, summary }: { staged: ReturnType<typeof buildStagedSchedule>['staged']; summary: ProposedScheduleSummary } =
-    storeys ? buildStagedSchedule(projectId, schedulePeriodId, storeys, rates, modelName, calendarId) : {
+    storeys ? buildStagedSchedule(projectId, schedulePeriodId, storeys, rates, rootName, calendarId) : {
       staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: null, activities: [], resources: [], assignments: [], relationships: [] },
       summary: { storeyCount: 0, activityCount: 0, resourceCount: 0, relationshipCount: 0, elementCount: 0 },
     }
@@ -156,17 +216,43 @@ export function IfcScheduleWizard({ handle, modelName, collections, calendars, p
               <p className="text-xs text-gray-500 mb-2">
                 How should the first-draft WBS be built?
               </p>
+              {models.length === 0 && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  No IFC model is currently loaded.
+                </p>
+              )}
+              {models.length > 1 && (
+                <div className="border border-gray-200 rounded-md px-2.5 py-2 space-y-1">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                    Models to scan
+                  </div>
+                  {models.map(m => (
+                    <label key={m.handle.modelID} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedModelIds.has(m.handle.modelID)}
+                        onChange={() => toggleModel(m.handle.modelID)}
+                      />
+                      {m.name}
+                    </label>
+                  ))}
+                </div>
+              )}
               <button
                 onClick={chooseScan}
-                disabled={!handle}
-                title={handle ? undefined : 'No IFC model is currently loaded/selected'}
+                disabled={selectedModels.length === 0}
+                title={selectedModels.length === 0 ? 'Check at least one model above' : undefined}
                 className="w-full text-left px-3 py-2.5 rounded-md border border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <div className="text-xs font-bold text-gray-800">Scan Model (automatic)</div>
+                <div className="text-xs font-bold text-gray-800">
+                  Scan Model{selectedModels.length > 1 ? 's' : ''} (automatic)
+                </div>
                 <div className="text-[11px] text-gray-500 mt-0.5">
-                  Scans the loaded IFC model for structural elements (columns, beams, slabs, footings, foundation
-                  walls) and architectural elements (curtain walls, doors, windows, roofs, stairs, railings, interior
-                  finishes) and groups them by storey. Fast, but only as accurate as the model's own IFC typing.
+                  Scans the {selectedModels.length > 1 ? 'checked models' : 'loaded IFC model'} for structural
+                  elements (columns, beams, slabs, footings, foundation walls) and architectural elements (curtain
+                  walls, doors, windows, roofs, stairs, railings, interior finishes) and groups them by storey.
+                  {selectedModels.length > 1 && ' Same-named storeys across models are combined into one group.'}
+                  {' '}Fast, but only as accurate as the model's own IFC typing.
                 </div>
               </button>
               <button
@@ -310,7 +396,7 @@ export function IfcScheduleWizard({ handle, modelName, collections, calendars, p
             <div className="space-y-3">
               <div className="text-xs text-gray-600 space-y-1">
                 <div>Source: {source === 'collections' ? 'Your Collections tree' : 'Automatic IFC scan'}</div>
-                <div>1 root WBS ("{modelName}") + {summary.storeyCount} storey summary activities</div>
+                <div>1 root WBS ("{rootName}") + {summary.storeyCount} storey summary activities</div>
                 <div>{summary.activityCount - summary.storeyCount - 1} work activities across {categoryNames.length} categories, {phaseRows.length} construction phases</div>
                 <div>{summary.resourceCount} crews &amp; equipment, {summary.relationshipCount} sequencing links</div>
                 <div>{summary.elementCount} IFC elements will be linked to their completion activities</div>
@@ -372,7 +458,7 @@ export function IfcScheduleWizard({ handle, modelName, collections, calendars, p
             {step === 'extract' && !elements && (
               <button
                 onClick={runExtract}
-                disabled={extracting || !handle}
+                disabled={extracting || selectedModels.length === 0}
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
               >
                 {extracting ? 'Scanning…' : 'Scan Model'}
