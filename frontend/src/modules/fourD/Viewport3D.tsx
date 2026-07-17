@@ -21,6 +21,12 @@ import type { GizmoMode } from './TransformPanel'
 import type { CustomTextureSet } from './customTextures'
 import { axisCorrectionRotation, resolveDisplayAxis, type UpAxis } from './upAxis'
 import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline'
+// Real (non-type-only) import, unlike ifcModel.ts above — elementBatching.ts
+// has zero web-ifc dependency of its own (see its own header), so importing
+// ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
+// bundle regression the IfcModelHandle type-only import above exists to
+// avoid.
+import { ensureMaterialized, type BatchState } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
@@ -925,6 +931,34 @@ function ModelObjects({
           edges.visible = false
         }
       })
+
+      // Batched-element visibility (2026-07-17) — showFaces/Isolate/Hide
+      // for whatever's still sitting in ifcModel.ts's shared BatchedMesh
+      // (see elementBatching.ts's own header), mirroring the same
+      // baseVisible formula the traverse above applies per individual
+      // mesh. Deliberately narrower than that formula — no render-mode
+      // material swap, no variance/clash tint, no texture override, no
+      // selection highlight — a batched element hasn't been individually
+      // touched by definition, so none of those can apply to it yet;
+      // selection specifically always materializes immediately
+      // (Viewport3D.tsx's own handleClick), so a "selected but still
+      // batched" state never actually occurs. Gated on heavyChanged, not
+      // run on every pass like the traverse above — visibility here never
+      // depends on which specific expressID is currently selected (the
+      // only thing a cheap selection-only pass updates), so there's
+      // nothing for a non-heavy pass to do here.
+      const batch = object.userData.batch as BatchState | undefined
+      if (heavyChanged && batch) {
+        for (const [expressID, infos] of batch.byExpressId) {
+          const isolatedOut = isolateMode && (
+            isolatingSubElements ? !isolatedExpressIds.has(expressID) : !isObjectIsolated
+          )
+          const elementKey = kind === 'ifc' ? `${id}::${expressID}` : null
+          const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
+          const visible = settings.showFaces && !isolatedOut && !isChildHidden
+          for (const info of infos) batch.mesh.setVisibleAt(info.instanceId, visible)
+        }
+      }
     }
     // Narrowed from the whole `settings` object (2026-07-15) — this effect
     // only ever reads the fields listed below (upAxis is destructured
@@ -1051,9 +1085,37 @@ function ModelObjects({
     }
     e.stopPropagation()
     const additive = e.ctrlKey || e.metaKey
+
+    // Batched-element hit resolution (2026-07-17, per Maro — see
+    // elementBatching.ts's own header for the full "why": THREE.BatchedMesh
+    // carries every element whose geometry repeats elsewhere in the file,
+    // draw-call-cheap but *not* individually addressable via
+    // userData.expressID the way a normal per-element mesh is; three.js's
+    // own BatchedMesh.raycast (verified directly in
+    // node_modules/three/src/objects/BatchedMesh.js, not assumed) tags
+    // each intersection with which instance got hit via `batchId` instead.
+    // Resolved via the reverse lookup ifcModel.ts attaches to the batch's
+    // own root object at import time, then materialized immediately —
+    // ensureMaterialized converts it into a normal individual THREE.Mesh
+    // right here, so every line below this block (and every other
+    // selection/highlight/edit code path elsewhere in this file, in
+    // TransformPanel.tsx, etc.) needs zero changes to keep working for it,
+    // exactly as if it had never been batched at all.
     let target: THREE.Object3D | null = e.object
-    while (target && target.userData.expressID === undefined) target = target.parent
-    const expressId = target ? (target.userData.expressID as number) : null
+    let expressId: number | null = null
+    if ((target as THREE.Object3D & { isBatchedMesh?: boolean }).isBatchedMesh && e.batchId !== undefined) {
+      let batchRoot: THREE.Object3D | null = target
+      while (batchRoot && batchRoot.userData.batch === undefined) batchRoot = batchRoot.parent
+      const batchState = batchRoot?.userData.batch as BatchState | undefined
+      const resolvedId = batchState?.expressIdByInstanceId.get(e.batchId)
+      if (resolvedId !== undefined && batchRoot) {
+        ensureMaterialized(batchRoot, resolvedId)
+        expressId = resolvedId
+      }
+    } else {
+      while (target && target.userData.expressID === undefined) target = target.parent
+      expressId = target ? (target.userData.expressID as number) : null
+    }
 
     // Walks up to whichever ancestor is one of FourD.tsx's own top-level
     // imports (tagged sceneObjectId there at import time) — resolved
@@ -1820,8 +1882,11 @@ export function Viewport3D({
     if (activeImportedObject.kind === 'ifc' && selectedExpressId !== null) {
       const handle = ifcHandles.find(h => `ifc-${h.modelID}` === activeImportedObject.id)
       if (handle) {
-        let found: THREE.Object3D | null = null
-        handle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
+        // ensureMaterialized, not a plain traverse (2026-07-17) — see
+        // elementBatching.ts's own header: a repeated-geometry element may
+        // still be sitting in the shared BatchedMesh rather than its own
+        // traversable mesh if selected some way other than a click.
+        const found = ensureMaterialized(handle.object, selectedExpressId)
         if (found) return { ...activeImportedObject, object: found }
       }
     }

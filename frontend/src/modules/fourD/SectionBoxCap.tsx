@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber'
 import type { ImportedObject, ResolvedSectionBox } from './Viewport3D'
 import type { SectionBoxBounds } from './sectionBoxes'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
+import { ensureMaterialized } from './elementBatching'
 
 // Solid-filled cut faces (2026-07-09, per Maro's explicit choice over the
 // simpler hollow/open cutaway when asked). Deliberately NOT three.js's
@@ -177,8 +178,9 @@ export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]
         const entry = objects.find(o => o.id === box.sceneObjectId)
         if (!entry) return []
         if (box.elementExpressId !== undefined) {
-          let found: THREE.Mesh | null = null
-          entry.object.traverse(child => { if (!found && child instanceof THREE.Mesh && child.userData.expressID === box.elementExpressId) found = child })
+          // ensureMaterialized, not a plain traverse (2026-07-17) — see
+          // elementBatching.ts's own header.
+          const found = ensureMaterialized(entry.object, box.elementExpressId)
           if (!found) return []
           const mesh: THREE.Mesh = found
           mesh.geometry.computeBoundingBox()

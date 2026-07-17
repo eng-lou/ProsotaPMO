@@ -6,6 +6,7 @@ import * as THREE from 'three'
 // IfcDataPanel.tsx already use everywhere else to keep web-ifc out of the
 // main bundle.
 import type { IfcModelHandle, IfcTreeNode } from './ifcModel'
+import { ensureMaterialized } from './elementBatching'
 
 // IFC Schedule Wizard, step 1 (2026-07-13, per Maro: "generate a resource
 // loaded schedule based on an imported ifc") — extracts the elements a
@@ -208,6 +209,11 @@ async function buildStoreyMap(
 // them) — same userData.expressID lookup Viewport3D.tsx uses everywhere,
 // just collecting instead of stopping at the first match.
 function findMeshesForExpressId(root: THREE.Object3D, expressID: number): THREE.Mesh[] {
+  // ensureMaterialized first (2026-07-17) — see elementBatching.ts's own
+  // header: materializes every batched piece for this expressID so the
+  // traverse below actually finds all of them instead of silently missing
+  // whichever pieces were still batched.
+  ensureMaterialized(root, expressID)
   const found: THREE.Mesh[] = []
   root.traverse(child => {
     if (child instanceof THREE.Mesh && child.userData.expressID === expressID) found.push(child)

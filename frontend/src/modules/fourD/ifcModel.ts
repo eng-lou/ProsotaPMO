@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { IfcAPI } from 'web-ifc'
-import { captureBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
+import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
+import { buildElementMaterial, finalizeIndividualMesh, type BatchState } from './elementBatching'
+export { ensureMaterialized, type BatchInstanceInfo, type BatchState } from './elementBatching'
 
 // "Import IFC" (2026-07-10, per Maro — linked github.com/ThatOpen/engine_components
 // as "very important"). Uses web-ifc directly — the lower-level WASM parser
@@ -39,14 +41,75 @@ function getApi(): Promise<IfcAPI> {
   return apiPromise
 }
 
+// BatchState/BatchInstanceInfo/ensureMaterialized all live in
+// elementBatching.ts, not here (2026-07-17) — see that file's own header:
+// Viewport3D.tsx needs ensureMaterialized but must never statically import
+// anything from this file (web-ifc weight), and BatchState/BatchInstanceInfo
+// have zero web-ifc dependency of their own, so they moved with it.
 export interface IfcModelHandle {
   api: IfcAPI
   modelID: number
   object: THREE.Group
+  // Null when the file had no repeated geometry at all (every element
+  // unique) — nothing to batch, every element already went the individual-
+  // mesh route during import.
+  batch: BatchState | null
 }
 
 function colorToThree(c: { x: number; y: number; z: number; w: number }): THREE.Color {
   return new THREE.Color(c.x, c.y, c.z)
+}
+
+// Box-projected UVs (2026-07-11, per Maro: applied a concrete texture to
+// slabs, got a flat, detail-less grey instead) — web-ifc's own interleaved
+// vertex buffer is strictly position+normal, 6 floats per vertex (verified
+// against a real file, see this file's own header); it carries no UV/
+// texture-coordinate data at all, for any IFC geometry, ever. Without a
+// `uv` attribute, three.js's MeshStandardMaterial has no coordinates to
+// sample a `map` texture against and silently falls back to a flat,
+// untextured surface — that flat grey slab was never a render-mode
+// setting, it was a materially missing attribute. Generated here
+// per-vertex from each vertex's own *local* position (stable under a later
+// move/rotate, since TransformPanel edits the mesh's transform, not its
+// geometry) using the dominant axis of that vertex's own normal to pick
+// which two position components become U/V — the standard "box
+// projection" technique for CAD/BREP geometry with no native UV unwrap.
+// Exactly right (no seams) for the flat, axis-aligned faces that make up
+// most structural BIM elements (slabs/walls/columns/beams); a genuinely
+// curved face (this file has some curtain-wall panels) can show a seam
+// where the dominant axis flips — true triplanar blending would avoid
+// that, but needs a custom shader; deferred until it's actually reported
+// as a problem. UVs are left in raw model-space units (1 UV unit = 1 raw
+// unit, e.g. 1 foot for this file, see getLengthUnitToMetres's own header)
+// rather than pre-scaled to some guessed tile size — TextureFields.tsx's
+// own Tile Size control divides this back down via texture.repeat, so the
+// actual visual tiling density is a live, adjustable choice, not baked in
+// here.
+//
+// Factored out (2026-07-17) so ensureMaterialized below can build the
+// exact same geometry shape a batched element would have gotten had it
+// never been batched at all — one geometry-construction implementation,
+// reused whether an element becomes a mesh eagerly at import or lazily on
+// first interaction.
+function buildGeometryFromIfc(vertexData: Float32Array, indexData: Uint32Array): THREE.BufferGeometry {
+  const vertexCount = vertexData.length / 6
+  const positions = new Float32Array(vertexCount * 3)
+  const normals = new Float32Array(vertexCount * 3)
+  const uvs = new Float32Array(vertexCount * 2)
+  for (let v = 0, p = 0, u = 0; v < vertexData.length; v += 6, p += 3, u += 2) {
+    positions[p] = vertexData[v]; positions[p + 1] = vertexData[v + 1]; positions[p + 2] = vertexData[v + 2]
+    normals[p] = vertexData[v + 3]; normals[p + 1] = vertexData[v + 4]; normals[p + 2] = vertexData[v + 5]
+    const nx = Math.abs(normals[p]), ny = Math.abs(normals[p + 1]), nz = Math.abs(normals[p + 2])
+    if (nx >= ny && nx >= nz) { uvs[u] = positions[p + 1]; uvs[u + 1] = positions[p + 2] }
+    else if (ny >= nx && ny >= nz) { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 2] }
+    else { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 1] }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+  geometry.setIndex(new THREE.BufferAttribute(indexData, 1))
+  return geometry
 }
 
 export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
@@ -58,90 +121,112 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   group.name = file.name
 
   const flatMeshes = api.LoadAllGeometry(modelID)
-  for (let i = 0; i < flatMeshes.size(); i++) {
+  const meshCount = flatMeshes.size()
+
+  // Pass 1 (cheap — just reads the already-computed flatMesh structure, no
+  // GetGeometry/GetVertexArray calls): tally how many placements reference
+  // each geometryExpressID. Anything appearing exactly once keeps today's
+  // fully individual THREE.Mesh path, untouched, below. Anything repeated
+  // goes into the shared batch instead (this module's own header explains
+  // why).
+  const occurrenceCount = new Map<number, number>()
+  for (let i = 0; i < meshCount; i++) {
+    const flatMesh = flatMeshes.get(i)
+    for (let j = 0; j < flatMesh.geometries.size(); j++) {
+      const geomId = flatMesh.geometries.get(j).geometryExpressID
+      occurrenceCount.set(geomId, (occurrenceCount.get(geomId) ?? 0) + 1)
+    }
+  }
+
+  // Pass 2: build the BufferGeometry once per unique *repeated* shape
+  // (also dedupes the redundant GetGeometry/GetVertexArray calls the old
+  // one-call-per-placement code used to make even for identical geometry —
+  // a free import-time speedup, not just a rendering one), and tally the
+  // exact vertex/index/instance totals THREE.BatchedMesh needs fixed at
+  // construction time (no capacity growth in three@0.169 — verified
+  // directly in node_modules/three/src/objects/BatchedMesh.js, not
+  // assumed).
+  let totalVertexCount = 0
+  let totalIndexCount = 0
+  let totalInstanceCount = 0
+  const repeatedGeometries = new Map<number, THREE.BufferGeometry>()
+  for (const [geomId, count] of occurrenceCount) {
+    if (count <= 1) continue
+    const ifcGeom = api.GetGeometry(modelID, geomId)
+    const vertexData = api.GetVertexArray(ifcGeom.GetVertexData(), ifcGeom.GetVertexDataSize())
+    const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
+    repeatedGeometries.set(geomId, buildGeometryFromIfc(vertexData, indexData))
+    totalVertexCount += vertexData.length / 6
+    totalIndexCount += indexData.length
+    totalInstanceCount += count
+    ifcGeom.delete()
+  }
+
+  let batch: BatchState | null = null
+  if (repeatedGeometries.size > 0) {
+    // Base colour white — a repeated element's own real colour rides on
+    // its *per-instance* colour (setColorAt below), which three.js's
+    // batching shader multiplies against this material colour; a non-white
+    // base would tint every batched element uniformly regardless of its
+    // own actual colour.
+    const batchedMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    const batchedMesh = new THREE.BatchedMesh(totalInstanceCount, totalVertexCount, totalIndexCount, batchedMaterial)
+    batchedMesh.name = 'batched-elements'
+    const geometryByIfcId = new Map<number, { geometry: THREE.BufferGeometry; geometryId: number }>()
+    for (const [geomId, geometry] of repeatedGeometries) {
+      const geometryId = batchedMesh.addGeometry(geometry)
+      geometryByIfcId.set(geomId, { geometry, geometryId })
+    }
+    batch = { mesh: batchedMesh, byExpressId: new Map(), expressIdByInstanceId: new Map(), geometryByIfcId }
+    group.add(batchedMesh)
+  }
+
+  // Pass 3: place every element — a batch instance for repeated geometry,
+  // or today's fully individual THREE.Mesh for anything unique. Same final
+  // visual result either way, just a different draw-call cost.
+  for (let i = 0; i < meshCount; i++) {
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
       const placed = flatMesh.geometries.get(j)
+      const count = occurrenceCount.get(placed.geometryExpressID) ?? 1
+
+      const matrix = new THREE.Matrix4().fromArray(placed.flatTransformation)
+      // THREE.BatchedMesh.setMatrixAt explicitly does not support negatively
+      // scaled matrices (documented directly on the method, not assumed) —
+      // and real IFC files genuinely have these among repeated-geometry
+      // placements (IfcMappedItem reflections, e.g. a mirrored fastener
+      // type placed on the opposite side of something — the exact same
+      // class of data this session's Unreal work already found in this
+      // file family). Anything with a negative determinant falls back to
+      // the individual-mesh path unconditionally, regardless of how many
+      // times its geometry repeats — correctness over the batching win for
+      // the (typically small) fraction of placements this affects.
+      const isMirrored = matrix.determinant() < 0
+      if (count > 1 && batch && !isMirrored) {
+        const entry = batch.geometryByIfcId.get(placed.geometryExpressID)
+        if (!entry) continue
+        const instanceId = batch.mesh.addInstance(entry.geometryId)
+        batch.mesh.setMatrixAt(instanceId, matrix)
+        const color = colorToThree(placed.color)
+        batch.mesh.setColorAt(instanceId, color)
+        // Pushed onto an array, not a single-slot overwrite (2026-07-17) —
+        // one expressID can genuinely own more than one placed geometry
+        // piece; see BatchState.byExpressId's own header in
+        // elementBatching.ts for why a single slot would silently drop
+        // every piece but the last.
+        const infos = batch.byExpressId.get(flatMesh.expressID) ?? []
+        infos.push({ geometryId: entry.geometryId, instanceId, color, colorAlpha: placed.color.w, matrix })
+        batch.byExpressId.set(flatMesh.expressID, infos)
+        batch.expressIdByInstanceId.set(instanceId, flatMesh.expressID)
+        continue
+      }
+
       const ifcGeom = api.GetGeometry(modelID, placed.geometryExpressID)
       const vertexData = api.GetVertexArray(ifcGeom.GetVertexData(), ifcGeom.GetVertexDataSize())
       const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
-
-      const vertexCount = vertexData.length / 6
-      const positions = new Float32Array(vertexCount * 3)
-      const normals = new Float32Array(vertexCount * 3)
-      // Box-projected UVs (2026-07-11, per Maro: applied a concrete texture
-      // to slabs, got a flat, detail-less grey instead) — web-ifc's own
-      // interleaved vertex buffer is strictly position+normal, 6 floats per
-      // vertex (verified against a real file, see this file's own header);
-      // it carries no UV/texture-coordinate data at all, for any IFC
-      // geometry, ever. Without a `uv` attribute, three.js's
-      // MeshStandardMaterial has no coordinates to sample a `map` texture
-      // against and silently falls back to a flat, untextured surface —
-      // that flat grey slab was never a render-mode setting, it was a
-      // materially missing attribute. Generated here per-vertex from each
-      // vertex's own *local* position (stable under a later move/rotate,
-      // since TransformPanel edits the mesh's transform, not its geometry)
-      // using the dominant axis of that vertex's own normal to pick which
-      // two position components become U/V — the standard "box projection"
-      // technique for CAD/BREP geometry with no native UV unwrap. Exactly
-      // right (no seams) for the flat, axis-aligned faces that make up most
-      // structural BIM elements (slabs/walls/columns/beams); a genuinely
-      // curved face (this file has some curtain-wall panels) can show a
-      // seam where the dominant axis flips — true triplanar blending would
-      // avoid that, but needs a custom shader; deferred until it's actually
-      // reported as a problem. UVs are left in raw model-space units (1 UV
-      // unit = 1 raw unit, e.g. 1 foot for this file, see
-      // getLengthUnitToMetres's own header) rather than pre-scaled to some
-      // guessed tile size — TextureFields.tsx's own Tile Size control
-      // divides this back down via texture.repeat, so the actual visual
-      // tiling density is a live, adjustable choice, not baked in here.
-      const uvs = new Float32Array(vertexCount * 2)
-      for (let v = 0, p = 0, u = 0; v < vertexData.length; v += 6, p += 3, u += 2) {
-        positions[p] = vertexData[v]; positions[p + 1] = vertexData[v + 1]; positions[p + 2] = vertexData[v + 2]
-        normals[p] = vertexData[v + 3]; normals[p + 1] = vertexData[v + 4]; normals[p + 2] = vertexData[v + 5]
-        const nx = Math.abs(normals[p]), ny = Math.abs(normals[p + 1]), nz = Math.abs(normals[p + 2])
-        if (nx >= ny && nx >= nz) { uvs[u] = positions[p + 1]; uvs[u + 1] = positions[p + 2] }
-        else if (ny >= nx && ny >= nz) { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 2] }
-        else { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 1] }
-      }
-
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
-      geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
-      geometry.setIndex(new THREE.BufferAttribute(indexData, 1))
-
-      const material = new THREE.MeshStandardMaterial({
-        color: colorToThree(placed.color),
-        transparent: placed.color.w < 1,
-        opacity: placed.color.w,
-        side: THREE.DoubleSide,
-      })
-      const mesh = new THREE.Mesh(geometry, material)
-      mesh.applyMatrix4(new THREE.Matrix4().fromArray(placed.flatTransformation))
-      mesh.userData.expressID = flatMesh.expressID
-      // Its real placement within the model, not 0/0/0 — captured here,
-      // right after applyMatrix4 decomposes flatTransformation into this
-      // mesh's own local position/rotation/scale, so TransformPanel.tsx's
-      // hover-Backspace reset can snap a hand-edited field back to what
-      // this element actually started at (2026-07-09, per Maro — see
-      // elementBaseline.ts's own header for the full story).
-      captureBaseline(mesh)
-      // The element's own real colour (from web-ifc's own per-element
-      // `placed.color`) — captured so clearing a manual texture override
-      // later can actually restore it, instead of leaving the last-applied
-      // override showing forever (2026-07-09, per Maro: "when i change the
-      // material and delete the material, it doesn't actually go back to
-      // the default").
-      captureOriginalMaterial(mesh)
-      // 2026-07-11, per Maro — see geometrySubdivision.ts's own header:
-      // Viewport3D.tsx swaps mesh.geometry to a subdivided copy whenever
-      // displacement mapping + a subdivision level are active on this
-      // element, and needs this snapshot to swap back to whenever they
-      // aren't.
-      captureOriginalGeometry(mesh)
-      group.add(mesh)
-
+      const geometry = buildGeometryFromIfc(vertexData, indexData)
+      const mesh = new THREE.Mesh(geometry, buildElementMaterial(placed.color))
+      finalizeIndividualMesh(mesh, flatMesh.expressID, matrix, group)
       ifcGeom.delete()
     }
     // No flatMesh.delete() here despite web-ifc-api.d.ts declaring one
@@ -165,7 +250,12 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   // axisCorrectionRotation (upAxis.ts), applied via a wrapper group around
   // this object rather than onto it.
   captureBaseline(group)
-  return { api, modelID, object: group }
+  // Same userData-threading idiom as expressID/sceneObjectId elsewhere in
+  // this module — lets ensureMaterialized (and Viewport3D.tsx's raycast
+  // hit resolution) reach the batch state from just an Object3D reference,
+  // without needing the full IfcModelHandle in scope.
+  group.userData.batch = batch
+  return { api, modelID, object: group, batch }
 }
 
 // GlobalId -> expressID (2026-07-11) — model_element_link.py's ifc-kind
@@ -232,12 +322,23 @@ export function groupExpressIdsByType(handle: IfcModelHandle, expressIds: number
 }
 
 export function disposeIfcModel(handle: IfcModelHandle) {
+  // THREE.BatchedMesh extends THREE.Mesh, so the traversal below would
+  // otherwise also match it and hand it to disposeMeshGeometries/
+  // disposeMeshMaterials, both of which assume per-element userData
+  // (originalGeometry, standardMaterial) the shared batch mesh never has —
+  // it gets its own dedicated disposal below instead.
+  const batchMesh = handle.batch?.mesh
   handle.object.traverse(child => {
-    if (child instanceof THREE.Mesh) {
+    if (child instanceof THREE.Mesh && child !== batchMesh) {
       disposeMeshGeometries(child)
       disposeMeshMaterials(child, false)
     }
   })
+  if (handle.batch) {
+    handle.batch.mesh.material && (Array.isArray(handle.batch.mesh.material) ? handle.batch.mesh.material.forEach(m => m.dispose()) : handle.batch.mesh.material.dispose())
+    handle.batch.mesh.dispose()
+    for (const entry of handle.batch.geometryByIfcId.values()) entry.geometry.dispose()
+  }
   handle.api.CloseModel(handle.modelID)
 }
 

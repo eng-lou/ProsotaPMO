@@ -47,6 +47,15 @@ import { DEFAULT_DOCK_CONFIG, useActiveDockConfig, useDockLayouts, type DockLayo
 // weight isn't in the main bundle at all until an IFC file is actually
 // imported.
 import type { IfcModelHandle } from './ifcModel'
+// Real (non-type-only) import — elementBatching.ts has zero web-ifc
+// dependency of its own (see its own header), unlike the type-only
+// IfcModelHandle import above, so this doesn't reintroduce the
+// ~2.95MB->6.6MB bundle regression ifcModel.ts's own header describes.
+// Needed here specifically (not just dynamically imported at each call
+// site like the rest of ifcModel.ts) because the render-body TransformPanel
+// gizmo-target resolution below runs synchronously during render, where an
+// await import() isn't an option.
+import { ensureMaterialized } from './elementBatching'
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
@@ -381,9 +390,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       let bounds: SectionBoxBounds
       if (target.kind === 'ifc' && selectedExpressId !== null) {
         const handle = getIfcHandleFor(target.id)
+        // ensureMaterialized, not a plain traverse (2026-07-17) — see
+        // elementBatching.ts's own header: a repeated-geometry element may
+        // still be sitting in the shared BatchedMesh, not its own
+        // traversable mesh, if it was selected some way other than a
+        // click (handleClick's own materialize call covers that path).
         let found: Object3D | null = null
         if (handle) {
-          handle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
+          const { ensureMaterialized } = await import('./elementBatching')
+          found = ensureMaterialized(handle.object, selectedExpressId)
         }
         if (found && handle) {
           const { getElementInfo } = await import('./ifcModel')
@@ -2887,8 +2902,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [activeIfcHandle])
   if (activeIfcHandle && selectedExpressId !== null) {
-    let found: Object3D | null = null
-    activeIfcHandle.object.traverse(child => { if (!found && child.userData.expressID === selectedExpressId) found = child })
+    // ensureMaterialized, not a plain traverse (2026-07-17) — the
+    // TransformPanel gizmo's actual target; a repeated-geometry element
+    // selected some way other than a click (handleClick's own materialize
+    // call covers that path) could otherwise still be sitting in
+    // ifcModel.ts's shared BatchedMesh, silently leaving no gizmo target
+    // at all. Safe to call unconditionally every render — idempotent, and
+    // a no-op after the first materialization.
+    const found = ensureMaterialized(activeIfcHandle.object, selectedExpressId)
     if (found) { activeTransformObject = found; isElementTransform = true }
   }
 

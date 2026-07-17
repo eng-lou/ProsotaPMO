@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { ElementSplit } from './elementSplits'
 import { captureOriginalGeometry, captureOriginalMaterial } from './elementBaseline'
 import type { IfcModelHandle } from './ifcModel'
+import { ensureMaterialized } from './elementBatching'
 import { worldSlicePlanes } from './sectionBoxGeometry'
 import { buildSplitElementRef, splitTargetMapsByHandle, type SplitTargetMaps } from './splitElementRefs'
 export { getSplitExpressId, getSplitElementRef } from './splitElementRefs'
@@ -93,6 +94,11 @@ export async function regenerateSplitTargets(handle: IfcModelHandle, splits: Ele
     // wall/beam" fix to Viewport3D.tsx's own getExpressIdIndex) — every
     // piece needs cloning+clipping identically, not just the first one
     // found, or a multi-piece element would only partially split.
+    // ensureMaterialized first (2026-07-17) — see elementBatching.ts's own
+    // header: materializes *every* batched piece for this expressID (not
+    // just one), so the traverse below actually finds all of them instead
+    // of silently missing whichever pieces were still batched.
+    ensureMaterialized(handle.object, expressId)
     const parentMeshes: THREE.Mesh[] = []
     handle.object.traverse(child => {
       if (child instanceof THREE.Mesh && child.userData.expressID === expressId && !child.userData.isSplitClone) {

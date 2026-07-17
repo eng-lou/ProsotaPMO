@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import type { ImportedObject, ResolvedSectionBox } from './Viewport3D'
 import type { SectionBoxBounds } from './sectionBoxes'
+import { ensureMaterialized } from './elementBatching'
 
 type FaceId = 'min_x' | 'max_x' | 'min_y' | 'max_y' | 'min_z' | 'max_z'
 
@@ -227,8 +228,9 @@ export function SectionBoxGizmos({
         if (!object) return null
         let target = object
         if (box.elementExpressId !== undefined) {
-          let found: THREE.Object3D | null = null
-          object.traverse(child => { if (!found && child.userData.expressID === box.elementExpressId) found = child })
+          // ensureMaterialized, not a plain traverse (2026-07-17) — see
+          // elementBatching.ts's own header.
+          const found = ensureMaterialized(object, box.elementExpressId)
           if (!found) return null
           target = found
         }

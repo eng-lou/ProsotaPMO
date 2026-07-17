@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { CustomTextureSet, TextureSlot } from './customTextures'
 import { getOriginalMaterialSlots } from './elementBaseline'
+import { ensureMaterialized, materializeAll } from './elementBatching'
 import type { IfcModelHandle } from './ifcModel'
 
 // "Select Linked" / "Apply to Linked" — per material channel (2026-07-09,
@@ -59,10 +60,13 @@ export function findLinkedExpressIds(
   ifcHandle: IfcModelHandle, objectId: string, slot: TextureSlot, referenceExpressId: number,
   customTextures: Record<string, CustomTextureSet>,
 ): number[] {
-  let referenceMesh: THREE.Mesh | null = null
-  ifcHandle.object.traverse(child => {
-    if (!referenceMesh && child instanceof THREE.Mesh && child.userData.expressID === referenceExpressId) referenceMesh = child
-  })
+  // materializeAll, not a plain traverse (2026-07-17) — see
+  // elementBatching.ts's own header: this scans *every* element's current
+  // material value against the reference, which a plain traverse would
+  // silently skip for anything still sitting in ifcModel.ts's shared
+  // BatchedMesh.
+  materializeAll(ifcHandle.object)
+  const referenceMesh = ensureMaterialized(ifcHandle.object, referenceExpressId)
   if (!referenceMesh) return []
   const referenceValue = resolveChannelValue(referenceMesh, slot, objectId, customTextures)
 

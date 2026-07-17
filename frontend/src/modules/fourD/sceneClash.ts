@@ -89,9 +89,15 @@ export async function resolveMembersToElements(
       for (const handle of ifcHandles) {
         const expressId = ifcModel.getExpressIdFromGuid(handle, member.element_ref)
         if (expressId === undefined) continue
-        handle.object.traverse(child => {
-          if (child instanceof THREE.Mesh && child.userData.expressID === expressId) meshes.push(child)
-        })
+        // ensureMaterialized, not a plain traverse (2026-07-17) — an
+        // element whose geometry repeats elsewhere in the file may still
+        // be sitting in ifcModel.ts's shared THREE.BatchedMesh rather than
+        // its own traversable mesh (see elementBatching.ts's own header);
+        // a plain userData.expressID traverse would silently find nothing
+        // for it and this element would just never clash-test at all,
+        // with no error to say why.
+        const mesh = ifcModel.ensureMaterialized(handle.object, expressId)
+        if (mesh) meshes.push(mesh)
         break
       }
     }
