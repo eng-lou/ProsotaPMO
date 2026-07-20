@@ -1721,3 +1721,95 @@ nothing broken by the new code. Frontend `tsc --noEmit` clean. Not yet
 tried in an actual browser (no browser available in this environment) —
 that's the one thing still needed before this gets committed, per the
 usual rule of not saving work until Maro's actually seen it work.
+
+**Same session, continued: "carry on with next phases" — Phase 1b
+(Baseline Comparison) built end to end, plus a "Generate ICD" feature
+requested along the way, both landed after several real rounds of
+feedback.** Phase 1b needed Risk/Cost/ICD to each gain a "freeze a
+snapshot, compare later" capability the way Scheduling already has via
+`ScheduleBaseline`. Talked the actual design through with Maro rather
+than picking one myself: each module keeps its own independent baseline
+(new `RiskBaseline`/`CostBaseline`/`IcdBaseline` tables, each mirroring
+`ScheduleBaseline`'s own shape exactly — this app has never used a
+generic JSON-blob snapshot anywhere, and these don't start that), *plus*
+a new `BaselineSet` that ties one of each together under a shared name
+("Contract Baseline") so the Dashboard can compare "everything as it
+stood at X" in one pick — supporting both a one-click "capture all four
+now" action and manually linking an already-existing standalone baseline
+into a set afterward, per Maro's own two real workflows. New
+`GET /api/v1/dashboard/baseline-comparison` computes real deltas across
+all four modules — Cost's BAC/CPI/EAC recomputed at both the snapshot's
+own resolved bac/ac/pct_complete and today's, through the exact same
+`rollup_evm_from_totals` formula every other EVM figure in this app
+already goes through, never a second one.
+
+Maro asked for "generate icd in that module as well," extending the same
+schedule -> resources -> cost -> risk pipeline `riskGeneration.ts` already
+established. Real domain question worth getting right rather than
+copy-pasting the risk generator: an Issue is a problem that's already
+happened, a Change is a modification actually requested — there's nothing
+legitimate to pre-populate for either, unlike a Risk (uncertain future
+event) or a Decision (something you can genuinely see coming — "confirm
+the facade system" tied to a long-lead package). Shipped Decisions-only
+first; Maro then explicitly asked for Issue/Change placeholders too, and
+a second short discussion landed on the right shape for those — a
+discipline-level "watch-flag" with no real trigger date (unlike a
+Decision's real `required_by`), clearly labelled as a generated
+placeholder to review or dismiss, never presented as something that
+actually happened. Also built this as a genuine *rescan*, not
+`risk_bulk_generate.py`'s one-shot dedupe-and-freeze: re-running it after
+the schedule moves only refreshes the items whose own discipline actually
+shifted (per Maro: "it doesn't have to change all items just onces
+impacted"), and every generated item gets real `record_links` edges to
+the activities it gates — laying real groundwork for the cross-module
+causal tracing in the Baseline Analysis prototype (an Issue driving a
+Risk, driving schedule slip, driving a Change, pending a Decision)
+without building the AI narrative itself, which stays a deliberately
+deferred later phase.
+
+Four rounds of real, specific feedback after the first working version,
+each one a genuine fix rather than a matter of taste:
+1. **Milestone Timeline "single line is stupid."** With only two
+   milestones, a track that only spans between the milestones themselves
+   reduces to a bare line. Fixed by adding real evenly-spaced calendar
+   tick marks (a genuine time scale) below the axis, independent of how
+   many milestones exist, with milestones themselves above it.
+2. **Delta colours were backwards for cost and risk.** A literal
+   "positive is green" rule is wrong wherever growth is bad news — a
+   growing budget or a worsening risk rating are never good, even though
+   a rising SPI/CPI is. Added a `higherIsBetter` flag per metric instead
+   of one universal rule, and fixed the call sites that had it backwards
+   (BAC, EAC, risk rating).
+3. **Schedule SPI, added to the Baseline Comparison's Schedule tab.**
+   Genuinely harder than it sounds: SPI is a cost-side figure (PV/EV), not
+   a pure schedule one, so computing it "at baseline time" needed
+   cross-referencing the *sibling* `CostBaseline`'s own snapshot bac/pct_
+   complete against the *sibling* `ScheduleBaseline`'s own snapshot
+   start/finish — two different modules' baselines, matched by
+   `linked_activity_id`, run through the exact same `_schedule_evm`
+   formula Cost Plan's live SPI already uses. None on either side when the
+   underlying schedule-linked cost data isn't there, never a guessed
+   number.
+4. **"I don't need to see 0 variances" — then "but an added/removed item
+   should still show."** First pass filtered every comparison table down
+   to only rows that actually moved, which accidentally hid *added* items
+   too (a null baseline reads as "no delta" if you're not careful). Real
+   second bug hiding underneath: the Cost/ICD summary *totals* themselves
+   had been quietly under-counting all along, only ever summing items
+   that existed at baseline time — an added cost element's BAC or an added
+   issue's open status never rolled into "current" at all. Fixed both:
+   every comparison function now also surfaces live records with no
+   baseline snapshot (shown as "(new) £20,000" rather than a blank), and
+   the aggregate totals sum over every live record, not just previously-
+   snapshotted ones.
+
+742 backend tests passing throughout (up from 715), full suite re-run
+clean after every round, `tsc --noEmit` clean throughout. Committed this
+time — Maro tried it in the browser across several rounds and said "good
+enough, carry on" each time, satisfying the usual don't-commit-until-
+verified rule. The commit also swept in a batch of older, already-
+finished-but-uncommitted work from earlier in the session (the 4D Measure
+tool, BOQ delete-all/print, Risk/Cost bulk generation, section box
+rotation) — asked Maro explicitly whether to keep that separate or bundle
+it in, since none of it had been touched or re-verified in this
+continuation; he chose one combined commit.
