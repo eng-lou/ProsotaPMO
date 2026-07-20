@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Vector3, type Object3D } from 'three'
+import { Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
@@ -20,11 +20,11 @@ import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, re
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind, type SourceKind } from './modelElementLinks'
 import { deleteModel3DFile, downloadModel3DFile, listModel3DFiles, uploadModel3DFile, type Model3DKind } from './model3dFiles'
-import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds } from './sectionBoxes'
+import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds, type SectionBoxRotation } from './sectionBoxes'
 import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sectionBoxGeometry'
 import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
-import { SectionBoxPanel } from './SectionBoxPanel'
+import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { CameraViewPanel } from './CameraViewPanel'
 import {
@@ -78,12 +78,20 @@ import {
 } from './clashTests'
 import { ClashDetectionPanel } from './ClashDetectionPanel'
 import { resolveMembersToElements, findClashes, type ClashSceneObject } from './sceneClash'
+import { createMeasurement, deleteMeasurement, listMeasurements, updateMeasurement, type Measurement, type MeasurementPoint } from './measurements'
+import { MeasurementsPanel, type MeasuringTool } from './MeasurementsPanel'
+import type { MeasurementHit } from './MeasurementGizmo'
+// Real (non-type-only) import, same reasoning as elementBatching.ts above —
+// pure geometry math with zero web-ifc dependency of its own, so there's no
+// bundle-weight benefit to deferring it the way ifcModel.ts itself needs
+// (see resolveToMetresForHit below, which still dynamic-imports that one).
+import { distanceMetres, measureFacePatch } from './measurementGeometry'
 import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
 import { BaselineViewportPane } from './BaselineViewportPane'
 import { ImportModelDialog } from './ImportModelDialog'
 import { IfcScheduleWizard } from './IfcScheduleWizard'
 import { UnloadModelDialog } from './UnloadModelDialog'
-import type { UpAxis } from './upAxis'
+import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
 import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
 import { WindowChrome, type DockSide } from './WindowChrome'
@@ -135,6 +143,8 @@ const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
 const CLASH_PANEL_DOCK_KEY = 'prosota_4d_clash_panel_dock'
 const RIG_PANEL_OPEN_KEY = 'prosota_4d_rig_panel_open'
 const RIG_PANEL_DOCK_KEY = 'prosota_4d_rig_panel_dock'
+const MEASUREMENTS_PANEL_OPEN_KEY = 'prosota_4d_measurements_panel_open'
+const MEASUREMENTS_PANEL_DOCK_KEY = 'prosota_4d_measurements_panel_dock'
 function loadPanelOpen(key: string, defaultOpen = true): boolean {
   try {
     const raw = localStorage.getItem(key)
@@ -385,7 +395,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // that element's own mesh, not the whole model, so the box wraps
       // just that element; element_ref stores its GlobalId (the stable
       // identifier — expressIDs only mean anything within one web-ifc
-      // session, see ifcModel.ts).
+      // session, see ifcModel.ts). Relies on selectedExpressId only ever
+      // being non-null when exactly one element is genuinely selected —
+      // see handleBoxSelect/handleSelectUnassigned/handleSelectAll's own
+      // 2026-07-17 fix headers for why that invariant used to not hold.
       let elementRef: string | null = null
       let bounds: SectionBoxBounds
       if (target.kind === 'ifc' && selectedExpressId !== null) {
@@ -413,6 +426,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         const handle = getIfcHandleFor(target.id)
         const found: Object3D[] = []
         if (handle) {
+          // materializeAll first (2026-07-17 fix) — this branch used to be
+          // unreachable for any multi-select (see this function's own
+          // header above), so its missing materialize call never mattered
+          // until now: a plain traverse only ever sees real individual
+          // meshes, silently skipping every element still sitting in the
+          // shared THREE.BatchedMesh untouched, which for a large Select
+          // All is most of them — same "materialize first" convention
+          // elementBatching.ts's own header documents for every other
+          // whole-model scan in this app.
+          const { materializeAll } = await import('./elementBatching')
+          materializeAll(handle.object)
           handle.object.traverse(child => { if (selectedExpressIds.has(child.userData.expressID)) found.push(child) })
         }
         bounds = found.length > 0 ? computeLocalBoundsForObjects(target.object, found) : computeLocalBoundsForObject(target.object)
@@ -426,7 +450,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleUpdateSectionBox = async (id: string, data: Partial<SectionBoxBounds> & { name?: string; active?: boolean; visible?: boolean }) => {
+  const handleUpdateSectionBox = async (id: string, data: Partial<SectionBoxBounds> & Partial<SectionBoxRotation> & { name?: string; active?: boolean; visible?: boolean }) => {
     try {
       setSectionBoxError(null)
       const updated = await updateSectionBox(id, data)
@@ -453,6 +477,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleSectionBoxDragEnd = (id: string, bounds: SectionBoxBounds) => {
     setDraggingSectionBox(null)
     handleUpdateSectionBox(id, bounds)
+  }
+  // Same live-drag/commit split as handleSectionBoxDragMove/End above, for
+  // the rotate gizmo (2026-07-17).
+  const handleSectionBoxRotateMove = (id: string, rotation: SectionBoxRotation) => setDraggingSectionBoxRotation({ id, rotation })
+  const handleSectionBoxRotateEnd = (id: string, rotation: SectionBoxRotation) => {
+    setDraggingSectionBoxRotation(null)
+    handleUpdateSectionBox(id, rotation)
   }
 
   const handleDeleteSectionBox = async (id: string) => {
@@ -1383,6 +1414,177 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Dockable Measurements panel (2026-07-19) — same shared-side-dock
+  // treatment as every panel above.
+  const [measurementsPanelOpen, setMeasurementsPanelOpen] = useState(() => loadPanelOpen(MEASUREMENTS_PANEL_OPEN_KEY, false))
+  const toggleMeasurementsPanel = () => {
+    setMeasurementsPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(MEASUREMENTS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [measurementsPanelDock, setMeasurementsPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(MEASUREMENTS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleMeasurementsPanelDock = () => {
+    setMeasurementsPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(MEASUREMENTS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+
+  // Measure tool (2026-07-19, per Maro: "add a measurement feature, length
+  // and areas" then "maybe i can also click element surfaces and it gives
+  // me the area") — project-scoped, persisted server-side like every other
+  // 4D-viewport tool this session (see measurement.py's own docstring).
+  const [measurements, setMeasurements] = useState<Measurement[]>([])
+  const [measurementError, setMeasurementError] = useState<string | null>(null)
+  const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
+  const [measuringTool, setMeasuringTool] = useState<MeasuringTool | null>(null)
+  // Local-only until Finish/auto-finalize actually creates the row — a
+  // Measurement is a fixed record once saved (see measurement.py's
+  // MeasurementUpdate docstring), so points are gathered client-side first
+  // rather than persisted-and-patched per click the way Path's own points
+  // are.
+  const [measuringPoints, setMeasuringPoints] = useState<MeasurementPoint[]>([])
+  // Resolved once per in-progress measurement, from the FIRST click's own
+  // hit target only (2026-07-19 v1 simplification, same spirit as
+  // sceneClash.ts's own documented "assumes scene units are already
+  // metres" — here at least corrected for whichever one model the
+  // measurement is actually being taken against, via
+  // getLengthUnitToMetres, rather than skipping the correction entirely).
+  // Defaults to 1 (assume already metres) for a ground-plane click or a
+  // plain non-IFC mesh, matching ifcUnitDisplay.ts's own toMetres===null
+  // passthrough convention.
+  const [measuringToMetres, setMeasuringToMetres] = useState(1)
+  // Live snap-cursor preview (2026-07-19, per Maro: "learn from blender") —
+  // read-only, updated on every pointermove by MeasurementCatcher; see that
+  // component's own header for why it only resolves for an
+  // already-individual (non-batched) mesh.
+  const [measurementHoverPoint, setMeasurementHoverPoint] = useState<MeasurementPoint | null>(null)
+
+  useEffect(() => {
+    if (!selectedProject) return
+    let cancelled = false
+    listMeasurements(selectedProject.id).then(ms => { if (!cancelled) setMeasurements(ms) })
+    return () => { cancelled = true }
+  }, [selectedProject])
+
+  const measurementErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  const handleStartMeasuring = (tool: MeasuringTool) => {
+    setMeasuringTool(prev => (prev === tool ? null : tool))
+    setMeasuringPoints([])
+  }
+
+  // Walks up from a raw click's hit object to whichever ancestor carries
+  // sceneObjectId (set at import time, same tag getIfcHandleFor's every
+  // other caller already relies on) to find which loaded IFC model, if any,
+  // actually owns it, then reads that model's own real LENGTHUNIT — a plain
+  // mesh import or a ground-plane click (object===null) has nothing to
+  // read and stays at the "assume metres" default of 1.
+  const resolveToMetresForHit = async (object: Object3D | null): Promise<number> => {
+    if (!object) return 1
+    let node: Object3D | null = object
+    while (node && node.userData.sceneObjectId === undefined) node = node.parent
+    const sceneObjectId = node?.userData.sceneObjectId as string | undefined
+    const handle = sceneObjectId ? getIfcHandleFor(sceneObjectId) : null
+    if (!handle) return 1
+    const { getSpatialTree, getLengthUnitToMetres } = await import('./ifcModel')
+    const tree = await getSpatialTree(handle)
+    return getLengthUnitToMetres(handle, tree.expressID)
+  }
+
+  const handleCreateMeasurement = async (
+    kind: 'length' | 'area', points: MeasurementPoint[], value: number, name: string, holeLoops?: MeasurementPoint[][],
+  ) => {
+    if (!selectedProject) return
+    try {
+      setMeasurementError(null)
+      const created = await createMeasurement({ project_id: selectedProject.id, kind, points, value, name, hole_loops: holeLoops })
+      setMeasurements(prev => [...prev, created])
+    } catch (err) {
+      setMeasurementError(measurementErrorMessage(err, 'Failed to save measurement'))
+    }
+  }
+
+  const handleMeasurementHit = async (hit: MeasurementHit) => {
+    if (!measuringTool) return
+
+    if (measuringTool === 'area_face') {
+      setMeasuringTool(null)
+      if (!hit.object || hit.faceIndex === null || !(hit.object instanceof Mesh)) {
+        setMeasurementError('Click directly on a real element surface to measure its face area')
+        return
+      }
+      const toMetres = await resolveToMetresForHit(hit.object)
+      const patch = measureFacePatch(hit.object, hit.faceIndex, toMetres)
+      if (!patch) {
+        setMeasurementError('Could not measure that surface (unsupported geometry)')
+        return
+      }
+      await handleCreateMeasurement('area', patch.outlinePointsScene, patch.areaMetres, 'Face area', patch.holeLoopsScene)
+      return
+    }
+
+    // Only 'length' reaches here now (area_points removed 2026-07-19, per
+    // Maro — Area (face)'s automatic flood-fill made manually clicking a
+    // polygon's own corners redundant).
+    const toMetres = measuringPoints.length === 0 ? await resolveToMetresForHit(hit.object) : measuringToMetres
+    if (measuringPoints.length === 0) setMeasuringToMetres(toMetres)
+    const nextPoints = [...measuringPoints, hit.point]
+    if (nextPoints.length < 2) {
+      setMeasuringPoints(nextPoints)
+      return
+    }
+    setMeasuringTool(null)
+    setMeasuringPoints([])
+    await handleCreateMeasurement('length', nextPoints, distanceMetres(nextPoints[0], nextPoints[1], toMetres), 'Length')
+  }
+
+  const handleRenameMeasurement = async (id: string, name: string) => {
+    try {
+      setMeasurementError(null)
+      const updated = await updateMeasurement(id, { name })
+      setMeasurements(prev => prev.map(m => (m.id === id ? updated : m)))
+    } catch (err) {
+      setMeasurementError(measurementErrorMessage(err, 'Failed to rename measurement'))
+    }
+  }
+  const handleToggleMeasurementVisible = async (id: string) => {
+    const m = measurements.find(m => m.id === id)
+    if (!m) return
+    try {
+      setMeasurementError(null)
+      const updated = await updateMeasurement(id, { visible: !m.visible })
+      setMeasurements(prev => prev.map(x => (x.id === id ? updated : x)))
+    } catch (err) {
+      setMeasurementError(measurementErrorMessage(err, 'Failed to update measurement'))
+    }
+  }
+  const handleDeleteMeasurement = async (id: string) => {
+    try {
+      setMeasurementError(null)
+      await deleteMeasurement(id)
+      setMeasurements(prev => prev.filter(m => m.id !== id))
+      if (selectedMeasurementId === id) setSelectedMeasurementId(null)
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setMeasurements(prev => prev.filter(m => m.id !== id))
+        return
+      }
+      setMeasurementError(measurementErrorMessage(err, 'Failed to delete measurement'))
+    }
+  }
   // Heights of the top/bottom window docks, in px — drag-resizable via
   // DockDivider.tsx between each dock and the viewport (2026-07-11, per
   // Maro: "the dividers separating the windows and the main the 3d
@@ -1498,6 +1700,36 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // DataPanel.tsx) are derived from below (2026-07-11, per Maro: manage 3D
   // data, not just IFC — including unloading one).
   const [sceneObjects, setSceneObjects] = useState<SceneObject[]>([])
+
+  // Forces a real save before a refresh is allowed to actually happen
+  // (2026-07-17, per Maro, after a real incident: a freshly-imported IFC
+  // set survived in the live scene for a while — since persistModelFile's
+  // own upload is deliberately fire-and-forget, not blocking the import —
+  // but a refresh mid-upload (a 150MB+ real building file can take a real
+  // while over the wire) discards whatever hadn't finished landing
+  // server-side yet, with nothing forcing the user to notice or wait).
+  // `fileId === null` on a scene object means exactly "imported, but not
+  // yet confirmed saved" (see persistModelFile's own header) — the browser's
+  // native beforeunload prompt is the only mechanism that can actually make
+  // a refresh wait on the user's own explicit "yes, leave anyway," the same
+  // way any other app warns on real unsaved changes. A ref, not a `useEffect`
+  // dependency on `sceneObjects` itself, so this one listener registered
+  // once on mount always reads whatever the *latest* state is at the moment
+  // the browser actually fires the event, not whatever it happened to close
+  // over at mount time.
+  const sceneObjectsRef = useRef(sceneObjects)
+  useEffect(() => { sceneObjectsRef.current = sceneObjects })
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (sceneObjectsRef.current.some(o => o.fileId === null)) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
+
   // A live-drag override for whichever one box is currently being resized
   // via SectionBoxGizmo.tsx's own pointer handlers (2026-07-09) — updated
   // on every pointer-move (handleSectionBoxDragMove below), cleared once
@@ -1509,6 +1741,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // lives further below, after getIfcHandleFor is declared, since
   // per-element scoping needs it too; see that block's own header.)
   const [draggingSectionBox, setDraggingSectionBox] = useState<{ id: string; bounds: SectionBoxBounds } | null>(null)
+  // Same live-preview-until-release convention as draggingSectionBox above,
+  // just for the box's own rotation (2026-07-17, per Maro: "I'd like to
+  // rotate the bounding box") — kept as a separate piece of state rather
+  // than folded into draggingSectionBox's own shape, since resize and
+  // rotate are two independent drag gestures that should never clobber
+  // each other's live preview.
+  const [draggingSectionBoxRotation, setDraggingSectionBoxRotation] = useState<{ id: string; rotation: SectionBoxRotation } | null>(null)
+  // Resize vs Rotate (2026-07-17, per Maro: "the rotation handles make it
+  // hard to manipulate the original handles") — one gizmo active at a
+  // time across every box, not per-box; matches gizmoMode's own single
+  // global toggle for the ordinary object/element TransformControls
+  // elsewhere in this file.
+  const [sectionBoxTool, setSectionBoxTool] = useState<SectionBoxTool>('resize')
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   // Hide-by-sub-element (2026-07-11, for Collections) — see Viewport3D.tsx's
   // own Props doc comment on why this is a composite-key Set<string>, not a
@@ -1712,7 +1957,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (objectIds.length === 0 && expressIdsByObject.size === 0) return
     const allExpressIds = [...expressIdsByObject.values()].flat()
     setSelectedExpressIds(new Set(allExpressIds))
-    setSelectedExpressId(allExpressIds.length ? allExpressIds[allExpressIds.length - 1] : null)
+    // Only a genuine single-element result gets a "primary" element
+    // (2026-07-17 fix — see handleBoxSelect's own header for why).
+    setSelectedExpressId(allExpressIds.length === 1 ? allExpressIds[0] : null)
     setSelectedObjectIds(new Set([...objectIds, ...expressIdsByObject.keys()]))
     const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : objectIds[objectIds.length - 1]
     if (lastObjectId) {
@@ -1903,8 +2150,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!sceneObject) return []
     if (box.element_ref !== null && sectionBoxElementIds[box.id] === undefined) return []
     const bounds = draggingSectionBox?.id === box.id ? draggingSectionBox.bounds : box
+    const rotation = draggingSectionBoxRotation?.id === box.id
+      ? draggingSectionBoxRotation.rotation
+      : { rot_x: box.rot_x, rot_y: box.rot_y, rot_z: box.rot_z }
     return [{
-      id: box.id, sceneObjectId: sceneObject.id, active: box.active, visible: box.visible, bounds,
+      id: box.id, sceneObjectId: sceneObject.id, active: box.active, visible: box.visible, bounds, rotation,
       elementExpressId: box.element_ref !== null ? sectionBoxElementIds[box.id] : undefined,
     }]
   })
@@ -1968,18 +2218,48 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Combined "Import Model" flow (2026-07-08, per Maro: "combine the two
   // import widgets to one... after selecting the model and its type, there
   // should be an option to set its axis transformations") — one file picker
-  // covering both kinds' extensions; picking a file doesn't import it
-  // immediately, it opens ImportModelDialog (below, in the JSX) with the
-  // kind auto-detected from the extension, so the user can override the
-  // axis guess before anything actually loads.
-  const [pendingImport, setPendingImport] = useState<{ file: File; kind: 'ifc' | 'mesh' } | null>(null)
+  // covering both kinds' extensions. Originally showed ImportModelDialog for
+  // every kind; IFC now skips it entirely (2026-07-17, per Maro: "upon
+  // import of ifc remove ability to rename and the axis... use y axis as
+  // default" — see handleFileSelected's own header) since this queue is
+  // mesh-only these days — GLTF/OBJ/FBX axis convention genuinely varies
+  // file-to-file, unlike IFC.
+  // A queue, not a single pending file (2026-07-17, per Maro: "allow me to
+  // bulk import ifc files not one by one" — this predates the IFC-skips-the-
+  // dialog change above, but the same multi-select-picker mechanism still
+  // matters for mesh imports). Every mesh file picked lands here; the
+  // confirm dialog (JSX below) always shows pendingImports[0] — confirming
+  // or cancelling one just advances to the next.
+  const [pendingImports, setPendingImports] = useState<{ file: File }[]>([])
 
   const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     e.target.value = ''
-    if (!file) return
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    setPendingImport({ file, kind: ext === 'ifc' ? 'ifc' : 'mesh' })
+    if (files.length === 0) return
+    // IFC files skip the confirm dialog entirely (2026-07-17, per Maro:
+    // "upon import of ifc remove ability to rename and the axis... use y
+    // axis as default") — real IFC filenames (e.g. "Snowdon Towers Sample
+    // Architectural.ifc") are already a fine identity as-is, and 'y' is
+    // already this app's own default guess for IFC (see
+    // defaultSourceUpAxis's own header on why IFC's spec'd Z-up default
+    // turned out wrong against every real test file tried), so a
+    // per-file dialog was pure friction with nothing left worth
+    // overriding. Still funnelled through importQueueRef (not called
+    // directly) — see that ref's own header on why IFC parses must stay
+    // strictly serialized against the shared WASM instance regardless of
+    // how the import was triggered. Mesh imports (GLTF/OBJ/FBX) keep the
+    // dialog — axis convention genuinely varies file-to-file for those,
+    // unlike IFC (see ImportModelDialog.tsx's own header).
+    const ifcFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'ifc')
+    const meshFiles = files.filter(file => !ifcFiles.includes(file))
+    for (const file of ifcFiles) {
+      importQueueRef.current = importQueueRef.current.then(
+        () => handleImportIfc(file, defaultSourceUpAxis('ifc'), file.name),
+      )
+    }
+    if (meshFiles.length > 0) {
+      setPendingImports(prev => [...prev, ...meshFiles.map(file => ({ file, kind: 'mesh' as const }))])
+    }
   }
 
   // Uploads a freshly-imported file to the backend so it survives a hard
@@ -2071,12 +2351,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Chained, not fire-and-forget (2026-07-17, per Maro's bulk-import
+  // request) — the dialog queue below advances the instant each file is
+  // confirmed, so a user breezing through 6 confirms back-to-back could
+  // otherwise trigger 6 truly-overlapping loadIfcModel() calls into
+  // ifcModel.ts's single shared web-ifc WASM instance (getApi()), which has
+  // no prior art in this codebase for concurrent OpenModel/LoadAllGeometry
+  // calls — same reasoning as the restore-on-reload fix just above. This
+  // ref is a promise chain acting as a mutex: each confirmed import is
+  // appended to run only after the previous one has fully finished
+  // (success or failure), so actual parsing stays strictly one-at-a-time no
+  // matter how fast the confirm clicks come in — only the review dialog
+  // itself (name/axis, no WASM involved) is instant per file.
+  const importQueueRef = useRef<Promise<void>>(Promise.resolve())
+
+  // Mesh-only now (2026-07-17) — IFC files bypass this dialog entirely,
+  // see handleFileSelected's own header.
   const handleConfirmImport = (sourceUpAxis: UpAxis, name: string) => {
-    if (!pendingImport) return
-    const { file, kind } = pendingImport
-    setPendingImport(null)
-    if (kind === 'ifc') handleImportIfc(file, sourceUpAxis, name)
-    else handleImport3D(file, sourceUpAxis, name)
+    const next = pendingImports[0]
+    if (!next) return
+    const { file } = next
+    setPendingImports(prev => prev.slice(1))
+    importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, name))
   }
 
   // Restores every persisted model on load (2026-07-09, per Maro: "if i hard
@@ -2117,6 +2413,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!selectedProject) return
     let cancelled = false
     ;(async () => {
+      // Reset first (2026-07-19), before any model for this (possibly new)
+      // project gets restored/loaded below — see ifcModel.ts's own
+      // sharedRecenterOffset/resetRecenterOffset header for why a project
+      // switch specifically needs this: without it, a second project's own
+      // first file would silently reuse whichever unrelated site
+      // coordinates the previous project's own offset happened to be.
+      const { resetRecenterOffset } = await import('./ifcModel')
+      resetRecenterOffset()
       let listFailure: unknown = null
       const [files, transforms] = await Promise.all([
         listModel3DFiles(selectedProject.id).catch(err => { listFailure = err; return [] }),
@@ -2155,11 +2459,46 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         object.scale.set(t.scale_x, t.scale_y, t.scale_z)
       }
 
-      for (const file of files) {
+      // Downloads are kicked off for every file up front, in parallel
+      // (2026-07-17, per Maro: "only loaded 3 out of 6 ifc files" on
+      // reload — this used to await each file's network download AND its
+      // web-ifc parse, one whole file at a time, before even starting the
+      // next file's download; for 6 real building-scale IFC files that's
+      // 6x the network latency stacked up serially before the last file's
+      // parse even begins). The actual web-ifc parse below (OpenModel/
+      // LoadAllGeometry) stays sequential, one file at a time — those run
+      // against the single shared IfcAPI WASM instance (getApi(), same
+      // module), and unlike a plain fetch there's no prior art in this
+      // codebase for calling into it from more than one file's load at
+      // once, so this only overlaps the safe, side-effect-free part
+      // (pure network I/O) rather than gambling on WASM concurrency it's
+      // never been exercised under.
+      const downloads = files.map(file => downloadModel3DFile(file.id).then(
+        blob => ({ file, blob, error: null as unknown }),
+        error => ({ file, blob: null as Blob | null, error }),
+      ))
+
+      // Every restore failure now gets its own line instead of overwriting
+      // the last one (same fix, same root cause: silently losing files was
+      // impossible to diagnose because only the LAST file's error ever
+      // survived in importError, whatever it was).
+      const restoreFailures: string[] = []
+      const reportRestoreFailure = (message: string) => {
+        restoreFailures.push(message)
+        setImportError(restoreFailures.join('\n'))
+      }
+
+      for (const download of downloads) {
         if (cancelled) return
+        const { file, blob, error: downloadError } = await download
+        if (downloadError) {
+          console.error(`Failed to download persisted model "${file.name}"`, downloadError)
+          const detail = downloadError instanceof Error ? downloadError.message : String(downloadError)
+          reportRestoreFailure(`"${file.name}" was saved but failed to download on reload (${detail}).`)
+          continue
+        }
         try {
-          const blob = await downloadModel3DFile(file.id)
-          const restoredFile = new File([blob], file.name)
+          const restoredFile = new File([blob as Blob], file.name)
           const wholeFileTransform = transforms.find(t => t.model3d_file_id === file.id && t.element_ref === null)
           if (file.kind === 'ifc') {
             const { loadIfcModel } = await import('./ifcModel')
@@ -2215,7 +2554,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           // real file could only ever have shown up here, and never did.
           console.error(`Failed to restore persisted model "${file.name}"`, err)
           const detail = err instanceof Error ? err.message : String(err)
-          setImportError(`"${file.name}" was saved but failed to restore on reload (${detail}).`)
+          reportRestoreFailure(`"${file.name}" was saved but failed to restore on reload (${detail}).`)
         }
       }
     })()
@@ -2286,7 +2625,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleSelectAll = () => {
+  const handleSelectAll = (objectIds: string[], expressIdsByObject: Map<string, number[]>) => {
     // Isolated to a specific element subset — Select All picks up exactly
     // what's currently isolated/visible instead of jumping back out to "the
     // whole model(s)" (2026-07-15, per Maro: "same with select all", same
@@ -2299,21 +2638,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (isolateMode && isolatedExpressIds.size > 0 && activeIfcModelId) {
       const expressIds = [...isolatedExpressIds]
       setSelectedExpressIds(new Set(expressIds))
-      setSelectedExpressId(expressIds[expressIds.length - 1])
+      // Only a genuine single-element result gets a "primary" element
+      // (2026-07-17 fix — see handleBoxSelect's own header for why).
+      setSelectedExpressId(expressIds.length === 1 ? expressIds[0] : null)
       setSelectedObjectIds(new Set([...isolatedObjectIds, activeIfcModelId]))
       setActiveObjectId(activeIfcModelId)
       return
     }
-    const ids = sceneObjects.map(o => o.id)
-    setSelectedObjectIds(new Set(ids))
-    setActiveObjectId(ids.length ? ids[ids.length - 1] : null)
-    // Selecting every whole object is another "I mean the model(s), not a
-    // specific sub-element" action — same fix and same reasoning as
-    // DataPanel.tsx's IFC checkbox handler (2026-07-09, per Maro: Apply
-    // Transform on "the parent" kept targeting a stale individually-picked
-    // sub-element instead).
-    setSelectedExpressId(null)
-    setSelectedExpressIds(new Set())
+    // Viewport3D.tsx resolves every visible whole object AND every visible
+    // IFC sub-element within each ifc-kind import (2026-07-17 fix, per Maro:
+    // "selecting all only selects the object not the elements... I care
+    // about elements" — this used to only ever populate selectedObjectIds,
+    // same bug class box-select's own element-level rework fixed earlier).
+    const allExpressIds = [...expressIdsByObject.values()].flat()
+    setSelectedExpressIds(new Set(allExpressIds))
+    // Only a genuine single-element result gets a "primary" element
+    // (2026-07-17 fix — see handleBoxSelect's own header for why).
+    setSelectedExpressId(allExpressIds.length === 1 ? allExpressIds[0] : null)
+    setSelectedObjectIds(new Set([...objectIds, ...expressIdsByObject.keys()]))
+    const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : (objectIds.length ? objectIds[objectIds.length - 1] : null)
+    setActiveObjectId(lastObjectId)
+    if (lastObjectId && expressIdsByObject.has(lastObjectId)) setActiveIfcModelId(lastObjectId)
   }
 
   // Box-select (2026-07-08, per Maro: "select box in viewport") always adds
@@ -2335,8 +2680,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (objectIds.length === 0 && expressIdsByObject.size === 0) return
     const allExpressIds = [...expressIdsByObject.values()].flat()
     if (allExpressIds.length > 0) {
-      setSelectedExpressIds(prev => new Set([...prev, ...allExpressIds]))
-      setSelectedExpressId(allExpressIds[allExpressIds.length - 1])
+      const nextExpressIds = new Set([...selectedExpressIds, ...allExpressIds])
+      setSelectedExpressIds(nextExpressIds)
+      // Only a genuine single-element result gets a "primary" element
+      // (2026-07-17 fix, per Maro: "select all elements and sectioning
+      // doesn't work" — box-select was setting this to whichever element
+      // happened to be "last" even across a multi-element drag, which
+      // handleCreateSectionBox's own selectedExpressId !== null check
+      // (and the TransformPanel gizmo's own target resolution) both read
+      // as "exactly one element is selected," silently misrouting any
+      // multi-element box-select into a bogus single-element scope. Same
+      // "null unless exactly one" convention handleSelectCollection/
+      // handleSelectCollectionMember already use.
+      setSelectedExpressId(nextExpressIds.size === 1 ? [...nextExpressIds][0] : null)
     }
     setSelectedObjectIds(prev => new Set([...prev, ...objectIds, ...expressIdsByObject.keys()]))
     const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : objectIds[objectIds.length - 1]
@@ -2377,11 +2733,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setSelectedExpressIds(new Set([expressID]))
     } else {
       const next = new Set(selectedExpressIds)
-      const turningOn = !next.has(expressID)
-      if (turningOn) next.add(expressID); else next.delete(expressID)
+      if (next.has(expressID)) next.delete(expressID); else next.add(expressID)
       setSelectedExpressIds(next)
-      const remaining = [...next]
-      setSelectedExpressId(turningOn ? expressID : (remaining.length ? remaining[remaining.length - 1] : null))
+      // Only a genuine single-element result gets a "primary" element
+      // (2026-07-17 fix — see handleBoxSelect's own header for why) — a
+      // ctrl+click that leaves (or lands on) more than one element selected
+      // must not pin selectedExpressId to whichever one was just toggled.
+      setSelectedExpressId(next.size === 1 ? [...next][0] : null)
     }
     if (objectId) {
       setActiveIfcModelId(objectId)
@@ -2402,7 +2760,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (expressIDs.length === 0) return
     const next = additive ? new Set([...selectedExpressIds, ...expressIDs]) : new Set(expressIDs)
     setSelectedExpressIds(next)
-    setSelectedExpressId(expressIDs[expressIDs.length - 1])
+    // Only a genuine single-element result gets a "primary" element
+    // (2026-07-17 fix — see handleBoxSelect's own header for why); "select
+    // all the doors" matching more than one must not pin selectedExpressId
+    // to whichever door happened to resolve last.
+    setSelectedExpressId(next.size === 1 ? [...next][0] : null)
     setActiveIfcModelId(objectId)
     setSelectedObjectIds(prev => (prev.has(objectId) ? prev : new Set([...prev, objectId])))
     setActiveObjectId(objectId)
@@ -3419,6 +3781,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           boxes={sectionBoxes}
           canCreate={activeObjectId !== null}
           error={sectionBoxError}
+          tool={sectionBoxTool}
+          onToolChange={setSectionBoxTool}
           onCreate={handleCreateSectionBox}
           onRename={handleRenameSectionBox}
           onToggleActive={handleToggleSectionBoxActive}
@@ -3572,6 +3936,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (measurementsPanelOpen) {
+    dockablePanels.push({
+      id: 'measurements', label: 'Measurements', dock: measurementsPanelDock,
+      onToggleDock: toggleMeasurementsPanelDock, onClose: toggleMeasurementsPanel,
+      content: (
+        <MeasurementsPanel
+          measurements={measurements}
+          error={measurementError}
+          unitPreference={ifcUnitDisplay}
+          measuringTool={measuringTool}
+          measuringPointCount={measuringPoints.length}
+          selectedId={selectedMeasurementId}
+          onStart={handleStartMeasuring}
+          onRename={handleRenameMeasurement}
+          onToggleVisible={handleToggleMeasurementVisible}
+          onDelete={handleDeleteMeasurement}
+          onSelect={setSelectedMeasurementId}
+        />
+      ),
+    })
+  }
   const leftDockPanels = dockablePanels.filter(p => p.dock === 'left')
   const rightDockPanels = dockablePanels.filter(p => p.dock === 'right')
 
@@ -3630,6 +4015,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       sectionBoxes={resolvedSectionBoxes}
       onSectionBoxDragMove={handleSectionBoxDragMove}
       onSectionBoxDragEnd={handleSectionBoxDragEnd}
+      onSectionBoxRotateMove={handleSectionBoxRotateMove}
+      onSectionBoxRotateEnd={handleSectionBoxRotateEnd}
+      sectionBoxTool={sectionBoxTool}
       onSaveCameraView={handleSaveCameraView}
       applyCameraViewRequest={applyCameraViewRequest}
       paths={resolvedPaths}
@@ -3650,6 +4038,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       pivotPicking={pivotPicking}
       onPickPivotPoint={handlePickPivotPoint}
       elementParents={elementParents}
+      measurements={measurements}
+      unitPreference={ifcUnitDisplay}
+      selectedMeasurementId={selectedMeasurementId}
+      onSelectMeasurement={setSelectedMeasurementId}
+      measuringTool={measuringTool}
+      measuringPoints={measuringPoints}
+      measuringToMetres={measuringToMetres}
+      onMeasurementHit={handleMeasurementHit}
+      measurementHoverPoint={measurementHoverPoint}
+      onMeasurementHoverPoint={setMeasurementHoverPoint}
     />
   )
 
@@ -3755,6 +4153,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Rigging
         </button>
         <button
+          onClick={toggleMeasurementsPanel}
+          title="Measure a length between 2 points, an area across several, or an area straight off a clicked element surface"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            measurementsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Measure
+        </button>
+        <button
           onClick={toggleCompareBaseline}
           title="Dock a second, read-only viewport showing the same model animated from the currently-assigned baseline's dates, alongside this one"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
@@ -3764,7 +4171,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Compare Baseline
         </button>
         <div className="w-px h-4 bg-gray-200 mx-1" />
-        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" onChange={handleFileSelected} className="hidden" />
+        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" multiple onChange={handleFileSelected} className="hidden" />
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}
@@ -3774,6 +4181,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           ⬆ Import Model
         </button>
         {importing && <span className="text-xs text-gray-400">Importing…</span>}
+        {(() => {
+          // Visible counterpart to the beforeunload guard above (2026-07-17,
+          // per Maro: "force a save and recall ifc after every refresh") —
+          // the browser prompt only ever fires at the moment of an actual
+          // refresh/close, which tells the user nothing while they're still
+          // deciding whether it's safe to leave. This makes "still saving"
+          // an ordinary, always-visible fact instead of a surprise dialog.
+          const pendingSaveCount = sceneObjects.filter(o => o.fileId === null).length
+          return pendingSaveCount > 0 ? (
+            <span
+              className="text-xs text-amber-600"
+              title="These model(s) are still uploading to the server — refreshing now would lose them. Wait for this to clear before reloading."
+            >
+              ⏳ Saving {pendingSaveCount} model{pendingSaveCount === 1 ? '' : 's'}…
+            </span>
+          ) : null
+        })()}
         {ifcHandles.length > 0 && (
           <button
             onClick={() => setScheduleWizardOpen(true)}
@@ -3903,12 +4327,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onAssignProfile={handleAssignProfile}
         />
       </div>
-      {pendingImport && (
+      {pendingImports[0] && (
         <ImportModelDialog
-          file={pendingImport.file}
-          kind={pendingImport.kind}
+          file={pendingImports[0].file}
+          kind="mesh"
+          queuePosition={pendingImports.length > 1 ? { remaining: pendingImports.length } : undefined}
           onConfirm={handleConfirmImport}
-          onCancel={() => setPendingImport(null)}
+          onCancel={() => setPendingImports(prev => prev.slice(1))}
         />
       )}
       {scheduleWizardOpen && selectedProject && period && (
@@ -3917,9 +4342,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             handle,
             name: sceneObjects.find(o => o.id === `ifc-${handle.modelID}`)?.name ?? handle.object.name ?? 'Imported Model',
           }))}
-          collections={collections}
           calendars={calendars}
           projectId={selectedProject.id}
+          projectName={selectedProject.name}
           schedulePeriodId={period.id}
           onCancel={() => setScheduleWizardOpen(false)}
           onGenerated={() => {

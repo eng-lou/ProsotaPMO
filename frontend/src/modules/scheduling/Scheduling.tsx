@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -11,6 +11,7 @@ import { useSchedulingHighlights } from '@/lib/schedulingHighlights'
 import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
+import { buildResourceRecipe } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
@@ -21,7 +22,7 @@ import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
 import { CalendarWidget } from './CalendarWidget'
 import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
-import { formatFloatDays, resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { downloadP6Xml } from './exportP6'
 import { P6ImportDialog } from './P6ImportDialog'
@@ -213,23 +214,43 @@ function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'as
 }
 
 // Group By (2026-07-10, per Maro) — same GROUP_OPTIONS/GroupByField/single-
-// select pattern as CostPlan.tsx/RiskRegister.tsx/IcdTracker.tsx.
-const GROUP_OPTIONS = [
+// select pattern as CostPlan.tsx/RiskRegister.tsx/IcdTracker.tsx. Extended
+// 2026-07-17 (per Maro: "create a udf column called Discipline... so i can
+// also choose to group by discipline") — any *text* UDF definition (not
+// just Discipline specifically — no reason to special-case one field name)
+// becomes its own selectable group-by option, `udf:${definitionId}`,
+// computed alongside these fixed ones inside the component itself (see
+// groupOptions below) since UDF definitions are per-project/dynamic, not a
+// module-level constant. Number/date/indicator UDFs are left out for now —
+// grouping by "the raw indicator token" or "one row per exact date" isn't
+// a useful grouping the way a handful of text categories is.
+const BASE_GROUP_OPTIONS = [
   { value: 'none', label: 'No grouping' },
   { value: 'resource', label: 'Resource' },
   { value: 'type', label: 'Type' },
   { value: 'calendar', label: 'Calendar' },
   { value: 'critical', label: 'Critical' },
 ] as const
-type GroupByField = (typeof GROUP_OPTIONS)[number]['value']
+type GroupByField = (typeof BASE_GROUP_OPTIONS)[number]['value'] | `udf:${string}`
 
 const GROUP_TYPE_LABELS: Record<Activity['activity_type'], string> = {
   task: 'Task', start_milestone: 'Start Milestone', finish_milestone: 'Finish Milestone', wbs_summary: 'WBS Summary',
 }
 
 function groupKeyFor(
-  a: Activity, groupBy: GroupByField, resourceAssignments: Map<string, ResourceAssignment[]>, calendars: Calendar[]
+  a: Activity, groupBy: GroupByField, resourceAssignments: Map<string, ResourceAssignment[]>, calendars: Calendar[],
+  getUdfValue: (fieldDefinitionId: string, recordId: string) => { value_text?: string | null } | undefined,
 ): string {
+  // `udf:${definitionId}` (2026-07-17) — checked before the switch since a
+  // template-literal type isn't a plain switch-case match. Same "(none)"
+  // fallback empty text already gets elsewhere in this app's own UDF grid
+  // cells — a WBS/milestone row with no Discipline value (by design, see
+  // BulkActivityInput.discipline's own header) lands in its own visible
+  // "(none)" group instead of silently vanishing from the grouped view.
+  if (groupBy.startsWith('udf:')) {
+    const definitionId = groupBy.slice('udf:'.length)
+    return getUdfValue(definitionId, a.id)?.value_text || '(none)'
+  }
   switch (groupBy) {
     case 'resource': return resourceLabelForActivity(a.id, resourceAssignments)
     case 'type': return GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type
@@ -429,6 +450,11 @@ export function Scheduling() {
   const [activities, setActivities] = useState<Activity[]>([])
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
   const [calendars, setCalendars] = useState<Calendar[]>([])
+  // Built once per real `calendars` change, not per row (2026-07-17 perf fix)
+  // — resolveHoursPerDay/formatFloatDays used to linear-scan the raw array on
+  // every call; this feeds every call site in this file an O(1) lookup
+  // instead. See durationDisplay.ts's own header for the full story.
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [resources, setResources] = useState<Resource[]>([])
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [loading, setLoading] = useState(true)
@@ -519,27 +545,32 @@ export function Scheduling() {
   // same "select rows here, scope something else" shape as Cost Plan's own
   // selectedForPrint. Empty means "show everything," unchanged from today.
   const [selectedResourceIds, setSelectedResourceIds] = useState<Set<string>>(new Set())
-  const toggleResourceSelected = (id: string) => {
+  // useCallback (2026-07-17, perf fix) — passed straight through to the now
+  // memo()'d ResourceTrackingWidget/ResourceUsageProfileWidget; a plain
+  // closure here would get a new identity every Scheduling.tsx render and
+  // defeat that memo boundary immediately.
+  const toggleResourceSelected = useCallback((id: string) => {
     setSelectedResourceIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-  }
+  }, [])
 
   // Resource Tracking's own tree (resource -> its assigned activities) —
   // same collapse/expand shape as collapsedIds above, just not persisted (a
   // much shallower 2-level tree, less need to remember across reloads).
   const [collapsedResourceIds, setCollapsedResourceIds] = useState<Set<string>>(new Set())
-  const toggleResourceCollapsed = (id: string) => {
+  // useCallback — same memo-defeating-closure reasoning as toggleResourceSelected above.
+  const toggleResourceCollapsed = useCallback((id: string) => {
     setCollapsedResourceIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-  }
+  }, [])
   const handleCollapseAllResources = () => {
     setCollapsedResourceIds(new Set(
       resources
@@ -554,14 +585,15 @@ export function Scheduling() {
   // selectedResourceIds above; Resource Tracking's own activity-row
   // checkboxes write here, Resource Usage Profile's chart reads it.
   const [selectedActivityIds, setSelectedActivityIds] = useState<Set<string>>(new Set())
-  const toggleActivitySelected = (id: string) => {
+  // useCallback — same memo-defeating-closure reasoning as toggleResourceSelected above.
+  const toggleActivitySelected = useCallback((id: string) => {
     setSelectedActivityIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-  }
+  }, [])
 
   // One shared toolbar (zoom/unit/date-range/layout/page-setup/print) above
   // all three Resources-tab tables (2026-07-08, per Maro: "I want all the
@@ -682,15 +714,22 @@ export function Scheduling() {
       }
       return hours * factor
     })
-    const rollup = resourcesTabData.buckets.map((_, i) => rows.reduce((sum, row) => sum + bucketHoursFor(row.assignment.id)[i], 0))
+    // Computed once per row, not once per (bucket x row) pair (2026-07-17
+    // perf fix, per a real perf audit) — rollup used to re-derive each
+    // row's WHOLE bucketHoursFor array (itself an O(buckets x days) scan)
+    // just to pluck out a single bucket's value, for every bucket, an
+    // O(buckets^2 x rows x days) blowup. Same "compute once, reuse" fix as
+    // computeUsageProfileBars' own 2026-07-17 header in useResourcesTabData.ts.
+    const rowsWithHours = rows.map(row => ({ row, bucketHours: bucketHoursFor(row.assignment.id) }))
+    const rollup = resourcesTabData.buckets.map((_, i) => rowsWithHours.reduce((sum, { bucketHours }) => sum + bucketHours[i], 0))
     return {
       resourceName: resource.name,
       bucketHours: rollup,
-      rows: rows.map(row => ({
+      rows: rowsWithHours.map(({ row, bucketHours }) => ({
         code: row.activity.code, name: row.activity.task_name,
         start: row.activity.start ? formatDateTime(row.activity.start, false) : null,
         finish: row.activity.finish ? formatDateTime(row.activity.finish, false) : null,
-        bucketHours: bucketHoursFor(row.assignment.id),
+        bucketHours,
       })),
     }
   }).filter(group => group.rows.length > 0), [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit])
@@ -808,18 +847,26 @@ export function Scheduling() {
     }
   }
 
-  // Row DOM nodes, keyed by activity id — populated by each row's own ref
-  // callback below, used only to scroll a specific row into view (not a
-  // measurement/positioning dependency the way earlier ref-map attempts in
-  // this file's history were, see SchedulingPrintView.tsx's own saga).
-  const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
-
   // Jumps to a specific activity from anywhere else in the UI (2026-07-05,
   // per Maro: clicking a predecessor/successor's name in the Logic panel
   // should select it and bring it into view) — expands any collapsed WBS
-  // ancestor so the row actually exists in the DOM first, opens its detail
-  // panel, then scrolls the grid pane to it once the (possibly just-
-  // expanded) row has had a render to appear.
+  // ancestor so the row actually exists in visibleActivities first, opens
+  // its detail panel, then scrolls the grid pane to its index once the
+  // (possibly just-expanded) list has had a render to update.
+  //
+  // Rewritten 2026-07-17 for row virtualization — used to find the row's own
+  // DOM node via a rowRefs Map and call scrollIntoView on it; once rows
+  // aren't all permanently mounted, an off-window row's ref is never
+  // populated and this would silently no-op. Now computes the target's
+  // index directly and sets leftPaneRef's scrollTop from it instead — a real
+  // scrollTo dispatches a genuine scroll event, so the existing onScroll
+  // handler (handleGridScroll) picks it up and both keeps the Gantt pane in
+  // sync and recomputes the grid's own visible window, no separate code path
+  // needed for that side. visibleActivitiesRef (not the closed-over
+  // visibleActivities) because this runs inside a requestAnimationFrame +
+  // setTimeout, after the ancestor-expanding setCollapsedIds above has had a
+  // chance to actually re-render — the ref stays current across that render,
+  // the closed-over value would not.
   const handleFocusActivity = (activityId: string) => {
     const target = activities.find(a => a.id === activityId)
     if (!target) return
@@ -841,7 +888,12 @@ export function Scheduling() {
     setExpandedId(activityId)
     requestAnimationFrame(() => {
       setTimeout(() => {
-        rowRefs.current.get(activityId)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        const el = leftPaneRef.current
+        if (!el) return
+        const index = visibleActivitiesRef.current.findIndex(a => a.id === activityId)
+        if (index === -1) return
+        const targetTop = index * GANTT_ROW_HEIGHT - el.clientHeight / 2 + GANTT_ROW_HEIGHT / 2
+        el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
       }, 50)
     })
   }
@@ -852,6 +904,17 @@ export function Scheduling() {
   // detail panel (ResourceAssignments, below) — only the resource *pool*
   // definitions move.
   const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>('schedule')
+  // "Generate Resources" / "Auto Assign Resources" (2026-07-17, per Maro's
+  // two-stage flow — schedule generation itself no longer creates any
+  // Resource/ResourceAssignment rows, see buildStagedSchedule's own header
+  // in scheduleGeneration.ts): 'generate' populates the pool from every
+  // IFC-generated activity's own schedule_category/schedule_phase_key,
+  // reusing an existing same-named resource rather than duplicating it;
+  // 'assign' then links that pool to those same activities. Both are plain
+  // busy/message state, not a modal — these are one-shot batch actions, not
+  // a form.
+  const [resourceGenBusy, setResourceGenBusy] = useState<'generate' | 'assign' | null>(null)
+  const [resourceGenMessage, setResourceGenMessage] = useState<string | null>(null)
   const [calendarWidgetOpen, setCalendarWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
@@ -1090,6 +1153,23 @@ export function Scheduling() {
     })
   }
   const visibleUdfDefinitions = udfDefinitions.filter(d => isUdfColumnVisible(d.id))
+  // Widened for value-fetching only, not column rendering (2026-07-17) —
+  // grouping by a UDF (groupBy = `udf:${id}`) still needs its values
+  // fetched even when that field's own grid column isn't separately
+  // toggled visible; every other visibleUdfDefinitions consumer (column
+  // headers/cells) keeps reading the narrower, column-visibility-only list
+  // above unchanged.
+  const groupByUdfDefinition = groupBy.startsWith('udf:') ? udfDefinitions.find(d => d.id === groupBy.slice(4)) : undefined
+  const udfDefinitionsForValues = groupByUdfDefinition && !visibleUdfDefinitions.includes(groupByUdfDefinition)
+    ? [...visibleUdfDefinitions, groupByUdfDefinition]
+    : visibleUdfDefinitions
+  // Group By dropdown options — the fixed built-ins plus one entry per
+  // *text* UDF definition (2026-07-17, per Maro's "Discipline" request —
+  // see BASE_GROUP_OPTIONS' own header for why only text UDFs qualify).
+  const groupOptions = [
+    ...BASE_GROUP_OPTIONS,
+    ...udfDefinitions.filter(d => d.data_type === 'text').map(d => ({ value: `udf:${d.id}` as const, label: d.name })),
+  ]
   const [udfWidgetOpen, setUdfWidgetOpen] = useState(false)
 
   // Print Preview (2026-07-07, per Maro: "I need controls and a way to
@@ -1440,8 +1520,85 @@ export function Scheduling() {
   ])
 
   const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(
-    visibleUdfDefinitions, visibleActivities.map(a => a.id)
+    udfDefinitionsForValues, visibleActivities.map(a => a.id)
   )
+
+  // Row virtualization for the main Activities grid (2026-07-17 perf fix,
+  // per Maro: P6-imported/IFC-generated schedules with real scale made this
+  // the laggiest surface in the whole app — every activity used to render
+  // as a real <tr> regardless of scroll position). visibleActivities is
+  // already the fully filtered/collapse-aware flat list (see its own header
+  // above), so this is the simplest virtualization target in the app: pure
+  // `index * GANTT_ROW_HEIGHT`, no cumulative-offset pass needed (unlike the
+  // two-level Resources-tab trees). Reuses the existing leftPaneRef and its
+  // own onScroll handler (below) rather than a new ref — one scroll
+  // container already drives the Gantt pane's scroll sync too.
+  const GRID_ROW_BUFFER = 20
+  const [visibleGridRowRange, setVisibleGridRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(visibleActivities.length, 40) })
+
+  const recomputeVisibleGridRowRange = () => {
+    const el = leftPaneRef.current
+    if (!el) return
+    const firstVisible = Math.floor(el.scrollTop / GANTT_ROW_HEIGHT)
+    const lastVisible = Math.ceil((el.scrollTop + el.clientHeight) / GANTT_ROW_HEIGHT)
+    const start = Math.max(0, firstVisible - GRID_ROW_BUFFER)
+    const end = Math.min(visibleActivities.length, lastVisible + GRID_ROW_BUFFER)
+    setVisibleGridRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  // useLayoutEffect, not useEffect — corrects the window before paint
+  // whenever visibleActivities itself changes, critical for exactly the
+  // P6-import/IFC-generate moment that triggers the reported lag: a stale,
+  // possibly-huge previous window must never paint first against a brand
+  // new (much larger or smaller) activity list.
+  useLayoutEffect(() => {
+    recomputeVisibleGridRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleActivities])
+
+  const gridScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleGridScroll = (scrollTop: number) => {
+    // Unchanged from before this fix — the Gantt pane still needs to track
+    // scroll position immediately, every tick, not debounced.
+    ganttRef.current?.setScrollTop(scrollTop)
+    if (gridScrollDebounceRef.current !== null) clearTimeout(gridScrollDebounceRef.current)
+    gridScrollDebounceRef.current = setTimeout(() => {
+      gridScrollDebounceRef.current = null
+      recomputeVisibleGridRowRange()
+    }, 150)
+  }
+
+  useEffect(() => {
+    window.addEventListener('resize', recomputeVisibleGridRowRange)
+    return () => window.removeEventListener('resize', recomputeVisibleGridRowRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clamped to visibleActivities.length for the same reason every other
+  // virtualized table's window is — a filter/search/collapse change can
+  // shrink the list before this render's own layout effect has corrected
+  // the range.
+  const clampedGridRowEnd = Math.min(visibleGridRowRange.end, visibleActivities.length)
+  const clampedGridRowStart = Math.min(visibleGridRowRange.start, clampedGridRowEnd)
+  const visibleGridRowIndices = useMemo(
+    () => Array.from({ length: Math.max(0, clampedGridRowEnd - clampedGridRowStart) }, (_, k) => clampedGridRowStart + k),
+    [clampedGridRowStart, clampedGridRowEnd]
+  )
+  const leadingGridRowSpacerHeight = clampedGridRowStart * GANTT_ROW_HEIGHT
+  const trailingGridRowSpacerHeight = Math.max(0, visibleActivities.length - clampedGridRowEnd) * GANTT_ROW_HEIGHT
+
+  // Always-latest ref for handleFocusActivity's own use below — that handler
+  // reads this from inside a requestAnimationFrame+setTimeout callback fired
+  // *after* a WBS-ancestor-expanding setCollapsedIds call has had a chance to
+  // re-render, so it needs the post-expansion visibleActivities, not the one
+  // closed over at the moment the handler was originally invoked (the same
+  // "read the latest, not the stale closed-over value" reason the old
+  // rowRefs Map worked at all — a plain ref mutated every render, not a
+  // value captured once).
+  const visibleActivitiesRef = useRef(visibleActivities)
+  useLayoutEffect(() => {
+    visibleActivitiesRef.current = visibleActivities
+  })
 
   // Flat groups over the same already-filtered visibleActivities every other
   // feature here reads from — empty when groupBy is 'none' (tree+Gantt render
@@ -1450,11 +1607,89 @@ export function Scheduling() {
     if (groupBy === 'none') return []
     const map = new Map<string, Activity[]>()
     for (const a of visibleActivities) {
-      const key = groupKeyFor(a, groupBy, assignmentsByActivityId, calendars)
+      // WBS Summary/milestone rows dropped from every grouped view (2026-07-17,
+      // per Maro — the Discipline grouping's own "(none)" bucket was piling
+      // up every WBS folder plus Construction Start/Substantial Completion,
+      // since none of those ever carry a value for ANY groupable field, not
+      // just Discipline; this was already true of grouping by Resource/
+      // Calendar too, just less visible there). Grouped views are now real
+      // work only — WBS/milestones stay visible in the normal ungrouped
+      // tree+Gantt view (the JSX below switches to that render path whenever
+      // groupBy === 'none').
+      if (a.activity_type !== 'task') continue
+      const key = groupKeyFor(a, groupBy, assignmentsByActivityId, calendars, getUdfValue)
       map.set(key, [...(map.get(key) ?? []), a])
     }
     return [...map.entries()].sort(([x], [y]) => x.localeCompare(y))
-  }, [visibleActivities, groupBy, assignmentsByActivityId, calendars])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleActivities, groupBy, assignmentsByActivityId, calendars, getUdfValue])
+
+  // Row virtualization for the Group-By table (2026-07-17 perf fix) — this
+  // table used to render every group header AND every activity row inside
+  // it (respecting collapse) unconditionally, real DOM regardless of scroll
+  // position; a large P6-imported/IFC-generated schedule with many groups
+  // made this table itself real, unbounded cost. Flattened into one row-list
+  // unit per group header and per (non-collapsed) activity row, in on-screen
+  // order — pure `index * GANTT_ROW_HEIGHT` here (unlike the two-level
+  // Resources-tab trees), since the group-header row now shares the same
+  // fixed height as an activity row rather than needing its own.
+  const flatGroupRows = useMemo(() => {
+    const out: ({ type: 'header'; key: string; count: number } | { type: 'activity'; key: string; activity: Activity })[] = []
+    for (const [key, acts] of groupedActivities) {
+      out.push({ type: 'header', key, count: acts.length })
+      if (!collapsedGroups.has(key)) {
+        for (const a of acts) out.push({ type: 'activity', key, activity: a })
+      }
+    }
+    return out
+  }, [groupedActivities, collapsedGroups])
+
+  const groupScrollRef = useRef<HTMLDivElement>(null)
+  const GROUP_ROW_BUFFER = 20
+  const [visibleGroupRowRange, setVisibleGroupRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(flatGroupRows.length, 40) })
+
+  const recomputeVisibleGroupRowRange = () => {
+    const el = groupScrollRef.current
+    if (!el) return
+    const firstVisible = Math.floor(el.scrollTop / GANTT_ROW_HEIGHT)
+    const lastVisible = Math.ceil((el.scrollTop + el.clientHeight) / GANTT_ROW_HEIGHT)
+    const start = Math.max(0, firstVisible - GROUP_ROW_BUFFER)
+    const end = Math.min(flatGroupRows.length, lastVisible + GROUP_ROW_BUFFER)
+    setVisibleGroupRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  useLayoutEffect(() => {
+    recomputeVisibleGroupRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flatGroupRows])
+
+  const groupScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleGroupScroll = () => {
+    if (groupScrollDebounceRef.current !== null) clearTimeout(groupScrollDebounceRef.current)
+    groupScrollDebounceRef.current = setTimeout(() => {
+      groupScrollDebounceRef.current = null
+      recomputeVisibleGroupRowRange()
+    }, 150)
+  }
+
+  useEffect(() => {
+    window.addEventListener('resize', recomputeVisibleGroupRowRange)
+    return () => window.removeEventListener('resize', recomputeVisibleGroupRowRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clamped to flatGroupRows.length for the same reason every other
+  // virtualized table's window is — collapsing/expanding a group can shrink
+  // or grow the flattened list before this render's own layout effect has
+  // corrected the range.
+  const clampedGroupRowEnd = Math.min(visibleGroupRowRange.end, flatGroupRows.length)
+  const clampedGroupRowStart = Math.min(visibleGroupRowRange.start, clampedGroupRowEnd)
+  const visibleGroupRowIndices = useMemo(
+    () => Array.from({ length: Math.max(0, clampedGroupRowEnd - clampedGroupRowStart) }, (_, k) => clampedGroupRowStart + k),
+    [clampedGroupRowStart, clampedGroupRowEnd]
+  )
+  const leadingGroupRowSpacerHeight = clampedGroupRowStart * GANTT_ROW_HEIGHT
+  const trailingGroupRowSpacerHeight = Math.max(0, flatGroupRows.length - clampedGroupRowEnd) * GANTT_ROW_HEIGHT
 
   if (!selectedProject) return null
 
@@ -1482,6 +1717,82 @@ export function Scheduling() {
     setCalendars(calendarsRes.data)
     setResources(resourcesRes.data)
     setResourceAssignments(assignmentsRes.data)
+  }
+
+  // "Generate Resources" — stage 1 of Maro's two-stage flow: reads every
+  // activity's own schedule_category/schedule_phase_key (set at IFC
+  // schedule-generation time, see Activity.schedule_category's backend
+  // docstring), derives the crew/equipment each one needs off the same rate
+  // table schedule generation itself used to use, and populates the
+  // Resource Pool with them — no assignments yet, so the user can freely
+  // edit/delete/rename what lands here before anything gets linked to real
+  // work. dedupe_resources_by_name means running this again later (e.g.
+  // after linking more IFC elements and regenerating) only adds resources
+  // for genuinely new crew/equipment names, never duplicates.
+  const handleGenerateResources = async () => {
+    if (!period) return
+    const { resources: recipeResources } = buildResourceRecipe(activities)
+    if (recipeResources.length === 0) {
+      setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
+      return
+    }
+    setResourceGenBusy('generate')
+    setResourceGenMessage(null)
+    try {
+      const { data } = await api.post('/api/v1/schedule-bulk-generate/', {
+        project_id: selectedProject.id, schedule_period_id: period.id,
+        activities: [], resources: recipeResources, assignments: [], relationships: [],
+        dedupe_resources_by_name: true,
+      })
+      await refresh()
+      const reused = recipeResources.length - data.resource_count
+      setResourceGenMessage(
+        `Resource pool updated — ${data.resource_count} new resource(s)${reused > 0 ? `, ${reused} already existed` : ''}.`
+      )
+    } catch (err) {
+      setResourceGenMessage(axios.isAxiosError(err)
+        ? `Failed to generate resources (${err.response?.data?.detail ?? err.message})`
+        : 'Failed to generate resources')
+    } finally {
+      setResourceGenBusy(null)
+    }
+  }
+
+  // "Auto Assign Resources" — stage 2: links the pool (by name — expects
+  // "Generate Resources" to have already been run, but sends the same
+  // dedupe_resources_by_name recipe again so it's self-sufficient even if
+  // run on its own) to every one of those same activities.
+  // skip_existing_assignments makes this safely repeatable too — re-running
+  // after linking a few more elements only assigns the newly-eligible
+  // activities, never re-assigns (and re-costs) one that already has its
+  // resource.
+  const handleAutoAssignResources = async () => {
+    if (!period) return
+    const { resources: recipeResources, assignments: recipeAssignments } = buildResourceRecipe(activities)
+    if (recipeAssignments.length === 0) {
+      setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
+      return
+    }
+    setResourceGenBusy('assign')
+    setResourceGenMessage(null)
+    try {
+      const { data } = await api.post('/api/v1/schedule-bulk-generate/', {
+        project_id: selectedProject.id, schedule_period_id: period.id,
+        activities: [], resources: recipeResources, assignments: recipeAssignments, relationships: [],
+        dedupe_resources_by_name: true, skip_existing_assignments: true,
+      })
+      await refresh()
+      const skipped = recipeAssignments.length - data.assignment_count
+      setResourceGenMessage(
+        `${data.assignment_count} assignment(s) created${skipped > 0 ? `, ${skipped} already assigned` : ''}.`
+      )
+    } catch (err) {
+      setResourceGenMessage(axios.isAxiosError(err)
+        ? `Failed to auto-assign resources (${err.response?.data?.detail ?? err.message})`
+        : 'Failed to auto-assign resources')
+    } finally {
+      setResourceGenBusy(null)
+    }
   }
 
   // Tagging/untagging changes the affected activities' codes (SP-####) and
@@ -1521,7 +1832,7 @@ export function Scheduling() {
   const handleUpdate = async (
     activity: Activity, values: ActivityFormValues, reassessmentNote: string | null, amendRelationships = false
   ) => {
-    const payload = toActivityPayload(values, calendars, activity.activity_type === 'wbs_summary')
+    const payload = toActivityPayload(values, calendarLookup, activity.activity_type === 'wbs_summary')
     try {
       await api.patch(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
     } catch (err) {
@@ -1655,7 +1966,7 @@ export function Scheduling() {
       const days = editingValue.trim() === '' ? null : Number(editingValue)
       if (days !== null && Number.isNaN(days)) { setEditingCell(null); return }
       const activity = activities.find(a => a.id === id)
-      const hoursPerDay = activity ? resolveHoursPerDay(activity, calendars) : 8
+      const hoursPerDay = activity ? resolveHoursPerDay(activity, calendarLookup) : 8
       payload = { duration_hours: days !== null ? days * hoursPerDay : null }
     } else if (field === 'pct_complete') {
       const num = editingValue.trim() === '' ? null : Number(editingValue)
@@ -1988,6 +2299,22 @@ export function Scheduling() {
               >Cost</button>
             </div>
             <div className="ml-auto flex items-center gap-1">
+              {resourceGenMessage && (
+                <div className="text-[11px] text-gray-500 max-w-xs truncate" title={resourceGenMessage}>{resourceGenMessage}</div>
+              )}
+              <button
+                onClick={handleGenerateResources}
+                disabled={resourceGenBusy !== null}
+                title="Populates the Resource Pool below from every IFC-generated activity's own crew/equipment recipe — no assignments yet, review/edit the pool first"
+                className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >{resourceGenBusy === 'generate' ? 'Generating…' : 'Generate Resources'}</button>
+              <button
+                onClick={handleAutoAssignResources}
+                disabled={resourceGenBusy !== null}
+                title="Links the Resource Pool below to every IFC-generated activity — run after Generate Resources, once the pool looks right"
+                className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >{resourceGenBusy === 'assign' ? 'Assigning…' : 'Auto Assign Resources'}</button>
+              <div className="w-px h-4 bg-gray-200 mx-1" />
               <div className="relative">
                 <button
                   onClick={() => setLevelPanelOpen(o => !o)}
@@ -2647,7 +2974,7 @@ export function Scheduling() {
             title="Group activities into a flat list by this field, instead of the WBS tree — hides the Gantt while grouped"
             className="text-xs border border-gray-300 rounded-md px-2 py-1 ml-1"
           >
-            {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
+            {groupOptions.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
           </select>
         </div>
 
@@ -2782,7 +3109,7 @@ export function Scheduling() {
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
-          onScroll={e => ganttRef.current?.setScrollTop(e.currentTarget.scrollTop)}
+          onScroll={e => handleGridScroll(e.currentTarget.scrollTop)}
           // overflow-x-auto, not -hidden (2026-07-12 fix — see
           // leftPaneWidth's own header) — extra columns beyond this pane's
           // own width scroll within it instead of being silently clipped
@@ -2885,12 +3212,15 @@ export function Scheduling() {
               </tr>
             </thead>
             <tbody>
-              {visibleActivities.map((a, rowIndex) => {
+              {leadingGridRowSpacerHeight > 0 && (
+                <tr><td colSpan={visibleColumns.size + visibleUdfDefinitions.length + 2} style={{ height: leadingGridRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+              )}
+              {visibleGridRowIndices.map(rowIndex => {
+                const a = visibleActivities[rowIndex]
                 const editingField = editingCell?.id === a.id ? editingCell.field : null
                 return (
                 <tr
                   key={a.id}
-                  ref={el => { if (el) rowRefs.current.set(a.id, el); else rowRefs.current.delete(a.id) }}
                   style={{
                     height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a),
                     // box-shadow, not a real border-bottom — SchedulingPrintView.tsx
@@ -3066,7 +3396,7 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('float') && (
                     <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-                      {formatFloatDays(a.total_float_hours, a, calendars)}
+                      {formatFloatDays(a.total_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('critical') && (
@@ -3076,12 +3406,12 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('free_float') && (
                     <td className="px-3 py-1 text-gray-600">
-                      {formatFloatDays(a.free_float_hours, a, calendars)}
+                      {formatFloatDays(a.free_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('sub_float') && (
                     <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
-                      {formatFloatDays(a.sub_total_float_hours, a, calendars)}
+                      {formatFloatDays(a.sub_total_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('sub_critical') && (
@@ -3146,6 +3476,9 @@ export function Scheduling() {
                 </tr>
                 )
               })}
+              {trailingGridRowSpacerHeight > 0 && (
+                <tr><td colSpan={visibleColumns.size + visibleUdfDefinitions.length + 2} style={{ height: trailingGridRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+              )}
               {visibleActivities.length === 0 && (
                 <tr>
                   <td
@@ -3195,71 +3528,81 @@ export function Scheduling() {
           above, untouched. */}
       {groupBy !== 'none' && (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div ref={groupScrollRef} onScroll={handleGroupScroll} className="rt-hide-scrollbar" style={{ maxHeight: 500, overflow: 'auto' }}>
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-gray-50 text-left text-gray-500 border-b border-gray-200">
-                <th className="px-2 py-1.5 w-8"></th>
-                <th className="px-3 py-1.5">Code</th>
-                <th className="px-3 py-1.5">Activity</th>
-                <th className="px-3 py-1.5">Type</th>
-                <th className="px-3 py-1.5">Start</th>
-                <th className="px-3 py-1.5">Finish</th>
-                <th className="px-3 py-1.5 text-right">Dur (d)</th>
-                <th className="px-3 py-1.5">Resources</th>
-                <th className="px-3 py-1.5">Critical</th>
+                <th className="px-2 py-1.5 w-8" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}></th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Code</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Activity</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Type</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Start</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Finish</th>
+                <th className="px-3 py-1.5 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Dur (d)</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Resources</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Critical</th>
               </tr>
             </thead>
             <tbody>
-              {groupedActivities.map(([key, acts]) => {
-                const collapsed = collapsedGroups.has(key)
-                return (
-                  <Fragment key={key || '(none)'}>
-                    <tr className="bg-gray-100 border-b border-gray-200 cursor-pointer" onClick={() => toggleGroupCollapsed(key)}>
+              {leadingGroupRowSpacerHeight > 0 && (
+                <tr><td colSpan={9} style={{ height: leadingGroupRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+              )}
+              {visibleGroupRowIndices.map(idx => {
+                const flat = flatGroupRows[idx]
+                if (flat.type === 'header') {
+                  const collapsed = collapsedGroups.has(flat.key)
+                  return (
+                    <tr key={flat.key || '(none)'} style={{ height: GANTT_ROW_HEIGHT }} className="bg-gray-100 border-b border-gray-200 cursor-pointer" onClick={() => toggleGroupCollapsed(flat.key)}>
                       <td className="px-2 py-1.5" colSpan={9}>
                         <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700 text-xs">
-                          <CollapseIcon expanded={!collapsed} /> {key || '(none)'}
-                          <span className="text-gray-400 font-normal">({acts.length})</span>
+                          <CollapseIcon expanded={!collapsed} /> {flat.key || '(none)'}
+                          <span className="text-gray-400 font-normal">({flat.count})</span>
                         </span>
                       </td>
                     </tr>
-                    {!collapsed && acts.map(a => (
-                      <tr
-                        key={a.id}
-                        style={{ height: GANTT_ROW_HEIGHT, backgroundColor: rowBackground(a) }}
-                        className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                  )
+                }
+                const a = flat.activity
+                return (
+                  <tr
+                    key={a.id}
+                    style={{ height: GANTT_ROW_HEIGHT, backgroundColor: rowBackground(a) }}
+                    className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                  >
+                    <td className="px-2 py-1.5">
+                      <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-500 font-mono text-xs">{a.code}</td>
+                    <td className="px-3 py-1.5">
+                      <button
+                        onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
+                        className="text-left font-medium text-gray-900 hover:text-blue-600"
                       >
-                        <td className="px-2 py-1.5">
-                          <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
-                        </td>
-                        <td className="px-3 py-1.5 text-gray-500 font-mono text-xs">{a.code}</td>
-                        <td className="px-3 py-1.5">
-                          <button
-                            onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
-                            className="text-left font-medium text-gray-900 hover:text-blue-600"
-                          >
-                            {a.task_name}
-                          </button>
-                        </td>
-                        <td className="px-3 py-1.5 text-gray-500">{GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type}</td>
-                        <td className="px-3 py-1.5 text-gray-500">{a.start ? formatDateTime(a.start, false) : '—'}</td>
-                        <td className="px-3 py-1.5 text-gray-500">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">{formatDuration(a.duration_days)}</td>
-                        <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, assignmentsByActivityId)}</td>
-                        <td className="px-3 py-1.5">
-                          {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Critical</span>}
-                          {a.is_critical === false && <span className="text-gray-300 text-xs">—</span>}
-                          {a.is_critical === null && <span className="text-gray-300 text-xs">—</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </Fragment>
+                        {a.task_name}
+                      </button>
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-500">{GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{a.start ? formatDateTime(a.start, false) : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
+                    <td className="px-3 py-1.5 text-right text-gray-500">{formatDuration(a.duration_days)}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, assignmentsByActivityId)}</td>
+                    <td className="px-3 py-1.5">
+                      {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Critical</span>}
+                      {a.is_critical === false && <span className="text-gray-300 text-xs">—</span>}
+                      {a.is_critical === null && <span className="text-gray-300 text-xs">—</span>}
+                    </td>
+                  </tr>
                 )
               })}
+              {trailingGroupRowSpacerHeight > 0 && (
+                <tr><td colSpan={9} style={{ height: trailingGroupRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+              )}
               {groupedActivities.length === 0 && (
                 <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">No activities match the current filters</td></tr>
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

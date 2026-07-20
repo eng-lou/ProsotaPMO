@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
-import { formatFloatDays, resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay, type CalendarLookup } from './durationDisplay'
 import {
   ACTIVITY_TYPES,
   CONSTRAINT_TYPES,
@@ -52,14 +52,14 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
 // children — the backend rejects these outright for one (2026-07-06, per
 // Maro), so they're left out of the payload entirely rather than sent back
 // unchanged.
-export function toActivityPayload(values: ActivityFormValues, calendars: Calendar[], isParent: boolean) {
+export function toActivityPayload(values: ActivityFormValues, calendarLookup: CalendarLookup, isParent: boolean) {
   const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
   // alap needs no date either (2026-07-07, per Maro) — a relative positioning
   // directive, not an exact one — but unlike asap it's still a real,
   // distinct constraint_type to store, not nulled out to "no constraint".
   const needsNoDate = isAsap || values.constraint_type === 'alap'
-  const hoursPerDay = resolveHoursPerDay({ calendar_id: values.calendar_id || null }, calendars)
+  const hoursPerDay = resolveHoursPerDay({ calendar_id: values.calendar_id || null }, calendarLookup)
   const payload: Record<string, unknown> = {
     task_name: values.task_name,
     activity_type: values.activity_type,
@@ -96,6 +96,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
 }
 
 export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded = false }: Props) {
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity))
   const [values, setValues] = useState<ActivityFormValues>(initialValues)
   const [submitting, setSubmitting] = useState(false)
@@ -194,7 +195,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Total Float (d)</div>
-            <div className="font-medium text-gray-700">{formatFloatDays(activity.total_float_hours, activity, calendars)}</div>
+            <div className="font-medium text-gray-700">{formatFloatDays(activity.total_float_hours, activity, calendarLookup)}</div>
           </div>
           <div>
             <div className="text-gray-400 mb-0.5">Critical?</div>
@@ -218,7 +219,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
             <div className="text-gray-400 mb-0.5" title="Computed: Duration x (1 - % Complete) — not directly editable">Remaining Duration (d)</div>
             <div className="font-medium text-gray-700">
               {activity.remaining_duration_hours != null
-                ? (Number(activity.remaining_duration_hours) / resolveHoursPerDay(activity, calendars)).toFixed(1)
+                ? (Number(activity.remaining_duration_hours) / resolveHoursPerDay(activity, calendarLookup)).toFixed(1)
                 : '—'}
             </div>
           </div>

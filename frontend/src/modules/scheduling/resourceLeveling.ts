@@ -1,6 +1,6 @@
 import { api } from '@/lib/api'
 import { toDateOnly, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
-import { resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
 import { eachDate, indexSpread, type AssignmentRow } from './useResourcesTabData'
 import type { Activity, Calendar, Resource, ResourceAssignment } from './types'
 
@@ -117,6 +117,7 @@ export async function levelTarget(
   rangeEnd: Date,
   buckets: BucketRange[],
 ): Promise<LevelRunResult> {
+  const calendarLookup = buildCalendarLookup(calendars)
   const movedActivityIds: string[] = []
   let blockedByFloat = false
 
@@ -157,7 +158,7 @@ export async function levelTarget(
       const requiredDelayDays = Math.round((newStart.getTime() - oldStart.getTime()) / 86_400_000)
 
       if (mode === 'smooth') {
-        const hoursPerDay = resolveHoursPerDay(candidate.activity, calendars)
+        const hoursPerDay = resolveHoursPerDay(candidate.activity, calendarLookup)
         const floatDays = candidate.activity.total_float_hours != null ? Number(candidate.activity.total_float_hours) / hoursPerDay : 0
         if (requiredDelayDays > floatDays) { blockedByFloat = true; continue }
       }

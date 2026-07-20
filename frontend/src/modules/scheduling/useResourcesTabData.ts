@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { toDateOnly, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { computePeriodBuckets, type GanttZoom } from './ganttZoom'
@@ -84,43 +84,45 @@ export function useResourcesTabData(
         return
       }
       setLoading(true)
-      // Promise.allSettled, not Promise.all (2026-07-13 fix, per Maro:
-      // "some resources are still not showing on the resource tracking" —
-      // Promise.all rejects the *whole batch* the instant any single
-      // resource's request fails, e.g. a 404 for a resource that existed a
-      // moment ago but got cleaned up mid-regeneration (the app's own log
-      // shows exactly this: DELETE /model-element-links/... 404s from an
-      // earlier schedule being replaced) — with no catch anywhere in this
-      // function, that one failure silently dropped the update for every
-      // OTHER resource in the same batch too, since setSpreadByResource
-      // never ran at all. Each resource's fetch is now isolated: one
-      // failing resource shows blank (indexSpread(undefined) is the
-      // existing, correct "no data yet" fallback), the rest still update.
-      const results = await Promise.allSettled(trackedResources.map(async r => {
-        const { data } = await api.get<ResourceSpread>('/api/v1/resource-assignment-spreads/', {
-          params: { resource_id: r.id, start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
-        })
-        return [r.id, data] as const
-      }))
-      if (!cancelled) {
-        const entries = results.flatMap(r => r.status === 'fulfilled' ? [r.value] : [])
-        const failedCount = results.length - entries.length
-        // Merge into the existing map, don't replace it (2026-07-14 fix, per
-        // Maro: "unchecked it shows no values... if checked, it shows them"
-        // — checking a resource narrows trackedResources down to just that
-        // one, this effect refetches only it, and a wholesale replace here
-        // wiped out every other already-fetched resource's data from the
-        // map. Unchecking widened trackedResources back out, but until
-        // *that* refetch finished, spreadByResource only had the single
-        // checked resource's entry — every other (correctly loaded a moment
-        // earlier) resource rendered blank in the meantime, with no error,
-        // because nothing actually failed — its data was just discarded for
-        // no reason. Merging means a fetch for a narrower resource set can
-        // only ever add/update entries, never destroy previously-fetched
-        // ones still sitting in the map for resources outside this batch.
-        setSpreadByResource(prev => new Map([...prev, ...entries]))
-        setSpreadFetchError(failedCount > 0 ? `Failed to load resource tracking data for ${failedCount} of ${results.length} resource(s)` : null)
-        setLoading(false)
+      // One POST for every tracked resource, not one GET per resource
+      // (2026-07-17 perf fix, per a real perf audit — a 22-resource tab load
+      // was firing 22 separate requests, each independently rebuilding the
+      // exact same project-wide calendar lookup server-side; see
+      // app/services/resource_assignment_spread.py:get_spreads_for_resources).
+      // A resource_id the backend can't serve (deleted mid-regeneration, not
+      // time-based) is silently absent from the response `spreads` object
+      // rather than failing the request — same "isolate the bad entry, don't
+      // sink the whole batch" reasoning the old per-resource
+      // Promise.allSettled had, just enforced server-side now instead of via
+      // N independent HTTP failures.
+      try {
+        const { data } = await api.post<{ spreads: Record<string, ResourceSpread> }>(
+          '/api/v1/resource-assignment-spreads/bulk-fetch',
+          { resource_ids: trackedResources.map(r => r.id), start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
+        )
+        if (!cancelled) {
+          const entries = Object.entries(data.spreads)
+          const failedCount = trackedResources.length - entries.length
+          // Merge into the existing map, don't replace it (2026-07-14 fix, per
+          // Maro: "unchecked it shows no values... if checked, it shows them"
+          // — checking a resource narrows trackedResources down to just that
+          // one, this effect refetches only it, and a wholesale replace here
+          // wiped out every other already-fetched resource's data from the
+          // map. Unchecking widened trackedResources back out, but until
+          // *that* refetch finished, spreadByResource only had the single
+          // checked resource's entry — every other (correctly loaded a moment
+          // earlier) resource rendered blank in the meantime, with no error,
+          // because nothing actually failed — its data was just discarded for
+          // no reason. Merging means a fetch for a narrower resource set can
+          // only ever add/update entries, never destroy previously-fetched
+          // ones still sitting in the map for resources outside this batch.
+          setSpreadByResource(prev => new Map([...prev, ...entries]))
+          setSpreadFetchError(failedCount > 0 ? `Failed to load resource tracking data for ${failedCount} of ${trackedResources.length} resource(s)` : null)
+        }
+      } catch {
+        if (!cancelled) setSpreadFetchError(`Failed to load resource tracking data for ${trackedResources.length} resource(s)`)
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
     load()
@@ -128,17 +130,24 @@ export function useResourcesTabData(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackedResources.map(r => r.id).join(','), toDateOnly(rangeStart), toDateOnly(rangeEnd)])
 
-  const refetchResource = async (resourceId: string) => {
+  const refetchResource = useCallback(async (resourceId: string) => {
     const { data } = await api.get<ResourceSpread>('/api/v1/resource-assignment-spreads/', {
       params: { resource_id: resourceId, start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
     })
     setSpreadByResource(prev => new Map(prev).set(resourceId, data))
-  }
+  }, [rangeStart, rangeEnd])
 
-  return {
+  // Memoized (2026-07-17 perf fix, per a real perf audit) — this used to be
+  // a plain object literal, a brand new reference every render regardless
+  // of whether any of its fields actually changed. Every caller's own
+  // useMemo keyed on this whole object (Scheduling.tsx's
+  // printScopedTrackedResources/resourcesPrintGroups/resourcesProfileBars)
+  // was silently defeated by that — recomputing on every Scheduling.tsx
+  // render, not just when resource data itself changed.
+  return useMemo(() => ({
     trackedResources, assignmentsByResource, rangeStart, rangeEnd, buckets,
     spreadByResource, loading, spreadFetchError, refetchResource,
-  }
+  }), [trackedResources, assignmentsByResource, rangeStart, rangeEnd, buckets, spreadByResource, loading, spreadFetchError, refetchResource])
 }
 
 export function indexSpread(spread: ResourceSpread | undefined) {
@@ -185,19 +194,30 @@ export function computeUsageProfileBars(
   buckets: { start: Date; end: Date; label: string }[], spreadByResource: Map<string, ResourceSpread>,
   selectedActivityIds: Set<string>, unit: 'hours' | 'days' | 'cost' = 'hours',
 ): { barValues: number[]; hasActuals: boolean[]; limitValue: number } {
-  const scopedRows = trackedResources.flatMap(r => assignmentsByResource.get(r.id) ?? [])
-    .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
-
+  // 2026-07-17 perf fix: this used to build `scopedRows` (every tracked
+  // resource's assignment rows, filtered by selectedActivityIds) and then,
+  // for every row of every resource, re-scan that whole array with
+  // `.includes()` — O(total_assignments²) across the tab. The filter
+  // predicate needs nothing but the row itself, so it applies directly per
+  // row below with an O(1) Set.has(), no membership scan at all. Also folds
+  // what used to be a second, separate maxCapacity pass (which rebuilt each
+  // resource's capacityByDate map from scratch, per bucket, throwing away
+  // the identical map indexSpread had already built moments earlier in the
+  // bars pass) into this same single per-resource loop, reusing indexSpread's
+  // own capacityByDate directly instead of rebuilding it.
   const bars = buckets.map(() => 0)
   const actualFlags = buckets.map(() => false)
+  const capacityByBucket = buckets.map(() => 0)
   for (const resource of trackedResources) {
     const spread = spreadByResource.get(resource.id)
     if (!spread) continue
     const factor = usageUnitFactor(resource, unit)
-    const { hoursByAssignmentDate } = indexSpread(spread)
-    const rows = (assignmentsByResource.get(resource.id) ?? []).filter(row => scopedRows.includes(row))
+    const { hoursByAssignmentDate, capacityByDate } = indexSpread(spread)
+    const rows = (assignmentsByResource.get(resource.id) ?? [])
+      .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
     buckets.forEach((bucket, i) => {
       for (const d of eachDate(bucket.start, bucket.end)) {
+        capacityByBucket[i] += (capacityByDate.get(d) ?? 0) * factor
         for (const row of rows) {
           const hours = hoursByAssignmentDate.get(`${row.assignment.id}:${d}`)?.hours ?? 0
           if (hours > 0) {
@@ -208,19 +228,6 @@ export function computeUsageProfileBars(
       }
     })
   }
-  let maxCapacity = 0
-  for (const bucket of buckets) {
-    let capacity = 0
-    for (const resource of trackedResources) {
-      const spread = spreadByResource.get(resource.id)
-      if (!spread) continue
-      const factor = usageUnitFactor(resource, unit)
-      const capacityByDate = new Map(spread.days.map(d => [d.date, Number(d.capacity)]))
-      for (const d of eachDate(bucket.start, bucket.end)) {
-        capacity += (capacityByDate.get(d) ?? 0) * factor
-      }
-    }
-    maxCapacity = Math.max(maxCapacity, capacity)
-  }
+  const maxCapacity = capacityByBucket.reduce((max, c) => Math.max(max, c), 0)
   return { barValues: bars, hasActuals: actualFlags, limitValue: maxCapacity }
 }

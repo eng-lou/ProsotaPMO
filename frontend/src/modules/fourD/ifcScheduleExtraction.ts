@@ -26,13 +26,29 @@ import { ensureMaterialized } from './elementBatching'
 // runs (see extractScheduleElements) — bracing, stair stringers,
 // connection hardware that don't match a curtain-wall name pattern land
 // here rather than being silently dropped.
+// MEP + facade-detailing categories (2026-07-17, per Maro — real Snowdon
+// Towers HVAC/Electrical/Plumbing/Facades sample files, not guessed) added
+// alongside the original 15 structural/architectural ones. Verified against
+// those actual files' own STEP text before writing IFC_TYPE_CATEGORIES/the
+// keyword tables below — the discipline-specific IFC4 types a naive design
+// would reach for (IfcDuctSegment, IfcPipeSegment, IfcCableCarrierSegment,
+// ...) don't actually appear in any of them: every MEP element instance
+// exports as the generic IfcFlowSegment/IfcFlowFitting/IfcFlowTerminal/
+// IfcFlowController family regardless of discipline (duct vs. pipe vs.
+// conduit only shows up on the linked *Type object, e.g. IfcDuctSegmentType
+// vs IfcPipeSegmentType — not on the instance's own IFC class at all), so
+// classification here works the same way Curtain Walls' own IfcMember/
+// IfcPlate re-bucketing already does: off each element's real, already-read
+// Name (see resolveMepCategory's own header below), not off ifcType alone.
 export type ScheduleCategory =
-  | 'Footings' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls'
-  | 'Structural Members' | 'Stairs' | 'Roofs' | 'Curtain Walls' | 'Windows' | 'Doors' | 'Railings'
-  | 'Coverings' | 'Furnishings'
+  | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls'
+  | 'Structural Members' | 'Stairs' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
+  | 'Ductwork' | 'Air Terminals' | 'Piping' | 'Plumbing Fixtures'
+  | 'Electrical Containment' | 'Lighting' | 'Electrical Devices'
+  | 'Coverings' | 'Furnishings' | 'Site & Landscaping'
 
 export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory }[] = [
-  { ifcType: 'IfcFooting', category: 'Footings' },
+  { ifcType: 'IfcFooting', category: 'Foundation' },  // "Foundation" (2026-07-17, per Maro: "Footings is Foundation") — was 'Footings'
   // Individual reinforcement (2026-07-15, per Maro, after "Select
   // Unassigned" on a real structural export turned up 149 IfcReinforcingBar
   // elements — Revit's own per-bar rebar export, distinct from the
@@ -77,29 +93,74 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
   { ifcType: 'IfcWindow', category: 'Windows' },
   { ifcType: 'IfcDoor', category: 'Doors' },
   { ifcType: 'IfcRailing', category: 'Railings' },
+  // Raw default buckets only, same convention as IfcMember/IfcPlate above —
+  // extractScheduleElements re-buckets every one of these off Name via
+  // resolveMepCategory below (2026-07-17). Defaults picked as "whichever
+  // real discipline was the majority case across the reference files" —
+  // dry-run-verified against every real name pattern sampled from all
+  // three reference files (not just spot-checked): IfcFlowSegment/
+  // IfcFlowTerminal essentially never actually hit this default at all
+  // (every real segment/terminal name matched a keyword). IfcFlowFitting
+  // does hit it for real, on two fronts that pull in opposite directions —
+  // ALL of HVAC's own ~1000 duct fittings ("Round Elbow"/"Rectangular
+  // Tee"/"Round Endcap", no literal "duct" in the name) rely on this
+  // default to land as Ductwork at all, while a smaller minority of
+  // Plumbing's own fittings ("Cap - Generic"/"Elbow - Generic", no PVC/
+  // DWV/sanitary marker either) incorrectly inherit the same Ductwork
+  // default instead of Piping. Ductwork wins here on volume — the
+  // structural-fitting default an earlier version of this comment used
+  // instead (a neutral 'Structural Members' catch-all) traded a smaller,
+  // already-documented residue for a much larger one. IfcFlowController
+  // defaults to Piping for the same reason (valves were the only real
+  // IfcFlowController content seen across all three files, already
+  // 100% keyword-matched in practice — this default is essentially
+  // never hit, same as IfcFlowSegment/IfcFlowTerminal above).
+  { ifcType: 'IfcFlowSegment', category: 'Ductwork' },
+  { ifcType: 'IfcFlowFitting', category: 'Ductwork' },
+  { ifcType: 'IfcFlowTerminal', category: 'Ductwork' },
+  { ifcType: 'IfcFlowController', category: 'Piping' },
   { ifcType: 'IfcCovering', category: 'Coverings' },
   { ifcType: 'IfcFurnishingElement', category: 'Furnishings' },
 ]
 
 // Fixed construction sequence within one storey — primary structure
-// first (Footings must exist before Columns can bear on them, Columns
+// first (Foundation must exist before Columns can bear on them, Columns
 // before Beams span between them, Beams before the Slab they support can
 // be poured, Slab before Walls close in around it), then secondary
 // structural members and stairs (go up alongside/soon after primary
 // framing), then the envelope closes in roof-first for weathertightness
-// before curtain wall/windows/doors, then railings (life-safety, needs
-// floor edges/stairs already in place), then interior finishes only once
-// enclosed, furnishings last. Drives both scheduleGeneration.ts's
-// within-storey relationships and the Review step's own display order.
-// Reinforcement (2026-07-15) sits right after Footings — rebar cages go in
+// before curtain wall/windows/doors — Facade Ornamentation (2026-07-17,
+// per Maro: "that's stupid in reality, the architecture especially the
+// cladding and external walls etc needs to be fully formed before the
+// facade [ornamentation]") sits AFTER Windows/Doors, not right after
+// Curtain Walls where an earlier version of this had it — decorative
+// trim/cresting/corbels mount onto a wall assembly and its openings that
+// already exist, never the reverse. Then MEP rough-in once the floor's own
+// envelope and walls exist to run services through, then railings (life-
+// safety, needs floor edges/stairs already in place), then interior
+// finishes only once enclosed, then MEP trim-out (terminals/fixtures/
+// lighting/devices go in once their own rough-in and the finishes they
+// mount to both exist), furnishings next-to-last, Site & Landscaping dead
+// last (2026-07-17, per Maro: "there are somethings you should leave to
+// the final phases like this park benches/canopies/landscaping etc" —
+// softscape/hardscape/site furniture is real punch-list-adjacent work,
+// done once everything it could get damaged/blocked by already exists).
+// Drives both scheduleGeneration.ts's within-storey relationships and the
+// Review step's own display order. None of the MEP/Facade Ornamentation/
+// Site & Landscaping additions (2026-07-17) are in scheduleGeneration.ts's
+// own STRUCTURAL_CATEGORIES — only the floor's own structure gates the
+// floor above starting, so this ordering only ever affects sequencing
+// *within* one storey, same as every other secondary/finish category here.
+// Reinforcement (2026-07-15) sits right after Foundation — rebar cages go in
 // before the pour that encases them, same "before the concrete" position
 // real reinforcement takes across footings/walls/slabs alike; a
 // first-draft placement, freely reordered per project in the wizard same
 // as every other category here.
 export const CATEGORY_ORDER: ScheduleCategory[] = [
-  'Footings', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls',
-  'Structural Members', 'Stairs', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Railings',
-  'Coverings', 'Furnishings',
+  'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls',
+  'Structural Members', 'Stairs', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
+  'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
+  'Air Terminals', 'Plumbing Fixtures', 'Lighting', 'Electrical Devices', 'Furnishings', 'Site & Landscaping',
 ]
 
 // Purely informational (not a second category axis) — keyword-matched off
@@ -151,6 +212,108 @@ const CURTAIN_WALL_NAME_KEYWORDS = [
 function isCurtainWallMember(name: string): boolean {
   const lower = name.toLowerCase()
   return CURTAIN_WALL_NAME_KEYWORDS.some(k => lower.includes(k))
+}
+
+// MEP re-bucketing (2026-07-17) — same reasoning/precedent as
+// isCurtainWallMember above (Name already read for free, keyword-matching
+// it costs nothing where a per-element pset walk over thousands of Flow*
+// instances would), applied to IfcFlowSegment/IfcFlowFitting/
+// IfcFlowTerminal/IfcFlowController and IfcBuildingElementProxy — see this
+// file's own header on why base ifcType alone can't tell a duct from a
+// pipe from a conduit run here.
+//
+// Matched longest-keyword-first across the WHOLE table, not
+// category-by-category in array order (2026-07-17 fix, caught by actually
+// dry-running this against every real name pattern sampled from all three
+// reference files before shipping it, not just spot-checking a few): a
+// bare 'light' would otherwise catch "Lighting and Appliance Panelboard"
+// (an electrical panel, not a fixture) and "Lighting Switches" (a device)
+// before ever reaching their own, already-present, more specific
+// 'panelboard'/'lighting switch' entries below — checking every keyword by
+// specificity instead of by which category's array it happens to sit in
+// fixes that class of bug generically, not just for these two cases.
+// Real cross-discipline collisions still exist and are handled by keyword
+// precision instead (e.g. 'water meter' vs 'meter bank'/'meter main' — a
+// bare 'meter' would wrongly catch both).
+//
+// An instance matching nothing here keeps whichever raw IFC_TYPE_CATEGORIES
+// default it started with (still visible/schedulable, same "broad and
+// heuristic, not authoritative" contract as the curtain-wall case) — a
+// small residue is expected (e.g. a handful of genuinely generic "Elbow -
+// Generic"/"Cap - Generic" plumbing fittings with no PVC/DWV/sanitary
+// marker, or "Round Elbow" itself, ambiguous between a duct and a pipe
+// fitting by name alone) and freely re-bucketable by hand afterward.
+const MEP_CATEGORY_KEYWORDS: { category: ScheduleCategory; keywords: string[] }[] = [
+  { category: 'Ductwork', keywords: ['duct', 'rectangular'] },
+  { category: 'Air Terminals', keywords: ['air terminal', 'diffuser', 'grille', 'return grille', 'supply grille'] },
+  { category: 'Electrical Containment', keywords: ['conduit', 'cable tray', 'cable basket', 'busway', 'wireway'] },
+  { category: 'Lighting', keywords: [
+    // 'bollard light', not bare 'bollard' (2026-07-17 fix) — a plain
+    // 'bollard' also means a site marker/bollard post (Site & Landscaping
+    // below), not a light fixture; the longer, specific phrase avoids that
+    // collision instead of relying on match order to sort it out.
+    'light', 'lamp', 'sconce', 'chandelier', 'downlight', 'luminaire', 'pendant', 'bollard light',
+  ] },
+  { category: 'Piping', keywords: [
+    'pipe', 'pvc', 'dwv', 'sanitary', 'domesticwater', 'sinkconnection', 'waterclosetconnection',
+    'showerconnection', 'washerconnection', 'floor drain', 'roof drain', 'hose bib', 'mopsink', 'floor sink',
+    'water heater', 'water meter', 'ball valve', 'gate valve', 'pressure regulating valve', 'buildingconnection',
+  ] },
+  { category: 'Electrical Devices', keywords: [
+    'receptacle', 'panelboard', 'switchboard', 'lighting switch', 'transformer', 'disconnect switch',
+    'meter bank', 'meter main', 'data outlet', 'pv battery', 'pv inverter', 'pv panelboard',
+    'wiring pull box', 'hand dryer',
+  ] },
+  { category: 'Facade Ornamentation', keywords: [
+    'cresting', 'muntin', 'corbel', 'trim-window', 'trim - window', 'slab edge', 'wall sweep',
+    'dentil', 'rope molding', 'key end', 'medallion', 'elliptical arch', 'arch w', 'key pattern',
+  ] },
+  // Site & Landscaping (2026-07-17, per Maro: "there are somethings you
+  // should leave to the final phases like this park benches/canopies/
+  // landscaping etc... I dont want to see a tree being placed in while the
+  // ground floor is also being worked on" — the real culprit turned out to
+  // be classification, not sequencing: a "Tree - Honey-Locust:15' Canopy"
+  // element, Pset_ProductRequirements.Category="Planting" per its own
+  // Object Information panel, matched nothing here and fell to the raw
+  // IfcBuildingElementProxy default, 'Structural Members' — an EARLY
+  // category, sequenced right after Beams, which is exactly why it showed
+  // up concurrent with early structural work. CATEGORY_ORDER below places
+  // this new category dead last, after Furnishings, matching "leave to the
+  // final phases" directly — softscape/hardscape/site furniture is real
+  // punch-list-adjacent work in practice, done once everything it could
+  // get damaged/blocked by is already in place.
+  //
+  // 'canopy' added standalone (2026-07-17, per Maro: "i dont want to see a
+  // flipping canopy in any early phase") — confirmed against the real
+  // Architectural file: "AC_Bandstand Canopy" (IfcBuildingElementProxy, a
+  // park bandstand's roof structure) matched nothing above either, same
+  // 'Structural Members' default, same early-phase bug as the tree canopy
+  // — just a literal building canopy this time, not a tree's canopy. A
+  // bare 'tree' or 'bench' keyword wouldn't have caught it since the name
+  // has neither word in it.
+  { category: 'Site & Landscaping', keywords: [
+    'tree', 'shrub', 'planting', 'landscap', 'hardscape', 'site furniture', 'bench', 'bollard', 'canopy',
+  ] },
+]
+
+// Flattened once and sorted longest-first at module load, not per call —
+// see MEP_CATEGORY_KEYWORDS' own header for why length order (not category
+// array order) is what actually matters here.
+const MEP_KEYWORD_ENTRIES: { category: ScheduleCategory; keyword: string }[] =
+  MEP_CATEGORY_KEYWORDS
+    .flatMap(({ category, keywords }) => keywords.map(keyword => ({ category, keyword })))
+    .sort((a, b) => b.keyword.length - a.keyword.length)
+
+const MEP_FAMILY_TYPES: ReadonlySet<string> = new Set([
+  'IfcFlowSegment', 'IfcFlowFitting', 'IfcFlowTerminal', 'IfcFlowController', 'IfcBuildingElementProxy',
+])
+
+function resolveMepCategory(name: string): ScheduleCategory | null {
+  const lower = name.toLowerCase()
+  for (const { category, keyword } of MEP_KEYWORD_ENTRIES) {
+    if (lower.includes(keyword)) return category
+  }
+  return null
 }
 
 export interface ExtractedElement {
@@ -221,12 +384,22 @@ function findMeshesForExpressId(root: THREE.Object3D, expressID: number): THREE.
   return found
 }
 
+// The only categories a real IfcElementQuantity area is worth reading for
+// (2026-07-18) — mirrors scheduleGeneration.ts's own COUNT_BASED set
+// exactly (its inverse, for the 4 continuous/area-priced categories), kept
+// as its own local list rather than imported from there to avoid a
+// circular dependency (scheduleGeneration.ts already imports from this
+// module).
+const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Roofs', 'Coverings'])
+
 // Length (columns/beams: the box's longest axis) or area (slabs/footings/
 // walls: the product of the two largest axes — a slab/footing's footprint,
 // or a wall's face area, since the thickness axis is reliably the
 // smallest of the three for all of these element types) — one formula
 // covers both quantity kinds without needing to know each element's local
-// orientation.
+// orientation. Only ever the fallback now (2026-07-18) — see
+// getElementQuantityArea (ifcModel.ts) and AREA_PRICED_CATEGORIES above for
+// why a real Qto value is tried first when the file actually has one.
 function measureElement(
   meshes: THREE.Mesh[], category: ScheduleCategory, toMetres: number,
 ): { quantity: number; quantityUnit: 'm' | 'm²' } {
@@ -255,6 +428,14 @@ export async function extractScheduleElements(
   const tree = await ifcModel.getSpatialTree(handle)
   const toMetres = ifcModel.getLengthUnitToMetres(handle, tree.expressID)
   const storeyByExpressId = await buildStoreyMap(ifcModel, handle, tree, toMetres)
+  // One cheap, synchronous, whole-model check (2026-07-18, per Maro: "yes,
+  // then..." on preferring a real IFC quantity over the bounding-box
+  // estimate) — if this file has zero IfcElementQuantity entities anywhere
+  // (confirmed true for all 6 real Snowdon sample files — a common Revit
+  // export gap, "Export base quantities" not enabled), skip the extra
+  // per-element property read entirely rather than paying for a lookup
+  // that can never succeed.
+  const hasQuantitySets = ifcModel.getExpressIdsForType(handle, 'IfcElementQuantity').length > 0
 
   const candidates: { expressID: number; category: ScheduleCategory; ifcType: string }[] = []
   for (const { ifcType, category } of IFC_TYPE_CATEGORIES) {
@@ -273,18 +454,37 @@ export async function extractScheduleElements(
     // verified against the real reference file, where 538 of 612 IfcSlab
     // elements are exactly this (see this module's own plan doc/
     // getElementNameAndPredefinedType's header). Re-bucketed into
-    // Footings so it sequences and prices as one, rather than showing up
+    // Foundation so it sequences and prices as one, rather than showing up
     // as "Level 1 — Slabs" alongside actual floor slabs. IfcMember/
     // IfcPlate get the same re-bucketing treatment, off Name instead of
     // PredefinedType — see isCurtainWallMember's own header for why.
+    // Every MEP-family instance (2026-07-17) goes through
+    // resolveMepCategory the same way — see MEP_CATEGORY_KEYWORDS' own
+    // header for why base ifcType alone can't disambiguate a duct from a
+    // pipe from a conduit run here; falls back to rawCategory's own raw
+    // IFC_TYPE_CATEGORIES default when nothing matches.
     const category: ScheduleCategory =
-      ifcType === 'IfcSlab' && predefinedType === 'BASESLAB' ? 'Footings'
+      ifcType === 'IfcSlab' && predefinedType === 'BASESLAB' ? 'Foundation'
       : (ifcType === 'IfcMember' || ifcType === 'IfcPlate') && isCurtainWallMember(name) ? 'Curtain Walls'
+      : MEP_FAMILY_TYPES.has(ifcType) ? (resolveMepCategory(name) ?? rawCategory)
       : rawCategory
     const meshes = findMeshesForExpressId(handle.object, expressID)
     if (meshes.length > 0 && globalId) {
       const storey = storeyByExpressId.get(expressID)
-      const { quantity, quantityUnit } = measureElement(meshes, category, toMetres)
+      // Real IfcElementQuantity NetArea/GrossArea preferred over the
+      // bounding-box estimate (2026-07-18) — only worth checking for the
+      // continuous, area-priced categories (scheduleGeneration.ts's own
+      // COUNT_BASED set — not importable here without a circular
+      // dependency, since that module already imports from this one — so
+      // this is the same 4 categories expressed as its own local allow-
+      // list instead). Every other category prices by a flat per-element
+      // count, so a more accurate area would never be read forward anyway.
+      const realArea = hasQuantitySets && AREA_PRICED_CATEGORIES.has(category)
+        ? await ifcModel.getElementQuantityArea(handle, expressID)
+        : null
+      const { quantity, quantityUnit } = realArea !== null
+        ? { quantity: realArea, quantityUnit: 'm²' as const }
+        : measureElement(meshes, category, toMetres)
       elements.push({
         expressID, globalId, name, ifcType, category,
         material: classifyMaterial(name),

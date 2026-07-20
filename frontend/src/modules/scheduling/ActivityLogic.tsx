@@ -1,9 +1,9 @@
 import axios from 'axios'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import type { GanttStyle } from '@/lib/ganttLayout'
 import { ActivityPicker, nearestOtherActivityId } from './ActivityPicker'
-import { resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
 import {
   RELATIONSHIP_TYPES, validRelationshipTypesFor,
   type Activity, type ActivityRelationship, type Calendar, type RelationshipType,
@@ -196,7 +196,8 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
   const [lagDays, setLagDays] = useState('0')
   const [addError, setAddError] = useState<string | null>(null)
 
-  const hoursPerDay = resolveHoursPerDay(activity, calendars)
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
+  const hoursPerDay = resolveHoursPerDay(activity, calendarLookup)
   const activitiesById = new Map(activities.map(a => [a.id, a]))
   const predecessors = relationships.filter(r => r.successor_id === activity.id)
   const successors = relationships.filter(r => r.predecessor_id === activity.id)

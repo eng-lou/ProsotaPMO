@@ -246,6 +246,18 @@ class ActivityResponse(ActivityBase):
     # written only by app/services/scheduling_cpm.py's own scoped pass.
     sub_total_float_hours: Decimal | None = None
     sub_is_critical: bool | None = None
+    # Set once at IFC schedule generation, never editable afterward — see
+    # app/models/activity.py's own docstring. Read by the Resources tab's
+    # "Generate Resources"/"Auto Assign Resources" flow; null for every
+    # activity created any other way.
+    schedule_category: str | None = None
+    schedule_phase_key: str | None = None
+    # The real IFC-measured quantity duration_hours was computed from
+    # (2026-07-18, per Maro's own QA catch — see Activity.schedule_quantity's
+    # model docstring) — read by boqGeneration.ts instead of reverse-
+    # engineering an approximation from duration_hours. Same "set once at
+    # generation, null for anything else" contract as the two fields above.
+    schedule_quantity: Decimal | None = None
     # Server-managed outline position — see app/services/activity.py:_recompute_hierarchy.
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.
     wbs_path: str | None = None

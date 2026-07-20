@@ -2,11 +2,10 @@ import axios from 'axios'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import type { Calendar } from '@/modules/scheduling/types'
-import type { Collection } from './collections'
 import type { IfcModelHandle } from './ifcModel'
 import { extractScheduleElements, type ExtractedElement } from './ifcScheduleExtraction'
 import {
-  buildStagedSchedule, groupByStorey, groupFromCollections,
+  buildStagedSchedule, groupByStorey,
   usedCategoryNames, usedPhaseRows, type CategoryRate, type PhaseRow, type ProposedScheduleSummary, type StoreyGroup,
 } from './scheduleGeneration'
 
@@ -20,39 +19,43 @@ interface Props {
   // reachable at all regardless of what the user picked). The Source step
   // below lets the user check/uncheck which of these actually get scanned.
   models: { handle: IfcModelHandle; name: string }[]
-  collections: Collection[]
   calendars: Calendar[]
   projectId: string
+  // The generated root WBS's own name (2026-07-17, per Maro: "you dont need
+  // to append the names of all the IFC. Just use the name of the Project as
+  // the overall parent name" — this used to be every checked model's own
+  // name joined together, e.g. "Structural + Electrical + Facades +
+  // Architectural + HVAC + Plumbing", unreadable past 2-3 files).
+  projectName: string
   schedulePeriodId: string
   onCancel: () => void
   onGenerated: () => void
 }
 
-type Source = 'scan' | 'collections'
-type Step = 'source' | 'extract' | 'rates' | 'review'
+// No 'rates' step (2026-07-17, per Maro: "I dont want to see the rate and
+// crew settings when I'm generating the schedule" — that UI moves to a
+// separate "Generate Resources" flow in the Resources tab, operating on an
+// already-committed schedule instead of this one). seedRates below still
+// runs internally either way — computeDurationHours still needs *some*
+// CategoryRate to estimate a realistic duration from, just DEFAULT_
+// CATEGORY_PHASES' own typical-industry defaults now, silently, with no
+// user-facing editing step at all.
+type Step = 'source' | 'extract' | 'review'
 
 // "Generate a resource loaded schedule based on an imported ifc"
 // (2026-07-13, per Maro) — a wizard modelled on ImportModelDialog.tsx's
 // own overlay/panel conventions, the first wizard-shaped dialog in this
-// module. Two ways to arrive at the same reviewable WBS
-// (scheduleGeneration.ts's own StoreyGroup[] shape), picked in the new
-// Source step:
-// - Scan Model: automatic, off ifcScheduleExtraction.ts's IFC-type scan.
-// - Use My Collections: manual, off a Collections tree Maro organised by
-//   hand (Pit > Footings, Level 1 > Columns, ...) — added 2026-07-13 after
-//   the automatic scan mis-bucketed this file's pile caps (exported as
-//   IfcSlab with PredefinedType=BASESLAB, not IfcFooting) as ordinary
-//   floor slabs; Maro's own words: "a controlled way to do this better...
-//   then with that you can generate the schedule". The auto-scan's own
-//   classifier got a real fix for that specific case too (see
-//   ifcScheduleExtraction.ts), but a hand-curated Collections tree stays
-//   available as a deliberate, always-correct alternative for whatever the
-//   next heuristic gap turns out to be, and isn't limited to the five
-//   structural types either, since a collection can hold anything.
-// Both paths converge on the same Rates & Crews / Review & Commit steps.
-export function IfcScheduleWizard({ models, collections, calendars, projectId, schedulePeriodId, onCancel, onGenerated }: Props) {
+// module. Builds a reviewable WBS (scheduleGeneration.ts's own
+// StoreyGroup[] shape) off ifcScheduleExtraction.ts's automatic IFC-type
+// scan. (A second "Use My Collections (controlled)" source — building the
+// same WBS off a hand-curated Collections tree instead — existed
+// 2026-07-13 through 2026-07-19 and was removed per Maro: the auto-scan's
+// own classifier got real fixes for the specific mis-bucketing cases that
+// motivated it at the time, and the extra path wasn't worth keeping
+// alongside that; see scheduleGeneration.ts's own git history for
+// groupFromCollections if this ever needs resurrecting.)
+export function IfcScheduleWizard({ models, calendars, projectId, projectName, schedulePeriodId, onCancel, onGenerated }: Props) {
   const [step, setStep] = useState<Step>('source')
-  const [source, setSource] = useState<Source | null>(null)
   // Defaults to every loaded model selected — matches this app's usual
   // "editable default, not forced choice" convention (same shape as the
   // rates table below defaulting to industry-typical values): the common
@@ -75,7 +78,6 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
   const [extractError, setExtractError] = useState<string | null>(null)
 
   const [storeys, setStoreys] = useState<StoreyGroup[] | null>(null)
-  const [collectionWarnings, setCollectionWarnings] = useState<string[]>([])
 
   const [rates, setRates] = useState<Record<string, CategoryRate>>({})
   // null = the project's own default calendar (2026-07-13, per Maro:
@@ -90,24 +92,12 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
-  const topLevelCollections = collections.filter(c => c.parent_collection_id === null)
-
   const seedRates = (grouped: StoreyGroup[]) => {
     setRates(Object.fromEntries(usedPhaseRows(grouped).map(row => [row.id, row.phase.rate])))
   }
 
   const chooseScan = () => {
-    setSource('scan')
     setStep('extract')
-  }
-
-  const chooseCollections = () => {
-    setSource('collections')
-    const { storeys: grouped, warnings } = groupFromCollections(collections)
-    setStoreys(grouped)
-    setCollectionWarnings(warnings)
-    seedRates(grouped)
-    setStep('rates')
   }
 
   // Scans every *checked* model in turn, not just the first/active one
@@ -154,7 +144,7 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
       const grouped = groupByStorey(found)
       setStoreys(grouped)
       seedRates(grouped)
-      setStep('rates')
+      setStep('review')
     } catch (err) {
       setExtractError(err instanceof Error ? err.message : 'Failed to extract schedule elements')
     } finally {
@@ -162,22 +152,21 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
     }
   }
 
-  // The root WBS activity's own name (2026-07-15) — every checked model's
-  // name joined, so a structural + architectural run reads as "Structural +
-  // Architectural" rather than silently only naming one of them.
-  const rootName = selectedModels.map(m => m.name).join(' + ') || 'Imported Model'
+  // The root WBS activity's own name — the project's own name (2026-07-17,
+  // per Maro: "just use the name of the Project as the overall parent
+  // name"), not every checked model's own name joined together (the old
+  // 2026-07-15 behaviour — unreadable past 2-3 files, e.g. "Structural +
+  // Electrical + Facades + Architectural + HVAC + Plumbing").
+  const rootName = projectName
 
   const categoryNames = storeys ? usedCategoryNames(storeys) : []
   const phaseRows: PhaseRow[] = storeys ? usedPhaseRows(storeys) : []
   const { staged, summary }: { staged: ReturnType<typeof buildStagedSchedule>['staged']; summary: ProposedScheduleSummary } =
     storeys ? buildStagedSchedule(projectId, schedulePeriodId, storeys, rates, rootName, calendarId) : {
       staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: null, activities: [], resources: [], assignments: [], relationships: [] },
-      summary: { storeyCount: 0, activityCount: 0, resourceCount: 0, relationshipCount: 0, elementCount: 0 },
+      summary: { storeyCount: 0, activityCount: 0, relationshipCount: 0, elementCount: 0 },
     }
 
-  const updateRate = (rowId: string, patch: Partial<CategoryRate>) => {
-    setRates(prev => ({ ...prev, [rowId]: { ...prev[rowId], ...patch } }))
-  }
 
   const handleGenerate = async () => {
     setGenerating(true)
@@ -196,7 +185,7 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
     }
   }
 
-  const stepOrder: Step[] = source === 'collections' ? ['source', 'rates', 'review'] : ['source', 'extract', 'rates', 'review']
+  const stepOrder: Step[] = ['source', 'extract', 'review']
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
@@ -255,29 +244,17 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
                   {' '}Fast, but only as accurate as the model's own IFC typing.
                 </div>
               </button>
-              <button
-                onClick={chooseCollections}
-                disabled={topLevelCollections.length === 0}
-                title={topLevelCollections.length === 0 ? 'No Collections exist in this project yet' : undefined}
-                className="w-full text-left px-3 py-2.5 rounded-md border border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <div className="text-xs font-bold text-gray-800">Use My Collections (controlled)</div>
-                <div className="text-[11px] text-gray-500 mt-0.5">
-                  Builds the WBS from a Collections tree you've organised by hand — one top-level Collection per
-                  storey (e.g. "Pit", "Level 1"), each with sub-Collections for its trades (e.g. "Footings",
-                  "Columns"). Full control over grouping when the automatic scan isn't reliable enough.
-                  {topLevelCollections.length === 0 && ' Create a Collection first (IFC Data panel) to use this.'}
-                </div>
-              </button>
             </div>
           )}
 
           {step === 'extract' && (
             <div className="space-y-3">
               <p className="text-xs text-gray-500">
-                Scans this model for structural and architectural elements (columns, beams, slabs, footings, walls,
-                curtain walls, doors, windows, roofs, stairs, railings, finishes) and groups them by storey — a
-                first-draft WBS you'll review and adjust before anything is created.
+                Scans every checked model for structural, architectural, MEP, and facade-detailing elements
+                (columns, beams, slabs, footings, walls, curtain walls, facade trim, doors, windows, roofs, stairs,
+                ductwork, air terminals, piping, plumbing fixtures, electrical containment, lighting, electrical
+                devices, railings, finishes) and groups them by storey — a first-draft WBS you'll review and adjust
+                before anything is created.
               </p>
               {extracting && progress && (
                 <div className="space-y-1">
@@ -300,106 +277,26 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
             </div>
           )}
 
-          {step === 'rates' && storeys && (
-            <div className="space-y-3">
-              {source === 'collections' && (
-                <div className="text-xs text-gray-600">
-                  Found {storeys.length} storeys with {categoryNames.length} categories from your Collections tree
-                  ({summary.elementCount} linked elements).
-                  {collectionWarnings.length > 0 && (
-                    <ul className="mt-1.5 space-y-0.5 text-[11px] text-amber-700">
-                      {collectionWarnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-                    </ul>
-                  )}
-                </div>
-              )}
-              <p className="text-xs text-gray-500">
-                {source === 'collections'
-                  ? 'Starting productivity rates — edit crew, equipment, output per crew-day, and day rates for any phase before generating durations and budgets.'
-                  : 'Typical industry productivity rates — edit crew, equipment, output per crew-day, and day rates for any phase before generating durations and budgets.'}
-              </p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
-                      <th className="text-left pb-1">Category / Phase</th>
-                      <th className="text-left pb-1">Crew</th>
-                      <th className="text-right pb-1">Size</th>
-                      <th className="text-right pb-1">Output/Day</th>
-                      <th className="text-right pb-1">Crew $/Day</th>
-                      <th className="text-left pb-1">Equipment</th>
-                      <th className="text-right pb-1">Equip. $/Day</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {phaseRows.map(row => {
-                      const rate = rates[row.id] ?? row.phase.rate
-                      return (
-                        <tr key={row.id} className="border-t border-gray-100">
-                          <td className="py-1.5 text-gray-700 whitespace-nowrap">{row.category} — {row.phase.label}</td>
-                          <td className="py-1.5">
-                            <input
-                              value={rate.crewName}
-                              onChange={e => updateRate(row.id, { crewName: e.target.value })}
-                              className="w-32 border border-gray-300 rounded px-1 py-0.5"
-                            />
-                          </td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              type="number" min={1} value={rate.crewSize}
-                              onChange={e => updateRate(row.id, { crewSize: Math.max(1, Number(e.target.value) || 1) })}
-                              className="w-12 text-right border border-gray-300 rounded px-1 py-0.5"
-                            />
-                          </td>
-                          <td className="py-1.5 text-right whitespace-nowrap">
-                            <input
-                              type="number" min={0.1} step={0.1} value={rate.productivityPerCrewDay}
-                              onChange={e => updateRate(row.id, { productivityPerCrewDay: Math.max(0.1, Number(e.target.value) || 0.1) })}
-                              className="w-16 text-right border border-gray-300 rounded px-1 py-0.5"
-                            />
-                            <span className="text-gray-400 ml-1">{rate.unit}</span>
-                          </td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              type="number" min={0} value={rate.costPerCrewDay}
-                              onChange={e => updateRate(row.id, { costPerCrewDay: Math.max(0, Number(e.target.value) || 0) })}
-                              className="w-20 text-right border border-gray-300 rounded px-1 py-0.5"
-                            />
-                          </td>
-                          <td className="py-1.5">
-                            <input
-                              value={rate.equipmentName ?? ''}
-                              placeholder="—"
-                              onChange={e => updateRate(row.id, { equipmentName: e.target.value || undefined })}
-                              className="w-28 border border-gray-300 rounded px-1 py-0.5"
-                            />
-                          </td>
-                          <td className="py-1.5 text-right">
-                            {rate.equipmentName && (
-                              <input
-                                type="number" min={0} value={rate.equipmentCostPerDay ?? 0}
-                                onChange={e => updateRate(row.id, { equipmentCostPerDay: Math.max(0, Number(e.target.value) || 0) })}
-                                className="w-20 text-right border border-gray-300 rounded px-1 py-0.5"
-                              />
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
 
           {step === 'review' && storeys && (
             <div className="space-y-3">
               <div className="text-xs text-gray-600 space-y-1">
-                <div>Source: {source === 'collections' ? 'Your Collections tree' : 'Automatic IFC scan'}</div>
                 <div>1 root WBS ("{rootName}") + {summary.storeyCount} storey summary activities</div>
                 <div>{summary.activityCount - summary.storeyCount - 1} work activities across {categoryNames.length} categories, {phaseRows.length} construction phases</div>
-                <div>{summary.resourceCount} crews &amp; equipment, {summary.relationshipCount} sequencing links</div>
+                <div>{summary.relationshipCount} sequencing links</div>
                 <div>{summary.elementCount} IFC elements will be linked to their completion activities</div>
+                {/* No Resource/ResourceAssignment rows generated here
+                    (2026-07-17, per Maro's phased-generation plan) — typical
+                    industry crew/productivity DEFAULTS (DEFAULT_CATEGORY_
+                    PHASES, scheduleGeneration.ts) still drive these
+                    durations behind the scenes, just with no rates-editing
+                    step shown here at all (2026-07-17, per Maro: "I dont
+                    want to see the rate and crew settings when I'm
+                    generating the schedule") — that editing UI, and the
+                    real Resource Pool rows it drives, move to a separate
+                    "Generate Resources" flow in the Resources tab, off this
+                    now-committed schedule. */}
+                <div className="text-gray-400">Durations use typical industry crew/productivity defaults — the Resource Pool isn't populated by this step; generate resources separately from the Resources tab afterward.</div>
               </div>
               <div>
                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Calendar</div>
@@ -416,9 +313,7 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
                 <div className="text-[11px] text-gray-400 mt-0.5">Applied to every generated activity — editable per-activity afterward in Scheduling.</div>
               </div>
               <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                {source === 'collections'
-                  ? 'Grouping and element counts come straight from your Collections; durations and costs are still a first draft off the rates above, freely editable afterward in Scheduling.'
-                  : "Quantities are bounding-box estimates from the loaded geometry, not a certified takeoff — durations and costs are a first draft, freely editable afterward in Scheduling."}
+                Quantities are bounding-box estimates from the loaded geometry, not a certified takeoff — durations are a first draft, freely editable afterward in Scheduling.
               </p>
               {generateError && <div className="text-xs text-red-600">{generateError}</div>}
             </div>
@@ -438,17 +333,9 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
                 Back
               </button>
             )}
-            {step === 'rates' && (
-              <button
-                onClick={() => setStep(source === 'scan' ? 'extract' : 'source')}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
-              >
-                Back
-              </button>
-            )}
             {step === 'review' && (
               <button
-                onClick={() => setStep('rates')}
+                onClick={() => setStep('extract')}
                 disabled={generating}
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
               >
@@ -462,22 +349,6 @@ export function IfcScheduleWizard({ models, collections, calendars, projectId, s
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
               >
                 {extracting ? 'Scanning…' : 'Scan Model'}
-              </button>
-            )}
-            {step === 'extract' && elements && (
-              <button
-                onClick={() => setStep('rates')}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800"
-              >
-                Next: Rates & Crews
-              </button>
-            )}
-            {step === 'rates' && (
-              <button
-                onClick={() => setStep('review')}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800"
-              >
-                Next: Review
               </button>
             )}
             {step === 'review' && (

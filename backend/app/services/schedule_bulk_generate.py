@@ -13,7 +13,8 @@ from app.models.calendar import Calendar
 from app.models.model_element_link import ModelElementLink
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
-from app.schemas.schedule_bulk_generate import ScheduleBulkGenerateRequest, ScheduleBulkGenerateResponse
+from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
+from app.schemas.schedule_bulk_generate import BulkAssignmentInput, ScheduleBulkGenerateRequest, ScheduleBulkGenerateResponse
 from app.services import cost_sync, scheduling_cpm
 from app.services.activity import _activity_role, _apply_computed_fields, _next_role_code, _recompute_hierarchy, _require_live_schedule_period
 from app.services.scheduling_cpm import _find_cycle
@@ -82,21 +83,92 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     if len(real_id_by_temp_id) != len(data.activities):
         raise HTTPException(status_code=422, detail="activities contains an unreachable/cyclic parent_temp_id chain")
 
-    resource_real_id_by_temp_id: dict[str, uuid.UUID] = {r.temp_id: uuid.uuid4() for r in data.resources}
+    # dedupe_resources_by_name (2026-07-17, per Maro — "Generate Resources"
+    # being repeatable): reuse an existing Resource's real id by (project_id,
+    # name) instead of minting a fresh row for a temp_id whose name is
+    # already in the pool. One query up front for every candidate name,
+    # rather than one query per resource.
+    resource_real_id_by_temp_id: dict[str, uuid.UUID] = {}
+    new_resource_temp_ids: set[str] = set(r.temp_id for r in data.resources)
+    if data.dedupe_resources_by_name and data.resources:
+        existing_by_name_result = await db.execute(
+            select(Resource.name, Resource.id).where(
+                Resource.project_id == data.project_id,
+                Resource.name.in_({r.name for r in data.resources}),
+            )
+        )
+        existing_id_by_name = dict(existing_by_name_result.all())
+        for r in data.resources:
+            existing_id = existing_id_by_name.get(r.name)
+            if existing_id is not None:
+                resource_real_id_by_temp_id[r.temp_id] = existing_id
+                new_resource_temp_ids.discard(r.temp_id)
+    for temp_id in new_resource_temp_ids:
+        resource_real_id_by_temp_id[temp_id] = uuid.uuid4()
 
-    activities_with_assignments: set[uuid.UUID] = set()
-    for a in data.assignments:
-        if a.activity_temp_id not in real_id_by_temp_id:
-            raise HTTPException(status_code=422, detail=f"Unknown activity_temp_id '{a.activity_temp_id}' in assignments")
+    # activity_id-targeted assignments (2026-07-17, per Maro — "Auto Assign
+    # Resources" against an already-committed schedule, no new activities in
+    # this same payload at all) — validated in one batched query against
+    # this same schedule period, same reasoning as the temp_id path: never
+    # let an assignment silently attach to an activity outside this project/
+    # period, or one that doesn't exist at all.
+    external_activity_ids = {a.activity_id for a in data.assignments if a.activity_id is not None}
+    if external_activity_ids:
+        existing_activities_result = await db.execute(
+            select(Activity.id).where(
+                Activity.id.in_(external_activity_ids), Activity.schedule_period_id == data.schedule_period_id,
+            )
+        )
+        existing_activity_ids = {row[0] for row in existing_activities_result.all()}
+        missing_activity_ids = external_activity_ids - existing_activity_ids
+        if missing_activity_ids:
+            raise HTTPException(status_code=422, detail=f"Unknown activity_id(s) in assignments: {sorted(str(m) for m in missing_activity_ids)}")
+
+    resolved_activity_id_by_assignment: dict[int, uuid.UUID] = {}
+    for i, a in enumerate(data.assignments):
+        if a.activity_id is not None:
+            resolved_activity_id_by_assignment[i] = a.activity_id
+        elif a.activity_temp_id is not None:
+            if a.activity_temp_id not in real_id_by_temp_id:
+                raise HTTPException(status_code=422, detail=f"Unknown activity_temp_id '{a.activity_temp_id}' in assignments")
+            resolved_activity_id_by_assignment[i] = real_id_by_temp_id[a.activity_temp_id]
+        else:
+            raise HTTPException(status_code=422, detail="Each assignment needs either activity_temp_id or activity_id")
         if a.resource_temp_id not in resource_real_id_by_temp_id:
             raise HTTPException(status_code=422, detail=f"Unknown resource_temp_id '{a.resource_temp_id}' in assignments")
+
+    # skip_existing_assignments (2026-07-17, per Maro — "Auto Assign
+    # Resources" being repeatable without duplicating cost for work that
+    # already has its resource attached) — one batched query for every
+    # (activity, resource) pair this payload is about to write, rather than
+    # one query per assignment.
+    already_assigned_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    if data.skip_existing_assignments and data.assignments:
+        candidate_activity_ids = {resolved_activity_id_by_assignment[i] for i in range(len(data.assignments))}
+        candidate_resource_ids = {resource_real_id_by_temp_id[a.resource_temp_id] for a in data.assignments}
+        existing_pairs_result = await db.execute(
+            select(ResourceAssignment.activity_id, ResourceAssignment.resource_id).where(
+                ResourceAssignment.activity_id.in_(candidate_activity_ids),
+                ResourceAssignment.resource_id.in_(candidate_resource_ids),
+            )
+        )
+        already_assigned_pairs = set(existing_pairs_result.all())
+
+    activities_with_assignments: set[uuid.UUID] = set()
+    assignments_to_insert: list[tuple[uuid.UUID, uuid.UUID, BulkAssignmentInput]] = []
+    for i, a in enumerate(data.assignments):
+        activity_id = resolved_activity_id_by_assignment[i]
+        resource_id = resource_real_id_by_temp_id[a.resource_temp_id]
+        if (activity_id, resource_id) in already_assigned_pairs:
+            continue
         resource = next(r for r in data.resources if r.temp_id == a.resource_temp_id)
         # Same rule resource_assignment.py's own _validate_assignment_fields
         # enforces for a single create — material has no sensible default
         # utilisation, a quantity must be given.
         if resource.resource_type == "material" and a.quantity is None:
             raise HTTPException(status_code=422, detail=f"quantity is required for material resource '{resource.name}'")
-        activities_with_assignments.add(real_id_by_temp_id[a.activity_temp_id])
+        activities_with_assignments.add(activity_id)
+        assignments_to_insert.append((activity_id, resource_id, a))
 
     # Relationship cycle check, done once in memory against the batch's own
     # candidate edges plus whatever already exists in this schedule period
@@ -126,7 +198,12 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     activities_by_real_id: dict[uuid.UUID, Activity] = {}
     for temp_id, parent_real_id, sort_order in ordered_inserts:
         staged = activity_by_temp_id[temp_id]
-        role = _activity_role("task", parent_real_id)  # brand-new leaf; promotion to wbs_summary happens below
+        # staged.activity_type, not a hardcoded "task" (2026-07-17, per Maro:
+        # Construction Start/Substantial Completion are real start_milestone/
+        # finish_milestone rows, not 0-duration tasks) — brand-new leaf either
+        # way; wbs_summary promotion still happens automatically below via
+        # _recompute_hierarchy once everything's inserted.
+        role = _activity_role(staged.activity_type, parent_real_id)
         code = await _next_role_code(db, data.project_id, role)
         activity_id = real_id_by_temp_id[temp_id]
         activity = Activity(
@@ -134,23 +211,57 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
             code=code, wbs_role=role,
             project_id=data.project_id, schedule_variant_id=period.schedule_variant_id,
             schedule_period_id=data.schedule_period_id,
-            task_name=staged.task_name, activity_type="task", parent_id=parent_real_id, sort_order=sort_order,
+            task_name=staged.task_name, activity_type=staged.activity_type, parent_id=parent_real_id, sort_order=sort_order,
             duration_hours=staged.duration_hours, calendar_id=data.calendar_id,
+            schedule_category=staged.category, schedule_phase_key=staged.phase_key,
+            schedule_quantity=staged.quantity,
         )
         _apply_computed_fields(activity)
         db.add(activity)
         activities_by_real_id[activity_id] = activity
 
+    # Discipline UDF (2026-07-17, per Maro: "create a udf column called
+    # Discipline... so i can also choose to group by discipline") — found
+    # once per project by (project_id, entity_type, name) rather than
+    # created fresh every generation run, since a second run in the same
+    # project would otherwise collide with UserDefinedFieldDefinition's own
+    # uniqueness constraint on that triple. A plain "text" field, same as
+    # any other UDF a user could have created by hand through the normal
+    # User Defined Fields UI — nothing about this one is special-cased
+    # beyond how it gets populated here.
+    discipline_by_activity_id = {
+        real_id_by_temp_id[a.temp_id]: a.discipline for a in data.activities if a.discipline
+    }
+    if discipline_by_activity_id:
+        discipline_definition = (await db.execute(
+            select(UserDefinedFieldDefinition).where(
+                UserDefinedFieldDefinition.project_id == data.project_id,
+                UserDefinedFieldDefinition.entity_type == "activity",
+                UserDefinedFieldDefinition.name == "Discipline",
+            )
+        )).scalar_one_or_none()
+        if discipline_definition is None:
+            discipline_definition = UserDefinedFieldDefinition(
+                project_id=data.project_id, entity_type="activity", name="Discipline", data_type="text",
+            )
+            db.add(discipline_definition)
+            await db.flush()  # need its real id before UserDefinedFieldValue rows can reference it below
+        for activity_id, discipline in discipline_by_activity_id.items():
+            db.add(UserDefinedFieldValue(
+                field_definition_id=discipline_definition.id, record_id=activity_id, value_text=discipline,
+            ))
+
     for r in data.resources:
+        if r.temp_id not in new_resource_temp_ids:
+            continue  # deduped to an existing row by name — nothing to insert
         db.add(Resource(
             id=resource_real_id_by_temp_id[r.temp_id], project_id=data.project_id, resource_type=r.resource_type,
             name=r.name, unit=r.unit, rate=r.rate, max_hours_per_day=r.max_hours_per_day,
         ))
 
-    for a in data.assignments:
+    for activity_id, resource_id, a in assignments_to_insert:
         db.add(ResourceAssignment(
-            id=uuid.uuid4(), activity_id=real_id_by_temp_id[a.activity_temp_id],
-            resource_id=resource_real_id_by_temp_id[a.resource_temp_id],
+            id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id,
             utilisation_pct=a.utilisation_pct, quantity=a.quantity,
         ))
 
@@ -211,9 +322,10 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
 
     return ScheduleBulkGenerateResponse(
         activity_count=len(data.activities),
-        resource_count=len(data.resources),
-        assignment_count=len(data.assignments),
+        resource_count=len(new_resource_temp_ids),
+        assignment_count=len(assignments_to_insert),
         relationship_count=len(data.relationships),
         model_element_link_count=link_count,
         activity_ids_by_temp_id=real_id_by_temp_id,
+        resource_ids_by_temp_id=resource_real_id_by_temp_id,
     )

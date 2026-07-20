@@ -4,6 +4,12 @@ import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 interface Props {
   file: File
   kind: 'ifc' | 'mesh'
+  // Set whenever more files are still queued behind this one (2026-07-17,
+  // per Maro: "allow me to bulk import ifc files not one by one" — a
+  // multi-select in the file picker feeds every file through this same
+  // one-at-a-time dialog, FourD.tsx's own pendingImports queue) — just a
+  // "N more to go" hint so it's clear confirming this one won't be the end.
+  queuePosition?: { remaining: number }
   onConfirm: (sourceUpAxis: UpAxis, name: string) => void
   onCancel: () => void
 }
@@ -19,7 +25,7 @@ interface Props {
 // authoring tool, and per-project habits all vary — see upAxis.ts's
 // axisCorrectionRotation header for the fuller story on why this stopped
 // being a fixed per-kind rule).
-export function ImportModelDialog({ file, kind, onConfirm, onCancel }: Props) {
+export function ImportModelDialog({ file, kind, queuePosition, onConfirm, onCancel }: Props) {
   const [upAxis, setUpAxis] = useState<UpAxis>(defaultSourceUpAxis(kind))
   // Editable, pre-filled from the file's own name (2026-07-12, per Maro:
   // two files both literally called "Untitled.glb" — a common default
@@ -34,8 +40,11 @@ export function ImportModelDialog({ file, kind, onConfirm, onCancel }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
       <div className="w-80 bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-gray-100">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-sm font-bold text-gray-800">Import Model</h3>
+          {queuePosition && (
+            <span className="text-[10px] text-gray-400">{queuePosition.remaining} more queued</span>
+          )}
         </div>
         <div className="px-4 py-3 space-y-3">
           <div>

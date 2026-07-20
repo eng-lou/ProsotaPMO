@@ -20,6 +20,14 @@ export interface CostElement {
   rev_a_baseline: string | null
   pct_complete: number | null
   last_reviewed_date: string | null
+  // An independent benchmark figure (2026-07-18, per Maro: "make that
+  // another field so it could be another projects costs... then the
+  // variance separate from the budget vs forecast variance to simply show
+  // the difference") — e.g. another project's equivalent line, a tender
+  // return, or a prior cost plan revision. comparison_variance (budget -
+  // comparison_cost) is server-computed, never sent as input.
+  comparison_cost: string | null
+  comparison_variance: string | null
   computed_budget: string | null
   computed_forecast: string | null
   computed_actuals: string | null

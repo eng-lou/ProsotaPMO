@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SectionBoxBounds } from './sectionBoxes'
+import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
 
 // Section Box bounds are stored in the TARGET OBJECT'S OWN LOCAL space, not
 // world space (2026-07-09, per section_box.py's own docstring) — this app
@@ -31,10 +31,22 @@ function localBoundsFromWorldBox(worldBox: THREE.Box3, target: THREE.Object3D): 
     new THREE.Vector3(worldBox.max.x, worldBox.max.y, worldBox.max.z),
   ].map(v => v.applyMatrix4(inverse))
   const localBox = new THREE.Box3().setFromPoints(corners)
-  return {
+  const bounds = {
     min_x: localBox.min.x, min_y: localBox.min.y, min_z: localBox.min.z,
     max_x: localBox.max.x, max_y: localBox.max.y, max_z: localBox.max.z,
   }
+  // An empty source Box3 (e.g. worldBox never got union()'d with anything —
+  // no visible geometry found under the target) stays at its default
+  // min=(+Inf,+Inf,+Inf)/max=(-Inf,-Inf,-Inf) (2026-07-17 fix, per a real
+  // 422 — that non-finite value round-trips through JSON.stringify as
+  // `null`, which the backend's own required `float` fields then reject
+  // with an opaque 422 instead of a message that explains anything).
+  // Caught by handleCreateSectionBox's own try/catch, surfaced through the
+  // existing sectionBoxError UI same as any other creation failure.
+  const allFinite = Number.isFinite(bounds.min_x) && Number.isFinite(bounds.min_y) && Number.isFinite(bounds.min_z)
+    && Number.isFinite(bounds.max_x) && Number.isFinite(bounds.max_y) && Number.isFinite(bounds.max_z)
+  if (!allFinite) throw new Error('Could not compute a bounding box for the current selection — try selecting again.')
+  return bounds
 }
 
 export function computeLocalBoundsForObject(object: THREE.Object3D): SectionBoxBounds {
@@ -83,8 +95,28 @@ function localClipPlanes(bounds: SectionBoxBounds): THREE.Plane[] {
   ]
 }
 
+// The box's own additional rotation (2026-07-17, per Maro: "I'd like to
+// rotate the bounding box"), as a matrix that rotates *around the box's own
+// centre* rather than the target's local origin — T(centre) * R(euler) *
+// T(-centre) — so dragging a rotate handle spins the box in place instead
+// of also relocating it. Shared by SectionBoxGizmo.tsx's own wireframe/
+// handle placement (composed onto the target's matrixWorld the exact same
+// way) and computeWorldClipPlanes below, so the visible gizmo and the
+// actual clip always agree.
+export function sectionBoxPivotMatrix(bounds: SectionBoxBounds, rotation: SectionBoxRotation): THREE.Matrix4 {
+  const cx = (bounds.min_x + bounds.max_x) / 2
+  const cy = (bounds.min_y + bounds.max_y) / 2
+  const cz = (bounds.min_z + bounds.max_z) / 2
+  const euler = new THREE.Euler(rotation.rot_x, rotation.rot_y, rotation.rot_z, 'XYZ')
+  return new THREE.Matrix4()
+    .makeTranslation(cx, cy, cz)
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(euler))
+    .multiply(new THREE.Matrix4().makeTranslation(-cx, -cy, -cz))
+}
+
 // Transforms the 6 local-space clip planes into world space against a
-// target's *current* matrixWorld — Plane.applyMatrix4 uses the normal
+// target's *current* matrixWorld, composed with the box's own rotation
+// (sectionBoxPivotMatrix above) — Plane.applyMatrix4 uses the normal
 // matrix internally, so this stays correct even under the target's own
 // rotation/non-uniform scale. Always returns brand-new Plane instances
 // (2026-07-09 fix, per design review — Material.clone() deep-clones
@@ -92,8 +124,9 @@ function localClipPlanes(bounds: SectionBoxBounds): THREE.Plane[] {
 // Plane in place would silently go stale on any mesh whose material later
 // gets cloned by Viewport3D.tsx's own texture-override scheme; building
 // fresh arrays on every call sidesteps that entirely).
-export function computeWorldClipPlanes(bounds: SectionBoxBounds, matrixWorld: THREE.Matrix4): THREE.Plane[] {
-  return localClipPlanes(bounds).map(p => p.applyMatrix4(matrixWorld))
+export function computeWorldClipPlanes(bounds: SectionBoxBounds, rotation: SectionBoxRotation, matrixWorld: THREE.Matrix4): THREE.Plane[] {
+  const composed = matrixWorld.clone().multiply(sectionBoxPivotMatrix(bounds, rotation))
+  return localClipPlanes(bounds).map(p => p.applyMatrix4(composed))
 }
 
 // One level-slice's clip planes, for "split an element by level"

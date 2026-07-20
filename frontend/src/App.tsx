@@ -6,6 +6,7 @@ import { ConfirmHost } from './lib/confirmWithDontAsk'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
 import { Scheduling } from './modules/scheduling/Scheduling'
+import { Dashboard } from './modules/dashboard/Dashboard'
 import { RiskRegister } from './modules/risks/RiskRegister'
 import { CostPlan } from './modules/costs/CostPlan'
 import { IcdTracker } from './modules/icd/IcdTracker'
@@ -81,7 +82,7 @@ function AuthenticatedApp() {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/projects" element={<ProjectSelector />} />
-            <Route path="/dashboard" element={<Placeholder title="Controls Dashboard" />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/scheduling" element={<Scheduling />} />
             <Route path="/risks" element={<RiskRegister />} />
             <Route path="/costs" element={<CostPlan />} />

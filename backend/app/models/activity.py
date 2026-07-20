@@ -171,3 +171,36 @@ class Activity(Base, TimestampMixin):
     )
     sub_total_float_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     sub_is_critical: Mapped[bool | None] = mapped_column(Boolean)
+    # Set once, at IFC schedule generation, never editable afterward (2026-07-17,
+    # per Maro's phased-generation plan) — which ScheduleCategory/CategoryPhase
+    # (frontend's own ifcScheduleExtraction.ts/scheduleGeneration.ts) this
+    # activity was generated as, e.g. category="Columns", phase_key="erect".
+    # Schedule generation itself no longer creates Resource/ResourceAssignment
+    # rows (see schedule_bulk_generate.py's own docstring) — these two columns
+    # are what a LATER, separate "Generate Resources"/"Auto Assign Resources"
+    # pass (Resources tab) reads to reconstruct which activities need which
+    # crew/equipment without re-scanning the IFC file or parsing task_name
+    # (both fragile — task_name is freely user-editable after generation).
+    # Null for every activity created any other way (manual entry, P6 import,
+    # a pre-2026-07-17 generation) — those simply aren't eligible for the
+    # resource-generation pass, same "opt-in, not retrofitted" contract
+    # ModelElementLink's own element_ref already has for IFC linkage.
+    schedule_category: Mapped[str | None] = mapped_column(String(100))
+    schedule_phase_key: Mapped[str | None] = mapped_column(String(100))
+    # The real IFC-measured quantity this activity's own duration_hours was
+    # computed FROM (2026-07-18, per Maro's own QA: isolating L2's beams in
+    # the 4D viewer showed 193 real IfcBeam elements, but the BOQ line for
+    # that same task showed 200 — because until this column existed, nothing
+    # persisted the true count at all; duration_hours (computeDurationHours,
+    # scheduleGeneration.ts) is Math.ceil(quantity / productivityPerCrewDay)
+    # days, and BOQ generation had to reverse THAT lossy rounding instead of
+    # reading the real number — recovering "whole days x rate" (200), not
+    # the true 193 that produced those days in the first place). Same units
+    # as CategoryRate.unit for this activity's own category/phase ('each' for
+    # a discrete count, 'm²' for an area) — see boqGeneration.ts, the only
+    # reader. Null for every activity created any other way (manual entry, P6
+    # import, a pre-2026-07-18 generation) — same "opt-in, not retrofitted"
+    # contract schedule_category/schedule_phase_key already have; those
+    # older/other activities still fall back to boqGeneration.ts's own
+    # reverse-engineered estimate.
+    schedule_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))

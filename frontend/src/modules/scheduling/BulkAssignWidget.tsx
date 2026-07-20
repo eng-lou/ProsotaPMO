@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import type { GanttStyle } from '@/lib/ganttLayout'
 import { ActivityPicker, nearestOtherActivityId } from './ActivityPicker'
-import { resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
 import {
   RELATIONSHIP_TYPES, RESOURCE_TYPE_LABELS,
   type Activity, type Calendar, type Resource, type RelationshipType, type ResourceAssignment, type ResourceType,
@@ -96,7 +96,8 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
   // resolved calendar — the one shared reference point across every
   // relationship this bulk-applies.
   const targetActivity = allActivities.find(a => a.id === targetActivityId)
-  const hoursPerDay = targetActivity ? resolveHoursPerDay(targetActivity, calendars) : 8
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
+  const hoursPerDay = targetActivity ? resolveHoursPerDay(targetActivity, calendarLookup) : 8
 
   // Empty resourceId = "All assigned resources" for this mode (2026-07-08, per
   // Maro) — unlike 'resource' mode, where empty means "not picked yet."

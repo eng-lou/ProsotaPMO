@@ -112,6 +112,36 @@ function buildGeometryFromIfc(vertexData: Float32Array, indexData: Uint32Array):
   return geometry
 }
 
+// Shared across every loadIfcModel call in this session (2026-07-19 fix,
+// per Maro: "you've seriously fucked the coordinates of my ifc files, i
+// imported site and structurals and facade etc. and they're in different
+// positions" — a real, serious regression: the recenter-offset fix below
+// originally computed a fresh offset *per file*, so site.ifc,
+// structural.ifc, and facade.ifc each shifted to their own independent
+// origin instead of all shifting together, destroying the real alignment
+// between them that only exists because they share one real-world/site
+// coordinate system. The fix has to be ONE offset shared by every file
+// loaded this session, not one per file — computed from whichever file
+// happens to load first, then reused verbatim for every subsequent one, so
+// all of them shift by the exact same amount and their relative positions
+// stay exactly as authored. Reset to null on a full page reload (this is
+// just an in-memory module variable) — a new session recomputes fresh from
+// whatever's imported first, same as before. Also explicitly reset by
+// resetRecenterOffset below on a *project switch* — FourD.tsx stays
+// mounted for the whole authenticated session (PersistentFourD, App.tsx)
+// rather than remounting per project, so without an explicit reset a
+// second project's own first file would silently reuse the first
+// project's completely unrelated site coordinates as its offset.
+let sharedRecenterOffset: THREE.Vector3 | null = null
+
+// Called by FourD.tsx right before restoring/importing models for a
+// newly-selected project (2026-07-19) — see sharedRecenterOffset's own
+// header for why a project switch specifically needs this, unlike normal
+// multi-file import within the same project.
+export function resetRecenterOffset(): void {
+  sharedRecenterOffset = null
+}
+
 export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   const api = await getApi()
   const buffer = new Uint8Array(await file.arrayBuffer())
@@ -130,13 +160,66 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   // goes into the shared batch instead (this module's own header explains
   // why).
   const occurrenceCount = new Map<number, number>()
+  // Recenter offset (2026-07-19 fix, per Maro: columns specifically
+  // shaking while orbiting — confirmed via direct evidence, not assumed:
+  // a real Frame Selected run logged its own computed box at
+  // (417585, 224, -78735) to (417646, 259, -78660) — a real project sited
+  // at real-world/site coordinates roughly 400,000 units from the three.js
+  // origin. WebGL vertex math is 32-bit float throughout (~7 significant
+  // decimal digits); at that magnitude there's only ~0.05 units of
+  // precision left for anything *within* the model. An ordinary THREE.Mesh
+  // survives this because three.js precomputes its camera-relative
+  // modelViewMatrix on the CPU in full 64-bit JS doubles before the GPU
+  // ever sees it — the dangerous "huge minus huge" cancellation happens
+  // somewhere safe. THREE.BatchedMesh instead does the equivalent
+  // per-instance matrix math *inside the GPU vertex shader*, in 32-bit
+  // float the whole way through — the same huge-coordinate magnitude that's
+  // harmless for a normal mesh becomes visible per-frame jitter for a
+  // batched one, exactly matching "shakes, but stops the instant you select
+  // it" (selecting materializes it onto the safe, CPU-precomputed
+  // individual-mesh path). The standard fix for real-world-coordinate BIM/
+  // GIS data is recentering near the origin at load time, not working
+  // around float32 precision after the fact — every element's own
+  // placement gets this same offset subtracted below (Pass 3), preserving
+  // every relative position/rotation between elements exactly; only the
+  // absolute reference point moves. The MEAN of every placement's own
+  // translation is used as that reference (2026-07-19 fix, replacing an
+  // initial version that just used the first placement found) — per Maro:
+  // "shadows looking crazy, floating." A directional light's shadow camera
+  // defaults to looking at world origin (0,0,0); the first-placement
+  // version could recenter the whole model around an arbitrary corner
+  // element rather than its middle, leaving the actual geometry sitting
+  // well outside where the shadow camera was actually looking even after
+  // recentering. The mean of every element's own origin is a cheap (no
+  // extra geometry reads, just the translations Pass 1 already has to
+  // iterate anyway), reasonable proxy for "the middle of the model" — not
+  // a true geometric bounding-box centroid, but close enough to land the
+  // recentered model right around the origin, exactly where the shadow
+  // camera already expects it.
+  // Only the FIRST file loaded this session actually computes an offset —
+  // see sharedRecenterOffset's own header above for why every subsequent
+  // file must reuse that exact same value instead of computing its own.
+  const computingSharedOffset = sharedRecenterOffset === null
+  let offsetSum: THREE.Vector3 | null = null
+  let offsetCount = 0
   for (let i = 0; i < meshCount; i++) {
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
-      const geomId = flatMesh.geometries.get(j).geometryExpressID
+      const placed = flatMesh.geometries.get(j)
+      const geomId = placed.geometryExpressID
       occurrenceCount.set(geomId, (occurrenceCount.get(geomId) ?? 0) + 1)
+      if (computingSharedOffset) {
+        const t = placed.flatTransformation
+        if (offsetSum === null) offsetSum = new THREE.Vector3(t[12], t[13], t[14])
+        else offsetSum.add(new THREE.Vector3(t[12], t[13], t[14]))
+        offsetCount++
+      }
     }
   }
+  if (computingSharedOffset && offsetSum && offsetCount > 0) {
+    sharedRecenterOffset = offsetSum.divideScalar(offsetCount)
+  }
+  const recenterOffset = sharedRecenterOffset
 
   // Pass 2: build the BufferGeometry once per unique *repeated* shape
   // (also dedupes the redundant GetGeometry/GetVertexArray calls the old
@@ -172,6 +255,26 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     const batchedMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide })
     const batchedMesh = new THREE.BatchedMesh(totalInstanceCount, totalVertexCount, totalIndexCount, batchedMaterial)
     batchedMesh.name = 'batched-elements'
+    // Both default to true on THREE.BatchedMesh itself (verified directly
+    // in node_modules/three/src/objects/BatchedMesh.js) — every frame the
+    // camera moves, onBeforeRender re-runs a per-instance frustum-vs-
+    // bounding-sphere test (perObjectFrustumCulled) and re-sorts draw order
+    // by camera distance (sortObjects). 2026-07-19 fix, per Maro: "its some
+    // elements mainly the columns" shaking while orbiting — columns are
+    // exactly the kind of numerous, repeated-geometry element that ends up
+    // batched, and an instance whose bounding sphere sits near a frustum
+    // boundary can flip in/out of that per-frame test purely from floating-
+    // point noise in the recomputed projection*view matrix during
+    // continuous rotation, a well-documented flicker source for batched/
+    // instanced rendering. Neither is actually needed here: this app's own
+    // batched elements are opaque (no transparency-sort dependency) and
+    // reasonably clustered per model (whole-batch culling via the
+    // BatchedMesh's own aggregate bounds, still automatic, already skips
+    // the draw call entirely once the whole thing is off-screen) — the
+    // small GPU cost of drawing a handful of individually off-screen-but-
+    // batch-in-view instances is a good trade for not flickering.
+    batchedMesh.perObjectFrustumCulled = false
+    batchedMesh.sortObjects = false
     const geometryByIfcId = new Map<number, { geometry: THREE.BufferGeometry; geometryId: number }>()
     for (const [geomId, geometry] of repeatedGeometries) {
       const geometryId = batchedMesh.addGeometry(geometry)
@@ -191,6 +294,17 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       const count = occurrenceCount.get(placed.geometryExpressID) ?? 1
 
       const matrix = new THREE.Matrix4().fromArray(placed.flatTransformation)
+      // Recenter near the origin (2026-07-19 fix) — see this function's own
+      // recenterOffset comment above (Pass 1) for the full "why". Only the
+      // translation (elements 12/13/14 in three.js's own column-major
+      // Matrix4 layout) shifts; the rotation/scale sub-matrix, and thus
+      // every element's orientation and every relative position between
+      // elements, is untouched.
+      if (recenterOffset) {
+        matrix.elements[12] -= recenterOffset.x
+        matrix.elements[13] -= recenterOffset.y
+        matrix.elements[14] -= recenterOffset.z
+      }
       // THREE.BatchedMesh.setMatrixAt explicitly does not support negatively
       // scaled matrices (documented directly on the method, not assumed) —
       // and real IFC files genuinely have these among repeated-geometry
@@ -474,6 +588,44 @@ export async function getElementNameAndPredefinedType(
     ? null
     : unwrapIfcValue(props.PredefinedType)
   return { name: unwrapIfcValue(props.Name), predefinedType }
+}
+
+// This element's own real, authored IfcElementQuantity area (NetArea
+// preferred over GrossArea when both exist — Net excludes openings/voids,
+// the more accurate "actual footprint" figure), instead of
+// ifcScheduleExtraction.ts's own bounding-box approximation (2026-07-18,
+// per Maro's own QA: "how are you deriving the area quantities, i dont see
+// any area reference in the object informations per element" — confirmed
+// the bounding-box method was silently overstating area for anything
+// non-rectangular, since it never checked for a real Qto value in the
+// first place). Returns null when the element carries no quantity set at
+// all — verified against the real Snowdon sample files: none of the 6
+// contain a single IfcElementQuantity entity (a common gap in Revit's
+// default IFC export, "Export base quantities" not enabled at export time)
+// — so this is forward-looking for IFC files from other tools that do
+// populate it, not something that changes anything for those particular
+// files. getPropertySets (not a dedicated "get quantities" call — web-ifc
+// has none; IfcElementQuantity is fetched via the exact same
+// IfcRelDefinesByProperties relationship as a plain IfcPropertySet, see
+// PropsNames.psets in web-ifc's own source) returns a mix of both kinds;
+// only the ones with a `.Quantities` array (not `.HasProperties`) are
+// quantity sets.
+export async function getElementQuantityArea(handle: IfcModelHandle, expressID: number): Promise<number | null> {
+  const psets = await handle.api.properties.getPropertySets(handle.modelID, expressID, true, false)
+  let grossArea: number | null = null
+  for (const pset of psets as Record<string, unknown>[]) {
+    const quantities = pset.Quantities
+    if (!Array.isArray(quantities)) continue
+    for (const q of quantities as Record<string, unknown>[]) {
+      const name = unwrapIfcValue(q.Name)
+      if (name !== 'NetArea' && name !== 'GrossArea') continue
+      const value = Number(unwrapIfcValue(q.AreaValue))
+      if (Number.isNaN(value)) continue
+      if (name === 'NetArea') return value
+      grossArea = value
+    }
+  }
+  return grossArea
 }
 
 // A storey's own Elevation attribute, raw and unconverted (2026-07-11, per

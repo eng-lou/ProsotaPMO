@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
+import { TransformControls } from '@react-three/drei'
 import type { ImportedObject, ResolvedSectionBox } from './Viewport3D'
-import type { SectionBoxBounds } from './sectionBoxes'
+import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
+import type { SectionBoxTool } from './SectionBoxPanel'
 import { ensureMaterialized } from './elementBatching'
+import { sectionBoxPivotMatrix } from './sectionBoxGeometry'
 
 type FaceId = 'min_x' | 'max_x' | 'min_y' | 'max_y' | 'min_z' | 'max_z'
 
@@ -86,13 +89,17 @@ function applyFaceDelta(start: SectionBoxBounds, face: FaceId, localDelta: numbe
 // (onDragEnd), matching this whole app's existing "TransformControls edits
 // are live-local, nothing auto-saves mid-drag" convention.
 function SectionBoxGizmo({
-  box, target, onDragStart, onDragMove, onDragEnd,
+  box, target, tool, onDragStart, onDragMove, onDragEnd, onRotateStart, onRotateMove, onRotateEnd,
 }: {
   box: ResolvedSectionBox
   target: THREE.Object3D
+  tool: SectionBoxTool
   onDragStart: () => void
   onDragMove: (boxId: string, bounds: SectionBoxBounds) => void
   onDragEnd: (boxId: string, bounds: SectionBoxBounds) => void
+  onRotateStart: () => void
+  onRotateMove: (boxId: string, rotation: SectionBoxRotation) => void
+  onRotateEnd: (boxId: string, rotation: SectionBoxRotation) => void
 }) {
   const groupRef = useRef<THREE.Group>(null)
   const { camera } = useThree()
@@ -108,13 +115,40 @@ function SectionBoxGizmo({
   useFrame(() => {
     if (!groupRef.current) return
     target.updateMatrixWorld(true)
-    groupRef.current.matrix.copy(target.matrixWorld)
+    // Composed with the box's own rotation (2026-07-17, per Maro: "I'd
+    // like to rotate the bounding box") — see sectionBoxPivotMatrix's own
+    // header (sectionBoxGeometry.ts). Children below still position
+    // themselves using bounds' plain absolute min_x/max_x etc, unchanged —
+    // pivotMatrix rotates *around the box's own centre*, so nothing here
+    // needs to be redefined relative to that centre.
+    groupRef.current.matrix.copy(target.matrixWorld).multiply(sectionBoxPivotMatrix(box.bounds, box.rotation))
     groupRef.current.matrixAutoUpdate = false
     groupRef.current.matrixWorldNeedsUpdate = true
   })
 
   const bounds = box.bounds
   const faces = useMemo(() => facesFor(bounds), [bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z])
+  // Proportional to the box's own size, not a fixed absolute unit size
+  // (2026-07-17 fix, per Maro: "no handles" — a fixed radius/height was
+  // comfortably visible against a single small element's local scale but
+  // became microscopically invisible against a box spanning an entire
+  // building. No upper clamp deliberately — this app never rescales an
+  // IFC file's own native length unit onto the scene graph
+  // (getLengthUnitToMetres in ifcModel.ts only ever reports it for
+  // display, see that function's own header), and a common one is
+  // millimetres, where even a whole building's own bounds diagonal is
+  // "large" only in the small-multiplier sense, not in absolute scene
+  // units — an upper clamp tuned for a metres-scale model would silently
+  // reintroduce this exact invisible-handle bug on an mm-scale one. Only a
+  // lower clamp, so a tiny element-scoped box still gets a comfortably
+  // grabbable handle instead of shrinking below usable size.
+  const handleRadius = useMemo(() => {
+    const dx = bounds.max_x - bounds.min_x
+    const dy = bounds.max_y - bounds.min_y
+    const dz = bounds.max_z - bounds.min_z
+    const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    return Math.max(diagonal * 0.015, 0.08)
+  }, [bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z])
   // Created once and mutated in place on every bounds change, rather than
   // rebuilt via useMemo (2026-07-09 fix) — this fires on every pointer-move
   // while dragging, and a fresh Box3Helper each time would leak a small
@@ -174,31 +208,104 @@ function SectionBoxGizmo({
     onDragEnd(box.id, drag.lastBounds)
   }
 
+  // Rotate handle (2026-07-17, per Maro: "I'd like to rotate the bounding
+  // box") — reuses drei's own TransformControls in 'rotate' mode rather
+  // than a bespoke ring gizmo, same control every object/element transform
+  // elsewhere in this app already uses, attached to an invisible proxy
+  // group instead of a real scene object (there's no single real Object3D
+  // that "is" the box's rotation — it's stored as its own rot_x/y/z,
+  // independent of the target's own transform).
+  //
+  // pivotGroupRef carries target.matrixWorld * translate-to-centre only —
+  // deliberately NOT composed with the box's own current rotation (unlike
+  // groupRef above) — so the proxy's own LOCAL rotation, read directly off
+  // it, always equals the box's current absolute rot_x/y/z with no delta
+  // math needed: onChange just reads proxy.rotation straight off.
+  // space="local" on TransformControls means the rings themselves are
+  // drawn along the proxy's own (unrotated-parent) axes too, i.e. the
+  // box's own default axes, not the camera/world's.
+  const pivotGroupRef = useRef<THREE.Group>(null)
+  const [proxy, setProxy] = useState<THREE.Group | null>(null)
+  const isRotatingRef = useRef(false)
+
+  useFrame(() => {
+    if (!pivotGroupRef.current) return
+    target.updateMatrixWorld(true)
+    const cx = (bounds.min_x + bounds.max_x) / 2
+    const cy = (bounds.min_y + bounds.max_y) / 2
+    const cz = (bounds.min_z + bounds.max_z) / 2
+    pivotGroupRef.current.matrix.copy(target.matrixWorld).multiply(new THREE.Matrix4().makeTranslation(cx, cy, cz))
+    pivotGroupRef.current.matrixAutoUpdate = false
+    pivotGroupRef.current.matrixWorldNeedsUpdate = true
+  })
+
+  // Syncs the proxy's own rotation FROM box.rotation — only while NOT
+  // actively being dragged (isRotatingRef), so this doesn't fight
+  // TransformControls' own direct mutation of the same object mid-drag;
+  // only relevant for an external change (initial mount, or another
+  // client's edit landing) while this box isn't the one being rotated.
+  useEffect(() => {
+    if (!proxy || isRotatingRef.current) return
+    proxy.rotation.set(box.rotation.rot_x, box.rotation.rot_y, box.rotation.rot_z, 'XYZ')
+  }, [proxy, box.rotation.rot_x, box.rotation.rot_y, box.rotation.rot_z])
+
+  const handleRotateChange = () => {
+    if (!proxy || !isRotatingRef.current) return
+    onRotateMove(box.id, { rot_x: proxy.rotation.x, rot_y: proxy.rotation.y, rot_z: proxy.rotation.z })
+  }
+
   return (
-    <group ref={groupRef}>
-      <primitive object={box3Helper} />
-      {faces.map(face => (
-        <mesh
-          key={face.id}
-          position={face.position}
-          rotation={face.rotation}
-          onPointerDown={handlePointerDown(face)}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-        >
-          <coneGeometry args={[0.08, 0.24, 8]} />
-          {/* depthTest normal, not disabled (2026-07-09 fix, per Maro's
-              screenshot — the handles were rendering *through* solid
-              geometry, looking like stray shapes floating inside the
-              object). Raycasting/dragging is unaffected either way (it's
-              independent of depth-tested rendering) — a handle that's
-              behind geometry from the current angle is still fully
-              grabbable, just not visible until you rotate to see it,
-              same as any other occluded object in the scene. */}
-          <meshBasicMaterial color={HANDLE_COLOR} />
-        </mesh>
-      ))}
-    </group>
+    <>
+      <group ref={groupRef}>
+        {/* Wireframe stays visible in both tools — only the draggable
+            cones themselves are Resize-only (2026-07-17 fix, per Maro:
+            "the rotation handles make it hard to manipulate the original
+            handles" — showing both sets of handles at once meant they
+            fought over the same clicks and screen space). */}
+        <primitive object={box3Helper} />
+        {tool === 'resize' && faces.map(face => (
+          <mesh
+            key={face.id}
+            position={face.position}
+            rotation={face.rotation}
+            onPointerDown={handlePointerDown(face)}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+          >
+            <coneGeometry args={[handleRadius, handleRadius * 3, 8]} />
+            {/* depthTest normal, not disabled (2026-07-09 fix, per Maro's
+                screenshot — the handles were rendering *through* solid
+                geometry, looking like stray shapes floating inside the
+                object). Raycasting/dragging is unaffected either way (it's
+                independent of depth-tested rendering) — a handle that's
+                behind geometry from the current angle is still fully
+                grabbable, just not visible until you rotate to see it,
+                same as any other occluded object in the scene. */}
+            <meshBasicMaterial color={HANDLE_COLOR} />
+          </mesh>
+        ))}
+      </group>
+      {tool === 'rotate' && (
+        <>
+          <group ref={pivotGroupRef}>
+            <group ref={setProxy} />
+          </group>
+          {proxy && (
+            <TransformControls
+              object={proxy}
+              mode="rotate"
+              space="local"
+              onMouseDown={() => { isRotatingRef.current = true; onRotateStart() }}
+              onChange={handleRotateChange}
+              onMouseUp={() => {
+                isRotatingRef.current = false
+                onRotateEnd(box.id, { rot_x: proxy.rotation.x, rot_y: proxy.rotation.y, rot_z: proxy.rotation.z })
+              }}
+            />
+          )}
+        </>
+      )}
+    </>
   )
 }
 
@@ -213,13 +320,17 @@ function SectionBoxGizmo({
 // this file — so the wireframe/handles wrap just that element and track
 // its own local transform within the model, not the model's as a whole.
 export function SectionBoxGizmos({
-  boxes, objects, onDragStart, onDragMove, onDragEnd,
+  boxes, objects, tool, onDragStart, onDragMove, onDragEnd, onRotateStart, onRotateMove, onRotateEnd,
 }: {
   boxes: ResolvedSectionBox[]
   objects: ImportedObject[]
+  tool: SectionBoxTool
   onDragStart: () => void
   onDragMove: (boxId: string, bounds: SectionBoxBounds) => void
   onDragEnd: (boxId: string, bounds: SectionBoxBounds) => void
+  onRotateStart: () => void
+  onRotateMove: (boxId: string, rotation: SectionBoxRotation) => void
+  onRotateEnd: (boxId: string, rotation: SectionBoxRotation) => void
 }) {
   return (
     <>
@@ -235,7 +346,11 @@ export function SectionBoxGizmos({
           target = found
         }
         return (
-          <SectionBoxGizmo key={box.id} box={box} target={target} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} />
+          <SectionBoxGizmo
+            key={box.id} box={box} target={target} tool={tool}
+            onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd}
+            onRotateStart={onRotateStart} onRotateMove={onRotateMove} onRotateEnd={onRotateEnd}
+          />
         )
       })}
     </>

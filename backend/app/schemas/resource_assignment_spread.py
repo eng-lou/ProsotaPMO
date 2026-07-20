@@ -31,6 +31,26 @@ class ResourceSpreadResponse(BaseModel):
     cells: list[SpreadCellResponse]
 
 
+class ResourceSpreadBulkFetch(BaseModel):
+    """POST, not a GET with repeated query params — same reasoning as
+    UserDefinedFieldValuesBulkFetch (app/schemas/user_defined_field.py): a
+    Resources-tab load can easily have 20+ resources at once, which risks
+    exceeding practical URL length limits as a query string."""
+    resource_ids: list[uuid.UUID]
+    start: date
+    end: date
+
+
+class ResourceSpreadBatchResponse(BaseModel):
+    """Keyed by resource_id, stringified — JSON object keys must be strings.
+    A resource_id that doesn't exist or isn't time-based is silently omitted
+    rather than failing the whole batch (2026-07-17, per a real perf audit —
+    same "isolate one bad entry, don't sink the whole request" precedent as
+    the frontend's own per-resource Promise.allSettled this replaces, see
+    useResourcesTabData.ts)."""
+    spreads: dict[str, ResourceSpreadResponse]
+
+
 class SpreadRangeUpdate(BaseModel):
     """Editing a cell at any zoom — day/week/month/quarter/year — arrives
     here as one requested total for a date range; see

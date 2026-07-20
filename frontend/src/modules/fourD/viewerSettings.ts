@@ -34,6 +34,24 @@ export interface ViewerSettings {
   showGrid: boolean
   showAxisIndicator: boolean
   shadows: boolean
+  // Sun azimuth/elevation, in degrees (2026-07-19, per Maro: "shadows
+  // doesnt do much... make more distinct, able to control shadow/light
+  // angle" — the directional light casting these shadows sat at a fixed
+  // position before this, so a shadow's own direction/length could never
+  // change no matter what was in the scene). azimuth: compass direction
+  // the light comes FROM, 0-360°, measured same convention as
+  // Math.atan2(y,x)/Math.atan2(z,x) (see Viewport3D.tsx's own
+  // sunPosition()). elevation: angle above the horizon, 5-85° — kept off
+  // the true horizon/zenith at either end, since a directional light
+  // exactly edge-on or straight-down produces a degenerate (infinitely
+  // long, or vanishing) shadow that isn't a usefully controllable "look",
+  // just a broken-looking extreme of the slider. Defaults (45/45) match
+  // this app's own original fixed light position ([10,10,15] z-up) as
+  // closely as a round number allows, so upgrading existing
+  // localStorage-persisted settings doesn't visibly change anyone's
+  // current look.
+  sunAzimuth: number
+  sunElevation: number
   // Ambient occlusion (2026-07-09, per Maro — N8AO via
   // @react-three/postprocessing, chosen over hand-rolling SSAO: mature,
   // actively maintained, same pmndrs family as drei, already a dependency
@@ -80,6 +98,8 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   showGrid: true,
   showAxisIndicator: true,
   shadows: false,
+  sunAzimuth: 45,
+  sunElevation: 45,
   ambientOcclusion: false,
   environmentBackground: true,
   upAxis: 'z',

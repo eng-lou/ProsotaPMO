@@ -26,8 +26,36 @@ from app.models.period import Period
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_variant import ScheduleVariant
+from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.services.reference_codes import next_code
 from app.services.resource_costing import compute_assignment_budget, compute_assignment_rate_line_qty
+
+
+async def _discipline_for_activity(db: AsyncSession, activity: Activity) -> str | None:
+    """This activity's own "Discipline" UDF value (2026-07-18, per Maro: "I
+    want it by discipline so less items on the cost plan" — a rolled-up-by-
+    discipline Cost Plan view needs each schedule-sourced element's
+    element_group set to something groupable). Written once per generated
+    activity by schedule_bulk_generate.py's own Discipline UDF block — a
+    hand-created activity that was never IFC-generated simply has no such
+    value, so this returns None and the element's element_group stays null,
+    same "leave it blank rather than guess" rule as everywhere else."""
+    definition = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == activity.project_id,
+            UserDefinedFieldDefinition.entity_type == "activity",
+            UserDefinedFieldDefinition.name == "Discipline",
+        )
+    )).scalar_one_or_none()
+    if definition is None:
+        return None
+    value = (await db.execute(
+        select(UserDefinedFieldValue.value_text).where(
+            UserDefinedFieldValue.field_definition_id == definition.id,
+            UserDefinedFieldValue.record_id == activity.id,
+        )
+    )).scalar_one_or_none()
+    return value
 
 
 async def _get_linked_element(db: AsyncSession, activity_id: uuid.UUID) -> CostElement | None:
@@ -105,6 +133,7 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
         Decimal(0),
     )
     description = f"{activity.code}: {activity.task_name}"
+    discipline = await _discipline_for_activity(db, activity)
 
     if element is None:
         code = await next_code(db, CostElement, "CST", activity.project_id)
@@ -114,6 +143,7 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
             period_id=live_period.id,
             code=code,
             element_type="fixed",
+            element_group=discipline,
             description=description,
             source="schedule",
             linked_activity_id=activity.id,
@@ -131,6 +161,7 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
         await db.flush()
     else:
         element.description = description
+        element.element_group = discipline
         element.budget = total_budget
         await db.execute(delete(CostRateLine).where(CostRateLine.cost_element_id == element.id))
 

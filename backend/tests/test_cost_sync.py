@@ -45,6 +45,46 @@ async def test_first_assignment_creates_linked_cost_element(client: AsyncClient,
     assert activity["task_name"] in element["description"]
 
 
+async def test_linked_element_element_group_set_from_discipline_udf(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
+):
+    # 2026-07-18, per Maro: "I want it by discipline so less items on the
+    # cost plan" — a schedule-sourced element's element_group should mirror
+    # its activity's own "Discipline" UDF value (schedule_bulk_generate.py's
+    # own convention), so grouping Cost Plan by element_group rolls
+    # resource-loaded lines up by discipline without any extra UI wiring.
+    activity = await _create_activity(client, project, live_schedule_period, "Erect Steel Columns", duration_hours=24)
+    definition = (await client.post("/api/v1/user-defined-fields/definitions", json={
+        "project_id": str(project.id), "entity_type": "activity", "name": "Discipline", "data_type": "text",
+    })).json()
+    await client.put(
+        f"/api/v1/user-defined-fields/values/{definition['id']}/{activity['id']}", json={"value_text": "Structures"},
+    )
+    resource = await _create_resource(client, project, rate="45")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+
+    element = await _linked_element(client, project, live_period)
+    assert element["element_group"] == "Structures"
+
+
+async def test_linked_element_element_group_null_without_discipline_udf(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
+):
+    # A hand-created activity was never IFC-generated, so it has no
+    # Discipline UDF value at all — element_group should stay null, not
+    # guess at something.
+    activity = await _create_activity(client, project, live_schedule_period, "Hand-Added Task", duration_hours=8)
+    resource = await _create_resource(client, project, rate="45")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+
+    element = await _linked_element(client, project, live_period)
+    assert element["element_group"] is None
+
+
 async def test_pct_complete_syncs_from_activity_to_linked_element(
     client: AsyncClient, project: Project, live_period: Period
 , live_schedule_period: SchedulePeriod):

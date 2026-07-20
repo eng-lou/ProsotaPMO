@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.resource import ResourceAssignmentResponse
-from app.schemas.resource_assignment_spread import ResourceSpreadResponse, SpreadRangeUpdate
+from app.schemas.resource_assignment_spread import (
+    ResourceSpreadBatchResponse,
+    ResourceSpreadBulkFetch,
+    ResourceSpreadResponse,
+    SpreadRangeUpdate,
+)
 from app.services import resource_assignment_spread as svc
 
 router = APIRouter(prefix="/resource-assignment-spreads", tags=["resource-assignment-spreads"])
@@ -23,6 +28,20 @@ async def get_spread(
 ):
     days, cells = await svc.get_spread_for_resource(db, resource_id, start, end)
     return {"days": days, "cells": cells}
+
+
+@router.post("/bulk-fetch", response_model=ResourceSpreadBatchResponse)
+async def bulk_fetch_spreads(
+    data: ResourceSpreadBulkFetch,
+    db: AsyncSession = Depends(get_db),
+):
+    """One shared calendar-lookup build across every requested resource,
+    instead of the Resources tab's old one-HTTP-request-per-resource pattern
+    (2026-07-17 perf fix) — see get_spreads_for_resources' own header."""
+    results = await svc.get_spreads_for_resources(db, data.resource_ids, data.start, data.end)
+    return {
+        "spreads": {str(rid): {"days": days, "cells": cells} for rid, (days, cells) in results.items()},
+    }
 
 
 @router.patch("/", status_code=204)

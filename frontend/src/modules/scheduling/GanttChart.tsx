@@ -1,4 +1,4 @@
-import { forwardRef, memo, useImperativeHandle, useMemo, useRef } from 'react'
+import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { groupAssignmentsByActivityId } from '@/lib/resourceLabel'
 import { formatDateTime } from './dateTime'
@@ -200,11 +200,80 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   onSelectActivity,
 }, ref) {
   const bodyWrapperRef = useRef<HTMLDivElement>(null)
+
+  // Row virtualization (2026-07-17 perf fix) — see this file's own
+  // 2026-07-15 memo() header above: memo only stopped *unrelated*
+  // Scheduling.tsx re-renders from re-running this component's whole body;
+  // it never addressed the actual "activities.map() over every bar/
+  // milestone/connector/baseline shape, no windowing" problem that comment
+  // itself flags. scrollTopRef/activitiesLengthRef/viewportHeightRef exist
+  // so recomputeVisibleRowRange only ever reads refs, never render-scoped
+  // closures — that's what lets the imperative setScrollTop handle below
+  // keep a `[]` dependency array (its very first-render closure stays
+  // functionally correct forever) while still always computing against the
+  // CURRENT scroll position/activity count/viewport height.
+  const scrollTopRef = useRef(0)
+  const activitiesLengthRef = useRef(activities.length)
+  const viewportHeightRef = useRef(viewportHeight)
+  const ROW_BUFFER_PX = 600
+  const [visibleRowRange, setVisibleRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(activities.length, 60) })
+
+  const recomputeVisibleRowRange = () => {
+    const vh = viewportHeightRef.current
+    // undefined viewportHeight = the static print view, rendered whole and
+    // unclipped in normal page flow (see this component's own render below)
+    // — nothing to window there, every activity is "visible" by definition.
+    if (vh === undefined) return
+    const length = activitiesLengthRef.current
+    const top = scrollTopRef.current - ROW_BUFFER_PX
+    const bottom = scrollTopRef.current + vh + ROW_BUFFER_PX
+    const start = Math.max(0, Math.floor(top / GANTT_ROW_HEIGHT))
+    const end = Math.min(length, Math.ceil(bottom / GANTT_ROW_HEIGHT))
+    setVisibleRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  // useLayoutEffect, not useEffect — syncs the refs and corrects the window
+  // before paint whenever activities or viewportHeight change (a fresh
+  // schedule loading, or the split-pane being resized), so a stale window
+  // against brand new data never paints first.
+  useLayoutEffect(() => {
+    activitiesLengthRef.current = activities.length
+    viewportHeightRef.current = viewportHeight
+    recomputeVisibleRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activities, viewportHeight])
+
+  const rowDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useImperativeHandle(ref, () => ({
     setScrollTop: (scrollTop: number) => {
+      // Immediate DOM mutation, unchanged from before this fix — zero-lag
+      // visual tracking during an active scroll (see this handle's own
+      // header comment on why this bypasses React state entirely).
+      scrollTopRef.current = scrollTop
       if (bodyWrapperRef.current) bodyWrapperRef.current.style.transform = `translateY(${-scrollTop}px)`
+      // Debounced, not per-scroll-tick — same "recompute once the gesture
+      // pauses, not on every tick" reasoning as every other virtualized
+      // table's own scroll handler in this app (e.g. Scheduling.tsx's
+      // handleGridScroll).
+      if (rowDebounceRef.current !== null) clearTimeout(rowDebounceRef.current)
+      rowDebounceRef.current = setTimeout(() => {
+        rowDebounceRef.current = null
+        recomputeVisibleRowRange()
+      }, 150)
     },
   }), [])
+
+  // Clamped to activities.length for the same reason every other virtualized
+  // table's window is — activities can shrink (a filter, or a fresh smaller
+  // dataset) before this render's own layout effect has corrected the range.
+  const clampedRowEnd = Math.min(visibleRowRange.end, activities.length)
+  const clampedRowStart = Math.min(visibleRowRange.start, clampedRowEnd)
+  const visibleRowIndices = useMemo(
+    () => viewportHeight === undefined
+      ? activities.map((_, i) => i)
+      : Array.from({ length: Math.max(0, clampedRowEnd - clampedRowStart) }, (_, k) => clampedRowStart + k),
+    [viewportHeight, activities, clampedRowStart, clampedRowEnd]
+  )
 
   // Built once per resourceAssignments change, not once per bar — see
   // buildBarLabel's own 2026-07-15 header.
@@ -328,15 +397,16 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
 
   const body = (
       <div className="relative" style={{ width, height }}>
-        {activities.map((a, i) => (
-          i % 2 === 1 && (
+        {visibleRowIndices.map(i => {
+          const a = activities[i]
+          return i % 2 === 1 && (
             <div
               key={`stripe-${a.id}`}
               className="absolute bg-gray-50/70"
               style={{ top: i * GANTT_ROW_HEIGHT, left: 0, width, height: GANTT_ROW_HEIGHT }}
             />
           )
-        ))}
+        })}
         <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
           <defs>
             <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -360,6 +430,19 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
             const pred = geometry.get(r.predecessor_id)
             const succ = geometry.get(r.successor_id)
             if (!pred || !succ) return null
+            // Windowing check (2026-07-17) — geometry/pred/succ stay full-
+            // schedule (relationships can span any distance, no adjacency
+            // constraint), only whether this <path> actually mounts gets
+            // windowed. A span-overlap check, not an endpoint-only one — a
+            // connector between two off-window activities whose line still
+            // *passes through* the visible band must still draw.
+            if (viewportHeight !== undefined) {
+              const bandTop = clampedRowStart * GANTT_ROW_HEIGHT
+              const bandBottom = clampedRowEnd * GANTT_ROW_HEIGHT
+              const spanTop = Math.min(pred.centerY, succ.centerY)
+              const spanBottom = Math.max(pred.centerY, succ.centerY)
+              if (spanBottom < bandTop || spanTop > bandBottom) return null
+            }
             const x1 = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? pred.left : pred.right
             const x2 = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succ.right : succ.left
             const critical = criticalById.get(r.predecessor_id) && criticalById.get(r.successor_id)
@@ -375,7 +458,8 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
             )
           })}
         </svg>
-        {activities.map(a => {
+        {visibleRowIndices.map(i => {
+          const a = activities[i]
           const bl = baselineGeometry.get(a.id)
           if (!bl) return null
           const title = `Baseline: ${formatDateTime(a.bl_start)} → ${formatDateTime(a.bl_finish)}`
@@ -423,7 +507,8 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
             />
           )
         })}
-        {activities.map(a => {
+        {visibleRowIndices.map(i => {
+          const a = activities[i]
           const geo = geometry.get(a.id)
           if (!geo) return null
           const critical = a.is_critical === true

@@ -1,9 +1,12 @@
+import axios from 'axios'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
+import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { HeatMatrix } from '@/components/HeatMatrix'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
@@ -13,6 +16,7 @@ import { MitigationActions } from './MitigationActions'
 import { CriteriaThresholds } from './CriteriaThresholds'
 import { downloadRisksCsv } from './exportRisks'
 import { RiskPrintView } from './RiskPrintView'
+import { buildRiskDraft } from './riskGeneration'
 import { RISK_STATUSES, type Risk } from './types'
 
 interface CostElementSummary {
@@ -65,10 +69,18 @@ function uniqueValues(risks: Risk[], field: 'category' | 'area'): string[] {
 export function RiskRegister() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [risks, setRisks] = useState<Risk[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
+  // Schedule + resource data for "Generate Risk Register" (2026-07-18) — see
+  // riskGeneration.ts's own header on why these are needed (per-discipline
+  // resourced cost, overall programme duration).
+  const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
+  const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
+  const [generatingRisks, setGeneratingRisks] = useState(false)
+  const [generateRiskMessage, setGenerateRiskMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
@@ -115,6 +127,26 @@ export function RiskRegister() {
     load()
     return () => { cancelled = true }
   }, [selectedProject, period])
+
+  // Schedule + resource data for "Generate Risk Register" (2026-07-18) —
+  // loaded separately from the main Risk Register fetch above since it
+  // comes from Scheduling's own schedule-variant/period, same split
+  // CostPlan.tsx already uses for the identical reason.
+  useEffect(() => {
+    if (!selectedProject || !schedulePeriod) return
+    let cancelled = false
+    async function loadScheduleData() {
+      const [assignmentsRes, activitiesRes] = await Promise.all([
+        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
+        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
+      ])
+      if (cancelled) return
+      setResourceAssignments(assignmentsRes.data)
+      setScheduleActivities(activitiesRes.data)
+    }
+    loadScheduleData()
+    return () => { cancelled = true }
+  }, [selectedProject, schedulePeriod])
 
   // Fires window.print() only after printMode has committed to the DOM (state
   // updates are batched/async, so calling print() directly after setPrintMode
@@ -165,6 +197,46 @@ export function RiskRegister() {
       params: { project_id: selectedProject.id, period_id: period.id },
     })
     setRisks(data)
+  }
+
+  // "Generate Risk Register" (2026-07-18) — see riskGeneration.ts's own
+  // header. Also refreshes costElements, not just risks: a threat with a
+  // real cost EMV rolls into a Contingency line on the Cost Plan
+  // (risk_bulk_generate.py, backend) in this same call, and that line lives
+  // in costElements here too (used for whatever cost-linked display this
+  // register already shows).
+  const handleGenerateRisks = async () => {
+    if (!period) return
+    const drafts = buildRiskDraft(scheduleActivities, resourceAssignments)
+    if (drafts.length === 0) {
+      setGenerateRiskMessage('No committed schedule found to draft risks from yet.')
+      return
+    }
+    setGeneratingRisks(true)
+    setGenerateRiskMessage(null)
+    try {
+      const { data } = await api.post('/api/v1/risk-bulk-generate/', {
+        project_id: selectedProject.id, period_id: period.id, risks: drafts,
+      })
+      await refreshRisks()
+      const costRes = await api.get<CostElementSummary[]>('/api/v1/cost-elements/', {
+        params: { project_id: selectedProject.id, period_id: period.id },
+      })
+      setCostElements(costRes.data)
+      const reused = drafts.length - data.risk_count
+      const contingencyNote = data.contingency_cost_element_id
+        ? ` Contingency updated to ${(Number(data.contingency_rate) * 100).toFixed(1)}% of fixed costs.`
+        : ''
+      setGenerateRiskMessage(
+        `Risk register updated — ${data.risk_count} new risk(s)${reused > 0 ? `, ${reused} already existed` : ''}.${contingencyNote}`
+      )
+    } catch (err) {
+      setGenerateRiskMessage(axios.isAxiosError(err)
+        ? `Failed to generate risk register (${err.response?.data?.detail ?? err.message})`
+        : 'Failed to generate risk register')
+    } finally {
+      setGeneratingRisks(false)
+    }
   }
 
   const handleCreate = async (values: RiskFormValues) => {
@@ -347,12 +419,23 @@ export function RiskRegister() {
       )}
 
       {!formOpen && !editingRisk && (
-        <button
-          onClick={() => setFormOpen(true)}
-          className="mb-4 text-sm text-blue-600 hover:text-blue-700 font-medium"
-        >
-          + New risk
-        </button>
+        <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setFormOpen(true)}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            + New risk
+          </button>
+          <button
+            onClick={handleGenerateRisks}
+            disabled={generatingRisks}
+            title="Drafts a first-pass risk register from the committed schedule and resourced costs — general construction risks plus one per discipline actually present. Review and tune before relying on it."
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {generatingRisks ? 'Generating…' : 'Generate Risk Register'}
+          </button>
+          {generateRiskMessage && <span className="text-xs text-gray-500">{generateRiskMessage}</span>}
+        </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">

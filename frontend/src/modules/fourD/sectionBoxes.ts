@@ -19,6 +19,9 @@ export interface SectionBox {
   max_x: number
   max_y: number
   max_z: number
+  rot_x: number
+  rot_y: number
+  rot_z: number
   active: boolean
   visible: boolean
   created_at: string
@@ -34,6 +37,18 @@ export interface SectionBoxBounds {
   max_z: number
 }
 
+// Radians, THREE.Euler 'XYZ' order, applied around the box's own centre —
+// same convention as ElementTransform's rotation_x/y/z (2026-07-17, per
+// Maro: "I'd like to rotate the bounding box"). Kept separate from
+// SectionBoxBounds rather than folded in — most existing call sites
+// (resize-drag math, computeLocalBoundsFor*) only ever care about the
+// axis-aligned extent, not this on-top rotation.
+export interface SectionBoxRotation {
+  rot_x: number
+  rot_y: number
+  rot_z: number
+}
+
 export async function listSectionBoxes(projectId: string): Promise<SectionBox[]> {
   const res = await api.get<SectionBox[]>('/api/v1/section-boxes/', { params: { project_id: projectId } })
   return res.data
@@ -43,12 +58,12 @@ export async function createSectionBox(data: {
   model3d_file_id: string
   element_ref?: string | null
   name?: string
-} & SectionBoxBounds): Promise<SectionBox> {
+} & SectionBoxBounds & Partial<SectionBoxRotation>): Promise<SectionBox> {
   const res = await api.post<SectionBox>('/api/v1/section-boxes/', data)
   return res.data
 }
 
-export async function updateSectionBox(id: string, data: Partial<SectionBoxBounds> & {
+export async function updateSectionBox(id: string, data: Partial<SectionBoxBounds> & Partial<SectionBoxRotation> & {
   name?: string
   active?: boolean
   visible?: boolean

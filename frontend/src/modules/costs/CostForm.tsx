@@ -18,6 +18,9 @@ export interface CostFormValues {
   qs_signoff_date: string
   budget: string
   actuals: string
+  // An independent benchmark figure (2026-07-18) — see CostElement.
+  // comparison_cost's own docstring; e.g. another project's equivalent line.
+  comparison_cost: string
   pct_complete: string
   last_reviewed_date: string
 }
@@ -36,6 +39,7 @@ function toFormValues(el: CostElement | null): CostFormValues {
     qs_signoff_date: el?.qs_signoff_date ?? '',
     budget: el?.budget ?? '',
     actuals: el?.actuals ?? '',
+    comparison_cost: el?.comparison_cost ?? '',
     pct_complete: el?.pct_complete?.toString() ?? '',
     last_reviewed_date: el?.last_reviewed_date ?? '',
   }
@@ -56,6 +60,7 @@ export function toCostElementPayload(values: CostFormValues) {
     qs_signoff_date: values.qs_signoff_date || null,
     budget: !isPercentage && values.budget !== '' ? values.budget : null,
     actuals: !isPercentage && values.actuals !== '' ? values.actuals : null,
+    comparison_cost: values.comparison_cost !== '' ? values.comparison_cost : null,
     pct_complete: values.pct_complete === '' ? null : Number(values.pct_complete),
     last_reviewed_date: values.last_reviewed_date || null,
   }
@@ -248,6 +253,19 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
           {!costElement && ' The budget entered here also becomes the Rev A baseline, since there\'s no prior revision yet — it stays fixed after this, even if budget changes later.'}
         </p>
       )}
+
+      <div>
+        <label className={labelClass}>Comparison Cost (£)</label>
+        <input
+          type="number" step="0.01"
+          value={values.comparison_cost}
+          onChange={e => set('comparison_cost', e.target.value)}
+          className={inputClass}
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          An independent benchmark figure — another project's equivalent line, a tender return, or a prior cost plan revision. Shows as its own Variance (Budget − Comparison), separate from Forecast/EAC.
+        </p>
+      </div>
 
       {!isPercentage && (
         <div>

@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Environment, FlyControls, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
+import { Environment, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProfiles'
@@ -14,7 +14,7 @@ import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProf
 import type { IfcModelHandle } from './ifcModel'
 import { getSplitExpressId } from './elementSplitTargets'
 import type { ModelElementLink } from './modelElementLinks'
-import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type ResolvedTimelineLink } from './timelinePlayback'
+import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type AppliedAnimationState, type ResolvedTimelineLink } from './timelinePlayback'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ViewerSettings } from './viewerSettings'
 import type { GizmoMode } from './TransformPanel'
@@ -26,15 +26,16 @@ import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
-import { ensureMaterialized, type BatchState } from './elementBatching'
+import { ensureMaterialized, materializeAll, type BatchState } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
 import { clearClonedRenderModeVariantCache, getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
-import type { SectionBoxBounds } from './sectionBoxes'
+import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
 import { SectionBoxGizmos } from './SectionBoxGizmo'
+import type { SectionBoxTool } from './SectionBoxPanel'
 import { SectionBoxCaps } from './SectionBoxCap'
 import type { CameraViewPose } from './cameraViews'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
@@ -45,6 +46,11 @@ import type { PathFollower } from './pathFollowers'
 import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
 import type { Annotation, AnnotationKind } from './annotations'
 import { AnnotationMarker } from './AnnotationMarker'
+import type { IfcUnitDisplay } from './ifcUnitDisplay'
+import { MeasurementCatcher, type MeasurementHit } from './MeasurementGizmo'
+import { MeasurementHoverIndicator, MeasurementMarkers, MeasurementPreview } from './MeasurementMarker'
+import type { Measurement, MeasurementPoint } from './measurements'
+import type { MeasuringTool } from './MeasurementsPanel'
 
 export interface ImportedObject {
   id: string
@@ -102,6 +108,11 @@ export interface ResolvedSectionBox {
   // vice versa), matching the reference's own checkbox-vs-eye distinction.
   visible: boolean
   bounds: SectionBoxBounds
+  // The box's own additional rotation on top of bounds' axis-aligned extent
+  // (2026-07-17, per Maro: "I'd like to rotate the bounding box") — see
+  // sectionBoxPivotMatrix's own header (sectionBoxGeometry.ts) for how this
+  // and bounds combine.
+  rotation: SectionBoxRotation
 }
 
 // Ambient occlusion (2026-07-09, per Maro — N8AO via
@@ -149,7 +160,13 @@ interface Props {
   activeObjectId: string | null
   selectedObjectIds: Set<string>
   onSelectObject: (id: string | null, additive?: boolean) => void
-  onSelectAll: () => void
+  // objectIds/expressIdsByObject: same convention as onBoxSelect below —
+  // Select All used to only ever select whole objects, silently skipping
+  // every IFC sub-element (2026-07-17, per Maro: "selecting all only
+  // selects the object not the elements... I care about elements"). Now
+  // resolves the same way box-select's own IFC branch does: every visible
+  // element of every visible ifc-kind import, not just the model as a whole.
+  onSelectAll: (objectIds: string[], expressIdsByObject: Map<string, number[]>) => void
   // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
   // been 4d linked to an activity yet") — linkedObjectIds is which whole
   // mesh-kind objects already have a ModelElementLink; linkedElementKeys is
@@ -252,6 +269,12 @@ interface Props {
   // gets PATCHed.
   onSectionBoxDragMove: (boxId: string, bounds: SectionBoxBounds) => void
   onSectionBoxDragEnd: (boxId: string, bounds: SectionBoxBounds) => void
+  // Same live-drag/commit split as onSectionBoxDragMove/End above, for the
+  // rotate gizmo (2026-07-17, per Maro: "I'd like to rotate the bounding
+  // box").
+  onSectionBoxRotateMove: (boxId: string, rotation: SectionBoxRotation) => void
+  onSectionBoxRotateEnd: (boxId: string, rotation: SectionBoxRotation) => void
+  sectionBoxTool: SectionBoxTool
   // Camera Views (2026-07-10, per Maro: "add camera too so i can capture
   // the model at different angles like blender") — onSaveCameraView is a
   // plain callback (this component reads the live camera/controls and
@@ -320,17 +343,25 @@ interface Props {
   // Crane-style rigging (2026-07-12) — passed straight through to
   // ModelObjects, see that component's own Props doc comment.
   elementParents: ElementParent[]
+  // Measure tool (2026-07-19) — see MeasurementGizmo.tsx's own header for
+  // why this needs its own catcher instead of reusing PathAddPointCatcher.
+  measurements: Measurement[]
+  unitPreference: IfcUnitDisplay
+  selectedMeasurementId: string | null
+  onSelectMeasurement: (id: string) => void
+  measuringTool: MeasuringTool | null
+  measuringPoints: MeasurementPoint[]
+  measuringToMetres: number
+  onMeasurementHit: (hit: MeasurementHit) => void
+  measurementHoverPoint: MeasurementPoint | null
+  onMeasurementHoverPoint: (point: MeasurementPoint | null) => void
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
-// Whole-object selection tint (2026-07-08, per Maro's Blender-style
-// multi-select request) — deliberately a different colour from
-// SELECTED_EMISSIVE above, which marks the one specific sub-element/expressID
-// picked for the IFC Data tab's Object Information section. An object can be
-// "selected" (in selectedObjectIds) without any of its sub-elements being the
-// expressID-selected one, e.g. selected via the Project Overview tree/Mesh
-// Data Panel rather than an in-viewport click.
-const OBJECT_SELECTED_EMISSIVE = new THREE.Color(0xf59e0b)
+// Reused every frame by TimelinePlayback's own material diff below —
+// avoids allocating a fresh THREE.Color per material per frame just to
+// compare a candidate colour against what's already applied.
+const _scratchColor = new THREE.Color()
 // Variance colour-coding (2026-07-12, per Maro: "Colour coded elements by
 // variance") — reuses the Scheduling module's own already-working
 // baseline feature (Activity.variance_days, set once a baseline is
@@ -756,6 +787,15 @@ function ModelObjects({
 
             const isExpressSelected = child.userData.expressID === selectedExpressId
             const isExpressAlsoSelected = selectedExpressIds.has(child.userData.expressID)
+            // Amber "whole object selected, this element wasn't specifically
+            // picked" removed for IFC elements entirely (2026-07-17, per
+            // Maro: "I don't want the amber highlight at all, the element
+            // highlight is good enough") — only kept for plain mesh-kind
+            // imports, which have no sub-element concept at all and would
+            // otherwise show zero selection feedback; those now get the same
+            // blue as a specifically-picked element instead of their own
+            // amber tier.
+            const isPlainObjectSelected = isObjectSelected && kind !== 'ifc'
             // Three real tiers, not two (2026-07-11 fix, per Maro: "I
             // selected level 3 and IfcSlab... I get the overall highlight
             // but not the 3 elements") — isExpressAlsoSelected (one of
@@ -794,8 +834,7 @@ function ModelObjects({
             // top of it, so a selection reads as a real colour change even
             // on a small/thin element.
             if (isExpressSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 1.1 }
-            else if (isExpressAlsoSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 0.9 }
-            else if (isObjectSelected) { mat.emissive = OBJECT_SELECTED_EMISSIVE; mat.emissiveIntensity = 0.35 }
+            else if (isExpressAlsoSelected || isPlainObjectSelected) { mat.emissive = SELECTED_EMISSIVE; mat.emissiveIntensity = 0.9 }
             else { mat.emissive = new THREE.Color(0x000000); mat.emissiveIntensity = 0 }
 
             // Manual texture override (2026-07-11, per Maro) — see
@@ -850,8 +889,7 @@ function ModelObjects({
             // deliberately light (0.15) — background context, not
             // competing with the real selection.
             if (isExpressSelected) mat.color.lerp(SELECTED_EMISSIVE, 0.6)
-            else if (isExpressAlsoSelected) mat.color.lerp(SELECTED_EMISSIVE, 0.55)
-            else if (isObjectSelected) mat.color.lerp(OBJECT_SELECTED_EMISSIVE, 0.15)
+            else if (isExpressAlsoSelected || isPlainObjectSelected) mat.color.lerp(SELECTED_EMISSIVE, 0.55)
             if (overrides?.metalnessMap) { mat.metalnessMap = overrides.metalnessMap.texture; mat.metalness = 1 }
             else if (original) { mat.metalnessMap = original.metalnessMap; mat.metalness = original.metalness }
             if (overrides?.roughnessMap) { mat.roughnessMap = overrides.roughnessMap.texture; mat.roughness = 1 }
@@ -885,8 +923,7 @@ function ModelObjects({
             } else if (settings.renderMode === 'hiddenLine') {
               const hiddenLineTint = HIDDEN_LINE_BASE_COLOR.clone()
               if (isExpressSelected) hiddenLineTint.lerp(SELECTED_EMISSIVE, 0.6)
-              else if (isExpressAlsoSelected) hiddenLineTint.lerp(SELECTED_EMISSIVE, 0.55)
-              else if (isObjectSelected) hiddenLineTint.lerp(OBJECT_SELECTED_EMISSIVE, 0.15)
+              else if (isExpressAlsoSelected || isPlainObjectSelected) hiddenLineTint.lerp(SELECTED_EMISSIVE, 0.55)
               displayMaterials.push(getHiddenLineMaterial(mat, hiddenLineTint))
             } else {
               displayMaterials.push(mat)
@@ -904,7 +941,26 @@ function ModelObjects({
         // whole point of that render mode is "line art over a flat
         // occluder," not optional decoration.
         let edges = child.userData.edgesHelper as THREE.LineSegments | undefined
-        const wantsEdges = settings.showEdges || settings.renderMode === 'hiddenLine'
+        // Never for a THREE.BatchedMesh itself (2026-07-19 fix, per Maro:
+        // "the malformed edge nonsense... only shows like that when edge is
+        // activated" — confirmed: BatchedMesh extends THREE.Mesh, so this
+        // traversal already reaches it, and new THREE.EdgesGeometry(
+        // child.geometry) on a batch reads its own raw, shared internal
+        // buffer — every distinct repeated shape's geometry concatenated
+        // together with none of the per-instance placement matrices
+        // (setMatrixAt, elementBatching.ts) applied at all, since
+        // EdgesGeometry has no concept of per-instance transforms. The
+        // result is every repeated shape's own outline overlapping at the
+        // batch's single shared local origin — exactly the jumbled "star
+        // burst" shape reported, and exactly why clicking-and-framing one
+        // specific element "fixes" it: that materializes it out of the
+        // batch into a real individual Mesh (ensureMaterialized), which
+        // this same block already handles correctly. Everything still
+        // sitting in the batch has no valid per-instance edge overlay to
+        // build here at all — showing nothing is correct, not a
+        // regression, until/unless per-instance edge tracing is built.
+        const isBatchedMesh = (child as THREE.Object3D & { isBatchedMesh?: boolean }).isBatchedMesh === true
+        const wantsEdges = (settings.showEdges || settings.renderMode === 'hiddenLine') && !isBatchedMesh
         if (wantsEdges) {
           if (!edges) {
             edges = new THREE.LineSegments(
@@ -1017,7 +1073,7 @@ function ModelObjects({
       // boxes already have.
       const wholeObjectPlanes = boxesForObject
         .filter(b => b.elementExpressId === undefined)
-        .flatMap(b => computeWorldClipPlanes(b.bounds, object.matrixWorld))
+        .flatMap(b => computeWorldClipPlanes(b.bounds, b.rotation, object.matrixWorld))
       const elementBoxes = boxesForObject.filter(b => b.elementExpressId !== undefined)
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
@@ -1026,7 +1082,7 @@ function ModelObjects({
           const matching = elementBoxes.filter(b => b.elementExpressId === child.userData.expressID)
           if (matching.length > 0) {
             child.updateMatrixWorld(true)
-            clipPlanes = [...wholeObjectPlanes, ...matching.flatMap(b => computeWorldClipPlanes(b.bounds, child.matrixWorld))]
+            clipPlanes = [...wholeObjectPlanes, ...matching.flatMap(b => computeWorldClipPlanes(b.bounds, b.rotation, child.matrixWorld))]
           }
         }
         const materials = Array.isArray(child.material) ? child.material : [child.material]
@@ -1209,6 +1265,27 @@ interface ResolvedTimelineTarget {
   // ModelObjects' own effect above), neither of which is `material` itself.
   materials: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[]
   keyframeTracks: Partial<Record<KeyframeField, { date: Date; value: number }[]>>
+  // Mode A's own pickActiveLink/computeAppliedAnimationStateAt result,
+  // cached across frames (2026-07-17 perf fix, per Maro: "everything
+  // optimised for scale... speed drop when I play the animation from 6
+  // ifcs or navigate"). Viewport3D's Canvas runs frameloop="always"
+  // whenever the 4D tab is merely visible — not just during Play — so
+  // this useFrame loop fires continuously even while the user is just
+  // orbiting a static, paused scene. Before this fix, pickActiveLink (an
+  // array copy + full re-sort, each comparison constructing fresh Date
+  // objects) and computeAppliedAnimationStateAt ran unconditionally for
+  // every linked target on every single frame, regardless of whether the
+  // timeline date had moved at all — cost scaling directly with total
+  // linked-element count across however many IFC files are combined.
+  // These two are a pure function of (links, date), so they only need to
+  // be recomputed when the date actually changes (the same dateChanged
+  // gate Mode B/keyframes already use, for the same reason) — this cache
+  // holds the last result so the still-unconditional per-frame transform
+  // write and material-reassertion loop below (both correctly needed
+  // every frame, see their own comments) can keep reusing it for free on
+  // every frame the date hasn't moved.
+  cachedActiveLink: ResolvedTimelineLink | null
+  cachedState: AppliedAnimationState | null
 }
 
 const DEG_TO_RAD = Math.PI / 180
@@ -1454,6 +1531,8 @@ export function TimelinePlayback({
             baseScale: object.scale.clone(),
             materials: collectStandardMaterials(object),
             keyframeTracks: {},
+            cachedActiveLink: null,
+            cachedState: null,
           }
           byObject.set(object, target)
         }
@@ -1660,8 +1739,18 @@ export function TimelinePlayback({
 
     for (const target of targetsRef.current) {
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
-      const activeLink = pickActiveLink(target.links, now)
-      const state = activeLink ? computeAppliedAnimationStateAt(activeLink.activity, activeLink.profile, now) : null
+      // Only recomputed on an actual date change (see cachedActiveLink/
+      // cachedState's own doc comment) — the unconditional writes below
+      // (transform + material reassertion) keep reusing whatever was
+      // computed on the last date-changed frame.
+      if (dateChanged) {
+        target.cachedActiveLink = pickActiveLink(target.links, now)
+        target.cachedState = target.cachedActiveLink
+          ? computeAppliedAnimationStateAt(target.cachedActiveLink.activity, target.cachedActiveLink.profile, now)
+          : null
+      }
+      const activeLink = target.cachedActiveLink
+      const state = target.cachedState
 
       if (hasKeyframes) {
         if (dateChanged) applyKeyframedTransform(target, now, upAxis)
@@ -1680,11 +1769,35 @@ export function TimelinePlayback({
       // fought over by keyframeTracks, which only ever cover transform.
       if (state) {
         for (const { material, baseColor, mesh } of target.materials) {
-          material.transparent = state.opacity < 1
-          material.opacity = state.opacity
-          if (state.color) material.color.set(state.color)
-          else material.color.copy(baseColor)
-          material.needsUpdate = true
+          // Diffed before writing, not applied unconditionally (2026-07-17
+          // perf fix, per Maro: "mad laggy" — this loop runs every single
+          // frame by design (see mesh.visible's own comment below on why —
+          // some other effect can reset a mesh's state between date-change
+          // ticks and this has to keep reasserting it), but material.
+          // needsUpdate = true forces three.js to re-upload/recompile the
+          // material's GPU-facing state, and that was firing unconditionally
+          // for every material of every animated target, every frame,
+          // regardless of whether anything actually changed — fine at
+          // structural+architectural scale, not at six combined discipline
+          // files' worth of linked elements. Comparing against the
+          // material's own CURRENT value (not a separately-cached "what we
+          // last wrote" value) preserves the original "reassert every
+          // frame" correctness — an external change is still detected and
+          // corrected on the very next frame — while skipping the actual
+          // GPU-facing write (and the costly needsUpdate flag) whenever
+          // nothing would change, which is the overwhelming majority of
+          // frames whenever the timeline itself isn't actively moving.
+          const nextTransparent = state.opacity < 1
+          // state.color is a hex string (profile config), baseColor a real
+          // THREE.Color — normalized through one reused scratch Color
+          // (module-level, below) rather than allocating a fresh one every
+          // material every frame just to compare.
+          if (state.color) _scratchColor.set(state.color); else _scratchColor.copy(baseColor)
+          let changed = false
+          if (material.transparent !== nextTransparent) { material.transparent = nextTransparent; changed = true }
+          if (material.opacity !== state.opacity) { material.opacity = state.opacity; changed = true }
+          if (!material.color.equals(_scratchColor)) { material.color.copy(_scratchColor); changed = true }
+          if (changed) material.needsUpdate = true
 
           // Combined with ModelObjects' own showFaces/isolate/hidden verdict
           // (cached on mount/settings-change as userData.baseVisible, since
@@ -1695,6 +1808,8 @@ export function TimelinePlayback({
           // when nothing else is hiding it. Every frame, so leaving the
           // "before start" pose (or scrubbing back into it) reliably
           // re-hides a mesh some other effect had last set visible.
+          // (Plain assignment, not diffed — .visible has no GPU-facing
+          // cost the way needsUpdate does, nothing to save here.)
           mesh.visible = (mesh.userData.baseVisible ?? true) && state.opacity > ANIMATION_VISIBILITY_EPSILON
 
           // Gouraud/Hidden Line render modes display a cached variant
@@ -1860,12 +1975,14 @@ export function Viewport3D({
   gizmoMode, onTransformChange,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
-  sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd,
+  sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest,
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
+  measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
+  measurementHoverPoint, onMeasurementHoverPoint,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -1895,6 +2012,46 @@ export function Viewport3D({
   const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
   const zUp = settings.upAxis === 'z'
 
+  // Model-scale radius (2026-07-19 fix, per Maro: "shadow is still weird
+  // floating on that plane") — a real building can easily span well past
+  // the fixed 20-unit light distance this used before, which put the
+  // "sun" only marginally outside (sometimes practically inside) the
+  // model's own volume instead of comfortably above/around it, producing
+  // exactly this kind of warped, disconnected-looking shadow. Derived from
+  // the actual loaded model's own bounding sphere (its diagonal/2) instead
+  // of a fixed guess, so the light — and its shadow camera's own frustum
+  // below — scale to whatever's actually loaded rather than one arbitrary
+  // demo-scale number. Memoized since expandByObject does a real geometry
+  // traversal, not free to redo on every unrelated render. Falls back to
+  // 20 (the old fixed default) when nothing's loaded yet.
+  const modelRadius = useMemo(() => {
+    const box = new THREE.Box3()
+    let any = false
+    for (const { object } of importedObjects) { box.expandByObject(object); any = true }
+    if (!any || box.isEmpty()) return 20
+    return Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importedObjects])
+
+  // Sun azimuth/elevation -> a real directional-light position (2026-07-19,
+  // per Maro: "make [shadows] more distinct, able to control shadow/light
+  // angle" — see viewerSettings.ts's own sunAzimuth/sunElevation header for
+  // why these two numbers and their defaults). Plain spherical-to-Cartesian
+  // conversion at modelRadius * 3 (comfortably outside the model regardless
+  // of its real scale, see modelRadius's own comment just above — this
+  // used to be a fixed 20 regardless of model size); azimuth is the compass
+  // angle in the ground plane, elevation the angle up from it, with the
+  // ground plane's own two axes swapped between up-axis conventions the
+  // same way every other zUp-conditional in this file already is.
+  const sunAzimuthRad = (settings.sunAzimuth * Math.PI) / 180
+  const sunElevationRad = (settings.sunElevation * Math.PI) / 180
+  const sunRadius = modelRadius * 3
+  const sunHorizontal = Math.cos(sunElevationRad) * sunRadius
+  const sunHeight = Math.sin(sunElevationRad) * sunRadius
+  const sunPosition: [number, number, number] = zUp
+    ? [Math.cos(sunAzimuthRad) * sunHorizontal, Math.sin(sunAzimuthRad) * sunHorizontal, sunHeight]
+    : [Math.cos(sunAzimuthRad) * sunHorizontal, sunHeight, Math.sin(sunAzimuthRad) * sunHorizontal]
+
   // Box-select (2026-07-08, per Maro: "select box in viewport", modelled on
   // Blender's B-key marquee) — a toggleable mode rather than always-on,
   // since a plain drag is what OrbitControls uses to orbit; entering this
@@ -1905,20 +2062,6 @@ export function Viewport3D({
   // the Canvas below; containerRef gives pixel-to-NDC conversion without
   // needing the renderer's own size.
   const [boxSelectMode, setBoxSelectMode] = useState(false)
-  // Fly Mode (2026-07-11, per Maro comparing this app's navigation against
-  // Blender's own camera view: "I can go into the camera mode and view it
-  // and navigate from inside the camera") — swaps OrbitControls (orbit
-  // around a fixed target point, this app's only navigation scheme until
-  // now) for drei's FlyControls (free 6-DOF movement: WASD + drag-to-look,
-  // no orbit pivot at all — matching Blender's own "Fly Navigation," as
-  // opposed to its ground-constrained "Walk Navigation"). Mutually
-  // exclusive by conditional rendering, not a shared ref — the two control
-  // schemes have fundamentally different state (OrbitControls has a
-  // `target` point to orbit around; FlyControls has none, just the
-  // camera's own free position/orientation), so Save View/Frame Selected
-  // (which read controlsRef.current.target) are disabled while flying
-  // rather than pointed at a ref that wouldn't mean the same thing.
-  const [flyMode, setFlyMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
   const cameraRef = useRef<THREE.Camera | null>(null)
@@ -1959,25 +2102,30 @@ export function Viewport3D({
       controls.removeEventListener('end', onEnd)
     }
   }, [])
-  // 2026-07-11 fix, caught while wiring in an explicit Resolution setting
-  // for Capture/Export Video (renderCaptureSettings.ts) — R3F's own dpr
-  // prop, given a [min, max] tuple, *clamps* window.devicePixelRatio into
-  // that range (confirmed directly in @react-three/fiber's own source,
-  // calculateDpr: `Math.min(Math.max(dpr[0], target), dpr[1])` where target
-  // is the real devicePixelRatio) — it does not multiply it. On a standard
-  // 1x desktop monitor (devicePixelRatio === 1, the common case on
-  // Windows), [1,3] and [1,2] both clamp to exactly 1 — boostQuality's own
-  // "supersampling boost while idle" from earlier today was a silent no-op
-  // on that hardware the whole time, only ever doing anything on an
-  // already-HiDPI display reporting >2. Fixed by computing a real
-  // multiplier instead of a clamp range: dprMultiplier below is 1
-  // (interactive), a modest 1.5 while merely idle (boostQuality), or
-  // whatever Capture/Export Video's own explicit Resolution setting asks
-  // for (captureDprMultiplier, 1/2/4×) when one of those is actually in
-  // flight — capped at 4 total either way so a deliberate 4× export on top
-  // of an already-HiDPI display can't ask the GPU for something absurd.
+  // 2026-07-19 fix, per Maro: "when i move the axis angles the elements in
+  // view visibly shake before settling" plus a separate, intermittent
+  // "exploded on refresh" report — both traced to real, repeated
+  // GL_INVALID_OPERATION: glBlitFramebuffer errors in the browser console
+  // (hundreds of them, not assumed), a known @react-three/postprocessing
+  // failure mode: EffectComposer's `enableNormalPass` (needed by the N8AO
+  // ambient-occlusion effect below) keeps its own depth-stencil render
+  // target, and resizing the renderer's own pixel ratio — which boostQuality
+  // used to do here, toggling dpr between 1x and 1.5x on every orbit
+  // start/end — races that target's own resize, corrupting the shared
+  // depth-stencil buffer for a few frames (the "shake") or, if the same
+  // race hits during OrbitControls' own initial setup (which can fire a
+  // spurious 'end'-like event on mount), corrupting it before the WebGL
+  // context ever stabilizes (the "sometimes broken on refresh," which
+  // doesn't self-repair since the context is left in a bad state). Fixed by
+  // never varying dpr for the idle-vs-interactive boost at all — only the
+  // explicit, one-shot Capture/Export Video path (captureDprMultiplier)
+  // still resizes it, a deliberate user action rather than a per-orbit
+  // toggle. boostQuality's own AO-sample-count and shadow-map-resolution
+  // bumps below are unaffected and still work exactly as before — neither
+  // needs a render-target resize, just a pass-parameter change, so neither
+  // was ever part of this bug.
   const [captureDprMultiplier, setCaptureDprMultiplier] = useState<number | null>(null)
-  const dprMultiplier = captureDprMultiplier ?? (boostQuality ? 1.5 : 1)
+  const dprMultiplier = captureDprMultiplier ?? 1
   const dpr = Math.min(window.devicePixelRatio * dprMultiplier, 4)
   // Drives N8AO's aoSamples/denoiseSamples and shadow-map resolution — true
   // either while merely idle (boostQuality) or while a capture/export is
@@ -2056,6 +2204,51 @@ export function Viewport3D({
     controls.target.copy(center)
     controls.update()
   }
+
+  // Auto-frame on load (2026-07-19, per Maro: "upon refresh, default frame
+  // all elements") — reuses handleFrameSelected's own "nothing selected ->
+  // frame the whole scene" fallback exactly once, the first time there's
+  // both real, boundable geometry AND a live camera/controls to move,
+  // rather than leaving the camera sitting at its fixed default position
+  // ([8,8,8], this Canvas's own `camera` prop below) regardless of how
+  // big/where the real model turns out to be. Polls via
+  // requestAnimationFrame (restarted whenever importedObjects itself
+  // changes) rather than firing once — an entry appears in that array as
+  // soon as an import *starts* (an ImportedObject wrapping a still-empty
+  // THREE.Group), and cameraRef.current/controlsRef.current (populated by
+  // CameraCapture, below) aren't necessarily ready on the very first
+  // frame either — so "done" is only ever marked once both are actually
+  // true, not just once geometry showed up in the array. (The
+  // "still blank" symptom this was chased under twice turned out to be a
+  // real bug the whole time — see ifcModel.ts's own recenterOffset
+  // comment: real-world/site coordinates ~400,000 units from the origin
+  // put the *camera* at an equally huge, numerically unstable position
+  // once framed, which is what actually made the result look blank, not
+  // this polling logic.)
+  const hasAutoFramedRef = useRef(false)
+  useEffect(() => {
+    if (hasAutoFramedRef.current) return
+    let cancelled = false
+    let rafId = 0
+    const tryFrame = () => {
+      if (cancelled || hasAutoFramedRef.current) return
+      if (!cameraRef.current || !controlsRef.current) {
+        rafId = requestAnimationFrame(tryFrame)
+        return
+      }
+      const box = new THREE.Box3()
+      for (const { object } of importedObjects) box.expandByObject(object)
+      if (!box.isEmpty()) {
+        hasAutoFramedRef.current = true
+        handleFrameSelected()
+        return
+      }
+      rafId = requestAnimationFrame(tryFrame)
+    }
+    rafId = requestAnimationFrame(tryFrame)
+    return () => { cancelled = true; cancelAnimationFrame(rafId) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importedObjects])
 
   // Still-image capture (2026-07-10, per Maro's research-backed ask —
   // reads directly off the renderer's own <canvas> right after whatever
@@ -2335,6 +2528,38 @@ export function Viewport3D({
     onSelectUnassigned(matchedObjectIds, expressIdsByObject)
   }
 
+  // Select All (2026-07-17 fix, per Maro: "selecting all only selects the
+  // object not the elements... I care about elements") — same visible-element
+  // enumeration as box-select/Select Unassigned above, just with no filter
+  // beyond "is it actually on screen right now" (which already makes this
+  // correctly select just the isolated subset when isolate mode is on, since
+  // isolate/hide both work by flipping `.visible` off — "all" and "the
+  // isolated subset" mean the same thing on screen, per Maro's earlier Select
+  // All fix for the isolate case). materializeAll first — batched elements
+  // (elementBatching.ts) have no individual THREE.Mesh/userData.expressID
+  // until touched, so a plain traverse would silently skip every one of them.
+  const handleSelectAllClick = () => {
+    const matchedObjectIds: string[] = []
+    const expressIdsByObject = new Map<string, number[]>()
+    for (const { id, object, kind, visible } of importedObjects) {
+      if (!visible) continue
+      if (kind === 'ifc') {
+        materializeAll(object)
+        const matchedIds: number[] = []
+        object.traverse(child => {
+          if (!(child instanceof THREE.Mesh) || !child.visible) return
+          const expressID = child.userData.expressID as number | undefined
+          if (expressID === undefined) return
+          matchedIds.push(expressID)
+        })
+        if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
+        continue
+      }
+      matchedObjectIds.push(id)
+    }
+    onSelectAll(matchedObjectIds, expressIdsByObject)
+  }
+
   return (
     <div
       ref={containerRef}
@@ -2345,8 +2570,8 @@ export function Viewport3D({
     >
       <div className="absolute top-2 left-2 z-10 flex flex-wrap gap-1 max-w-[calc(100%-1rem)]">
         <button
-          onClick={onSelectAll}
-          title="Select all objects"
+          onClick={handleSelectAllClick}
+          title="Select every visible object and IFC element"
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
         >
           Select All
@@ -2401,24 +2626,10 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleFrameSelected}
-          disabled={flyMode}
-          title={flyMode ? 'Frame Selected — unavailable in Fly Mode (no orbit target to frame around)' : 'Frame Selected — move the camera to fit the current selection (or the whole scene if nothing\'s selected)'}
+          title="Frame Selected — move the camera to fit the current selection (or the whole scene if nothing's selected)"
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Frame Selected
-        </button>
-        <button
-          onClick={() => setFlyMode(v => !v)}
-          title={
-            flyMode
-              ? 'Exit Fly Mode — return to orbit navigation'
-              : 'Fly Mode — navigate freely from inside the camera, Blender-style: drag to look around, WASD (+ R/F or Q/E) to move'
-          }
-          className={`text-xs px-2 py-1 rounded-md border shadow-sm ${
-            flyMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          Fly Mode
         </button>
         <button
           onClick={handleCaptureImage}
@@ -2429,8 +2640,7 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleSaveCameraView}
-          disabled={flyMode}
-          title={flyMode ? 'Save Current View — unavailable in Fly Mode (no orbit target to save)' : 'Save Current View — bookmark this camera angle (see the Camera Views panel to jump back to it later)'}
+          title="Save Current View — bookmark this camera angle (see the Camera Views panel to jump back to it later)"
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Save View
@@ -2493,7 +2703,26 @@ export function Viewport3D({
         // exact timing). A small, constant memory cost for guaranteeing
         // handleCaptureImage below always reads back exactly what was
         // just on screen.
-        gl={{ stencil: true, preserveDrawingBuffer: true }}
+        //
+        // logarithmicDepthBuffer: true (2026-07-19 fix, per Maro: "the
+        // elements... visibly shake" — confirmed independent of AO/
+        // Shadows/Edges, ruling all three out; the real cause is Clip
+        // Start/Clip End (settings.clipStart/clipEnd, user-adjustable in 3D
+        // View Properties, default 0.1/10000 — a 100,000:1 near:far ratio).
+        // A standard WebGL depth buffer spends most of its precision within
+        // the first fraction of that range, leaving almost none left at a
+        // real BIM model's typical viewing distance — classic z-fighting:
+        // two near-coincident surfaces' depth values round to the same
+        // encoded value, so the rasterizer flips which one "wins" from
+        // frame to frame as the projection matrix shifts slightly during
+        // orbit, reading as a flicker/shake that stops the instant the
+        // camera (and therefore the projection matrix) stops changing.
+        // three.js's own logarithmic depth buffer is the standard fix for
+        // exactly this — large near:far ratios by design — at the cost of
+        // needing verification against N8AO/EffectComposer's own depth
+        // read (enableNormalPass above), since not every postprocessing
+        // effect is written to expect log-encoded depth.
+        gl={{ stencil: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!boxSelectMode) { onSelect(null); onSelectObject(null) } }}
       >
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
@@ -2506,16 +2735,23 @@ export function Viewport3D({
             512x512 map), sized for a small demo scene, not a BIM-scale
             import (buildings routinely span 50-200 units): with shadows
             "on," most real models simply had no shadow at all, clipped
-            entirely outside that tiny frustum. Widened to +-100 units at
-            2048x2048 — generous enough for typical site-scale models without
-            ballooning shadow-map memory; shadow-bias trims the "shadow acne"
-            self-shadowing artifact a widened frustum's lower effective
-            precision-per-unit would otherwise introduce. */}
+            entirely outside that tiny frustum. shadow-bias trims the
+            "shadow acne" self-shadowing artifact a widened frustum's lower
+            effective precision-per-unit would otherwise introduce.
+            2026-07-19 fix (per Maro: "shadow is still weird floating") —
+            the frustum bounds and far plane now scale with modelRadius
+            (see that variable's own comment) instead of a fixed +-100/300:
+            a light now positioned at modelRadius*3 away needs a far plane
+            that actually reaches back past the model, and a too-tight
+            fixed frustum on a much smaller/larger real model than the
+            original +-100 guess was tuned for is exactly what produced a
+            clipped, disconnected-looking shadow. */}
         <directionalLight
-          position={zUp ? [10, 10, 15] : [10, 15, 10]} intensity={1} castShadow={settings.shadows}
+          position={sunPosition} intensity={1} castShadow={settings.shadows}
           shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]} shadow-bias={-0.0005}
-          shadow-camera-left={-100} shadow-camera-right={100} shadow-camera-top={100} shadow-camera-bottom={-100}
-          shadow-camera-near={0.5} shadow-camera-far={300}
+          shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
+          shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}
+          shadow-camera-near={0.5} shadow-camera-far={sunRadius + modelRadius * 2}
         />
         <Suspense fallback={null}>
           <ViewportErrorBoundary key={activeEnvironmentUrl} onError={onEnvironmentError}>
@@ -2592,9 +2828,13 @@ export function Viewport3D({
           <SectionBoxGizmos
             boxes={sectionBoxes}
             objects={importedObjects}
+            tool={sectionBoxTool}
             onDragStart={() => setSectionBoxDragging(true)}
             onDragMove={onSectionBoxDragMove}
             onDragEnd={(boxId, bounds) => { setSectionBoxDragging(false); onSectionBoxDragEnd(boxId, bounds) }}
+            onRotateStart={() => setSectionBoxDragging(true)}
+            onRotateMove={onSectionBoxRotateMove}
+            onRotateEnd={(boxId, rotation) => { setSectionBoxDragging(false); onSectionBoxRotateEnd(boxId, rotation) }}
           />
           <SectionBoxCaps boxes={sectionBoxes} objects={importedObjects} />
           <TimelinePlayback
@@ -2665,24 +2905,37 @@ export function Viewport3D({
             upAxis={settings.upAxis}
             onAddPoint={onPickPivotPoint}
           />
+          <MeasurementMarkers
+            measurements={measurements}
+            unitPreference={unitPreference}
+            selectedId={selectedMeasurementId}
+            onSelect={onSelectMeasurement}
+          />
+          {measuringTool === 'length' && (
+            <MeasurementPreview
+              points={measuringPoints}
+              toMetres={measuringToMetres}
+              unitPreference={unitPreference}
+            />
+          )}
+          <MeasurementHoverIndicator point={measuringTool !== null ? measurementHoverPoint : null} />
+          {/* Measure tool click-to-place (2026-07-19) — its own catcher
+              rather than PathAddPointCatcher, since Area (face) mode needs a
+              resolved mesh + faceIndex back, not just a world-space point;
+              see MeasurementGizmo.tsx's own header. */}
+          <MeasurementCatcher
+            active={measuringTool !== null}
+            upAxis={settings.upAxis}
+            onHit={onMeasurementHit}
+            onHoverPoint={onMeasurementHoverPoint}
+          />
         </Suspense>
-        {flyMode ? (
-          // movementSpeed in scene units/sec — set well above the library's
-          // own default of 1 (this app's own shadow-frustum sizing
-          // elsewhere notes real BIM models routinely span 50-200 units;
-          // at speed 1 crossing one would take minutes). dragToLook:
-          // requires holding the mouse button to look around (matching
-          // this app's existing OrbitControls-style click-drag
-          // interaction) rather than FlyControls' own default of
-          // always-look-on-any-mouse-move, which would fight with reaching
-          // for a toolbar button. Note the library's own Shift behaviour is
-          // the opposite of a typical "sprint" key — held Shift *slows*
-          // movement for fine control, not a speed boost; not something
-          // this wrapper changes.
-          <FlyControls makeDefault movementSpeed={20} rollSpeed={0.5} dragToLook />
-        ) : (
-          <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
-        )}
+        {/* Fly Mode (drei's FlyControls) removed 2026-07-19, per Maro: "fly
+            mode is horrible, just remove for now" — even after fixing the
+            real 100x rollSpeed oversensitivity bug, it wasn't a good enough
+            navigation feel to keep; OrbitControls is this app's only
+            navigation scheme again, same as before Fly Mode existed. */}
+        <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         {activeObject && (
           <TransformControls
             object={activeObject.object}

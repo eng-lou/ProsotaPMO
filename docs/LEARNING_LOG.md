@@ -1650,3 +1650,74 @@ wizard end to end, confirm the Rates & Crews step recomputes durations
 live as a rate is edited, and confirm Generate produces a schedule in the
 Scheduling module with correct WBS nesting and the new activities already
 linked to their IFC elements with no extra manual step.
+
+**New session: scoped, then built, the first slice of the Controls
+Dashboard — the module the app's `/dashboard` route had been a placeholder
+for since the very first version of `App.tsx`.** Started with the
+prototype (`prosota-pmo_7.html`'s dashboard view: Overview / Baseline
+Comparison / AI Suggestions tabs) and the product vision doc, and wrote
+`CONTROLS_DASHBOARD_MODULE_PLAN.md` in the private docs repo comparing
+what the prototype specified against what the app can actually support
+today. The most useful finding wasn't about the Overview tab at all — it
+was that the *Baseline Comparison* tab's Risk/Cost/ICD columns can't
+really be built yet, because only Scheduling has a real "freeze a
+snapshot, compare against it later" mechanism (`schedule_baseline.py`);
+Risk and ICD have no baseline fields whatsoever, and Cost's only
+baseline-shaped field (`rev_a_baseline`) is a single one-off reference
+number, not a repeatable snapshot. Flagged that honestly as its own
+future phase rather than quietly faking it, and Maro picked the sensible
+split: build the Overview tab now (Phase 1a, real data, no AI), leave
+Baseline Comparison for later once that snapshot gap is actually closed.
+
+Two design questions came up while scoping Phase 1a, and both got
+resolved by checking what the app already does rather than inventing
+something new. First: how should "Schedule Performance" bucket activities
+into On-Time/At-Risk/Delayed? Maro's answer added real scope beyond a
+simple three-way split — he wanted the ability to toggle "critical path
+only" and to scope the whole view down to one of the named sub-projects
+the Sub-Project Float feature already supports. That turned out to fit
+the existing data exactly: `is_critical`/`sub_is_critical` and
+`total_float_hours`/`sub_total_float_hours` already exist side by side on
+every `Activity` specifically for this master-vs-scoped-branch
+distinction, and `activity.py`'s own `_subtree_ids` helper (already used
+by the DCMA quality-check subproject scoping) does the branch-filtering —
+no new backend concept needed, just wiring up what was already there.
+
+Second, harder one: how should "Risk Overview" turn each risk's
+probability/impact into a High/Medium/Low count? Asked the obvious
+PMBOK-thirds question first, and Maro pushed back with a screenshot of
+the Risk module's own "Criteria & Thresholds" screen — "we have this dont
+we?" He was right to ask, though the real answer was more precise than
+the screenshot: that screen holds the project-*editable* 5-level
+probability/impact bands, but the actual banding already drawn on screen
+for every individual risk lives in `HeatMatrix.tsx`'s own
+`bandOf`/`cellColor` functions, which use a fixed even-fifths split (not
+the editable criteria table) and colour a risk's position on a 5x5 grid
+into a 5-tier palette. Mirrored that exact formula server-side
+(`floor(value*5)` per axis, severity = the two bands added together,
+collapsed from 5 colour tiers into 3 counts) so the new dashboard panel
+can never silently disagree with what the Risk module already shows for
+the same risk.
+
+Built Phase 1a itself: a new read-only `GET /api/v1/dashboard/overview`
+endpoint aggregating Activity/Risk/CostElement/IcdItem — no new database
+tables at all, since every figure it needs already exists somewhere.
+Schedule SPI reuses Cost Plan's own `rollup_evm_from_totals` (summing
+PV/EV across schedule-linked cost elements) rather than a second,
+independently-invented formula — same "leave it blank rather than show a
+fake number" rule as everywhere else once no schedule-linked elements
+exist yet. New `frontend/src/modules/dashboard/Dashboard.tsx` fills in
+the `/dashboard` placeholder: KPI strip, Schedule Performance bars (with
+the critical-only toggle and sub-project dropdown), Milestone Timeline,
+Top 5 Risks (click-through to the Risk Register), Risk Overview, and a
+Risk Exposure bar chart using `recharts` — a dependency that was already
+installed but had never actually been used anywhere in the app until
+now.
+
+8 new backend tests (bucketing logic, the sub-project scoping switch, the
+critical-only toggle, the risk-banding boundaries, KPI counts), full
+suite 715/715 passing (previously 707) — every existing test still green,
+nothing broken by the new code. Frontend `tsc --noEmit` clean. Not yet
+tried in an actual browser (no browser available in this environment) —
+that's the one thing still needed before this gets committed, per the
+usual rule of not saving work until Maro's actually seen it work.

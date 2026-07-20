@@ -249,6 +249,9 @@ def _apply_computed(
     if bac is not None and element.rev_a_baseline is not None:
         data.variance = (bac - Decimal(str(element.rev_a_baseline))).quantize(_MONEY)
 
+    if bac is not None and element.comparison_cost is not None:
+        data.comparison_variance = (bac - Decimal(str(element.comparison_cost))).quantize(_MONEY)
+
     if bac is not None and gfa_m2 is not None:
         data.cost_per_m2 = (bac / gfa_m2).quantize(_MONEY)
 

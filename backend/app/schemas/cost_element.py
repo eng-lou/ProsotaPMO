@@ -32,6 +32,9 @@ class CostElementBase(BaseModel):
     # Physical progress (0-100) — the real EVM input; see CostElement model docstring.
     pct_complete: int | None = Field(default=None, ge=0, le=100)
     last_reviewed_date: date | None = None
+    # An independent benchmark figure (e.g. another project's equivalent
+    # line) — see CostElement.comparison_cost's own docstring.
+    comparison_cost: Decimal | None = None
 
     @model_validator(mode="after")
     def validate_type_fields(self) -> "CostElementBase":
@@ -62,6 +65,7 @@ class CostElementUpdate(BaseModel):
     actuals: Decimal | None = None
     pct_complete: int | None = Field(default=None, ge=0, le=100)
     last_reviewed_date: date | None = None
+    comparison_cost: Decimal | None = None
 
 
 class CostElementResponse(CostElementBase):
@@ -94,6 +98,11 @@ class CostElementResponse(CostElementBase):
     # re-baseline is a distinct, deliberate action, not implemented yet.
     rev_a_baseline: Decimal | None = None
     variance: Decimal | None = None
+    # budget (or computed_budget for a percentage element) - comparison_cost,
+    # a plain difference — never accepted as input, always derived. Distinct
+    # from `variance` above (budget vs rev_a_baseline) and from vac below
+    # (bac vs eac) — three different comparisons, three different fields.
+    comparison_variance: Decimal | None = None
     cost_per_m2: Decimal | None = None
     cv: Decimal | None = None
     cpi: Decimal | None = None

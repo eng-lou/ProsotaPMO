@@ -5,7 +5,7 @@ import type { ProjectLetterhead, TimescaleAnchorMode } from '@/lib/letterhead'
 import { formatDateTime } from './dateTime'
 import { buildBarLabel, CONNECTOR_STUB, GANTT_ROW_HEIGHT, HEADER_HEIGHT, LABEL_GAP } from './GanttChart'
 import { computeTimeMarks, type GanttZoom } from './ganttZoom'
-import { formatFloatDays } from './durationDisplay'
+import { buildCalendarLookup, formatFloatDays, type CalendarLookup } from './durationDisplay'
 import { formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
 import {
   indicatorOption, isMilestoneType,
@@ -314,7 +314,7 @@ interface PrintColumnDef {
   key: ColumnKey
   label: string
   align?: 'right'
-  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle, calendars: Calendar[]) => string
+  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle, calendarLookup: CalendarLookup) => string
   cellClassName?: (a: Activity) => string
 }
 
@@ -386,17 +386,17 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
   },
   {
     key: 'float', label: 'Total Float (d)', align: 'right',
-    render: (a, _r, _s, calendars) => formatFloatDays(a.total_float_hours, a, calendars),
+    render: (a, _r, _s, calendarLookup) => formatFloatDays(a.total_float_hours, a, calendarLookup),
     cellClassName: a => a.is_critical ? NEGATIVE_RED : NORMAL_GREY,
   },
   {
     key: 'critical', label: 'Critical', render: a => a.is_critical === null ? '—' : a.is_critical ? 'Yes' : 'No',
     cellClassName: a => a.is_critical ? NEGATIVE_RED : NORMAL_GREY,
   },
-  { key: 'free_float', label: 'Free Float (d)', align: 'right', render: (a, _r, _s, calendars) => formatFloatDays(a.free_float_hours, a, calendars) },
+  { key: 'free_float', label: 'Free Float (d)', align: 'right', render: (a, _r, _s, calendarLookup) => formatFloatDays(a.free_float_hours, a, calendarLookup) },
   {
     key: 'sub_float', label: 'Sub Total Float (d)', align: 'right',
-    render: (a, _r, _s, calendars) => formatFloatDays(a.sub_total_float_hours, a, calendars),
+    render: (a, _r, _s, calendarLookup) => formatFloatDays(a.sub_total_float_hours, a, calendarLookup),
     cellClassName: a => a.sub_is_critical ? 'text-orange-600 font-semibold' : NORMAL_GREY,
   },
   {
@@ -478,6 +478,7 @@ export function SchedulingPrintView({
   udfDefinitions = [], getUdfValue, udfColumnWidth = UDF_COLUMN_WIDTH, ganttStyle = DEFAULT_GANTT_STYLE, ganttZoom = 'week',
   highlightedActivityIds = new Set(), dataDate = null, preview = false,
 }: Props) {
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   // Mirrors PrintLetterheadFooter's own "nothing to show" guard — `preview`
   // mode (used below to get the tfoot its plain, non-fixed markup) skips
@@ -707,7 +708,7 @@ export function SchedulingPrintView({
                     key={c.key} style={dataCellStyle}
                     className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
                   >
-                    {c.render(a, resourceAssignments, ganttStyle, calendars)}
+                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup)}
                   </td>
                 ))}
                 <td
@@ -727,7 +728,7 @@ export function SchedulingPrintView({
                     key={c.key} style={dataCellStyle}
                     className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
                   >
-                    {c.render(a, resourceAssignments, ganttStyle, calendars)}
+                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup)}
                   </td>
                 ))}
                 {udfDefinitions.map(d => {

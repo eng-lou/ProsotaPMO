@@ -1,6 +1,7 @@
-import { Fragment, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
+import { buildCalendarLookup } from './durationDisplay'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import type { ResourcesLayoutPrefs } from './resourcesLayout'
@@ -117,14 +118,34 @@ function ClassificationFields({ values, setter }: { values: ResourceFormValues; 
 }
 
 const COLLAPSED_STORAGE_KEY = 'prosota_resource_pool_collapsed'
+// Fixed row heights (2026-07-17, for row virtualization below) — this table
+// used to have no explicit row height at all (natural, content-driven,
+// scaling with layoutPrefs.fontSize), unlike its two sibling Resources-tab
+// tables which already fix row height regardless of font size (e.g.
+// ResourceTrackingWidget's own 30/26). Virtualization needs a known height
+// to compute which rows are on screen without measuring every one, so this
+// aligns Pool with that same existing convention rather than introducing a
+// new one.
+const RESOURCE_POOL_ROW_HEIGHT = 30
+// The in-place edit sub-row (ClassificationFields) — generous enough for its
+// two-line (label + input) fields at any of the fixed labour/equipment/
+// crew/etc layouts, now that flex-wrap removal (below) makes its content
+// height deterministic instead of reflowing to a second line.
+const RESOURCE_POOL_EDIT_ROW_HEIGHT = 60
 
-export function ResourcePoolWidget({ projectId, resources, calendars, onChange, onClose, selectedIds, onToggleSelected, layoutPrefs }: Props) {
+// memo()'d (2026-07-17, per a perf audit — see GanttChart.tsx's own
+// 2026-07-15 precedent) — Scheduling.tsx is one large component managing
+// dozens of independent widgets/dialogs; without a memo boundary here, any
+// unrelated state change there re-renders this whole widget even when none
+// of its own props changed. Safe as a pure bail-out.
+function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onClose, selectedIds, onToggleSelected, layoutPrefs }: Props) {
   // Collapsible (2026-07-14, per Maro: "make the resource pool collapsible")
   // — this table alone can run to 25+ rows once a schedule's been generated,
   // pushing Resource Tracking/Profile below it well down the page. Persisted
   // like every other collapse-state in this app (e.g. Resource Tracking's
   // own visible-columns Set) so it stays collapsed across reloads instead of
   // needing to be re-collapsed on every visit.
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_STORAGE_KEY) === 'true')
   const toggleCollapsed = () => {
     setCollapsed(prev => {
@@ -137,6 +158,83 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
   const [form, setForm] = useState<ResourceFormValues>(BLANK)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<ResourceFormValues>(BLANK)
+
+  // Row virtualization (2026-07-17 perf fix) — this table used to render
+  // every resource as a real <tr> (plus a second in-place edit <tr> for
+  // whichever one, if any, is being edited) regardless of scroll position;
+  // a schedule with hundreds of generated resources made this table itself
+  // real, unbounded cost. Same flattened-row + cumulative-offset shape as
+  // ResourceTrackingWidget's own two-level tree — here the "second row type"
+  // is the in-place edit sub-row rather than a child assignment, and at most
+  // one resource (editingId) ever contributes one.
+  const flatPoolRows = useMemo(() => {
+    const out: ({ type: 'resource'; resource: Resource } | { type: 'edit'; resource: Resource })[] = []
+    for (const r of resources) {
+      out.push({ type: 'resource', resource: r })
+      if (editingId === r.id) out.push({ type: 'edit', resource: r })
+    }
+    return out
+  }, [resources, editingId])
+
+  const poolRowOffsets = useMemo(() => {
+    const offsets: number[] = []
+    let cumulative = 0
+    for (const r of flatPoolRows) {
+      offsets.push(cumulative)
+      cumulative += r.type === 'resource' ? RESOURCE_POOL_ROW_HEIGHT : RESOURCE_POOL_EDIT_ROW_HEIGHT
+    }
+    offsets.push(cumulative)
+    return offsets
+  }, [flatPoolRows])
+
+  const poolScrollRef = useRef<HTMLDivElement>(null)
+  const POOL_ROW_BUFFER_PX = 600
+  const [visiblePoolRowRange, setVisiblePoolRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(flatPoolRows.length, 40) })
+
+  const recomputeVisiblePoolRowRange = () => {
+    const el = poolScrollRef.current
+    if (!el) return
+    const top = el.scrollTop - POOL_ROW_BUFFER_PX
+    const bottom = el.scrollTop + el.clientHeight + POOL_ROW_BUFFER_PX
+    let start = 0
+    while (start < flatPoolRows.length && poolRowOffsets[start + 1] < top) start++
+    let end = start
+    while (end < flatPoolRows.length && poolRowOffsets[end] < bottom) end++
+    setVisiblePoolRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  useLayoutEffect(() => {
+    recomputeVisiblePoolRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flatPoolRows, poolRowOffsets])
+
+  const poolScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handlePoolScroll = () => {
+    if (poolScrollDebounceRef.current !== null) clearTimeout(poolScrollDebounceRef.current)
+    poolScrollDebounceRef.current = setTimeout(() => {
+      poolScrollDebounceRef.current = null
+      recomputeVisiblePoolRowRange()
+    }, 150)
+  }
+
+  useEffect(() => {
+    window.addEventListener('resize', recomputeVisiblePoolRowRange)
+    return () => window.removeEventListener('resize', recomputeVisiblePoolRowRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clamped to flatPoolRows.length for the same reason the other two
+  // Resources-tab tables' windows are — a data change (or opening/closing an
+  // edit row) can shrink or grow the flattened list before this render's own
+  // layout effect has corrected the range.
+  const clampedPoolRowEnd = Math.min(visiblePoolRowRange.end, flatPoolRows.length)
+  const clampedPoolRowStart = Math.min(visiblePoolRowRange.start, clampedPoolRowEnd)
+  const visiblePoolRowIndices = useMemo(
+    () => Array.from({ length: Math.max(0, clampedPoolRowEnd - clampedPoolRowStart) }, (_, k) => clampedPoolRowStart + k),
+    [clampedPoolRowStart, clampedPoolRowEnd]
+  )
+  const leadingPoolRowSpacerHeight = poolRowOffsets[clampedPoolRowStart] ?? 0
+  const trailingPoolRowSpacerHeight = Math.max(0, (poolRowOffsets[flatPoolRows.length] ?? 0) - (poolRowOffsets[clampedPoolRowEnd] ?? 0))
 
   const { definitions: udfDefinitions } = useUserDefinedFieldDefinitions(projectId, 'resource')
   const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(udfDefinitions, resources.map(r => r.id))
@@ -269,10 +367,11 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
 
       {!collapsed && (
       <>
-      <table className="w-full border-collapse mb-2" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
+      <div ref={poolScrollRef} onScroll={handlePoolScroll} className="rt-hide-scrollbar mb-2" style={{ maxHeight: 500, overflow: 'auto' }}>
+      <table className="w-full border-collapse" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
         <thead>
           <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200">
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>
               <input
                 type="checkbox"
                 title="Select all — scopes Resource Tracking/Profile below to just the checked resources"
@@ -285,32 +384,48 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
                 }}
               />
             </th>
-            <th className="px-2 py-1.5 border border-gray-200">Type</th>
-            <th className="px-2 py-1.5 border border-gray-200">Name</th>
-            <th className="px-2 py-1.5 border border-gray-200">Role</th>
-            <th className="px-2 py-1.5 border border-gray-200">Unit</th>
-            <th className="px-2 py-1.5 border border-gray-200 text-right">Rate (£)</th>
-            <th className="px-2 py-1.5 border border-gray-200 text-right">Max h/day</th>
-            <th className="px-2 py-1.5 border border-gray-200" title="Optional own calendar — storage/display only for now, doesn't yet affect scheduling">Calendar</th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Type</th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Name</th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Role</th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Unit</th>
+            <th className="px-2 py-1.5 border border-gray-200 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Rate (£)</th>
+            <th className="px-2 py-1.5 border border-gray-200 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Max h/day</th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }} title="Optional own calendar — storage/display only for now, doesn't yet affect scheduling">Calendar</th>
             {udfDefinitions.map(d => (
-              <th key={d.id} className="px-2 py-1.5 border border-gray-200" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
+              <th key={d.id} className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }} title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
             ))}
-            <th className="px-2 py-1.5 border border-gray-200"></th>
+            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}></th>
           </tr>
         </thead>
         <tbody>
-          {resources.map(r => {
+          {leadingPoolRowSpacerHeight > 0 && (
+            <tr><td colSpan={9 + udfDefinitions.length} style={{ height: leadingPoolRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+          )}
+          {visiblePoolRowIndices.map(idx => {
+            const flat = flatPoolRows[idx]
+            if (flat.type === 'edit') {
+              const r = flat.resource
+              return (
+                <tr key={`${r.id}-edit`} style={{ height: RESOURCE_POOL_EDIT_ROW_HEIGHT }}>
+                  <td colSpan={9 + udfDefinitions.length} className="px-2 py-2 border border-gray-200 bg-gray-50" style={{ height: RESOURCE_POOL_EDIT_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <div className="flex items-end gap-2">
+                      <ClassificationFields values={editForm} setter={setEditForm} />
+                    </div>
+                  </td>
+                </tr>
+              )
+            }
+            const r = flat.resource
             const isTimeBased = isTimeBasedType(r.resource_type)
             const editFixedUnit = editingId === r.id ? fixedUnitFor(editForm.resource_type) : null
             return (
-            <Fragment key={r.id}>
-            <tr>
-              <td className="px-2 py-1.5 border border-gray-200">
+            <tr key={r.id} style={{ height: RESOURCE_POOL_ROW_HEIGHT }}>
+              <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                 <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => onToggleSelected(r.id)} />
               </td>
               {editingId === r.id ? (
                 <>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <select
                       value={editForm.resource_type}
                       onChange={e => setType(setEditForm, e.target.value as ResourceType)}
@@ -319,28 +434,28 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
                       {RESOURCE_TYPES.map(t => <option key={t} value={t}>{RESOURCE_TYPE_LABELS[t]}</option>)}
                     </select>
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <input value={editForm.name} onChange={e => setEditForm(v => ({ ...v, name: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <input value={editForm.role} onChange={e => setEditForm(v => ({ ...v, role: e.target.value }))} placeholder="e.g. Trades" className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     {editFixedUnit ? (
                       <span className="text-gray-400">{editFixedUnit}</span>
                     ) : (
                       <input value={editForm.unit} onChange={e => setEditForm(v => ({ ...v, unit: e.target.value }))} placeholder="m3 / nr / each" className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
                     )}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <input type="number" min={0} step={0.01} value={editForm.rate} onChange={e => setEditForm(v => ({ ...v, rate: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs text-right" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     {isTimeBasedType(editForm.resource_type) ? (
                       <input type="number" min={0} max={24} step={0.5} value={editForm.max_hours_per_day} onChange={e => setEditForm(v => ({ ...v, max_hours_per_day: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs text-right" />
                     ) : <span className="text-gray-300 block text-right">—</span>}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200">
+                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <select
                       value={editForm.calendar_id}
                       onChange={e => setEditForm(v => ({ ...v, calendar_id: e.target.value }))}
@@ -353,49 +468,43 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
                   {udfDefinitions.map(d => (
                     <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, r.id)} onSave={payload => setUdfValue(d.id, r.id, payload)} />
                   ))}
-                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
+                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <button onClick={handleSaveEdit} className="text-blue-600 hover:text-blue-700 mr-2">Save</button>
                     <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600">Cancel</button>
                   </td>
                 </>
               ) : (
                 <>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{RESOURCE_TYPE_LABELS[r.resource_type]}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 font-medium">{r.name}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{r.role ?? '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{r.unit}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{Number(r.rate).toLocaleString()}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500">{isTimeBased ? r.max_hours_per_day : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">
-                    {r.calendar_id ? (calendars.find(c => c.id === r.calendar_id)?.name ?? '—') : '—'}
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{RESOURCE_TYPE_LABELS[r.resource_type]}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 font-medium" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.name}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.role ?? '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.unit}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{Number(r.rate).toLocaleString()}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{isTimeBased ? r.max_hours_per_day : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    {r.calendar_id ? (calendarLookup.byId.get(r.calendar_id)?.name ?? '—') : '—'}
                   </td>
                   {udfDefinitions.map(d => (
                     <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, r.id)} onSave={payload => setUdfValue(d.id, r.id, payload)} />
                   ))}
-                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
+                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <button onClick={() => startEdit(r)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
                     <button onClick={() => handleDelete(r)} className="text-gray-400 hover:text-red-600">Delete</button>
                   </td>
                 </>
               )}
             </tr>
-            {editingId === r.id && (
-              <tr>
-                <td colSpan={9 + udfDefinitions.length} className="px-2 py-2 border border-gray-200 bg-gray-50">
-                  <div className="flex items-end gap-2 flex-wrap">
-                    <ClassificationFields values={editForm} setter={setEditForm} />
-                  </div>
-                </td>
-              </tr>
-            )}
-            </Fragment>
             )
           })}
+          {trailingPoolRowSpacerHeight > 0 && (
+            <tr><td colSpan={9 + udfDefinitions.length} style={{ height: trailingPoolRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+          )}
           {resources.length === 0 && !creating && (
             <tr><td colSpan={9 + udfDefinitions.length} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No resources yet</td></tr>
           )}
         </tbody>
       </table>
+      </div>
 
       {creating ? (
         <div className="border border-gray-200 rounded p-3 flex items-end gap-2 flex-wrap">
@@ -457,3 +566,5 @@ export function ResourcePoolWidget({ projectId, resources, calendars, onChange, 
     </div>
   )
 }
+
+export const ResourcePoolWidget = memo(ResourcePoolWidgetImpl)

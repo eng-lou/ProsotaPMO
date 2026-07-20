@@ -199,6 +199,30 @@ export function PropertiesPanel({
       <Row label="Shadows">
         <input type="checkbox" checked={settings.shadows} onChange={e => set('shadows', e.target.checked)} />
       </Row>
+      {settings.shadows && (
+        <>
+          <Row label="Sun Azimuth">
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                type="range" min={0} max={360} step={5} value={settings.sunAzimuth}
+                onChange={e => set('sunAzimuth', Number(e.target.value))}
+                className="flex-1 w-0"
+              />
+              <span className="text-xs text-gray-500 w-8 text-right shrink-0">{settings.sunAzimuth}°</span>
+            </div>
+          </Row>
+          <Row label="Sun Elevation">
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                type="range" min={5} max={85} step={5} value={settings.sunElevation}
+                onChange={e => set('sunElevation', Number(e.target.value))}
+                className="flex-1 w-0"
+              />
+              <span className="text-xs text-gray-500 w-8 text-right shrink-0">{settings.sunElevation}°</span>
+            </div>
+          </Row>
+        </>
+      )}
       <Row label="Ambient Occlusion">
         <input type="checkbox" checked={settings.ambientOcclusion} onChange={e => set('ambientOcclusion', e.target.checked)} />
       </Row>

@@ -16,6 +16,14 @@ class SectionBoxBase(BaseModel):
     max_x: float
     max_y: float
     max_z: float
+    # Radians, THREE.Euler 'XYZ' order, applied around the box's own centre
+    # — same convention ElementTransform's own rotation_x/y/z already use
+    # (2026-07-17, per Maro: "I'd like to rotate the bounding box"). Default
+    # 0 so a freshly-created (still axis-aligned) box needs no client-side
+    # change to keep working.
+    rot_x: float = Field(default=0.0)
+    rot_y: float = Field(default=0.0)
+    rot_z: float = Field(default=0.0)
 
 
 # project_id is never client-supplied — the service derives it from the
@@ -39,6 +47,9 @@ class SectionBoxUpdate(BaseModel):
     max_x: float | None = None
     max_y: float | None = None
     max_z: float | None = None
+    rot_x: float | None = None
+    rot_y: float | None = None
+    rot_z: float | None = None
     active: bool | None = None
     visible: bool | None = None
 

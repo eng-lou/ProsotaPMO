@@ -66,3 +66,15 @@ class CostElement(Base, TimestampMixin):
     linked_activity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), unique=True
     )
+    # A separate, independent benchmark figure (2026-07-18, per Maro: "make
+    # that another field so it could be another projects costs... then the
+    # variance separate from the budget vs forecast variance to simply show
+    # the difference") — e.g. the equivalent line from a comparable project,
+    # a tender return, or a cost plan revision being checked against this
+    # one. Deliberately NOT forecast/EAC (that's a performance projection off
+    # THIS element's own progress) and NOT rev_a_baseline (that's THIS
+    # element's own frozen-at-creation budget) — a third, independent figure
+    # with its own simple variance (budget - comparison_cost, see
+    # CostElementResponse.comparison_variance), same "leave it blank rather
+    # than show a fake number" discipline as everywhere else in this model.
+    comparison_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))

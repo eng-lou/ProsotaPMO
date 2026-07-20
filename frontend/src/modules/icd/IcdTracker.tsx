@@ -1,18 +1,22 @@
+import axios from 'axios'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
+import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
+import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { downloadIcdItemsCsv } from './exportIcdItems'
 import { IcdActionItems } from './IcdActionItems'
 import { IcdComments } from './IcdComments'
 import { IcdCriteriaThresholds } from './IcdCriteriaThresholds'
 import { IcdKpiStrip } from './IcdKpiStrip'
 import { IcdForm, toIcdPayload, type IcdFormValues } from './IcdForm'
+import { buildIcdDraft } from './icdGeneration'
 import { IcdPrintView } from './IcdPrintView'
 import { ITEM_TYPE_LABELS, ITEM_TYPES, PRIORITIES, PRIORITY_LABELS, STATUS_LABELS, type IcdItem, type ItemType } from './types'
 
@@ -46,11 +50,19 @@ function uniqueValues(items: IcdItem[], field: 'owner' | 'status'): string[] {
 export function IcdTracker() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [items, setItems] = useState<IcdItem[]>([])
   const [risks, setRisks] = useState<RiskSummary[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
+  // Schedule + resource data for "Generate ICD" (2026-07-20) — see
+  // icdGeneration.ts's own header; same split RiskRegister.tsx/CostPlan.tsx
+  // already use for the identical reason.
+  const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
+  const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
+  const [generatingIcd, setGeneratingIcd] = useState(false)
+  const [generateIcdMessage, setGenerateIcdMessage] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -99,6 +111,25 @@ export function IcdTracker() {
     load()
     return () => { cancelled = true }
   }, [selectedProject, period])
+
+  // Schedule + resource data for "Generate ICD" (2026-07-20) — loaded
+  // separately since it comes from Scheduling's own schedule-variant/period,
+  // same split RiskRegister.tsx already uses for the identical reason.
+  useEffect(() => {
+    if (!selectedProject || !schedulePeriod) return
+    let cancelled = false
+    async function loadScheduleData() {
+      const [assignmentsRes, activitiesRes] = await Promise.all([
+        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
+        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
+      ])
+      if (cancelled) return
+      setResourceAssignments(assignmentsRes.data)
+      setScheduleActivities(activitiesRes.data)
+    }
+    loadScheduleData()
+    return () => { cancelled = true }
+  }, [selectedProject, schedulePeriod])
 
   // Fires window.print() only after printMode has committed to the DOM (state
   // updates are batched/async, so calling print() directly after setPrintMode
@@ -176,6 +207,35 @@ export function IcdTracker() {
     }
     setEditingItem(null)
     await refreshItems()
+  }
+
+  // "Generate ICD" (2026-07-20) — see icdGeneration.ts's own header. A
+  // rescan, not a one-shot: re-running this later only touches items whose
+  // own discipline actually shifted (backend: icd_bulk_generate.py).
+  const handleGenerateIcd = async () => {
+    if (!period) return
+    const drafts = buildIcdDraft(scheduleActivities, resourceAssignments)
+    if (drafts.length === 0) {
+      setGenerateIcdMessage('No committed, resourced schedule found to draft from yet.')
+      return
+    }
+    setGeneratingIcd(true)
+    setGenerateIcdMessage(null)
+    try {
+      const { data } = await api.post('/api/v1/icd-bulk-generate/', {
+        project_id: selectedProject.id, period_id: period.id, items: drafts,
+      })
+      await refreshItems()
+      setGenerateIcdMessage(
+        `ICD log updated — ${data.created_count} new item(s), ${data.updated_count} refreshed.`
+      )
+    } catch (err) {
+      setGenerateIcdMessage(axios.isAxiosError(err)
+        ? `Failed to generate ICD (${err.response?.data?.detail ?? err.message})`
+        : 'Failed to generate ICD')
+    } finally {
+      setGeneratingIcd(false)
+    }
   }
 
   const handleDelete = async (item: IcdItem) => {
@@ -367,12 +427,23 @@ export function IcdTracker() {
       )}
 
       {!formOpen && !editingItem && (
-        <button
-          onClick={() => setFormOpen(true)}
-          className="mb-4 text-sm text-blue-600 hover:text-blue-700 font-medium"
-        >
-          + New issue / change / decision
-        </button>
+        <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setFormOpen(true)}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            + New issue / change / decision
+          </button>
+          <button
+            onClick={handleGenerateIcd}
+            disabled={generatingIcd}
+            title="Drafts decisions needed from the committed, resourced schedule — one per discipline actually present, due before that discipline's own work starts. Re-running later only refreshes decisions whose discipline has actually moved. Review and tune before relying on it."
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {generatingIcd ? 'Generating…' : 'Generate ICD'}
+          </button>
+          {generateIcdMessage && <span className="text-xs text-gray-500">{generateIcdMessage}</span>}
+        </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">

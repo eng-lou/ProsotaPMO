@@ -140,6 +140,23 @@ export interface Activity {
   // backend app/services/activity.py:archive_activity.
   is_archived: boolean
   is_archive_container: boolean
+  // Which ScheduleCategory/CategoryPhase (frontend/src/modules/fourD/
+  // ifcScheduleExtraction.ts + scheduleGeneration.ts) this activity was
+  // generated as — null for anything not IFC-generated (a synthetic WBS/
+  // root/milestone node, or a hand-created activity). See
+  // Activity.schedule_category's own backend docstring: purely internal
+  // bookkeeping so the Resources tab's own "Generate Resources"/"Auto
+  // Assign Resources" actions (2026-07-17, per Maro) can find these
+  // activities again and re-derive their crew/equipment recipe, without
+  // re-scanning the IFC file or parsing the freely-user-editable task_name.
+  schedule_category: string | null
+  schedule_phase_key: string | null
+  // The real IFC-measured quantity duration_hours was computed from
+  // (2026-07-18, per Maro's own QA — see backend Activity.schedule_quantity's
+  // model docstring) — read by boqGeneration.ts directly instead of
+  // reverse-engineering an approximation from duration_hours. Null for
+  // anything not IFC-generated, or generated before this field existed.
+  schedule_quantity: string | null
 }
 
 // One entry in an activity's append-only code-change audit trail (2026-07-04,

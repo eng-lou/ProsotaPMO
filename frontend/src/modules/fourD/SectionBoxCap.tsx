@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import type { ImportedObject, ResolvedSectionBox } from './Viewport3D'
-import type { SectionBoxBounds } from './sectionBoxes'
-import { computeWorldClipPlanes } from './sectionBoxGeometry'
+import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
+import { computeWorldClipPlanes, sectionBoxPivotMatrix } from './sectionBoxGeometry'
 import { ensureMaterialized } from './elementBatching'
 
 // Solid-filled cut faces (2026-07-09, per Maro's explicit choice over the
@@ -102,35 +102,63 @@ function meshColor(mesh: THREE.Mesh): THREE.Color {
 // applying that one shared plane set uniformly to every mesh under it).
 // `colorMesh` only supplies a representative color and is never used for
 // any transform math.
-function SectionBoxCapSet({ anchor, colorMesh, bounds, skipBox }: {
+function SectionBoxCapSet({ anchor, colorMesh, bounds, rotation, skipBox }: {
   anchor: THREE.Object3D
   colorMesh: THREE.Mesh | null
   bounds: SectionBoxBounds
+  rotation: SectionBoxRotation
   skipBox: THREE.Box3 | null
 }) {
   const groupRef = useRef<THREE.Group>(null)
 
-  const faces = useMemo(
-    () => (skipBox ? facesFor(bounds).filter(f => planeIntersectsBox(f.localPlane, skipBox)) : facesFor(bounds)),
-    [skipBox, bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z],
-  )
+  // Each face's own localPlane is rotated by the SAME sectionBoxPivotMatrix
+  // the actual cap quad renders through (2026-07-17 fix, per Maro: "the
+  // material of the section box is weird" on a rotated box — this check
+  // used to compare skipBox, always in the element's own real, unrotated
+  // geometry frame, against the plane's ORIGINAL unrotated position, while
+  // the cap itself had already started rendering at its real *rotated*
+  // position. A face the rotated box no longer actually intersected could
+  // still pass this stale check and render its full flat quad anyway,
+  // covering real geometry it should have left alone.
+  const faces = useMemo(() => {
+    const all = facesFor(bounds)
+    if (!skipBox) return all
+    const pivot = sectionBoxPivotMatrix(bounds, rotation)
+    return all.filter(f => planeIntersectsBox(f.localPlane.clone().applyMatrix4(pivot), skipBox))
+  }, [skipBox, bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z, rotation.rot_x, rotation.rot_y, rotation.rot_z])
 
   // Unlit (MeshBasicMaterial), deliberately — a cap face isn't real
   // material, and an unlit flat color can't pick up environment-map noise
   // on a large surface the way a lit material could.
+  //
+  // Semi-transparent, not opaque (2026-07-17, per Maro: on a slab with real
+  // cutouts, "just more transparency" — this cap is always a flat
+  // rectangle sized to the box's own cross-section, not the real
+  // material's silhouette, see this component's own header on why a
+  // "real" silhouette-following cap was tried and abandoned twice already.
+  // Opaque, that full rectangle fully hid the actual geometry (and its
+  // real cutouts) wherever the cap over-covered it; translucent, the real
+  // geometry underneath stays visible through the tint instead of getting
+  // hidden — doesn't fix the over-coverage itself, but stops it from
+  // reading as "wrong," since you can now see what's actually there.
   const materials = useMemo(
-    () => faces.map(() => new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })),
+    () => faces.map(() => new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, transparent: true, opacity: 0.55 })),
     [faces],
   )
 
   useFrame(() => {
     if (!groupRef.current) return
     anchor.updateMatrixWorld(true)
-    groupRef.current.matrix.copy(anchor.matrixWorld)
+    // Composed with the box's own rotation (2026-07-17, per Maro: "I'd
+    // like to rotate the bounding box") — same sectionBoxPivotMatrix
+    // SectionBoxGizmo.tsx's own group and computeWorldClipPlanes below
+    // both use, so the visible cap quads, the wireframe/handles, and the
+    // actual clip all agree on where the box currently sits.
+    groupRef.current.matrix.copy(anchor.matrixWorld).multiply(sectionBoxPivotMatrix(bounds, rotation))
     groupRef.current.matrixAutoUpdate = false
     groupRef.current.matrixWorldNeedsUpdate = true
 
-    const worldPlanes = computeWorldClipPlanes(bounds, anchor.matrixWorld)
+    const worldPlanes = computeWorldClipPlanes(bounds, rotation, anchor.matrixWorld)
     const color = colorMesh ? meshColor(colorMesh) : new THREE.Color(0xffffff)
     faces.forEach((face, i) => {
       materials[i].color.copy(color)
@@ -185,7 +213,7 @@ export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]
           const mesh: THREE.Mesh = found
           mesh.geometry.computeBoundingBox()
           const skipBox = mesh.geometry.boundingBox ?? new THREE.Box3().setFromObject(mesh)
-          return [<SectionBoxCapSet key={box.id} anchor={mesh} colorMesh={mesh} bounds={box.bounds} skipBox={skipBox} />]
+          return [<SectionBoxCapSet key={box.id} anchor={mesh} colorMesh={mesh} bounds={box.bounds} rotation={box.rotation} skipBox={skipBox} />]
         }
         let colorMesh: THREE.Mesh | null = null
         let meshCount = 0
@@ -199,7 +227,7 @@ export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]
         // isn't something any single mesh's own geometry.boundingBox can
         // give directly across a multi-mesh object. Rendering all (up to)
         // 6 faces unconditionally here is the correctness-first tradeoff.
-        return [<SectionBoxCapSet key={box.id} anchor={entry.object} colorMesh={colorMesh} bounds={box.bounds} skipBox={null} />]
+        return [<SectionBoxCapSet key={box.id} anchor={entry.object} colorMesh={colorMesh} bounds={box.bounds} rotation={box.rotation} skipBox={null} />]
       })}
     </>
   )

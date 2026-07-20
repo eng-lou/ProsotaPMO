@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,10 +35,44 @@ class BulkActivityInput(BaseModel):
     # ignored for a node that turns out to have children.
     parent_temp_id: str | None = None
     duration_hours: Decimal = Field(default=Decimal("0"), ge=0)
+    # "task" default — a generated Project Milestones folder's own
+    # Construction Start/Substantial Completion children (2026-07-17, per
+    # Maro) are the only callers that ever set this to start_milestone/
+    # finish_milestone; every other generated row stays a plain task (WBS
+    # summary promotion still happens automatically via _recompute_hierarchy
+    # once inserted, same as before — this field doesn't affect that).
+    # wbs_summary is deliberately not offered here — same "server-computed,
+    # never client-chosen" rule a normal create_activity already enforces.
+    activity_type: Literal["task", "start_milestone", "finish_milestone"] = "task"
     # GlobalIds (source_kind="ifc") to link via ModelElementLink once this
     # activity has a real id — see model_element_link.py's own docstring
     # on why element_ref is a loose string, not a hard FK.
     element_refs: list[str] = []
+    # Which ScheduleCategory/CategoryPhase (frontend's own
+    # ifcScheduleExtraction.ts/scheduleGeneration.ts) this activity was
+    # generated as — None for a synthetic WBS/root/closeout node (see
+    # Activity.schedule_category's own docstring for why this is persisted
+    # at all: a later, separate resource-generation pass needs it).
+    category: str | None = Field(default=None, max_length=100)
+    phase_key: str | None = Field(default=None, max_length=100)
+    # The real IFC-measured quantity duration_hours was computed from
+    # (2026-07-18, per Maro's own QA — see Activity.schedule_quantity's own
+    # model docstring: BOQ generation used to have to reverse-engineer this
+    # from duration_hours, recovering the rounded-up day count rather than
+    # the true measured number). Same null-for-non-generated-activities
+    # contract as category/phase_key above.
+    quantity: Decimal | None = Field(default=None, ge=0)
+    # Coarser than category — "Structural"/"Architectural"/"Mechanical"/
+    # "Plumbing"/"Electrical"/"Site & Landscaping" (2026-07-17, per Maro:
+    # "create a udf column called Discipline... so i can also choose to
+    # group by discipline") — written into a "Discipline" UDF value on this
+    # activity (see bulk_generate's own handling below), not a new Activity
+    # column the way schedule_category/schedule_phase_key are: this is
+    # meant to be a normal, user-visible/user-editable grid column from day
+    # one (UDFs already support grouping/filtering in the Scheduling grid),
+    # where schedule_category/schedule_phase_key are purely internal,
+    # never-shown bookkeeping for the later resource-generation pass.
+    discipline: str | None = Field(default=None, max_length=100)
 
 
 class BulkResourceInput(BaseModel):
@@ -50,7 +85,19 @@ class BulkResourceInput(BaseModel):
 
 
 class BulkAssignmentInput(BaseModel):
-    activity_temp_id: str
+    # Exactly one of these two must be set (enforced in the service, not
+    # here — Pydantic's field-level validation can't easily express
+    # "exactly one of"). activity_temp_id targets a brand-new activity
+    # created in this same payload's own `activities` list (the original,
+    # "generate a whole new schedule" use). activity_id (2026-07-17, per
+    # Maro's "Generate Resources"/"Auto Assign Resources" as a separate,
+    # later Resources-tab action against an already-committed IFC-generated
+    # schedule) instead targets a real, already-existing Activity — this
+    # payload's own `activities` can be empty in that case, since there's
+    # nothing new to create, only resources/assignments against work that
+    # already exists.
+    activity_temp_id: str | None = None
+    activity_id: uuid.UUID | None = None
     resource_temp_id: str
     utilisation_pct: Decimal | None = Field(default=Decimal("100"), gt=0, le=100)
     quantity: Decimal | None = Field(default=None, gt=0)
@@ -77,14 +124,37 @@ class ScheduleBulkGenerateRequest(BaseModel):
     resources: list[BulkResourceInput] = []
     assignments: list[BulkAssignmentInput] = []
     relationships: list[BulkRelationshipInput] = []
+    # Both 2026-07-17, per Maro — support the Resources tab's own "Generate
+    # Resources" (repeatable: adding more IFC-generated activities later and
+    # re-running shouldn't spawn duplicate crew/equipment rows for a name
+    # that's already in the pool) and "Auto Assign Resources" (repeatable:
+    # re-running after new activities were linked shouldn't re-assign, and
+    # re-duplicate the cost of, work that already has its resource). Both
+    # default False so the original "generate a whole new schedule" path
+    # (fresh project, nothing to dedupe against yet) is unaffected.
+    dedupe_resources_by_name: bool = False
+    skip_existing_assignments: bool = False
 
 
 class ScheduleBulkGenerateResponse(BaseModel):
     activity_count: int
+    # Actually-inserted new Resource rows — with dedupe_resources_by_name,
+    # this can be less than len(request.resources) whenever a name already
+    # existed in the pool and was reused instead (2026-07-17).
     resource_count: int
+    # Actually-inserted new ResourceAssignment rows — with
+    # skip_existing_assignments, this can be less than
+    # len(request.assignments) whenever that (activity, resource) pairing
+    # already had one (2026-07-17).
     assignment_count: int
     relationship_count: int
     model_element_link_count: int
     # temp_id -> real Activity id, so the caller can immediately select/
     # frame what it just generated without a second fetch.
     activity_ids_by_temp_id: dict[str, uuid.UUID]
+    # temp_id -> real Resource id — either newly created, or the existing
+    # row dedupe_resources_by_name matched by name (2026-07-17, per Maro's
+    # "Generate Resources"/"Auto Assign Resources" flow) — lets the caller
+    # resolve its own resource_temp_id references without a second fetch,
+    # same convenience activity_ids_by_temp_id already provides.
+    resource_ids_by_temp_id: dict[str, uuid.UUID]

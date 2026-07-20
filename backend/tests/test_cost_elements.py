@@ -343,6 +343,35 @@ async def test_cost_per_m2_null_when_project_gfa_not_set(client: AsyncClient, pr
     assert el["cost_per_m2"] is None
 
 
+async def test_comparison_variance_computed_from_budget_and_comparison_cost(client: AsyncClient, project: Project, live_period: Period):
+    # 2026-07-18, per Maro: "make that another field so it could be another
+    # projects costs... then the variance separate from the budget vs
+    # forecast variance to simply show the difference" — comparison_cost is
+    # a plain, independent benchmark figure; comparison_variance is just
+    # budget - comparison_cost, distinct from `variance` (budget vs
+    # rev_a_baseline) and `vac` (bac vs eac).
+    el = await _create(client, project, live_period, description="Structures", budget="100000.00", comparison_cost="90000.00")
+    assert float(el["comparison_cost"]) == 90000.00
+    assert float(el["comparison_variance"]) == 10000.00
+
+
+async def test_comparison_variance_null_without_comparison_cost(client: AsyncClient, project: Project, live_period: Period):
+    el = await _create(client, project, live_period, description="Structures", budget="100000.00")
+    assert el["comparison_cost"] is None
+    assert el["comparison_variance"] is None
+
+
+async def test_comparison_cost_update_does_not_unlink_schedule_element(client: AsyncClient, project: Project, live_period: Period):
+    # Only a direct budget edit unlinks a schedule-sourced element (per
+    # cost_sync.py's own docstring) — comparison_cost is metadata, same as
+    # status/cost_owner/commentary, and must not trip that same guard.
+    el = await _create(client, project, live_period, description="Structures", budget="100000.00")
+    resp = await client.patch(f"/api/v1/cost-elements/{el['id']}", json={"comparison_cost": "95000.00"})
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "manual"  # was already manual; unaffected either way
+    assert float(resp.json()["comparison_variance"]) == 5000.00
+
+
 async def test_create_rejects_frozen_period(client: AsyncClient, project: Project, frozen_period: Period):
     resp = await client.post("/api/v1/cost-elements/", json={
         "project_id": str(project.id),

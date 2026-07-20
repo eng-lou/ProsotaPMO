@@ -107,3 +107,38 @@ async def test_deleting_model_file_cascades_its_section_boxes(client: AsyncClien
 
     listing = (await client.get("/api/v1/section-boxes/", params={"project_id": str(project.id)})).json()
     assert all(b["id"] != created["id"] for b in listing)
+
+
+async def test_create_box_defaults_to_unrotated(client: AsyncClient, project: Project):
+    """A freshly-created box needs no client-side rotation field at all to
+    keep working (2026-07-17, per Maro: "I'd like to rotate the bounding
+    box") — defaults to 0 on every axis, same axis-aligned box as before
+    this feature existed."""
+    file_id = await _create_model_file(client, project)
+
+    resp = await client.post("/api/v1/section-boxes/", json={"model3d_file_id": file_id, **_bounds()})
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["rot_x"] == 0.0
+    assert created["rot_y"] == 0.0
+    assert created["rot_z"] == 0.0
+
+
+async def test_create_and_update_box_rotation(client: AsyncClient, project: Project):
+    file_id = await _create_model_file(client, project)
+
+    resp = await client.post("/api/v1/section-boxes/", json={
+        "model3d_file_id": file_id, "rot_x": 0.1, "rot_y": 0.2, "rot_z": 0.3, **_bounds(),
+    })
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["rot_x"] == 0.1
+    assert created["rot_y"] == 0.2
+    assert created["rot_z"] == 0.3
+
+    resp = await client.patch(f"/api/v1/section-boxes/{created['id']}", json={"rot_z": 1.5})
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["rot_x"] == 0.1  # untouched
+    assert updated["rot_y"] == 0.2  # untouched
+    assert updated["rot_z"] == 1.5

@@ -1,4 +1,3 @@
-import type { Collection } from './collections'
 import { CATEGORY_ORDER, type ExtractedElement, type ScheduleCategory } from './ifcScheduleExtraction'
 
 // IFC Schedule Wizard, step 2 (2026-07-13) — groups a proposed WBS (one
@@ -11,17 +10,12 @@ import { CATEGORY_ORDER, type ExtractedElement, type ScheduleCategory } from './
 // (see schedule_bulk_generate.py's own docstring on the "frontend
 // computes, backend just persists" split).
 //
-// Two ways to arrive at the same StoreyGroup[] shape buildStagedSchedule
-// below actually consumes (2026-07-13, per Maro after the automatic scan
-// mis-bucketed pile caps as slabs — see ifcScheduleExtraction.ts's own
-// PredefinedType fix — and asked for "a controlled way" as a deliberate
-// alternative, not just a better auto-classifier):
-// - groupByStorey: automatic, off ifcScheduleExtraction.ts's IFC-type scan.
-// - groupFromCollections: manual, off a Collections tree the user already
-//   organised by hand (Pit > Footings, Level 1 > Columns, ...) — full
-//   control when the automatic heuristic isn't good enough for a given
-//   file, and not limited to the five structural types either, since a
-//   collection can hold anything.
+// groupByStorey below builds the StoreyGroup[] shape buildStagedSchedule
+// consumes, off ifcScheduleExtraction.ts's automatic IFC-type scan. (A
+// second grouping path, groupFromCollections — off a hand-curated
+// Collections tree instead, added 2026-07-13 for "a controlled way" around
+// a since-fixed mis-bucketing case — existed through 2026-07-19 and was
+// removed per Maro; see git history if it ever needs resurrecting.)
 
 const HOURS_PER_DAY = 8
 
@@ -84,20 +78,22 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   // not hundreds of near-identical small pours). These are still a single
   // crew's own throughput, not multiple parallel crews — freely edited in
   // the wizard's own Rates & Crews step either way.
-  Footings: [
+  // "Foundation" (2026-07-17, per Maro: "Footings is Foundation") — was
+  // 'Footings'; still IfcFooting-sourced, same phases/rates, renamed only.
+  Foundation: [
     { key: 'excavate', label: 'Excavate & Prep', rate: {
       crewName: 'Excavation Crew', crewSize: 4, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 1100,
       equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
     } },
     { key: 'formwork_rebar', label: 'Formwork & Rebar', rate: {
-      crewName: 'Footings Formwork Crew', crewSize: 5, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1400,
+      crewName: 'Foundation Formwork Crew', crewSize: 5, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1400,
     } },
     { key: 'pour', label: 'Pour Concrete', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 18, unit: 'each', costPerCrewDay: 1200,
       equipmentName: 'Concrete Pump Truck', equipmentCostPerDay: 900,
     } },
     { key: 'strip', label: 'Strip Formwork', rate: {
-      crewName: 'Footings Formwork Crew', crewSize: 3, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 900,
+      crewName: 'Foundation Formwork Crew', crewSize: 3, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 900,
     } },
   ],
   // Individual rebar bars/mesh sheets (2026-07-15, per Maro, after a real
@@ -215,6 +211,60 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
       crewName: 'Railing Crew', crewSize: 2, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 900,
     } },
   ],
+  // MEP + facade-detailing categories (2026-07-17, per Maro — real Snowdon
+  // Towers HVAC/Electrical/Plumbing/Facades sample files). Typical-industry
+  // ballpark figures same as every other category's own header already
+  // says — reviewed and freely edited in the wizard's own Rates & Crews
+  // step before anything commits, not sourced from any project's real
+  // historical data (none exists yet for MEP in this app any more than it
+  // did for structural). Rough-in (Ductwork/Piping/Electrical Containment)
+  // and trim-out (Air Terminals/Plumbing Fixtures/Lighting/Electrical
+  // Devices) are deliberately separate categories, not phases of one — see
+  // CATEGORY_ORDER's own header (ifcScheduleExtraction.ts) for why they
+  // sit apart in the sequence (trim-out happens after Coverings, once
+  // rough-in and the finishes it mounts to both exist).
+  'Facade Ornamentation': [
+    { key: 'install', label: 'Install Facade Ornamentation & Trim', rate: {
+      crewName: 'Ornamental Trim Crew', crewSize: 3, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1300,
+      equipmentName: 'Scissor Lift', equipmentCostPerDay: 400,
+    } },
+  ],
+  Ductwork: [
+    { key: 'install', label: 'Install Ductwork', rate: {
+      crewName: 'HVAC Ductwork Crew', crewSize: 4, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 1400,
+      equipmentName: 'Scissor Lift', equipmentCostPerDay: 400,
+    } },
+  ],
+  'Air Terminals': [
+    { key: 'install', label: 'Install Air Terminals & Diffusers', rate: {
+      crewName: 'HVAC Trim Crew', crewSize: 2, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 900,
+    } },
+  ],
+  Piping: [
+    { key: 'install', label: 'Install Piping & Valves', rate: {
+      crewName: 'Plumbing Piping Crew', crewSize: 3, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 1300,
+    } },
+  ],
+  'Plumbing Fixtures': [
+    { key: 'install', label: 'Install Plumbing Fixtures', rate: {
+      crewName: 'Plumbing Trim Crew', crewSize: 2, productivityPerCrewDay: 12, unit: 'each', costPerCrewDay: 900,
+    } },
+  ],
+  'Electrical Containment': [
+    { key: 'install', label: 'Install Conduit & Containment', rate: {
+      crewName: 'Electrical Rough-In Crew', crewSize: 3, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 1200,
+    } },
+  ],
+  Lighting: [
+    { key: 'install', label: 'Install Light Fixtures', rate: {
+      crewName: 'Electrical Trim Crew', crewSize: 2, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 900,
+    } },
+  ],
+  'Electrical Devices': [
+    { key: 'install', label: 'Install Electrical Devices & Equipment', rate: {
+      crewName: 'Electrical Trim Crew', crewSize: 2, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1000,
+    } },
+  ],
   // Single generic phase for v1 — no floor/wall/ceiling split (would need
   // each element's own PredefinedType, already read for free alongside
   // Name, but deferred to keep this pass scoped — see this module's own
@@ -227,6 +277,14 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   Furnishings: [
     { key: 'install', label: 'Install Furnishings & Fixtures', rate: {
       crewName: 'Furnishing Crew', crewSize: 3, productivityPerCrewDay: 20, unit: 'each', costPerCrewDay: 1100,
+    } },
+  ],
+  // Dead last in CATEGORY_ORDER (2026-07-17, per Maro — see that array's
+  // own header) — trees/benches/site furniture, done once everything they
+  // could get damaged/blocked by already exists.
+  'Site & Landscaping': [
+    { key: 'install', label: 'Install Site & Landscaping', rate: {
+      crewName: 'Landscaping Crew', crewSize: 3, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1000,
     } },
   ],
 }
@@ -254,6 +312,90 @@ export function resolvePhases(categoryName: string): CategoryPhase[] {
   return matched ? DEFAULT_CATEGORY_PHASES[matched] : genericCategoryPhases(categoryName)
 }
 
+export interface ResourceRecipeActivity {
+  id: string
+  schedule_category: string | null
+  schedule_phase_key: string | null
+}
+export interface ResourceRecipeResource {
+  temp_id: string
+  name: string
+  resource_type: 'crew' | 'equipment'
+  unit: string
+  rate: number
+}
+export interface ResourceRecipeAssignment {
+  activity_id: string
+  resource_temp_id: string
+  utilisation_pct: number
+}
+
+// Reusable by the Scheduling module's own Resources tab — "Generate
+// Resources" (resources only, populates the pool for review/editing) and
+// "Auto Assign Resources" (resources + assignments, links the pool to the
+// already-committed IFC-generated activities), both 2026-07-17 per Maro's
+// two-stage flow ("first stage generate resources - this populates the
+// resource pool. user can then edit etc. once satisfied (Auto Assign
+// resources) which links the resource pool to the activities"). Walks the
+// exact same DEFAULT_CATEGORY_PHASES/resolvePhases rate table
+// buildStagedSchedule itself used to size a phase's own duration_hours (see
+// computeDurationHours above) back when schedule generation still created
+// resources inline — a crew/equipment recipe built here after the fact
+// always matches what would have been generated in that same original pass,
+// off nothing but each activity's own persisted schedule_category/
+// schedule_phase_key (Activity columns, see StagedActivity.category's own
+// header on why those exist at all). Only activities with a
+// schedule_category are considered — a synthetic WBS/root/milestone node
+// never has one (this module never sets it for those), so this naturally
+// only ever touches real generated work, matching the Discipline UDF's own
+// "tasks only, never WBS" rule.
+//
+// Dedupes resources by name across every activity (same "one steel
+// erection crew and mobile crane does Columns then Beams" reasoning
+// DEFAULT_CATEGORY_PHASES' own header already documents) — the caller
+// (Scheduling.tsx) additionally passes dedupe_resources_by_name to the
+// bulk-generate endpoint so re-running this against a project that already
+// has some of these resources reuses them by name rather than creating
+// duplicates.
+export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
+  resources: ResourceRecipeResource[]
+  assignments: ResourceRecipeAssignment[]
+} {
+  const resourceByName = new Map<string, ResourceRecipeResource>()
+  const assignments: ResourceRecipeAssignment[] = []
+  let nextTempId = 0
+
+  const tempIdFor = (name: string, resource_type: 'crew' | 'equipment', rate: number): string => {
+    const existing = resourceByName.get(name)
+    if (existing) return existing.temp_id
+    const temp_id = `res-${nextTempId++}`
+    resourceByName.set(name, { temp_id, name, resource_type, unit: 'day', rate })
+    return temp_id
+  }
+
+  for (const activity of activities) {
+    if (!activity.schedule_category) continue
+    const phases = resolvePhases(activity.schedule_category)
+    const phase = phases.find(p => p.key === activity.schedule_phase_key) ?? phases[0]
+    if (!phase) continue
+    const { rate } = phase
+    assignments.push({
+      activity_id: activity.id,
+      resource_temp_id: tempIdFor(rate.crewName, 'crew', rate.costPerCrewDay),
+      utilisation_pct: 100,
+    })
+    if (rate.equipmentName && rate.equipmentCostPerDay != null) {
+      assignments.push({
+        activity_id: activity.id,
+        resource_temp_id: tempIdFor(rate.equipmentName, 'equipment', rate.equipmentCostPerDay),
+        utilisation_pct: 100,
+      })
+    }
+  }
+
+  return { resources: [...resourceByName.values()], assignments }
+}
+
 export interface CategoryGroup {
   name: string
   elementRefs: string[]
@@ -277,8 +419,17 @@ export interface StoreyGroup {
 // summed from ifcScheduleExtraction.ts's own per-element bounding-box
 // quantity.
 const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
-  'Footings', 'Reinforcement', 'Columns', 'Beams',
+  'Foundation', 'Reinforcement', 'Columns', 'Beams',
   'Structural Members', 'Stairs', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
+  // MEP + facade-detailing additions (2026-07-17) — every one of these is a
+  // discrete family instance (a duct fitting, a light fixture, a
+  // receptacle), not a continuous surface — same "installed per crew-day"
+  // count basis as Foundation/Columns/Beams above, never an area measurement.
+  'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
+  'Electrical Containment', 'Lighting', 'Electrical Devices', 'Facade Ornamentation',
+  // Same reasoning, 2026-07-17 — a tree/bench/bollard is a discrete
+  // planted/placed instance, not a continuous surface.
+  'Site & Landscaping',
 ])
 
 // One group per storey, bottom-up by elevation (storeys with an unknown
@@ -310,52 +461,6 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
     }))
 }
 
-// The "controlled way" (2026-07-13, per Maro: "I can take the time to
-// create collections and sub collections... then with that you can
-// generate the schedule") — a top-level Collection is a storey, its own
-// direct child Collections are that storey's categories, in the order
-// Maro organised them (Collection.sort_order, same field its own "Move
-// to…" UI already sets — see collection.py's own docstring on why there's
-// no separate drag-reorder yet). Only IFC-kind members are linkable
-// (ModelElementLink's own source_kind='ifc' below) — mesh-kind members are
-// skipped, surfaced via `warnings` rather than silently dropped. A
-// top-level collection's own *direct* members (not organised into a
-// sub-collection) land in a synthetic "(ungrouped)" category rather than
-// being silently lost either.
-export function groupFromCollections(collections: Collection[]): { storeys: StoreyGroup[]; warnings: string[] } {
-  const warnings: string[] = []
-  const byParent = new Map<string | null, Collection[]>()
-  for (const c of collections) {
-    const key = c.parent_collection_id
-    const list = byParent.get(key)
-    if (list) list.push(c)
-    else byParent.set(key, [c])
-  }
-  const sortCollections = (list: Collection[]) =>
-    [...list].sort((a, b) => (a.sort_order ?? Number.POSITIVE_INFINITY) - (b.sort_order ?? Number.POSITIVE_INFINITY) || a.name.localeCompare(b.name))
-
-  const toCategoryGroup = (c: Collection): CategoryGroup | null => {
-    const refs = c.members.filter(m => m.source_kind === 'ifc').map(m => m.element_ref)
-    const skipped = c.members.length - refs.length
-    if (skipped > 0) warnings.push(`"${c.name}" — ${skipped} non-IFC member(s) skipped (not supported by this wizard yet)`)
-    if (refs.length === 0) return null
-    return { name: c.name, elementRefs: refs, quantity: refs.length }
-  }
-
-  const storeys: StoreyGroup[] = []
-  for (const storeyCollection of sortCollections(byParent.get(null) ?? [])) {
-    const children = sortCollections(byParent.get(storeyCollection.id) ?? [])
-    const categories = children.map(toCategoryGroup).filter((g): g is CategoryGroup => g !== null)
-    const ownGroup = toCategoryGroup(storeyCollection)
-    if (ownGroup) {
-      warnings.push(`"${storeyCollection.name}" has its own directly-assigned elements outside any sub-collection — grouped as "(ungrouped)"`)
-      categories.push({ ...ownGroup, name: '(ungrouped)' })
-    }
-    if (categories.length > 0) storeys.push({ storeyName: storeyCollection.name, categories })
-  }
-  return { storeys, warnings }
-}
-
 // Whole multiples of HOURS_PER_DAY only, never a fractional/.5-hour
 // duration (2026-07-13, per Maro: "i think its because you have some
 // durations in .5 or decimals. dont do that" — whole-day scheduling is
@@ -376,6 +481,31 @@ export interface StagedActivity {
   parent_temp_id: string | null
   duration_hours: number
   element_refs: string[]
+  // Persisted on the real Activity row (Activity.schedule_category/
+  // schedule_phase_key, backend) — null for the synthetic root/storey-WBS/
+  // milestone nodes this module also generates, set for every real category-
+  // phase work activity. See that column's own docstring for why: a later,
+  // separate "Generate Resources"/"Auto Assign Resources" pass (Resources
+  // tab) needs to find these activities again without re-scanning the IFC
+  // file or parsing task_name (freely user-editable after generation).
+  category: string | null
+  phase_key: string | null
+  // The real IFC-measured quantity duration_hours (below) was computed
+  // FROM — same category.quantity computeDurationHours already reads, just
+  // also persisted verbatim this time (2026-07-18, per Maro's own QA catch:
+  // isolating L2's beams in the 4D viewer showed 193 real IfcBeam elements,
+  // but BOQ generation — having nothing but duration_hours to work from —
+  // could only reverse-engineer "whole days x rate" = 200, the rounded-up
+  // day count, not the true 193 that produced those days). Null for the
+  // same synthetic nodes category/phase_key are.
+  quantity: number | null
+  // "task" default — only Construction Start/Substantial Completion
+  // (2026-07-17, per Maro) ever set this to start_milestone/finish_milestone.
+  activity_type: 'task' | 'start_milestone' | 'finish_milestone'
+  // Written into a "Discipline" UDF value, not a new Activity column — see
+  // disciplineFor's own header above and BulkActivityInput.discipline's
+  // (backend). Null for the same synthetic nodes category/phase_key are.
+  discipline: string | null
 }
 export interface StagedResource {
   temp_id: string
@@ -416,7 +546,6 @@ export interface StagedSchedule {
 export interface ProposedScheduleSummary {
   storeyCount: number
   activityCount: number
-  resourceCount: number
   relationshipCount: number
   elementCount: number
 }
@@ -463,6 +592,126 @@ export function usedPhaseRows(storeys: StoreyGroup[]): PhaseRow[] {
   return rows
 }
 
+// Structural climb categories (2026-07-17, per Maro: "you literally give
+// everything a finish to start sequence from start to end... its not
+// practical in real life... first floor works can start as soon as its
+// slab has been placed so no need to wait for all ground floor works to be
+// done") — these are the categories the floor ABOVE literally bears on (a
+// column can't stand until the slab below it is poured), so they're what
+// actually gates the *next* storey's own structure starting. Everything
+// else on a storey (envelope, secondary members, stairs, finishes,
+// furnishings) still sequences after its OWN storey's structure completes
+// — CATEGORY_ORDER already puts them after Slabs/Walls — but no longer
+// waits on any OTHER storey at all: this storey's finishes and the storey
+// above's structure can now genuinely run in parallel, matching how a real
+// multi-storey job actually climbs (structure several floors ahead, trades
+// following behind it), not a strict "finish this whole floor before
+// touching the next" chain. Every relationship generated is still a plain
+// 0-lag FS link either way — this only changes *which* activities connect,
+// not the relationship type/lag, so it stays exactly as DCMA-clean
+// (#3 Relationship Types, #4 Positive Lags, #5 Leads) as the flat chain was.
+const STRUCTURAL_CATEGORIES: ReadonlySet<string> = new Set(['Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs'])
+
+// Facade categories (2026-07-17, per Maro, after reviewing an exported real
+// schedule + the 4D viewport: "dont touch facade until architecture walls
+// for all levels are complete") — the cascade rule above deliberately lets
+// a storey's own finishes run in parallel with the storey ABOVE it's
+// structure, which is correct for envelope-agnostic trades (MEP, interior
+// coverings), but real high-rise sequencing never glazes/clads a floor
+// while the floor(s) above it are still mid steel-erection/concrete-pour —
+// dropped tools, weld spatter, wet-concrete overspill and crane swing all
+// put finished glazing at risk. Confirmed against a real generated
+// schedule's own exported dates: Level 2's Curtain Walls/Glazing (26 May -
+// 24 Jun 2027) ran the entire time Level 3's steel/concrete erection (08
+// Apr - 25 Aug 2027) was underway directly overhead. The fix below adds one
+// global gate — see the "Structure Complete — All Levels" milestone further
+// down — rather than a per-storey "wait N floors" lag, matching Maro's own
+// literal rule: every level's Walls phase (the last structural pour before
+// envelope work) must be complete building-wide before ANY facade
+// (Curtain Walls/Windows/Doors/Facade Ornamentation) starts anywhere.
+const FACADE_CATEGORIES: ReadonlySet<string> = new Set(['Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation'])
+
+// Discipline (2026-07-17, per Maro: "create a udf column called
+// Discipline... Earthworks, Architecture, Structures, Electrical, HVAC,
+// Landscape, Plumbing, Misc. etc like that so where necessary") — coarser
+// than ScheduleCategory, written into a "Discipline" UDF value per
+// generated activity (see BulkActivityInput.discipline's own header,
+// backend) so the Scheduling grid can group by it directly. Furnishings
+// falls to Misc — none of the other 7 named disciplines are a real fit for
+// FF&E, and Misc exists specifically as that catch-all.
+// Exported (2026-07-18) so riskGeneration.ts can map an activity's own
+// schedule_category back to its coarse discipline the same way this module
+// already does for the Discipline UDF — one source of truth for "what
+// discipline is this category," not a second copy drifting out of sync.
+export const CATEGORY_DISCIPLINE: Record<string, string> = {
+  Foundation: 'Structures', Reinforcement: 'Structures', Columns: 'Structures', Beams: 'Structures',
+  Slabs: 'Structures', Walls: 'Structures', 'Structural Members': 'Structures', Stairs: 'Structures',
+  Roofs: 'Architecture', 'Curtain Walls': 'Architecture', 'Facade Ornamentation': 'Architecture',
+  Windows: 'Architecture', Doors: 'Architecture', Railings: 'Architecture', Coverings: 'Architecture',
+  Ductwork: 'HVAC', 'Air Terminals': 'HVAC',
+  Piping: 'Plumbing', 'Plumbing Fixtures': 'Plumbing',
+  'Electrical Containment': 'Electrical', Lighting: 'Electrical', 'Electrical Devices': 'Electrical',
+  Furnishings: 'Misc',
+  'Site & Landscaping': 'Landscape',
+}
+
+// Foundation's own "Excavate & Prep" phase specifically (2026-07-17) —
+// bulk excavation is genuinely Earthworks, not Structures, even though it
+// sits inside the Foundation category alongside the concrete pour itself
+// (2026-07-17, per Maro: "Earthworks is more like Excavation which we
+// dont have" as its own category — this phase-level override is exactly
+// that, without needing a whole separate ScheduleCategory for it); every
+// other Foundation phase (formwork/rebar, pour, strip) stays Structures
+// via CATEGORY_DISCIPLINE above. Keyed by "category::phaseKey" (phaseRowId,
+// defined further below) once that function exists.
+const PHASE_DISCIPLINE_OVERRIDES: Record<string, string> = {
+  'Foundation::excavate': 'Earthworks',
+}
+
+function disciplineFor(category: string, phaseKey: string): string {
+  return PHASE_DISCIPLINE_OVERRIDES[`${category}::${phaseKey}`] ?? CATEGORY_DISCIPLINE[category] ?? 'Misc'
+}
+
+interface StoreyHandoff {
+  // First/last phase belonging to a STRUCTURAL_CATEGORIES category on this
+  // storey — null when the storey has none.
+  firstStructuralTempId: string | null
+  lastStructuralTempId: string | null
+  // First/last phase belonging to any NON-facade category (2026-07-17 fix,
+  // per a real "circular dependency" rejection against a real generated
+  // schedule) — the fallback used to go straight to firstTempId/lastTempId
+  // (the storey's overall first/last activity, whatever it was), which for
+  // a storey with NO structural category at all and ONLY a facade one (a
+  // real case: "Block 43 - Parapet," whose sole activity is its own Facade
+  // Ornamentation phase) meant that facade activity itself became this
+  // storey's handoff anchor — feeding straight into the NEXT storey's own
+  // structural chain as a predecessor, which that storey's own Walls is a
+  // descendant of, which (after the "Structure Complete — All Levels" gate
+  // above) is ALSO a predecessor of that same facade-only storey's facade
+  // activity. A textbook cycle, entirely on the automatic IFC-scan path,
+  // nothing to do with the earlier Collections-ordering fix. A facade
+  // activity must never be used as a handoff anchor for this reason — see
+  // the handoff-building loop below for what happens when a storey has
+  // truly nothing else to anchor on (firstStructuralTempId and this both
+  // null): it's skipped over in the chain entirely, not force-anchored on
+  // its own facade activity.
+  firstNonFacadeTempId: string | null
+  lastNonFacadeTempId: string | null
+  firstTempId: string | null
+  lastTempId: string | null
+}
+
+// Schedule generation stops at activity detail + sequence for now — no
+// Resource/ResourceAssignment rows (2026-07-17, per Maro's phased-generation
+// plan: schedule first, so it can be reviewed/edited on its own; resources
+// and cost data come from a later, separate generation pass off the IFC +
+// this now-committed schedule, then a full cost plan off *that* combined
+// output, then a risk register off *that* — each stage refining the last,
+// eventually a risk-adjusted schedule/CRA-derived contingency feeding back
+// into costing). The crew/productivity rate model below (CategoryRate,
+// resolvePhases, computeDurationHours) still fully drives realistic
+// *durations* — none of that goes away, only the step that used to also
+// turn those same rates into real Resource/ResourceAssignment rows.
 export function buildStagedSchedule(
   projectId: string, schedulePeriodId: string, storeys: StoreyGroup[], rates: Record<string, CategoryRate>,
   rootName: string, calendarId: string | null,
@@ -470,13 +719,10 @@ export function buildStagedSchedule(
   const activities: StagedActivity[] = []
   const relationships: StagedRelationship[] = []
   let elementCount = 0
-  // storey index -> every phase activity temp_id generated for that storey,
-  // in sequence order — the between-storey link below connects the last
-  // one here to the first one of the next storey (a generic "this storey's
-  // last trade feeds the next storey's first" rule, not hardcoded to
-  // Slabs->Columns — works for both the fixed structural CATEGORY_ORDER
-  // and an arbitrary Collections-driven category sequence alike).
-  const phaseTempIdsByStorey: string[][] = []
+  // Per-storey handoff points the between-storey linking below reads —
+  // see STRUCTURAL_CATEGORIES' own header for why this replaced a single
+  // flat "last phase of storey N -> first phase of storey N+1" chain.
+  const handoffByStorey: StoreyHandoff[] = []
 
   // One root WBS summary named after the source model, parenting every
   // storey (2026-07-13, per Maro: "PIT, Level 1... implying wbs like PIT,
@@ -488,82 +734,86 @@ export function buildStagedSchedule(
   // for instance) is untouched, since this function only ever adds new
   // rows, never reparents existing ones.
   const rootTempId = 'wbs-root'
-  activities.push({ temp_id: rootTempId, task_name: rootName, parent_temp_id: null, duration_hours: 0, element_refs: [] })
+  activities.push({
+    temp_id: rootTempId, task_name: rootName, parent_temp_id: null, duration_hours: 0, element_refs: [],
+    category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+  })
 
-  // One resource per (phase-row, crew|equipment) — shared across every
-  // storey that phase touches (the same Steel Erection Crew visits every
-  // storey's Columns phase, not a fresh crew each floor), but deliberately
-  // NOT shared across two *different* phase rows even when they happen to
-  // carry the same name (e.g. Columns' own "Steel Erection Crew" and
-  // Beams' own, same display name by design — see DEFAULT_CATEGORY_PHASES'
-  // own header on realistic reuse). An earlier version deduped by raw name
-  // instead: whichever phase's rate got processed first silently became
-  // the resource's own cost/crew size, and editing a *different* phase row
-  // sharing that name in the wizard's Rates & Crews table had no visible
-  // effect at all — a real bug (2026-07-13, per Maro: "the resources...
-  // now the issue is multiplied because of the increased resource
-  // detail"). Keying by phase-row id instead makes every row's own edits
-  // land on its own resource, unambiguously, every time.
-  //
-  // That fix's own side effect, caught the same day from Maro's exported
-  // Resource Pool: multiple genuinely-distinct resources sharing one plain
-  // display name (three "Concrete Pour Crew" rows at 1200/2000/1200,
-  // "Footings Formwork Crew" at 900/1400, ...) reads exactly like
-  // accidental duplication in the Resource Pool list, since nothing
-  // visually distinguishes them. Resolved here: a base name used by more
-  // than one distinct phase-row gets its owning category *and* phase
-  // suffixed on — "Concrete Pour Crew (Footings — Pour Concrete)",
-  // "Concrete Pour Crew (Slabs — Pour Concrete)", ... — category alone
-  // isn't always enough (Footings' own "Formwork & Rebar" and "Strip
-  // Formwork" phases both reuse "Footings Formwork Crew" *within the same
-  // category*, so two rows suffixed with just "(Footings)" would still
-  // look identical) but a phase label is always unique per row. A name
-  // only ever used by a single phase-row (Slab Crew, Excavator (Mini),
-  // ...) stays exactly as typed.
-  const phaseRows = usedPhaseRows(storeys)
-  const nameUsers = new Map<string, Set<string>>()  // base name -> set of phase-row ids using it
-  for (const row of phaseRows) {
-    const rate = rates[row.id] ?? row.phase.rate
-    for (const name of [rate.crewName, rate.equipmentName].filter((n): n is string => !!n)) {
-      const users = nameUsers.get(name) ?? new Set<string>()
-      users.add(row.id)
-      nameUsers.set(name, users)
-    }
-  }
-  // Category alone isn't always enough to disambiguate — Footings' own
-  // "Formwork & Rebar" and "Strip Formwork" phases both reuse "Footings
-  // Formwork Crew" *within the same category*, so two collision members
-  // suffixed with just "(Footings)" would still read as identical
-  // duplicates. The phase label is always unique per phase-row, so it's
-  // used instead whenever the category alone wouldn't be enough.
-  const displayName = (baseName: string, category: string, phaseLabel: string): string => {
-    const users = nameUsers.get(baseName)?.size ?? 0
-    if (users <= 1) return baseName
-    return `${baseName} (${category} — ${phaseLabel})`
-  }
+  // Project Milestones (2026-07-17, per Maro: "there should be a
+  // Construction Start start milestone kicking off everything... these two
+  // will be in the first wbs called Project Milestones then the others
+  // follow") — root's own FIRST child, ahead of every storey WBS node.
+  // Construction Start (a real start_milestone, not a 0-duration task —
+  // schedule_bulk_generate.py's own create loop now reads staged.
+  // activity_type instead of hardcoding "task") feeds the very first
+  // storey's own first activity below, giving it a real predecessor instead
+  // of leaving it as the network's only unconstrained start (still fine
+  // for DCMA #1, but a named kickoff milestone reads far better on a real
+  // PM's schedule than an unlabeled implicit start). Substantial Completion
+  // (finish_milestone) is the same closeout every storey's own finishing
+  // work already converged on before this change — moved from a root-level
+  // task into this folder, not otherwise changed in what feeds it.
+  const milestonesWbsTempId = 'wbs-milestones'
+  const constructionStartTempId = 'act-construction-start'
+  const substantialCompletionTempId = 'act-substantial-completion'
+  // "Structure Complete — All Levels" (2026-07-17, per Maro — see
+  // FACADE_CATEGORIES' own header) — a third real milestone alongside
+  // Construction Start/Substantial Completion: every storey's own last
+  // Walls-category phase feeds it, and it in turn feeds every storey's own
+  // first facade-category phase, so no facade work anywhere can start until
+  // every level's walls are structurally complete. Declared here (added to
+  // `activities` further down, only if it ends up with at least one real
+  // predecessor AND successor — see the storeys.forEach loop) so its
+  // temp_id is in scope for that loop.
+  const structureCompleteTempId = 'act-structure-complete-all-levels'
+  activities.push({
+    temp_id: milestonesWbsTempId, task_name: 'Project Milestones', parent_temp_id: rootTempId,
+    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+  })
+  activities.push({
+    temp_id: constructionStartTempId, task_name: 'Construction Start', parent_temp_id: milestonesWbsTempId,
+    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'start_milestone', discipline: null,
+  })
+  activities.push({
+    temp_id: substantialCompletionTempId, task_name: 'Substantial Completion', parent_temp_id: milestonesWbsTempId,
+    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+  })
 
-  const resourceTempIdByKey = new Map<string, string>()
+  // No Resource/StagedAssignment rows generated here (2026-07-17 — see this
+  // function's own header) — resources and assignments always come back
+  // empty; only computeDurationHours below still reads rate.crewSize/
+  // productivityPerCrewDay off the same CategoryRate.
   const resources: StagedResource[] = []
-  const getOrCreateResource = (key: string, name: string, type: 'crew' | 'equipment', costPerDay: number): string => {
-    const existing = resourceTempIdByKey.get(key)
-    if (existing) return existing
-    const tempId = `res-${resources.length}`
-    resourceTempIdByKey.set(key, tempId)
-    resources.push({ temp_id: tempId, name, resource_type: type, unit: 'day', rate: costPerDay, max_hours_per_day: HOURS_PER_DAY })
-    return tempId
-  }
-
   const assignments: StagedAssignment[] = []
+
+  // Collected across every storey for the "Structure Complete — All Levels"
+  // gate below (2026-07-17, per Maro — see FACADE_CATEGORIES' own header).
+  const lastWallsTempIds: string[] = []
+  const firstFacadeTempIds: string[] = []
 
   storeys.forEach((storey, storeyIndex) => {
     const wbsTempId = `wbs-storey-${storeyIndex}`
-    activities.push({ temp_id: wbsTempId, task_name: storey.storeyName, parent_temp_id: rootTempId, duration_hours: 0, element_refs: [] })
+    activities.push({
+      temp_id: wbsTempId, task_name: storey.storeyName, parent_temp_id: rootTempId, duration_hours: 0,
+      element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+    })
 
-    const phaseTempIds: string[] = []
     let previousTempId: string | null = null
+    let firstTempId: string | null = null
+    let firstStructuralTempId: string | null = null
+    let lastStructuralTempId: string | null = null
+    let firstNonFacadeTempId: string | null = null
+    let lastNonFacadeTempId: string | null = null
+    let lastWallsTempId: string | null = null
+    let lastWallsCategoryIndex: number | null = null
+    let firstFacadeTempId: string | null = null
+    let firstFacadeCategoryIndex: number | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
       const phases = resolvePhases(category.name)
+      const isStructural = STRUCTURAL_CATEGORIES.has(category.name)
+      const isWalls = category.name === 'Walls'
+      const isFacade = FACADE_CATEGORIES.has(category.name)
       phases.forEach((phase, phaseIndex) => {
         const rate = rates[phaseRowId(category.name, phase.key)] ?? phase.rate
         const tempId = `act-${storeyIndex}-${categoryIndex}-${phaseIndex}`
@@ -576,35 +826,139 @@ export function buildStagedSchedule(
           // every intermediate step — avoids the same IFC elements being
           // linked to N separate activities for one physical installation.
           element_refs: phaseIndex === phases.length - 1 ? category.elementRefs : [],
+          category: category.name, phase_key: phase.key, quantity: category.quantity, activity_type: 'task',
+          discipline: disciplineFor(category.name, phase.key),
         })
-        phaseTempIds.push(tempId)
+        firstTempId ??= tempId
+        if (isStructural) {
+          firstStructuralTempId ??= tempId
+          lastStructuralTempId = tempId
+        }
+        if (!isFacade) {
+          firstNonFacadeTempId ??= tempId
+          lastNonFacadeTempId = tempId
+        }
+        if (isWalls) { lastWallsTempId = tempId; lastWallsCategoryIndex = categoryIndex }
+        if (isFacade && firstFacadeTempId === null) { firstFacadeTempId = tempId; firstFacadeCategoryIndex = categoryIndex }
         if (previousTempId) {
           relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
         }
         previousTempId = tempId
-
-        const rowId = phaseRowId(category.name, phase.key)
-        const crewTempId = getOrCreateResource(
-          `${rowId}::crew`, displayName(rate.crewName, category.name, phase.label), 'crew', rate.costPerCrewDay,
-        )
-        assignments.push({ activity_temp_id: tempId, resource_temp_id: crewTempId, utilisation_pct: 100 })
-        if (rate.equipmentName) {
-          const equipmentTempId = getOrCreateResource(
-            `${rowId}::equipment`, displayName(rate.equipmentName, category.name, phase.label), 'equipment', rate.equipmentCostPerDay ?? 0,
-          )
-          assignments.push({ activity_temp_id: tempId, resource_temp_id: equipmentTempId, utilisation_pct: 100 })
-        }
       })
     })
-    phaseTempIdsByStorey.push(phaseTempIds)
+    handoffByStorey.push({
+      firstStructuralTempId, lastStructuralTempId, firstNonFacadeTempId, lastNonFacadeTempId,
+      firstTempId, lastTempId: previousTempId,
+    })
+    // Skipped when this storey's own local category order runs Facade
+    // before Walls (2026-07-17 fix, per a real "circular dependency"
+    // rejection from schedule_bulk_generate.py) — this used to be reachable
+    // via the manual Collections path (groupFromCollections, removed
+    // 2026-07-19), where category order was whatever the user arranged,
+    // not CATEGORY_ORDER's guaranteed Walls-before-Facade sequence the
+    // automatic scan always produces; kept as a defensive safeguard since
+    // groupByStorey's own guaranteed ordering means this should no longer
+    // actually trigger. Contributing this storey to the global gate
+    // anyway would add BOTH
+    // "this storey's own Facade -> ... -> this storey's own Walls" (the
+    // local chain, in the order the categories actually appear) AND
+    // "Walls -> Structure Complete milestone -> Facade" (the global gate)
+    // — a genuine cycle back through the same two activities. Simplest safe
+    // fix: a storey only feeds the global gate when there's no such local
+    // contradiction to begin with; every other storey's edges are
+    // unaffected, so the global gate still holds everywhere it validly can.
+    const noLocalConflict = lastWallsCategoryIndex === null || firstFacadeCategoryIndex === null
+      || lastWallsCategoryIndex < firstFacadeCategoryIndex
+    if (lastWallsTempId && noLocalConflict) lastWallsTempIds.push(lastWallsTempId)
+    if (firstFacadeTempId && noLocalConflict) firstFacadeTempIds.push(firstFacadeTempId)
   })
 
-  for (let i = 0; i < phaseTempIdsByStorey.length - 1; i++) {
-    const thisStoreyIds = phaseTempIdsByStorey[i]
-    const fromLast = thisStoreyIds[thisStoreyIds.length - 1]
-    const toFirst = phaseTempIdsByStorey[i + 1][0]
-    if (fromLast && toFirst) {
-      relationships.push({ predecessor_temp_id: fromLast, successor_temp_id: toFirst, relationship_type: 'FS', lag_hours: 0 })
+  // Structural handoff, not "this storey's overall last phase" — see
+  // STRUCTURAL_CATEGORIES' own header. Falls back to the storey's own
+  // first/last NON-facade phase when it has no structural category at all
+  // (a pure-MEP or pure-finishes storey) — never falls all the way to
+  // firstTempId/lastTempId (2026-07-17 fix — see StoreyHandoff's own header
+  // on the real cycle a facade-only storey, "Block 43 - Parapet" in a real
+  // generated schedule, produced by letting its own Facade Ornamentation
+  // phase anchor the chain). A storey with truly nothing but facade
+  // categories has neither anchor (both null) — filtered out below entirely
+  // rather than linked with a null edge, so the chain connects straight
+  // from the storey before it to the storey after it, skipping over the
+  // facade-only one exactly as if it weren't part of the structural
+  // sequence at all (which, precisely because it's facade-only, it isn't —
+  // the "Structure Complete — All Levels" gate above is its real
+  // predecessor instead, and every storey's own lastTempId -> Substantial
+  // Completion loop below still gives it a successor, so it's never left
+  // dangling for DCMA #1/#2 either).
+  const handoffAnchors = handoffByStorey
+    .map(h => ({
+      firstId: h.firstStructuralTempId ?? h.firstNonFacadeTempId,
+      lastId: h.lastStructuralTempId ?? h.lastNonFacadeTempId,
+    }))
+    .filter((h): h is { firstId: string; lastId: string } => h.firstId !== null && h.lastId !== null)
+  for (let i = 0; i < handoffAnchors.length - 1; i++) {
+    relationships.push({
+      predecessor_temp_id: handoffAnchors[i].lastId, successor_temp_id: handoffAnchors[i + 1].firstId,
+      relationship_type: 'FS', lag_hours: 0,
+    })
+  }
+
+  // "Structure Complete — All Levels" (2026-07-17, per Maro: "dont touch
+  // facade until architecture walls for all levels are complete" — see
+  // FACADE_CATEGORIES' own header) — only added when there's genuinely
+  // something on both sides: a schedule with no Walls category anywhere, or
+  // no facade category anywhere, would otherwise get an orphan milestone
+  // with a missing predecessor or successor, exactly what DCMA #1/#2 flag.
+  // One central milestone rather than an edge per (walls storey, facade
+  // storey) pair — same O(n) vs O(n²) reasoning Construction Start/
+  // Substantial Completion already use, and CPM resolves "wait for
+  // whichever wall finishes last" automatically from the fan-in alone.
+  if (lastWallsTempIds.length > 0 && firstFacadeTempIds.length > 0) {
+    activities.push({
+      temp_id: structureCompleteTempId, task_name: 'Structure Complete — All Levels', parent_temp_id: milestonesWbsTempId,
+      duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+    })
+    for (const fromId of lastWallsTempIds) {
+      relationships.push({ predecessor_temp_id: fromId, successor_temp_id: structureCompleteTempId, relationship_type: 'FS', lag_hours: 0 })
+    }
+    for (const toId of firstFacadeTempIds) {
+      relationships.push({ predecessor_temp_id: structureCompleteTempId, successor_temp_id: toId, relationship_type: 'FS', lag_hours: 0 })
+    }
+  }
+
+  if (handoffByStorey.length > 0) {
+    // Construction Start kicks off the very first (structurally-anchored)
+    // storey's own first activity (2026-07-17) — the structural-handoff
+    // loop above only ever links storey-to-storey, so without this the
+    // first storey's own first activity would be the network's only
+    // implicit, unlabeled start (still DCMA #1-clean either way, but a real
+    // PM's schedule names its kickoff). Reads off handoffAnchors, not
+    // handoffByStorey[0] directly (2026-07-17 fix, same reasoning as the
+    // handoff chain above) — a facade-only storey has no real predecessor
+    // role to play; even as the very first storey, Construction Start
+    // driving straight into a facade activity would be a semantically odd
+    // kickoff, not a real methodology.
+    const firstOfSchedule = handoffAnchors[0]?.firstId
+    if (firstOfSchedule) {
+      relationships.push({ predecessor_temp_id: constructionStartTempId, successor_temp_id: firstOfSchedule, relationship_type: 'FS', lag_hours: 0 })
+    }
+
+    // Substantial Completion is every storey's own finishing work's real
+    // successor (2026-07-17) — the structural-handoff rewrite above only
+    // carries each storey's *structural* completion forward to the next
+    // storey; its envelope/finishes/furnishings branch (still chained to
+    // the end of its own storey, just no longer to the next storey at all)
+    // would otherwise dead-end with no successor at all on every storey but
+    // the last — realistic in isolation (a floor's finishes genuinely
+    // don't gate the floor above), but exactly what DCMA #2 (Missing
+    // Successors) flags: every activity but the true project end should
+    // feed *something*. Standard real-schedule practice already has an
+    // answer for this same shape — every trade's finish work across every
+    // floor converging on one Substantial Completion milestone — so that's
+    // what this is, not an artificial fix bolted on just to satisfy a metric.
+    for (const storey of handoffByStorey) {
+      const fromId = storey.lastTempId
+      if (fromId) relationships.push({ predecessor_temp_id: fromId, successor_temp_id: substantialCompletionTempId, relationship_type: 'FS', lag_hours: 0 })
     }
   }
 
@@ -613,7 +967,6 @@ export function buildStagedSchedule(
     summary: {
       storeyCount: storeys.length,
       activityCount: activities.length,
-      resourceCount: resources.length,
       relationshipCount: relationships.length,
       elementCount,
     },

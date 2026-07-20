@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
@@ -13,10 +14,12 @@ import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { UdfCell } from '@/modules/scheduling/UdfCell'
 import { UserDefinedFieldsWidget } from '@/modules/scheduling/UserDefinedFieldsWidget'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
+import { Boq } from './Boq'
 import { CostCommitments } from './CostCommitments'
+import { DEFAULT_COST_LINES } from './costGeneration'
 import { CostForm, toCostElementPayload, type CostFormValues } from './CostForm'
 import { downloadCostElementsCsv } from './exportCostElements'
-import { CostPrintView } from './CostPrintView'
+import { CostPrintView, type PrintColumn, type PrintRow } from './CostPrintView'
 import { CostRateLines } from './CostRateLines'
 import { CostSummaryPanel } from './CostSummaryPanel'
 import { CostVarianceThresholds } from './CostVarianceThresholds'
@@ -86,8 +89,83 @@ function varianceBand(el: CostElement, criteria: CostVarianceCriterion[]): CostV
   }) ?? null
 }
 
+// Deterministic, non-cryptographic 128-bit hash (cyrb128) formatted as a
+// valid UUID string (2026-07-18, per Maro: "allow me to insert comments per
+// line (parents included)") — Construction/Total/each discipline/each other
+// grouping's own summary row isn't a real CostElement, so there's no real
+// id to hang a UDF value off. UserDefinedFieldValue.record_id is a genuine
+// Postgres UUID column (not a free-text field), so a synthetic label like
+// "Construction" can't be stored there directly — this instead derives a
+// STABLE, always-the-same pseudo-id from the label text itself, reusing the
+// exact same UDF value system (and "Comments" column a user already
+// created) with zero backend changes. Collision risk is a non-issue here:
+// a project only ever has a handful of distinct group labels
+// (disciplines + Construction + Total + a few Status/Type values), nowhere
+// near the volume where a 128-bit hash's birthday-paradox risk matters.
+function cyrb128(str: string): [number, number, number, number] {
+  let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762
+  for (let i = 0; i < str.length; i++) {
+    const k = str.charCodeAt(i)
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067)
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233)
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213)
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179)
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067)
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233)
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213)
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179)
+  h1 ^= (h2 ^ h3 ^ h4); h2 ^= h1; h3 ^= h1; h4 ^= h1
+  return [h1 >>> 0, h2 >>> 0, h3 >>> 0, h4 >>> 0]
+}
+
+function pseudoRecordId(...parts: string[]): string {
+  const [a, b, c, d] = cyrb128(parts.join('::'))
+  const hex = (n: number) => n.toString(16).padStart(8, '0')
+  const ah = hex(a), bh = hex(b), ch = hex(c), dh = hex(d)
+  return `${ah}-${bh.slice(0, 4)}-4${bh.slice(4, 7)}-8${ch.slice(0, 3)}-${ch.slice(3, 8)}${dh.slice(0, 7)}`
+}
+
+// Column visibility (2026-07-18, per Maro: "give me column (activation/
+// deactivation)") — Checkbox/Description/Budget/Actions stay always-on
+// (structural, not really "data" columns); everything else here is
+// individually toggleable via the Columns picker, persisted per-browser
+// the same way column widths/visibility already work elsewhere in this app.
+const TOGGLEABLE_COLUMNS = [
+  { key: 'code', label: 'Code' },
+  { key: 'element_group', label: 'Group' },
+  { key: 'element_type', label: 'Type' },
+  { key: 'cost_owner', label: 'Owner' },
+  { key: 'status', label: 'Status' },
+  { key: 'variance_band', label: 'Variance Band' },
+  { key: 'forecast', label: 'Forecast' },
+  { key: 'actuals', label: 'Actuals' },
+  { key: 'variance', label: 'Variance' },
+  { key: 'pct_complete', label: '% Complete' },
+  { key: 'cpi', label: 'CPI' },
+] as const
+type CostColumnKey = (typeof TOGGLEABLE_COLUMNS)[number]['key']
+const COST_PLAN_COLUMNS_KEY = 'prosota_cost_plan_columns'
+
+function loadVisibleColumns(): Set<CostColumnKey> {
+  try {
+    const raw = localStorage.getItem(COST_PLAN_COLUMNS_KEY)
+    if (!raw) return new Set(TOGGLEABLE_COLUMNS.map(c => c.key))
+    const saved: string[] = JSON.parse(raw)
+    return new Set(TOGGLEABLE_COLUMNS.map(c => c.key).filter(k => saved.includes(k)))
+  } catch {
+    return new Set(TOGGLEABLE_COLUMNS.map(c => c.key))
+  }
+}
+
+const NON_DISCIPLINE_GROUPS = new Set(['On-Costs', 'Risk'])
+
 function uniqueGroups(elements: CostElement[]): string[] {
-  return [...new Set(elements.map(e => e.element_group).filter((v): v is string => !!v))].sort()
+  // 'BOQ' excluded (2026-07-18) — the dedicated Bill of Quantities element
+  // never shows in Cost Plan at all (see visibleElements' own filter), so
+  // offering it as a filterable group here would just filter down to
+  // nothing every time.
+  return [...new Set(elements.map(e => e.element_group).filter((v): v is string => !!v && v !== 'BOQ'))].sort()
 }
 
 export function CostPlan() {
@@ -118,8 +196,35 @@ export function CostPlan() {
     definitions: udfDefinitions, loading: udfDefinitionsLoading,
     create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
   } = useUserDefinedFieldDefinitions(selectedProject?.id, 'cost_element')
-  const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(udfDefinitions, elements.map(e => e.id))
+  // Pseudo-ids for Construction/Total/each discipline's own summary row
+  // (2026-07-18, per Maro: "allow me to insert comments per line (parents
+  // included)") — see pseudoRecordId's own header. Derived from `elements`
+  // directly (not visibleElements/constructionView, to avoid a dependency
+  // ordering issue — this only needs the set of discipline names that
+  // exist at all, unaffected by the current search/filter).
+  const summaryRecordIds = useMemo(() => {
+    const disciplines = new Set<string>()
+    for (const el of elements) {
+      if (el.element_group && !NON_DISCIPLINE_GROUPS.has(el.element_group) && el.element_group !== 'BOQ') {
+        disciplines.add(el.element_group)
+      }
+    }
+    return ['Construction', 'Total', ...disciplines].map(label => pseudoRecordId(label))
+  }, [elements])
+  const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(
+    udfDefinitions, [...elements.map(e => e.id), ...summaryRecordIds],
+  )
   const [udfWidgetOpen, setUdfWidgetOpen] = useState(false)
+  const [visibleColumns, setVisibleColumns] = useState<Set<CostColumnKey>>(loadVisibleColumns)
+  const [columnsPickerOpen, setColumnsPickerOpen] = useState(false)
+  const toggleColumn = (key: CostColumnKey) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      localStorage.setItem(COST_PLAN_COLUMNS_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
 
   // Search / Filters / Group — client-side, matching the Risk/ICD toolbar pattern.
   const [searchQuery, setSearchQuery] = useState('')
@@ -127,7 +232,23 @@ export function CostPlan() {
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set())
   const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set())
   const [filterGroup, setFilterGroup] = useState('')
-  const [groupBy, setGroupBy] = useState<GroupByField>('none')
+  // Defaults to grouped-by-discipline (2026-07-18, per Maro: "the resource
+  // loaded task level cost items are too detailed. I want it by discipline
+  // so less items on the cost plan... i want disciplines" — not a
+  // togglable collapse, just disciplines as the row, full stop).
+  // cost_sync.py sets a schedule-sourced element's own element_group to its
+  // activity's Discipline UDF value, so grouping by 'element_group' already
+  // means "by discipline" for anything IFC-generated, with zero new
+  // grouping logic needed here. Every group always renders as one
+  // aggregated summary row (see the table body below) — task-level detail
+  // lives in the BOQ tab instead, not here.
+  const [groupBy, setGroupBy] = useState<GroupByField>('element_group')
+  const [generatingCostPlan, setGeneratingCostPlan] = useState(false)
+  const [generateMessage, setGenerateMessage] = useState<string | null>(null)
+  // Cost Plan / BOQ tabs (2026-07-18, per Maro: "I want a boq form in the
+  // cost section BOQ TAB") — a top-level switch, same shape as Scheduling's
+  // own Activities/Resources tabs.
+  const [costTab, setCostTab] = useState<'plan' | 'boq'>('plan')
 
   // Print / Preview
   const [selectedForPrint, setSelectedForPrint] = useState<Set<string>>(new Set())
@@ -201,6 +322,11 @@ export function CostPlan() {
   const visibleElements = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     return elements.filter(el => {
+      // BOQ lives entirely in its own tab (2026-07-18, per Maro: "BOQ should
+      // not be included") — the dedicated "Bill of Quantities" CostElement
+      // (Boq.tsx's own BOQ_GROUP) never shows up in Cost Plan at all, not
+      // even as an ungrouped/other line.
+      if (el.element_group === 'BOQ') return false
       if (q) {
         const haystack = [el.description, el.code, el.cost_owner, el.element_group].filter(Boolean).join(' ').toLowerCase()
         if (!haystack.includes(q)) return false
@@ -224,6 +350,110 @@ export function CostPlan() {
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
   }, [visibleElements, groupBy, resourceAssignments])
+
+  // One aggregated row per group for the rolled-up view (2026-07-18) — sums
+  // budget/forecast/actuals/comparison the same way each individual row
+  // already resolves them (computed_* for a percentage element, the stored
+  // field for a fixed one — renderRow's own isPct logic, mirrored here).
+  const groupTotals = (groupElements: CostElement[]) => {
+    let budget = 0, forecast = 0, actuals = 0, comparisonCost = 0, hasComparison = false
+    for (const el of groupElements) {
+      const isPct = el.element_type === 'percentage'
+      budget += Number((isPct ? el.computed_budget : el.budget) ?? 0)
+      forecast += Number((isPct ? el.computed_forecast : el.forecast) ?? 0)
+      actuals += Number((isPct ? el.computed_actuals : el.actuals) ?? 0)
+      if (el.comparison_cost !== null) { comparisonCost += Number(el.comparison_cost); hasComparison = true }
+    }
+    return { budget, forecast, actuals, comparisonCost: hasComparison ? comparisonCost : null }
+  }
+
+  // "Construction is the parent of those disciplines, then the discipline
+  // and per discipline you can drill down if needed... [Prelims/Design
+  // Fees/Overhead/Inflation/Contingency] should be same level as the
+  // construction" (2026-07-18) — a real QS cost-plan shape: Construction (a
+  // synthetic parent, not a real CostElement — just every schedule-sourced
+  // element rolled up by its own discipline) as one section with its own
+  // subtotal, then Prelims/Design Fees/Overhead/Inflation/Contingency each
+  // as their own top-level line alongside it, not nested under it. Only
+  // meaningful when grouped by discipline (groupBy === 'element_group',
+  // the default) — other groupings (Status/Type/Resource) still use the
+  // plain flat `groups` list below.
+  const constructionView = useMemo(() => {
+    const disciplineMap = new Map<string, CostElement[]>()
+    const topLevel: CostElement[] = []
+    for (const el of visibleElements) {
+      if (el.element_group && !NON_DISCIPLINE_GROUPS.has(el.element_group)) {
+        disciplineMap.set(el.element_group, [...(disciplineMap.get(el.element_group) ?? []), el])
+      } else {
+        topLevel.push(el)
+      }
+    }
+    const disciplines = [...disciplineMap.entries()].sort(([a], [b]) => a.localeCompare(b))
+    return { disciplines, topLevel }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleElements])
+
+  // "Allow me to collapse the construction" (2026-07-18) — hides every
+  // discipline row underneath Construction's own subtotal, independent of
+  // each discipline's own expand/collapse state (expandedDisciplines is
+  // untouched either way, so re-expanding Construction restores whichever
+  // disciplines were drilled into before).
+  const [constructionCollapsed, setConstructionCollapsed] = useState(false)
+  const [expandedDisciplines, setExpandedDisciplines] = useState<Set<string>>(new Set())
+  const toggleDiscipline = (discipline: string) => {
+    setExpandedDisciplines(prev => {
+      const next = new Set(prev)
+      if (next.has(discipline)) next.delete(discipline); else next.add(discipline)
+      return next
+    })
+  }
+
+  // Shared aggregated-row renderer — Construction's own subtotal, each
+  // discipline under it, the grand Total, and (for every other grouping
+  // choice) a plain group header all share the identical column layout, so
+  // this is the one place that shape is defined.
+  const renderSummaryRow = (
+    label: string,
+    totals: ReturnType<typeof groupTotals>,
+    opts: { bold?: boolean; indent?: boolean; count?: number; expanded?: boolean; onClick?: () => void; className?: string } = {},
+  ) => {
+    // onClick lives on the arrow/label cells specifically, not the whole
+    // <tr> (2026-07-18) — Comments (UDF) needs its own double-click-to-edit
+    // on this same row, and a row-wide onClick would otherwise also fire
+    // (and toggle expand/collapse) on every click inside that cell too.
+    const summaryRecordId = pseudoRecordId(label)
+    const boldCls = opts.bold ? 'font-bold' : ''
+    return (
+      <tr key={label || 'all'} className={opts.className}>
+        <td className="px-3 py-2.5"></td>
+        <td className="px-2 py-2.5 text-gray-400 text-xs cursor-pointer" onClick={opts.onClick}>
+          {opts.onClick ? (opts.expanded ? '▾' : '▸') : ''}
+        </td>
+        {visibleColumns.has('code') && <td className="px-4 py-2.5"></td>}
+        <td
+          className={`px-4 py-2.5 ${opts.bold ? 'font-bold' : 'font-medium'} text-gray-900 ${opts.indent ? 'pl-8' : ''} ${opts.onClick ? 'cursor-pointer' : ''}`}
+          onClick={opts.onClick}
+        >
+          {label}{opts.count !== undefined && <span className="font-normal text-gray-400 text-xs"> ({opts.count})</span>}
+        </td>
+        {visibleColumns.has('element_group') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('element_type') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('status') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('variance_band') && <td className="px-4 py-2.5"></td>}
+        <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.budget.toString())}</td>
+        {visibleColumns.has('forecast') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.forecast.toString())}</td>}
+        {visibleColumns.has('actuals') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.actuals.toString())}</td>}
+        {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
+        {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('cpi') && <td className="px-4 py-2.5"></td>}
+        {udfDefinitions.map(d => (
+          <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, summaryRecordId)} onSave={payload => setUdfValue(d.id, summaryRecordId, payload)} />
+        ))}
+        <td className="px-4 py-2.5"></td>
+      </tr>
+    )
+  }
 
   // Rate Card child-activity rollup (2026-07-10, per Maro: "resource
   // description should be indentable per line... so I can collapse or expand
@@ -288,6 +518,31 @@ export function CostPlan() {
     await refreshElements()
   }
 
+  // "Generate Cost Plan" (2026-07-18) — see costGeneration.ts's own header.
+  // Resource-loaded fixed elements already exist (cost_sync.py, live) by the
+  // time this runs; this only adds the standard on-cost percentage lines,
+  // deduped by description so re-running after the schedule changes doesn't
+  // spawn duplicates.
+  const handleGenerateCostPlan = async () => {
+    if (!period) return
+    setGeneratingCostPlan(true)
+    setGenerateMessage(null)
+    try {
+      const { data } = await api.post('/api/v1/cost-bulk-generate/', {
+        project_id: selectedProject.id, period_id: period.id, elements: DEFAULT_COST_LINES,
+      })
+      await refreshElements()
+      const reused = DEFAULT_COST_LINES.length - data.element_count
+      setGenerateMessage(`Cost plan updated — ${data.element_count} new line(s)${reused > 0 ? `, ${reused} already existed` : ''}.`)
+    } catch (err) {
+      setGenerateMessage(axios.isAxiosError(err)
+        ? `Failed to generate cost plan (${err.response?.data?.detail ?? err.message})`
+        : 'Failed to generate cost plan')
+    } finally {
+      setGeneratingCostPlan(false)
+    }
+  }
+
   const handlePrintList = () => {
     setPrintMode('list')
     setPrintTrigger(t => t + 1)
@@ -298,6 +553,12 @@ export function CostPlan() {
     setPrintMode('detail')
     setPrintTrigger(t => t + 1)
   }
+
+  // checkbox + arrow + description + budget + actions are always on; the
+  // rest depends on visibleColumns (2026-07-18) — colSpan for the expanded-
+  // detail and empty-state rows has to track this or the table's borders
+  // stop lining up whenever a column's hidden.
+  const totalColumnCount = 5 + visibleColumns.size + udfDefinitions.length
 
   const candidatesFor = (el: CostElement): LinkCandidate[] => [
     ...elements.filter(e => e.id !== el.id).map(e => ({ id: e.id, type: 'cost_element' as const, label: `${e.code}: ${e.description}` })),
@@ -319,7 +580,8 @@ export function CostPlan() {
               onChange={() => toggleInSet(selectedForPrint, setSelectedForPrint, el.id)}
             />
           </td>
-          <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{el.code}</td>
+          <td className="px-2 py-2.5"></td>
+          {visibleColumns.has('code') && <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{el.code}</td>}
           <td className="px-4 py-2.5">
             <button
               onClick={() => setExpandedId(expandedId === el.id ? null : el.id)}
@@ -328,35 +590,41 @@ export function CostPlan() {
               {el.description}
             </button>
           </td>
-          <td className="px-4 py-2.5 text-gray-600">{el.element_group ?? '—'}</td>
-          <td className="px-4 py-2.5">
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPct ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
-              {isPct ? `${el.rate ? Math.round(Number(el.rate) * 100) : 0}%` : 'fixed'}
-            </span>
-          </td>
-          <td className="px-4 py-2.5 text-gray-600">{el.cost_owner ?? '—'}</td>
-          <td className="px-4 py-2.5 text-gray-600">{el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'}</td>
-          <td className="px-4 py-2.5">
-            {(() => {
-              const band = varianceBand(el, criteria)
-              return band ? (
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${VARIANCE_BAND_STYLES[band.label] ?? 'bg-gray-100 text-gray-600'}`}>
-                  {band.label}
-                </span>
-              ) : <span className="text-gray-400">—</span>
-            })()}
-          </td>
+          {visibleColumns.has('element_group') && <td className="px-4 py-2.5 text-gray-600">{el.element_group ?? '—'}</td>}
+          {visibleColumns.has('element_type') && (
+            <td className="px-4 py-2.5">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPct ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
+                {isPct ? `${el.rate ? Math.round(Number(el.rate) * 100) : 0}%` : 'fixed'}
+              </span>
+            </td>
+          )}
+          {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5 text-gray-600">{el.cost_owner ?? '—'}</td>}
+          {visibleColumns.has('status') && <td className="px-4 py-2.5 text-gray-600">{el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'}</td>}
+          {visibleColumns.has('variance_band') && (
+            <td className="px-4 py-2.5">
+              {(() => {
+                const band = varianceBand(el, criteria)
+                return band ? (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${VARIANCE_BAND_STYLES[band.label] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {band.label}
+                  </span>
+                ) : <span className="text-gray-400">—</span>
+              })()}
+            </td>
+          )}
           <td className="px-4 py-2.5 text-gray-600">{formatCurrency(budget)}</td>
-          <td className="px-4 py-2.5 text-gray-600">{formatCurrency(forecast)}</td>
-          <td className="px-4 py-2.5 text-gray-600">{formatCurrency(actuals)}</td>
-          <td className="px-4 py-2.5 text-gray-600" title="Forecast vs Budget">
-            {(() => {
-              const fv = elementForecastVariance(el)
-              return fv === null ? '—' : formatCurrency(fv.amount.toString())
-            })()}
-          </td>
-          <td className="px-4 py-2.5 text-gray-600">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>
-          <td className="px-4 py-2.5 text-gray-600">{formatRatio(el.cpi)}</td>
+          {visibleColumns.has('forecast') && <td className="px-4 py-2.5 text-gray-600">{formatCurrency(forecast)}</td>}
+          {visibleColumns.has('actuals') && <td className="px-4 py-2.5 text-gray-600">{formatCurrency(actuals)}</td>}
+          {visibleColumns.has('variance') && (
+            <td className="px-4 py-2.5 text-gray-600" title="Forecast vs Budget">
+              {(() => {
+                const fv = elementForecastVariance(el)
+                return fv === null ? '—' : formatCurrency(fv.amount.toString())
+              })()}
+            </td>
+          )}
+          {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5 text-gray-600">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>}
+          {visibleColumns.has('cpi') && <td className="px-4 py-2.5 text-gray-600">{formatRatio(el.cpi)}</td>}
           {udfDefinitions.map(d => (
             <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, el.id)} onSave={payload => setUdfValue(d.id, el.id, payload)} />
           ))}
@@ -371,7 +639,7 @@ export function CostPlan() {
         </tr>
         {expandedId === el.id && (
           <tr>
-            <td colSpan={15 + udfDefinitions.length} className="p-0">
+            <td colSpan={totalColumnCount} className="p-0">
               {el.last_reviewed_date && (
                 <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex gap-6 flex-wrap text-xs text-gray-500">
                   <span>Last reviewed: <span className="text-gray-700">{el.last_reviewed_date}</span></span>
@@ -399,6 +667,18 @@ export function CostPlan() {
                     {el.cost_per_m2 && (
                       <div><div className="text-gray-500">£/m²</div><div className="font-semibold text-gray-800">{formatCurrency(el.cost_per_m2)}</div></div>
                     )}
+                  </div>
+                </div>
+              )}
+              {el.comparison_cost !== null && (
+                <div className="px-4 py-3 bg-amber-50 border-t border-amber-100">
+                  <div className="text-xs font-semibold text-amber-700 mb-2" title="An independent benchmark figure — another project's equivalent line, a tender return, or a prior cost plan revision. Not the same as Forecast/EAC.">
+                    Comparison
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div><div className="text-gray-500">Comparison Cost</div><div className="font-semibold text-gray-800">{formatCurrency(el.comparison_cost)}</div></div>
+                    <div><div className="text-gray-500">Budget</div><div className="font-semibold text-gray-800">{formatCurrency(el.element_type === 'percentage' ? el.computed_budget : el.budget)}</div></div>
+                    <div title="Budget minus Comparison Cost"><div className="text-gray-500">Variance</div><div className="font-semibold text-gray-800">{formatCurrency(el.comparison_variance)}</div></div>
                   </div>
                 </div>
               )}
@@ -440,6 +720,146 @@ export function CostPlan() {
     return <div className="p-8 text-sm text-gray-400">Loading cost plan…</div>
   }
 
+  const costTabSwitcher = (
+    <div className="flex items-center gap-1 mb-4 border-b border-gray-200">
+      <button
+        onClick={() => setCostTab('plan')}
+        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'plan' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+      >Cost Plan</button>
+      <button
+        onClick={() => setCostTab('boq')}
+        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'boq' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+      >BOQ</button>
+    </div>
+  )
+
+  if (costTab === 'boq') {
+    return (
+      <div className="p-8 no-print">
+        <div className="flex items-center justify-between mb-1">
+          <h1 className="text-2xl font-bold text-gray-900">Bill of Quantities</h1>
+          {period && (
+            <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">
+              {period.period_label} · {period.freeze_status}
+            </span>
+          )}
+        </div>
+        <p className="text-gray-500 text-sm mb-4">
+          Measured-works breakdown for {selectedProject.name} — quantity and rate derived from the committed schedule's own duration and resourced cost.
+        </p>
+        {costTabSwitcher}
+        {period && <Boq projectId={selectedProject.id} periodId={period.id} projectName={selectedProject.name} />}
+      </div>
+    )
+  }
+
+  // "Fix up the print version, to print what's shown in the cost plan
+  // (exact fields activated/grouping/collapsible etc)" (2026-07-18) — built
+  // from the exact same state driving the on-screen table (constructionView/
+  // groups, constructionCollapsed/expandedDisciplines, visibleColumns), so
+  // printing can never quietly drift from what's actually shown. Every
+  // UDF (Comments included) rides along as its own column too, same as
+  // on-screen.
+  const formatUdfDisplay = (
+    definition: (typeof udfDefinitions)[number],
+    value: ReturnType<typeof getUdfValue>,
+  ): string => {
+    if (!value) return '—'
+    if (definition.data_type === 'indicator') return value.value_indicator ?? '—'
+    if (definition.data_type === 'start_date' || definition.data_type === 'finish_date') {
+      return value.value_date ? new Date(value.value_date).toLocaleDateString() : '—'
+    }
+    if (definition.data_type === 'cost') return value.value_number ? `£${Number(value.value_number).toLocaleString()}` : '—'
+    if (definition.data_type === 'number' || definition.data_type === 'integer') return value.value_number?.toString() ?? '—'
+    return value.value_text || '—'
+  }
+
+  const printColumns: PrintColumn[] = [
+    ...TOGGLEABLE_COLUMNS.filter(c => visibleColumns.has(c.key)).map(c => ({ key: c.key, label: c.label })),
+    ...udfDefinitions.map(d => ({ key: `udf:${d.id}`, label: `${d.name} (UDF)` })),
+  ]
+
+  const elementCell = (el: CostElement, columnKey: string): string => {
+    const isPct = el.element_type === 'percentage'
+    if (columnKey.startsWith('udf:')) {
+      const definition = udfDefinitions.find(d => d.id === columnKey.slice(4))
+      return definition ? formatUdfDisplay(definition, getUdfValue(definition.id, el.id)) : '—'
+    }
+    switch (columnKey) {
+      case 'code': return el.code
+      case 'element_group': return el.element_group ?? '—'
+      case 'element_type': return isPct ? `${el.rate ? Math.round(Number(el.rate) * 100) : 0}%` : 'fixed'
+      case 'cost_owner': return el.cost_owner ?? '—'
+      case 'status': return el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'
+      case 'variance_band': return varianceBand(el, criteria)?.label ?? '—'
+      case 'forecast': return formatCurrency(isPct ? el.computed_forecast : el.forecast)
+      case 'actuals': return formatCurrency(isPct ? el.computed_actuals : el.actuals)
+      case 'variance': {
+        const fv = elementForecastVariance(el)
+        return fv === null ? '—' : formatCurrency(fv.amount.toString())
+      }
+      case 'pct_complete': return el.pct_complete !== null ? `${el.pct_complete}%` : '—'
+      case 'cpi': return formatRatio(el.cpi)
+      default: return '—'
+    }
+  }
+
+  const summaryCell = (totals: ReturnType<typeof groupTotals>, label: string, columnKey: string): string => {
+    if (columnKey.startsWith('udf:')) {
+      const definition = udfDefinitions.find(d => d.id === columnKey.slice(4))
+      return definition ? formatUdfDisplay(definition, getUdfValue(definition.id, pseudoRecordId(label))) : '—'
+    }
+    switch (columnKey) {
+      case 'forecast': return formatCurrency(totals.forecast.toString())
+      case 'actuals': return formatCurrency(totals.actuals.toString())
+      case 'variance': return formatCurrency((totals.forecast - totals.budget).toString())
+      default: return '—'
+    }
+  }
+
+  const elementPrintRow = (el: CostElement): PrintRow => ({
+    key: el.id,
+    label: el.description,
+    budget: formatCurrency(el.element_type === 'percentage' ? el.computed_budget : el.budget),
+    cells: Object.fromEntries(printColumns.map(c => [c.key, elementCell(el, c.key)])),
+  })
+
+  const summaryPrintRow = (
+    label: string, totals: ReturnType<typeof groupTotals>, opts: { count?: number; indent?: boolean; bold?: boolean } = {},
+  ): PrintRow => ({
+    key: `summary:${label}`,
+    label, count: opts.count, indent: opts.indent, bold: opts.bold,
+    budget: formatCurrency(totals.budget.toString()),
+    cells: Object.fromEntries(printColumns.map(c => [c.key, summaryCell(totals, label, c.key)])),
+  })
+
+  const printRows: PrintRow[] = groupBy === 'element_group'
+    ? [
+        ...(constructionView.disciplines.length > 0
+          ? [summaryPrintRow('Construction', groupTotals(constructionView.disciplines.flatMap(([, els]) => els)), { bold: true })]
+          : []),
+        ...(constructionCollapsed ? [] : constructionView.disciplines.flatMap(([discipline, els]) => [
+          summaryPrintRow(discipline, groupTotals(els), { count: els.length, indent: true }),
+          ...(expandedDisciplines.has(discipline) ? els.map(elementPrintRow) : []),
+        ])),
+        ...constructionView.topLevel.map(elementPrintRow),
+        ...(constructionView.disciplines.length > 0 || constructionView.topLevel.length > 0
+          ? [summaryPrintRow(
+              'Total',
+              groupTotals([...constructionView.disciplines.flatMap(([, els]) => els), ...constructionView.topLevel]),
+              { bold: true },
+            )]
+          : []),
+      ]
+    : groupBy === 'none'
+      ? visibleElements.map(elementPrintRow)
+      : groups.flatMap(([groupKey, groupElements]) => [
+          summaryPrintRow(groupKey, groupTotals(groupElements), { count: groupElements.length }),
+          ...(expandedDisciplines.has(groupKey) ? groupElements.map(elementPrintRow) : []),
+        ])
+
+  const printElementCount = printRows.filter(r => !r.key.startsWith('summary:')).length
+
   return (
     <>
     <div className="p-8 no-print">
@@ -454,6 +874,7 @@ export function CostPlan() {
       <p className="text-gray-500 text-sm mb-6">
         Cost elements for {selectedProject.name}. Percentage elements (Prelims, Contingency, etc.) compute automatically from the fixed subtotal.
       </p>
+      {costTabSwitcher}
 
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
@@ -472,12 +893,23 @@ export function CostPlan() {
       )}
 
       {!formOpen && !editingElement && (
-        <button
-          onClick={() => setFormOpen(true)}
-          className="mb-4 text-sm text-blue-600 hover:text-blue-700 font-medium"
-        >
-          + New cost element
-        </button>
+        <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setFormOpen(true)}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            + New cost element
+          </button>
+          <button
+            onClick={handleGenerateCostPlan}
+            disabled={generatingCostPlan}
+            title="Adds the standard Prelims/Design Fees/Overhead/Inflation on-cost lines — resource-loaded costs already flow in automatically as resources get assigned in Scheduling"
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {generatingCostPlan ? 'Generating…' : 'Generate Cost Plan'}
+          </button>
+          {generateMessage && <span className="text-xs text-gray-500">{generateMessage}</span>}
+        </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -499,6 +931,26 @@ export function CostPlan() {
         >
           ⚙ Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
         </button>
+        <div className="relative">
+          <button
+            onClick={() => setColumnsPickerOpen(prev => !prev)}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+              columnsPickerOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            ☰ Columns
+          </button>
+          {columnsPickerOpen && (
+            <div className="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg p-2 z-30 text-xs w-48 space-y-1">
+              {TOGGLEABLE_COLUMNS.map(c => (
+                <label key={c.key} className="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                  <input type="checkbox" checked={visibleColumns.has(c.key)} onChange={() => toggleColumn(c.key)} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
         <select
           value={groupBy}
           onChange={e => setGroupBy(e.target.value as GroupByField)}
@@ -637,19 +1089,20 @@ export function CostPlan() {
                     title="Select all (for print)"
                   />
                 </th>
-                <th className="px-4 py-2.5">Code</th>
+                <th className="px-2 py-2.5 w-6"></th>
+                {visibleColumns.has('code') && <th className="px-4 py-2.5">Code</th>}
                 <th className="px-4 py-2.5">Description</th>
-                <th className="px-4 py-2.5">Group</th>
-                <th className="px-4 py-2.5">Type</th>
-                <th className="px-4 py-2.5">Owner</th>
-                <th className="px-4 py-2.5">Status</th>
-                <th className="px-4 py-2.5">Variance Band</th>
+                {visibleColumns.has('element_group') && <th className="px-4 py-2.5">Group</th>}
+                {visibleColumns.has('element_type') && <th className="px-4 py-2.5">Type</th>}
+                {visibleColumns.has('cost_owner') && <th className="px-4 py-2.5">Owner</th>}
+                {visibleColumns.has('status') && <th className="px-4 py-2.5">Status</th>}
+                {visibleColumns.has('variance_band') && <th className="px-4 py-2.5">Variance Band</th>}
                 <th className="px-4 py-2.5">Budget</th>
-                <th className="px-4 py-2.5">Forecast</th>
-                <th className="px-4 py-2.5">Actuals</th>
-                <th className="px-4 py-2.5" title="Forecast vs Budget">Variance</th>
-                <th className="px-4 py-2.5">% Complete</th>
-                <th className="px-4 py-2.5">CPI</th>
+                {visibleColumns.has('forecast') && <th className="px-4 py-2.5">Forecast</th>}
+                {visibleColumns.has('actuals') && <th className="px-4 py-2.5">Actuals</th>}
+                {visibleColumns.has('variance') && <th className="px-4 py-2.5" title="Forecast vs Budget">Variance</th>}
+                {visibleColumns.has('pct_complete') && <th className="px-4 py-2.5">% Complete</th>}
+                {visibleColumns.has('cpi') && <th className="px-4 py-2.5">CPI</th>}
                 {udfDefinitions.map(d => (
                   <th key={d.id} className="px-4 py-2.5" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
                 ))}
@@ -657,22 +1110,54 @@ export function CostPlan() {
               </tr>
             </thead>
             <tbody>
-              {groups.map(([groupKey, groupElements]) => (
-                <Fragment key={groupKey || 'all'}>
-                  {groupBy !== 'none' && (
-                    <tr>
-                      <td colSpan={15 + udfDefinitions.length} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        {groupKey} <span className="font-normal normal-case text-gray-400">({groupElements.length})</span>
-                      </td>
-                    </tr>
+              {groupBy === 'element_group' ? (
+                <>
+                  {constructionView.disciplines.length > 0 && renderSummaryRow(
+                    'Construction', groupTotals(constructionView.disciplines.flatMap(([, els]) => els)),
+                    {
+                      bold: true, expanded: !constructionCollapsed, onClick: () => setConstructionCollapsed(c => !c),
+                      className: 'bg-gray-100 border-b border-gray-200',
+                    },
                   )}
-                  {groupElements.map(renderRow)}
-                </Fragment>
-              ))}
+                  {!constructionCollapsed && constructionView.disciplines.map(([discipline, els]) => {
+                    const expanded = expandedDisciplines.has(discipline)
+                    return (
+                      <Fragment key={discipline}>
+                        {renderSummaryRow(discipline, groupTotals(els), {
+                          count: els.length, indent: true, expanded,
+                          onClick: () => toggleDiscipline(discipline),
+                          className: 'border-b border-gray-100 hover:bg-gray-50 cursor-pointer',
+                        })}
+                        {expanded && els.map(renderRow)}
+                      </Fragment>
+                    )
+                  })}
+                  {constructionView.topLevel.map(renderRow)}
+                  {(constructionView.disciplines.length > 0 || constructionView.topLevel.length > 0) && renderSummaryRow(
+                    'Total',
+                    groupTotals([...constructionView.disciplines.flatMap(([, els]) => els), ...constructionView.topLevel]),
+                    { bold: true, className: 'bg-gray-50 border-t-2 border-gray-300' },
+                  )}
+                </>
+              ) : (
+                groups.map(([groupKey, groupElements]) => {
+                  if (groupBy === 'none') return groupElements.map(renderRow)
+                  const expanded = expandedDisciplines.has(groupKey)
+                  return (
+                    <Fragment key={groupKey || 'all'}>
+                      {renderSummaryRow(groupKey, groupTotals(groupElements), {
+                        count: groupElements.length, expanded, onClick: () => toggleDiscipline(groupKey),
+                        className: 'border-b border-gray-100 hover:bg-gray-50 cursor-pointer',
+                      })}
+                      {expanded && groupElements.map(renderRow)}
+                    </Fragment>
+                  )
+                })
+              )}
 
               {visibleElements.length === 0 && (
                 <tr>
-                  <td colSpan={15 + udfDefinitions.length} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td colSpan={totalColumnCount} className="px-4 py-10 text-center text-gray-400 text-sm">
                     {elements.length === 0 ? 'No cost elements yet for this period. Add the first one above.' : 'No cost elements match your search/filters.'}
                   </td>
                 </tr>
@@ -690,6 +1175,9 @@ export function CostPlan() {
     </div>
     <CostPrintView
       mode={printMode}
+      printRows={printMode === 'list' ? printRows : undefined}
+      printColumns={printMode === 'list' ? printColumns : undefined}
+      printElementCount={printMode === 'list' ? printElementCount : undefined}
       elements={printMode === 'list' ? visibleElements : elements.filter(e => selectedForPrint.has(e.id))}
       projectName={selectedProject.name}
       letterhead={letterhead}

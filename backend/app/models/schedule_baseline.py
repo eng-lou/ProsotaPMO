@@ -49,6 +49,14 @@ class ScheduleBaseline(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Optional — links this baseline into a shared BaselineSet alongside a
+    # Risk/Cost/ICD baseline captured at the same moment (2026-07-20, per
+    # Maro — Controls Dashboard Phase 1b, see app/models/baseline_set.py).
+    # Purely additive: is_active/assign/promote-to-variant below are all
+    # completely untouched by this column's existence.
+    baseline_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL")
+    )
 
 
 class ScheduleBaselineActivity(Base):

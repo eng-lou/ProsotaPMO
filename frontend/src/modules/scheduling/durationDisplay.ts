@@ -1,13 +1,33 @@
 import type { Activity, Calendar } from './types'
 
+// A precomputed calendars lookup (2026-07-17, per a real perf audit) —
+// resolveHoursPerDay used to take the raw Calendar[] and do a linear
+// `.find()` over it on every single call; called 3x per activity row for
+// Total/Free/Sub Float across a whole scheduling grid, that's O(activities x
+// calendars) redone from scratch on every render for no reason (calendars
+// themselves rarely change). Callers build this once via buildCalendarLookup
+// wherever `calendars` is already in scope (typically a useMemo keyed on
+// `[calendars]`) and pass the lookup through instead of the raw array.
+export interface CalendarLookup {
+  byId: Map<string, Calendar>
+  projectDefault: Calendar | undefined
+}
+
+export function buildCalendarLookup(calendars: Calendar[]): CalendarLookup {
+  return {
+    byId: new Map(calendars.map(c => [c.id, c])),
+    projectDefault: calendars.find(c => c.is_project_default),
+  }
+}
+
 // duration_hours is still the wire field the backend's hour-precision CPM engine
 // (Phase 10) actually stores and computes with — this just lets the UI collect
 // duration the way planners normally think about it (days), converting through
 // whichever calendar governs the activity. Never sent to the backend as "days".
-export function resolveHoursPerDay(activity: Pick<Activity, 'calendar_id'>, calendars: Calendar[]): number {
+export function resolveHoursPerDay(activity: Pick<Activity, 'calendar_id'>, calendarLookup: CalendarLookup): number {
   const calendar = activity.calendar_id
-    ? calendars.find(c => c.id === activity.calendar_id)
-    : calendars.find(c => c.is_project_default)
+    ? calendarLookup.byId.get(activity.calendar_id)
+    : calendarLookup.projectDefault
   const hoursPerDay = calendar ? Number(calendar.hours_per_day) : NaN
   return Number.isFinite(hoursPerDay) && hoursPerDay > 0 ? hoursPerDay : 8
 }
@@ -19,9 +39,9 @@ export function resolveHoursPerDay(activity: Pick<Activity, 'calendar_id'>, cale
 // to a whole number, no decimals — showing "1.33d" of float never actually
 // meant anything to read (2026-07-06, per Maro, same call already made for
 // Duration on 2026-07-05).
-export function formatFloatDays(hours: number | string | null, activity: Pick<Activity, 'calendar_id'>, calendars: Calendar[]): string {
+export function formatFloatDays(hours: number | string | null, activity: Pick<Activity, 'calendar_id'>, calendarLookup: CalendarLookup): string {
   if (hours === null) return '—'
   const n = Number(hours)
   if (Number.isNaN(n)) return '—'
-  return String(Math.round(n / resolveHoursPerDay(activity, calendars)))
+  return String(Math.round(n / resolveHoursPerDay(activity, calendarLookup)))
 }

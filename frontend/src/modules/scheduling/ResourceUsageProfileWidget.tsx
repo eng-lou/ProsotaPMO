@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
+import { buildCalendarLookup } from './durationDisplay'
 import { RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesLayoutPrefs } from './resourcesLayout'
 import { computeUsageProfileBars, type AssignmentRow } from './useResourcesTabData'
 import type { Calendar, Resource } from './types'
@@ -50,6 +51,7 @@ function loadVisibleCols(): Set<OptionalColKey> {
 
 const PERIOD_COL_WIDTH = 64
 const CHART_HEIGHT_MIN = 180
+const RESOURCE_ROW_HEIGHT = 26
 
 export const RESOURCE_USAGE_COLORS = { budgeted: '#eab308', actual: '#22c55e', overallocated: '#ef4444', limit: '#111827' }
 
@@ -63,11 +65,17 @@ export const RESOURCE_USAGE_COLORS = { budgeted: '#eab308', actual: '#22c55e', o
 // (resource.max_hours_per_day x utilisation, same figure driving Resource
 // Tracking's own red flag) — red takes priority over green, since being
 // over capacity matters more than progress having been logged.
-export function ResourceUsageProfileWidget({
+// memo()'d (2026-07-17, per a perf audit — see GanttChart.tsx's own
+// 2026-07-15 precedent) — Scheduling.tsx is one large component managing
+// dozens of independent widgets/dialogs; without a memo boundary here, any
+// unrelated state change there re-renders this whole widget even when none
+// of its own props changed. Safe as a pure bail-out.
+function ResourceUsageProfileWidgetImpl({
   calendars, trackedResources, assignmentsByResource, buckets, spreadByResource, loading, layoutPrefs, unit,
   selectedResourceIds, onToggleResourceSelected, selectedActivityIds,
   leftPaneWidth,
 }: Props) {
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [visibleCols, setVisibleCols] = useState<Set<OptionalColKey>>(loadVisibleCols)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
 
@@ -154,10 +162,74 @@ export function ResourceUsageProfileWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const visibleBucketIndices = useMemo(
-    () => Array.from({ length: Math.max(0, visibleBucketRange.end - visibleBucketRange.start) }, (_, k) => visibleBucketRange.start + k),
-    [visibleBucketRange]
-  )
+  // Clamped to the CURRENT buckets.length, not just trusted as-is (real bug
+  // found 2026-07-17: switching zoom, e.g. Weeks -> Months, swaps in a
+  // shorter `buckets` array; useLayoutEffect below corrects
+  // visibleBucketRange for it, but only *after* this render already ran
+  // once with the stale, longer-array range — indexing buckets[i] for an i
+  // that's now out of bounds crashed the whole widget). Clamping here makes
+  // every render safe regardless of whether the layout effect has caught up
+  // yet, rather than relying on effect timing to prevent an out-of-bounds read.
+  const visibleBucketIndices = useMemo(() => {
+    const end = Math.min(visibleBucketRange.end, buckets.length)
+    const start = Math.min(visibleBucketRange.start, end)
+    return Array.from({ length: Math.max(0, end - start) }, (_, k) => start + k)
+  }, [visibleBucketRange, buckets.length])
+
+  // Row virtualization for the resource-list table (2026-07-17 perf fix) —
+  // same rationale and shape as the column virtualization above: every
+  // tracked resource used to render as a real <tr> regardless of scroll
+  // position, and a schedule with hundreds of resources made this table
+  // itself a real cost. ROW_BUFFER in row units (20 rows x 26px ~= 520px),
+  // comparable to BUCKET_BUFFER's own screen-distance buffer above.
+  const ROW_BUFFER = 20
+  const rowScrollRef = useRef<HTMLDivElement>(null)
+  const [visibleRowRange, setVisibleRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(trackedResources.length, 40) })
+
+  const recomputeVisibleRowRange = () => {
+    const el = rowScrollRef.current
+    if (!el) return
+    const firstVisible = Math.floor(el.scrollTop / RESOURCE_ROW_HEIGHT)
+    const lastVisible = Math.ceil((el.scrollTop + el.clientHeight) / RESOURCE_ROW_HEIGHT)
+    const start = Math.max(0, firstVisible - ROW_BUFFER)
+    const end = Math.min(trackedResources.length, lastVisible + ROW_BUFFER)
+    setVisibleRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  // useLayoutEffect, not useEffect, so a resource-list change (e.g. a fresh
+  // P6 import landing) corrects the window before the browser paints, same
+  // reasoning as the column virtualization's own effect above.
+  useLayoutEffect(() => {
+    recomputeVisibleRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackedResources])
+
+  const rowScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleRowScroll = () => {
+    if (rowScrollDebounceRef.current !== null) clearTimeout(rowScrollDebounceRef.current)
+    rowScrollDebounceRef.current = setTimeout(() => {
+      rowScrollDebounceRef.current = null
+      recomputeVisibleRowRange()
+    }, 150)
+  }
+
+  useEffect(() => {
+    window.addEventListener('resize', recomputeVisibleRowRange)
+    return () => window.removeEventListener('resize', recomputeVisibleRowRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clamped to trackedResources.length for the same reason
+  // visibleBucketIndices is above — a resource-list change can shrink the
+  // list before this render's own layout effect has corrected the range.
+  const visibleRowIndices = useMemo(() => {
+    const end = Math.min(visibleRowRange.end, trackedResources.length)
+    const start = Math.min(visibleRowRange.start, end)
+    return Array.from({ length: Math.max(0, end - start) }, (_, k) => start + k)
+  }, [visibleRowRange, trackedResources.length])
+  const leadingRowSpacerHeight = visibleRowIndices.length ? visibleRowIndices[0] * RESOURCE_ROW_HEIGHT : 0
+  const trailingRowSpacerHeight = Math.max(0, trackedResources.length - (visibleRowIndices.length ? visibleRowIndices[visibleRowIndices.length - 1] + 1 : 0)) * RESOURCE_ROW_HEIGHT
+  const resourceTableColCount = 2 + (['role', 'utilisation', 'calendar', 'default_units'] as const).filter(k => visibleCols.has(k)).length
 
   const toggleColumn = (key: OptionalColKey) => {
     setVisibleCols(prev => {
@@ -253,15 +325,17 @@ export function ResourceUsageProfileWidget({
                 </tr>
               </thead>
             </table>
-            <div className="overflow-y-auto rt-hide-scrollbar" style={{ maxHeight: chartHeight }}>
+            <div ref={rowScrollRef} onScroll={handleRowScroll} className="overflow-y-auto rt-hide-scrollbar" style={{ maxHeight: chartHeight }}>
               <table className="w-full border-collapse">
                 <tbody>
-                  {trackedResources.map(resource => {
+                  {leadingRowSpacerHeight > 0 && <tr><td colSpan={resourceTableColCount} style={{ height: leadingRowSpacerHeight, padding: 0, border: 'none' }} /></tr>}
+                  {visibleRowIndices.map(idx => {
+                    const resource = trackedResources[idx]
                     const rows = assignmentsByResource.get(resource.id) ?? []
                     const utilisations = rows.map(r => r.assignment.utilisation_pct !== null ? Number(r.assignment.utilisation_pct) : null).filter((v): v is number => v !== null)
                     const avgUtilisation = utilisations.length ? Math.round(utilisations.reduce((a, b) => a + b, 0) / utilisations.length) : null
                     return (
-                      <tr key={resource.id} className="hover:bg-gray-50" style={{ height: 26 }}>
+                      <tr key={resource.id} className="hover:bg-gray-50" style={{ height: RESOURCE_ROW_HEIGHT }}>
                         <td className="px-1.5 border-b border-gray-100">
                           <input type="checkbox" checked={selectedResourceIds.has(resource.id)} onChange={() => onToggleResourceSelected(resource.id)} />
                         </td>
@@ -270,13 +344,14 @@ export function ResourceUsageProfileWidget({
                         {visibleCols.has('utilisation') && <td className="px-2 py-1 border-b border-gray-100 text-right text-gray-500">{avgUtilisation !== null ? `${avgUtilisation}%` : '—'}</td>}
                         {visibleCols.has('calendar') && (
                           <td className="px-2 py-1 border-b border-gray-100 text-gray-500">
-                            {resource.calendar_id ? (calendars.find(c => c.id === resource.calendar_id)?.name ?? '—') : '—'}
+                            {resource.calendar_id ? (calendarLookup.byId.get(resource.calendar_id)?.name ?? '—') : '—'}
                           </td>
                         )}
                         {visibleCols.has('default_units') && <td className="px-2 py-1 border-b border-gray-100 text-right text-gray-500">{resource.max_hours_per_day}h/d</td>}
                       </tr>
                     )
                   })}
+                  {trailingRowSpacerHeight > 0 && <tr><td colSpan={resourceTableColCount} style={{ height: trailingRowSpacerHeight, padding: 0, border: 'none' }} /></tr>}
                 </tbody>
               </table>
             </div>
@@ -414,3 +489,5 @@ export function ResourceUsageProfileWidget({
     </div>
   )
 }
+
+export const ResourceUsageProfileWidget = memo(ResourceUsageProfileWidgetImpl)

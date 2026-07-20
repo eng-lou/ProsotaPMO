@@ -30,6 +30,7 @@ async def create_section_box(db: AsyncSession, data: SectionBoxCreate) -> Sectio
         name=data.name,
         min_x=data.min_x, min_y=data.min_y, min_z=data.min_z,
         max_x=data.max_x, max_y=data.max_y, max_z=data.max_z,
+        rot_x=data.rot_x, rot_y=data.rot_y, rot_z=data.rot_z,
     )
     db.add(row)
     await db.commit()

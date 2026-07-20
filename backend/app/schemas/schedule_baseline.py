@@ -39,6 +39,11 @@ class ScheduleBaselineResponse(BaseModel):
     # activities — never accepted as input, only flipped by
     # app/services/schedule_baseline.py:assign_baseline.
     is_active: bool
+    # Optional — links this baseline into a shared BaselineSet (Controls
+    # Dashboard Phase 1b, see app/models/baseline_set.py). Only ever set via
+    # app/services/baseline_set.py:capture_all/link_baseline, never accepted
+    # as input on this table's own create endpoint.
+    baseline_set_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
     # Server-computed, never accepted as input — how many activities this

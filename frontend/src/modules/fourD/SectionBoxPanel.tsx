@@ -1,10 +1,14 @@
 import { useState } from 'react'
 import type { SectionBox } from './sectionBoxes'
 
+export type SectionBoxTool = 'resize' | 'rotate'
+
 interface Props {
   boxes: SectionBox[]
   canCreate: boolean
   error: string | null
+  tool: SectionBoxTool
+  onToolChange: (tool: SectionBoxTool) => void
   onCreate: () => void
   onRename: (id: string, name: string) => void
   onToggleActive: (id: string) => void
@@ -79,12 +83,10 @@ function Item({ box, onRename, onToggleActive, onToggleVisible, onDelete }: {
 // "select something, then click +" flow). Content-only — DataPanel.tsx
 // owns the outer chrome and tab bar, same as IfcDataPanel/MeshDataPanel.
 //
-// Whole-object scope only for now — no per-box drag gizmo yet either
-// (dragging a face to reshape the box, and scoping to one individual IFC
-// element rather than the whole model, land in later phases of this same
-// feature). This tab already fully covers create/rename/toggle/delete —
-// only the interactive resize + finer scoping are still to come.
-export function SectionBoxPanel({ boxes, canCreate, error, onCreate, onRename, onToggleActive, onToggleVisible, onDelete }: Props) {
+// This tab covers create/rename/toggle/delete; the interactive per-face
+// resize/rotate handles and element/multi-element scoping live in the
+// viewport itself (SectionBoxGizmo.tsx), not here.
+export function SectionBoxPanel({ boxes, canCreate, error, tool, onToolChange, onCreate, onRename, onToggleActive, onToggleVisible, onDelete }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
       <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
@@ -98,6 +100,31 @@ export function SectionBoxPanel({ boxes, canCreate, error, onCreate, onRename, o
           + Add
         </button>
       </div>
+      {/* Resize vs Rotate (2026-07-17, per Maro: "the rotation handles make
+          it hard to manipulate the original handles" — showing both the
+          6 face-resize cones and drei's own rotate rings at once meant
+          they fought over the same clicks/screen space, worse the bigger
+          the rotate rings' own camera-distance-based auto-scaling made
+          them relative to a small/thin box. One tool active at a time
+          instead, same G/R mode-switch convention as the Blender reference
+          this whole feature is built from — defaults to resize so nothing
+          about existing drag behavior changes unless you switch.) */}
+      {boxes.length > 0 && (
+        <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-1">
+          <button
+            onClick={() => onToolChange('resize')}
+            className={`text-xs px-2 py-1 rounded border ${tool === 'resize' ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+          >
+            Resize
+          </button>
+          <button
+            onClick={() => onToolChange('rotate')}
+            className={`text-xs px-2 py-1 rounded border ${tool === 'rotate' ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+          >
+            Rotate
+          </button>
+        </div>
+      )}
       {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
       {boxes.length === 0 ? (
         <p className="px-3 py-3 text-xs text-gray-400">

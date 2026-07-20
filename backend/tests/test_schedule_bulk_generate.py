@@ -140,6 +140,140 @@ async def test_bulk_generate_creates_everything(client: AsyncClient, project: Pr
     assert columns["start"] >= footings["finish"]
 
 
+async def test_bulk_generate_supports_milestones_and_schedule_category(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    """Project Milestones (2026-07-17, per Maro: "there should be a
+    Construction Start start milestone kicking off everything... Substantial
+    completion should be a finish milestone") — activity_type is read off
+    the payload now, not hardcoded to "task", and category/phase_key
+    persist onto the real Activity row for a later, separate resource-
+    generation pass to find (Activity.schedule_category/schedule_phase_key)."""
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "wbs-milestones", "task_name": "Project Milestones", "parent_temp_id": None, "duration_hours": 0},
+            {
+                "temp_id": "act-start", "task_name": "Construction Start", "parent_temp_id": "wbs-milestones",
+                "duration_hours": 0, "activity_type": "start_milestone",
+            },
+            {
+                "temp_id": "act-finish", "task_name": "Substantial Completion", "parent_temp_id": "wbs-milestones",
+                "duration_hours": 0, "activity_type": "finish_milestone",
+            },
+            {
+                "temp_id": "act-columns", "task_name": "Columns", "parent_temp_id": None, "duration_hours": 24,
+                "category": "Columns", "phase_key": "erect",
+            },
+        ],
+        "relationships": [
+            {"predecessor_temp_id": "act-start", "successor_temp_id": "act-columns", "relationship_type": "FS", "lag_hours": "0"},
+            {"predecessor_temp_id": "act-columns", "successor_temp_id": "act-finish", "relationship_type": "FS", "lag_hours": "0"},
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    ids = resp.json()["activity_ids_by_temp_id"]
+
+    start = (await client.get(f"/api/v1/activities/{ids['act-start']}")).json()
+    finish = (await client.get(f"/api/v1/activities/{ids['act-finish']}")).json()
+    columns = (await client.get(f"/api/v1/activities/{ids['act-columns']}")).json()
+
+    assert start["activity_type"] == "start_milestone"
+    # M role, not T — see app/services/activity.py:_activity_role.
+    assert start["code"].startswith("M-")
+    assert finish["activity_type"] == "finish_milestone"
+    assert finish["code"].startswith("M-")
+    assert columns["schedule_category"] == "Columns"
+    assert columns["schedule_phase_key"] == "erect"
+    # Milestones stay null — never generated with a category/phase of their own.
+    assert start["schedule_category"] is None
+    assert finish["schedule_category"] is None
+
+
+async def test_bulk_generate_persists_schedule_quantity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    # 2026-07-18, per Maro's own QA: isolating a real IFC storey's beams in
+    # the 4D viewer showed 193 real IfcBeam elements, but the BOQ line for
+    # that same task showed 200 — because nothing persisted the true
+    # measured quantity, only the rounded-up duration_hours it produced.
+    # schedule_quantity closes that gap; boqGeneration.ts (frontend) reads
+    # it directly instead of reverse-engineering an approximation.
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {
+                "temp_id": "act-beams", "task_name": "L2 — Beams — Erect Steel Beams", "parent_temp_id": None,
+                "duration_hours": 200, "category": "Beams", "phase_key": "erect", "quantity": "193",
+            },
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    activity_id = resp.json()["activity_ids_by_temp_id"]["act-beams"]
+
+    activity = (await client.get(f"/api/v1/activities/{activity_id}")).json()
+    assert float(activity["schedule_quantity"]) == 193.0
+
+
+async def test_bulk_generate_schedule_quantity_null_by_default(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "act-plain", "task_name": "Hand-added task", "parent_temp_id": None, "duration_hours": 8},
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    activity_id = resp.json()["activity_ids_by_temp_id"]["act-plain"]
+    activity = (await client.get(f"/api/v1/activities/{activity_id}")).json()
+    assert activity["schedule_quantity"] is None
+
+
+async def test_bulk_generate_creates_discipline_udf(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    """"create a udf column called Discipline... so i can also choose to
+    group by discipline" (2026-07-17, per Maro) — a real "Discipline" UDF
+    definition gets created (once, not duplicated) and populated per
+    activity from the payload's own discipline field."""
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "wbs", "task_name": "Level 1", "parent_temp_id": None, "duration_hours": 0},
+            {"temp_id": "act-columns", "task_name": "Columns", "parent_temp_id": "wbs", "duration_hours": 24, "discipline": "Structures"},
+            {"temp_id": "act-duct", "task_name": "Ductwork", "parent_temp_id": "wbs", "duration_hours": 8, "discipline": "HVAC"},
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    ids = resp.json()["activity_ids_by_temp_id"]
+
+    definitions = (await client.get(
+        "/api/v1/user-defined-fields/definitions", params={"project_id": str(project.id), "entity_type": "activity"},
+    )).json()
+    discipline_def = next(d for d in definitions if d["name"] == "Discipline")
+    assert discipline_def["data_type"] == "text"
+
+    values = (await client.post("/api/v1/user-defined-fields/values/bulk-fetch", json={
+        "field_definition_ids": [discipline_def["id"]],
+        "record_ids": [ids["act-columns"], ids["act-duct"]],
+    })).json()
+    value_by_record = {v["record_id"]: v["value_text"] for v in values}
+    assert value_by_record[ids["act-columns"]] == "Structures"
+    assert value_by_record[ids["act-duct"]] == "HVAC"
+
+    # A second generation run in the same project reuses the same
+    # definition instead of erroring on its own uniqueness constraint.
+    resp2 = await client.post("/api/v1/schedule-bulk-generate/", json={
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "act-more", "task_name": "More Columns", "parent_temp_id": None, "duration_hours": 8, "discipline": "Structures"},
+        ],
+    })
+    assert resp2.status_code == 201, resp2.text
+    definitions_after = (await client.get(
+        "/api/v1/user-defined-fields/definitions", params={"project_id": str(project.id), "entity_type": "activity"},
+    )).json()
+    assert len([d for d in definitions_after if d["name"] == "Discipline"]) == 1
+
+
 async def test_bulk_generate_creates_model_element_links(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     resp = await client.post(
         "/api/v1/schedule-bulk-generate/", json=_payload(str(project.id), str(live_schedule_period.id)),
@@ -292,3 +426,109 @@ async def test_bulk_generate_rejects_calendar_from_another_project(
         json=_payload(str(project.id), str(live_schedule_period.id), calendar_id=other_calendar["id"]),
     )
     assert resp.status_code == 422
+
+
+async def test_bulk_generate_dedupe_resources_reuses_existing_by_name(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    # 2026-07-17, per Maro: the Resources tab's own "Generate Resources"
+    # action calls this same endpoint a second time (e.g. after more
+    # IFC-generated activities were added) — a crew/equipment name already
+    # in the pool from the first run must be reused, never duplicated.
+    first = await client.post(
+        "/api/v1/schedule-bulk-generate/",
+        json=_payload(
+            str(project.id), str(live_schedule_period.id),
+            resources=[{"temp_id": "res-crew", "name": "Excavation Crew", "resource_type": "crew", "unit": "day", "rate": "1100"}],
+            assignments=[], relationships=[], dedupe_resources_by_name=True,
+        ),
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["resource_count"] == 1
+    first_resource_id = first.json()["resource_ids_by_temp_id"]["res-crew"]
+
+    second = await client.post(
+        "/api/v1/schedule-bulk-generate/",
+        json=_payload(
+            str(project.id), str(live_schedule_period.id),
+            activities=[], resources=[{"temp_id": "res-crew-again", "name": "Excavation Crew", "resource_type": "crew", "unit": "day", "rate": "1100"}],
+            assignments=[], relationships=[], dedupe_resources_by_name=True,
+        ),
+    )
+    assert second.status_code == 201, second.text
+    # No new row inserted -- the name already existed in this project's pool.
+    assert second.json()["resource_count"] == 0
+    assert second.json()["resource_ids_by_temp_id"]["res-crew-again"] == first_resource_id
+
+    pool = (await client.get("/api/v1/resources/", params={"project_id": str(project.id)})).json()
+    assert sum(1 for r in pool if r["name"] == "Excavation Crew") == 1
+
+
+async def test_bulk_generate_assigns_resource_to_existing_activity_by_id(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    # 2026-07-17, per Maro: "Auto Assign Resources" runs as a separate,
+    # later action against a schedule that was already generated/committed
+    # -- no new activities in this call at all, only a real activity_id an
+    # earlier bulk_generate (or hand-editing) already created.
+    generated = await client.post(
+        "/api/v1/schedule-bulk-generate/",
+        json=_payload(str(project.id), str(live_schedule_period.id), resources=[], assignments=[], relationships=[]),
+    )
+    activity_id = generated.json()["activity_ids_by_temp_id"]["act-footings"]
+
+    resp = await client.post(
+        "/api/v1/schedule-bulk-generate/",
+        json={
+            "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+            "activities": [],
+            "resources": [{"temp_id": "res-crew", "name": "Excavation Crew", "resource_type": "crew", "unit": "day", "rate": "1100"}],
+            "assignments": [{"activity_id": activity_id, "resource_temp_id": "res-crew", "utilisation_pct": "100"}],
+            "relationships": [],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["assignment_count"] == 1
+
+    assignments = (await client.get(
+        "/api/v1/resource-assignments/", params={"schedule_period_id": str(live_schedule_period.id)},
+    )).json()
+    own = [a for a in assignments if a["activity_id"] == activity_id]
+    assert len(own) == 1
+    assert own[0]["resource_name"] == "Excavation Crew"
+
+
+async def test_bulk_generate_skip_existing_assignments_is_idempotent(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    # 2026-07-17, per Maro: re-running "Auto Assign Resources" (e.g. after
+    # linking a few more elements) must not duplicate an assignment -- and
+    # therefore double-count budget -- for an activity/resource pair that
+    # already has one.
+    generated = await client.post(
+        "/api/v1/schedule-bulk-generate/",
+        json=_payload(str(project.id), str(live_schedule_period.id), resources=[], assignments=[], relationships=[]),
+    )
+    activity_id = generated.json()["activity_ids_by_temp_id"]["act-footings"]
+
+    def assign_payload() -> dict:
+        return {
+            "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+            "activities": [],
+            "resources": [{"temp_id": "res-crew", "name": "Excavation Crew", "resource_type": "crew", "unit": "day", "rate": "1100"}],
+            "assignments": [{"activity_id": activity_id, "resource_temp_id": "res-crew", "utilisation_pct": "100"}],
+            "relationships": [], "dedupe_resources_by_name": True, "skip_existing_assignments": True,
+        }
+
+    first = await client.post("/api/v1/schedule-bulk-generate/", json=assign_payload())
+    assert first.json()["assignment_count"] == 1
+
+    second = await client.post("/api/v1/schedule-bulk-generate/", json=assign_payload())
+    assert second.status_code == 201, second.text
+    assert second.json()["assignment_count"] == 0
+
+    assignments = (await client.get(
+        "/api/v1/resource-assignments/", params={"schedule_period_id": str(live_schedule_period.id)},
+    )).json()
+    own = [a for a in assignments if a["activity_id"] == activity_id]
+    assert len(own) == 1

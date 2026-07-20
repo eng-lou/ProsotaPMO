@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import { recalculateCosts, saveSpreadRange, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { formatDateTime } from './dateTime'
-import { resolveHoursPerDay } from './durationDisplay'
+import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
 import { RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesLayoutPrefs } from './resourcesLayout'
 import { eachDate, type AssignmentRow } from './useResourcesTabData'
 import type { Calendar, Resource, ResourceAssignment } from './types'
@@ -80,6 +80,23 @@ const OPTIONAL_COLUMNS: { key: OptionalColKey; label: string; width: number }[] 
   { key: 'calendar', label: 'Calendar', width: 120 },
 ]
 const PERIOD_COL_WIDTH = 64
+const RESOURCE_HEADER_ROW_HEIGHT = 30
+const RESOURCE_CHILD_ROW_HEIGHT = 26
+
+// One flattened row-list unit — either a resource's own header/rollup row or
+// one of its (non-collapsed) assignment child rows, in on-screen order. This
+// is the row-axis virtualization unit (2026-07-17 perf fix, mirroring the
+// existing column-virtualization pattern below): the tree used to render as
+// `trackedResources.map` -> nested `rows.map`, every resource AND every one
+// of its assignments always a real <tr> regardless of scroll position or
+// collapse state — total DOM rows = resources + every assignment across all
+// of them, unbounded by schedule size. Row height differs between the two
+// types (30 vs 26), so — unlike the column virtualization, whose buckets are
+// all one fixed width — this needs a real cumulative-offset pass rather than
+// pure `index * rowHeight` to know where each row actually sits.
+type FlatTreeRow =
+  | { type: 'resource'; resource: Resource; rows: AssignmentRow[]; resourceStart: string | null; resourceFinish: string | null; resourceBuckets: { demand: number[]; capacity: number[] } | undefined }
+  | { type: 'assignment'; resource: Resource; row: AssignmentRow }
 
 function loadVisibleOptionalCols(): Set<OptionalColKey> {
   try {
@@ -96,7 +113,12 @@ function loadVisibleOptionalCols(): Set<OptionalColKey> {
 // in that period, directly editable (manual resource leveling). Labour/
 // Equipment only for now — Material/Subcontractor get their own spread mode
 // later ("we'll see as it goes").
-export function ResourceTrackingWidget({
+// memo()'d (2026-07-17, per a perf audit — see GanttChart.tsx's own
+// 2026-07-15 precedent) — Scheduling.tsx is one large component managing
+// dozens of independent widgets/dialogs; without a memo boundary here, any
+// unrelated state change there re-renders this whole widget even when none
+// of its own props changed. Safe as a pure bail-out.
+function ResourceTrackingWidgetImpl({
   calendars, trackedResources, assignmentsByResource: baseAssignmentsByResource, buckets, spreadByResource, loading,
   spreadFetchError, onRefetchResource, unit, layoutPrefs, selectedResourceIds, onToggleResourceSelected,
   selectedActivityIds, onToggleActivitySelected, collapsedIds, onToggleCollapsed,
@@ -109,6 +131,7 @@ export function ResourceTrackingWidget({
   const [editing, setEditing] = useState<{ assignmentId: string; bucketIndex: number } | null>(null)
   const [editValue, setEditValue] = useState('')
   const [recalculatingIds, setRecalculatingIds] = useState<Set<string>>(new Set())
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
 
   // 2026-07-14 rewrite, per Maro (after the tree/timeline two-table design
   // proved fundamentally fragile — row heights drifted out of sync between
@@ -172,7 +195,7 @@ export function ResourceTrackingWidget({
       case 'total_float': return row.activity.total_float_hours !== null ? Number(row.activity.total_float_hours) : -Infinity
       case 'role': return row.assignment.role ?? ''
       case 'utilisation': return row.assignment.utilisation_pct !== null ? Number(row.assignment.utilisation_pct) : -Infinity
-      case 'calendar': return calendars.find(c => c.id === row.activity.calendar_id)?.name ?? ''
+      case 'calendar': return (row.activity.calendar_id ? calendarLookup.byId.get(row.activity.calendar_id)?.name : undefined) ?? ''
     }
   }
 
@@ -273,6 +296,84 @@ export function ResourceTrackingWidget({
     }
     return { demandCapacityByResource, hoursByAssignment }
   }, [trackedResources, assignmentsByResource, buckets, spreadByResource, bucketIndexByDate])
+
+  // Flattens the tree into one row-list unit per resource header row and per
+  // (non-collapsed) assignment child row, in on-screen order — see
+  // FlatTreeRow's own header comment. Same per-resource start/finish/bucket
+  // computation the old render loop did inline; just done once here instead
+  // of every render, and independent of which rows actually end up windowed.
+  const flatTreeRows = useMemo<FlatTreeRow[]>(() => {
+    const out: FlatTreeRow[] = []
+    for (const resource of trackedResources) {
+      const rows = assignmentsByResource.get(resource.id) ?? []
+      const resourceStart = rows.length ? rows.reduce((min, r) => !min || (r.activity.start ?? '') < min ? r.activity.start : min, rows[0].activity.start) : null
+      const resourceFinish = rows.length ? rows.reduce((max, r) => !max || (r.activity.finish ?? '') > max ? r.activity.finish : max, rows[0].activity.finish) : null
+      const resourceBuckets = bucketData.demandCapacityByResource.get(resource.id)
+      out.push({ type: 'resource', resource, rows, resourceStart, resourceFinish, resourceBuckets })
+      if (!collapsedIds.has(resource.id)) {
+        for (const row of rows) out.push({ type: 'assignment', resource, row })
+      }
+    }
+    return out
+  }, [trackedResources, assignmentsByResource, collapsedIds, bucketData])
+
+  // Cumulative pixel offset of each flattened row (resource rows and child
+  // rows have different fixed heights, so this can't be a pure
+  // `index * rowHeight` the way the column virtualization's buckets can —
+  // one running-sum pass instead). rowOffsets[i] is row i's own top offset;
+  // rowOffsets[flatTreeRows.length] (one past the end) is the tree's total
+  // height, used for the trailing spacer below.
+  const rowOffsets = useMemo(() => {
+    const offsets: number[] = []
+    let cumulative = 0
+    for (const r of flatTreeRows) {
+      offsets.push(cumulative)
+      cumulative += r.type === 'resource' ? RESOURCE_HEADER_ROW_HEIGHT : RESOURCE_CHILD_ROW_HEIGHT
+    }
+    offsets.push(cumulative)
+    return offsets
+  }, [flatTreeRows])
+
+  // Row virtualization (2026-07-17 perf fix) — same rationale as the column
+  // virtualization above, applied to the vertical axis via the same
+  // mainScrollRef/handleMainScroll/debounce machinery (extended below) since
+  // it's the one scroll container driving both axes already. ROW_BUFFER_PX
+  // in pixels, not row count, since row heights aren't uniform here.
+  const ROW_BUFFER_PX = 600
+  const [visibleRowRange, setVisibleRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(flatTreeRows.length, 40) })
+
+  const recomputeVisibleRowRange = () => {
+    const el = mainScrollRef.current
+    if (!el) return
+    const top = el.scrollTop - ROW_BUFFER_PX
+    const bottom = el.scrollTop + el.clientHeight + ROW_BUFFER_PX
+    let start = 0
+    while (start < flatTreeRows.length && rowOffsets[start + 1] < top) start++
+    let end = start
+    while (end < flatTreeRows.length && rowOffsets[end] < bottom) end++
+    setVisibleRowRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end })
+  }
+
+  // useLayoutEffect, not useEffect — corrects the window before paint
+  // whenever the flattened tree itself changes (a fresh P6 import landing,
+  // or a collapse/expand toggle), same reasoning as the column
+  // virtualization's own effect above.
+  useLayoutEffect(() => {
+    recomputeVisibleRowRange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flatTreeRows, rowOffsets])
+
+  // Clamped to flatTreeRows.length for the same reason visibleBucketIndices
+  // is above — collapsing a resource with many rows can shrink the flattened
+  // list before this render's own layout effect has corrected the range.
+  const clampedRowEnd = Math.min(visibleRowRange.end, flatTreeRows.length)
+  const clampedRowStart = Math.min(visibleRowRange.start, clampedRowEnd)
+  const visibleTreeRowIndices = useMemo(
+    () => Array.from({ length: Math.max(0, clampedRowEnd - clampedRowStart) }, (_, k) => clampedRowStart + k),
+    [clampedRowStart, clampedRowEnd]
+  )
+  const leadingRowSpacerHeight = rowOffsets[clampedRowStart] ?? 0
+  const trailingRowSpacerHeight = Math.max(0, (rowOffsets[flatTreeRows.length] ?? 0) - (rowOffsets[clampedRowEnd] ?? 0))
 
   const startEdit = (assignment: ResourceAssignment, bucketIndex: number, currentHours: number) => {
     setEditing({ assignmentId: assignment.id, bucketIndex })
@@ -405,21 +506,40 @@ export function ResourceTrackingWidget({
     scrollDebounceRef.current = setTimeout(() => {
       scrollDebounceRef.current = null
       recomputeVisibleBucketRange()
+      // Row virtualization (2026-07-17) rides the same debounced scroll
+      // callback as the column virtualization above — one scroll container
+      // drives both axes, no reason for a second debounce timer.
+      recomputeVisibleRowRange()
     }, 150)
   }
 
   useEffect(() => {
-    window.addEventListener('resize', recomputeVisibleBucketRange)
-    return () => window.removeEventListener('resize', recomputeVisibleBucketRange)
+    const recomputeBoth = () => { recomputeVisibleBucketRange(); recomputeVisibleRowRange() }
+    window.addEventListener('resize', recomputeBoth)
+    return () => window.removeEventListener('resize', recomputeBoth)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Clamped to the CURRENT buckets.length, not just trusted as-is (real bug
+  // found 2026-07-17: switching zoom, e.g. Weeks -> Months, swaps in a
+  // shorter `buckets` array; useLayoutEffect above corrects
+  // visibleBucketRange for it, but only *after* this render already ran once
+  // with the stale, longer-array range — indexing buckets[i] for an i that's
+  // now out of bounds crashed the whole widget). Clamping here (and reusing
+  // the same clamped start/end for the spacer widths below) makes every
+  // render safe regardless of whether the layout effect has caught up yet.
+  const clampedBucketEnd = Math.min(visibleBucketRange.end, buckets.length)
+  const clampedBucketStart = Math.min(visibleBucketRange.start, clampedBucketEnd)
   const visibleBucketIndices = useMemo(
-    () => Array.from({ length: Math.max(0, visibleBucketRange.end - visibleBucketRange.start) }, (_, k) => visibleBucketRange.start + k),
-    [visibleBucketRange]
+    () => Array.from({ length: Math.max(0, clampedBucketEnd - clampedBucketStart) }, (_, k) => clampedBucketStart + k),
+    [clampedBucketStart, clampedBucketEnd]
   )
-  const leadingSpacerWidth = visibleBucketRange.start * PERIOD_COL_WIDTH
-  const trailingSpacerWidth = Math.max(0, buckets.length - visibleBucketRange.end) * PERIOD_COL_WIDTH
+  const leadingSpacerWidth = clampedBucketStart * PERIOD_COL_WIDTH
+  const trailingSpacerWidth = Math.max(0, buckets.length - clampedBucketEnd) * PERIOD_COL_WIDTH
+  // Real column count of one row (checkbox + tree cols + gutter + real
+  // bucket cells + either spacer) — the row-spacer <tr>s below span this
+  // exactly, matching the real <colgroup> above column-for-column.
+  const totalColCount = 1 + leftCols.length + 1 + (leadingSpacerWidth > 0 ? 1 : 0) + visibleBucketIndices.length + (trailingSpacerWidth > 0 ? 1 : 0)
 
   useEffect(() => {
     onLeftPaneWidthChange?.(leftPaneWidth + 26 + RESOURCE_CHART_Y_AXIS_WIDTH)
@@ -449,11 +569,11 @@ export function ResourceTrackingWidget({
       case 'duration': return row.activity.duration_days ?? '—'
       case 'pct_complete': return row.activity.pct_complete !== null ? `${row.activity.pct_complete}%` : '—'
       case 'total_float': return row.activity.total_float_hours !== null
-        ? Math.round(Number(row.activity.total_float_hours) / resolveHoursPerDay(row.activity, calendars))
+        ? Math.round(Number(row.activity.total_float_hours) / resolveHoursPerDay(row.activity, calendarLookup))
         : '—'
       case 'role': return row.assignment.role ?? '—'
       case 'utilisation': return row.assignment.utilisation_pct !== null ? `${row.assignment.utilisation_pct}%` : '—'
-      case 'calendar': return calendars.find(c => c.id === row.activity.calendar_id)?.name ?? '—'
+      case 'calendar': return (row.activity.calendar_id ? calendarLookup.byId.get(row.activity.calendar_id)?.name : undefined) ?? '—'
     }
   }
 
@@ -557,24 +677,25 @@ export function ResourceTrackingWidget({
                 </tr>
               </thead>
               <tbody>
-                {trackedResources.map(resource => {
-                  const rows = assignmentsByResource.get(resource.id) ?? []
-                  const collapsed = collapsedIds.has(resource.id)
-                  const resourceStart = rows.length ? rows.reduce((min, r) => !min || (r.activity.start ?? '') < min ? r.activity.start : min, rows[0].activity.start) : null
-                  const resourceFinish = rows.length ? rows.reduce((max, r) => !max || (r.activity.finish ?? '') > max ? r.activity.finish : max, rows[0].activity.finish) : null
-                  const resourceBuckets = bucketData.demandCapacityByResource.get(resource.id)
-                  return (
-                    <Fragment key={resource.id}>
-                      <tr className="text-white font-semibold" style={{ height: 30, backgroundColor: layoutPrefs.headerColor }}>
-                        <td className="px-1.5" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
+                {leadingRowSpacerHeight > 0 && (
+                  <tr><td colSpan={totalColCount} style={{ height: leadingRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+                )}
+                {visibleTreeRowIndices.map(idx => {
+                  const flat = flatTreeRows[idx]
+                  if (flat.type === 'resource') {
+                    const { resource, resourceStart, resourceFinish, resourceBuckets } = flat
+                    const collapsed = collapsedIds.has(resource.id)
+                    return (
+                      <tr key={resource.id} className="text-white font-semibold" style={{ height: RESOURCE_HEADER_ROW_HEIGHT, backgroundColor: layoutPrefs.headerColor }}>
+                        <td className="px-1.5" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
                           <input type="checkbox" checked={selectedResourceIds.has(resource.id)} onChange={() => onToggleResourceSelected(resource.id)} />
                         </td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
                           <button onClick={() => onToggleCollapsed(resource.id)} className="mr-1 text-white/80 hover:text-white">
                             {collapsed ? '▸' : '▾'}
                           </button>
                         </td>
-                        <td className="px-2 py-1.5 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
+                        <td className="px-2 py-1.5 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
                           {resource.name}
                           <button
                             onClick={() => handleRecalculate(resource)}
@@ -585,13 +706,13 @@ export function ResourceTrackingWidget({
                             {recalculatingIds.has(resource.id) ? '…' : '🔄'}
                           </button>
                         </td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceStart, false)}</td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceFinish, false)}</td>
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceStart, false)}</td>
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceFinish, false)}</td>
                         {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
-                          <td key={c.key} className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>—</td>
+                          <td key={c.key} className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>—</td>
                         ))}
-                        <td style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: 30, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }} />
-                        {leadingSpacerWidth > 0 && <td style={{ height: 30, overflow: 'hidden' }} />}
+                        <td style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }} />
+                        {leadingSpacerWidth > 0 && <td style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden' }} />}
                         {visibleBucketIndices.map(i => {
                           const demand = resourceBuckets?.demand[i] ?? 0
                           const capacity = resourceBuckets?.capacity[i] ?? 0
@@ -599,73 +720,77 @@ export function ResourceTrackingWidget({
                           return (
                             <td
                               key={i}
-                              style={{ height: 30, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
+                              style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
                               className={`px-2 py-1.5 text-right ${overallocated ? 'text-red-300 font-bold' : ''}`}
                             >
                               {toDisplay(demand, resource)}
                             </td>
                           )
                         })}
-                        {trailingSpacerWidth > 0 && <td style={{ height: 30, overflow: 'hidden' }} />}
+                        {trailingSpacerWidth > 0 && <td style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden' }} />}
                       </tr>
-                      {!collapsed && rows.map(row => (
-                        <tr key={row.assignment.id} style={{ height: 26 }}>
-                          <td className="px-1.5 border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>
-                            <input type="checkbox" checked={selectedActivityIds.has(row.activity.id)} onChange={() => onToggleActivitySelected(row.activity.id)} />
-                          </td>
-                          <td className="px-2 py-1 border-r border-gray-200 text-gray-500 font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.code}</td>
-                          <td className="px-2 py-1 border-r border-gray-200 text-gray-700 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.task_name}</td>
-                          <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.start, false)}</td>
-                          <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.finish, false)}</td>
-                          {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
-                            <td key={c.key} className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }}>{renderOptionalCell(c.key, row)}</td>
-                          ))}
-                          <td className="border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: 26, overflow: 'hidden', backgroundColor: 'white' }} />
-                          {leadingSpacerWidth > 0 && <td style={{ height: 26, overflow: 'hidden' }} />}
-                          {visibleBucketIndices.map(i => {
-                            const bucket = buckets[i]
-                            const active = bucketOverlapsSpan(bucket, row.activity)
-                            if (!active) {
-                              return <td key={i} className="px-2 py-1 border-r border-gray-200 bg-gray-50" style={{ height: 26, overflow: 'hidden' }} />
-                            }
-                            const hours = bucketData.hoursByAssignment.get(row.assignment.id)?.[i] ?? 0
-                            const isEditing = editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
-                            if (isEditing) {
-                              return (
-                                <td key={i} className="px-1 py-0.5 border-r border-gray-200" style={{ height: 26, overflow: 'hidden' }}>
-                                  <input
-                                    autoFocus
-                                    type="number" min={0} step={0.5}
-                                    value={editValue}
-                                    onChange={e => setEditValue(e.target.value)}
-                                    onBlur={() => commitEdit(row, bucket)}
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') commitEdit(row, bucket)
-                                      if (e.key === 'Escape') setEditing(null)
-                                    }}
-                                    className="w-14 border border-blue-400 rounded px-1 py-0.5 text-xs text-right"
-                                  />
-                                </td>
-                              )
-                            }
-                            return (
-                              <td
-                                key={i}
-                                onDoubleClick={() => startEdit(row.assignment, i, hours)}
-                                title="Double-click to edit — manual resource leveling"
-                                className="px-2 py-1 border-r border-gray-200 text-right text-gray-600 cursor-pointer hover:bg-blue-50"
-                                style={{ height: 26, overflow: 'hidden' }}
-                              >
-                                {toDisplay(hours, resource)}
-                              </td>
-                            )
-                          })}
-                          {trailingSpacerWidth > 0 && <td style={{ height: 26, overflow: 'hidden' }} />}
-                        </tr>
+                    )
+                  }
+                  const { resource, row } = flat
+                  return (
+                    <tr key={row.assignment.id} style={{ height: RESOURCE_CHILD_ROW_HEIGHT }}>
+                      <td className="px-1.5 border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>
+                        <input type="checkbox" checked={selectedActivityIds.has(row.activity.id)} onChange={() => onToggleActivitySelected(row.activity.id)} />
+                      </td>
+                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500 font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.code}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 text-gray-700 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.task_name}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.start, false)}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.finish, false)}</td>
+                      {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
+                        <td key={c.key} className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{renderOptionalCell(c.key, row)}</td>
                       ))}
-                    </Fragment>
+                      <td className="border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }} />
+                      {leadingSpacerWidth > 0 && <td style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />}
+                      {visibleBucketIndices.map(i => {
+                        const bucket = buckets[i]
+                        const active = bucketOverlapsSpan(bucket, row.activity)
+                        if (!active) {
+                          return <td key={i} className="px-2 py-1 border-r border-gray-200 bg-gray-50" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />
+                        }
+                        const hours = bucketData.hoursByAssignment.get(row.assignment.id)?.[i] ?? 0
+                        const isEditing = editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
+                        if (isEditing) {
+                          return (
+                            <td key={i} className="px-1 py-0.5 border-r border-gray-200" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}>
+                              <input
+                                autoFocus
+                                type="number" min={0} step={0.5}
+                                value={editValue}
+                                onChange={e => setEditValue(e.target.value)}
+                                onBlur={() => commitEdit(row, bucket)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') commitEdit(row, bucket)
+                                  if (e.key === 'Escape') setEditing(null)
+                                }}
+                                className="w-14 border border-blue-400 rounded px-1 py-0.5 text-xs text-right"
+                              />
+                            </td>
+                          )
+                        }
+                        return (
+                          <td
+                            key={i}
+                            onDoubleClick={() => startEdit(row.assignment, i, hours)}
+                            title="Double-click to edit — manual resource leveling"
+                            className="px-2 py-1 border-r border-gray-200 text-right text-gray-600 cursor-pointer hover:bg-blue-50"
+                            style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}
+                          >
+                            {toDisplay(hours, resource)}
+                          </td>
+                        )
+                      })}
+                      {trailingSpacerWidth > 0 && <td style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />}
+                    </tr>
                   )
                 })}
+                {trailingRowSpacerHeight > 0 && (
+                  <tr><td colSpan={totalColCount} style={{ height: trailingRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -686,3 +811,5 @@ export function ResourceTrackingWidget({
     </div>
   )
 }
+
+export const ResourceTrackingWidget = memo(ResourceTrackingWidgetImpl)

@@ -39,8 +39,18 @@ class SectionBox(Base, TimestampMixin):
     repositioned/rotated/rescaled via TransformControls; world-space bounds
     would leave a box visually detached from its geometry the moment the
     target moves, whereas local-space bounds move/rotate/scale with the
-    target automatically, same as its geometry does. No rotation of the box
-    itself in v1 — axis-aligned only, matching the Blender reference.
+    target automatically, same as its geometry does.
+
+    rot_x/y/z (2026-07-17, per Maro: "I'd like to rotate the bounding box")
+    are the box's OWN additional rotation on top of that same local space —
+    radians, THREE.Euler's default 'XYZ' order, same convention
+    ElementTransform's own rotation_x/y/z already use, and applied around
+    the box's own centre (not the target's local origin) so rotating it
+    doesn't also relocate it. min_x/max_x etc. stay a plain axis-aligned
+    extent defined in this rotated frame, not the target's raw local
+    space — resizing (dragging a face) and rotating are independent, same
+    "orbit around what you're editing" precedent as an element's own
+    pivot_x/y/z (element_transform.py).
 
     active toggles whether the clip is currently applied; visible toggles
     whether the wireframe gizmo itself is shown — independent, matching the
@@ -62,5 +72,8 @@ class SectionBox(Base, TimestampMixin):
     max_x: Mapped[float] = mapped_column(Float, nullable=False)
     max_y: Mapped[float] = mapped_column(Float, nullable=False)
     max_z: Mapped[float] = mapped_column(Float, nullable=False)
+    rot_x: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    rot_y: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    rot_z: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

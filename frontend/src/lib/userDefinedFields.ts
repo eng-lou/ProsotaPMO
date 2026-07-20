@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { IndicatorValue, UdfDataType, UdfEntityType, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import { api } from './api'
 
@@ -84,8 +84,21 @@ export function useUserDefinedFieldValues(definitions: UserDefinedFieldDefinitio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [definitions.map(d => d.id).join(','), recordIds.join(',')])
 
-  const getValue = (fieldDefinitionId: string, recordId: string): UserDefinedFieldValue | undefined =>
-    values.get(valueKey(fieldDefinitionId, recordId))
+  // useCallback, keyed on `values` (2026-07-17 perf fix, per a real bug
+  // caught wiring Scheduling.tsx's own "group by a UDF" feature) — this
+  // used to be a plain closure, a brand-new function reference every
+  // render regardless of whether `values` itself had actually changed.
+  // Harmless for a plain per-cell read, but Scheduling.tsx's own grouped-
+  // view useMemo needs to depend on getValue to recompute when a UDF value
+  // actually changes — an unstable reference there would either force that
+  // memo to recompute on literally every render (defeating the whole point
+  // of memoizing it) or, if the lint warning were suppressed instead,
+  // silently go stale whenever `values` changed without some *other*
+  // dependency also changing. Keying the callback on `values` gives a
+  // stable reference across renders where nothing here actually changed,
+  // and a fresh one exactly when it should.
+  const getValue = useCallback((fieldDefinitionId: string, recordId: string): UserDefinedFieldValue | undefined =>
+    values.get(valueKey(fieldDefinitionId, recordId)), [values])
 
   const setValue = async (fieldDefinitionId: string, recordId: string, payload: UdfValuePayload) => {
     const { data } = await api.put<UserDefinedFieldValue>(

@@ -238,3 +238,66 @@ async def test_material_resource_rejected(
         "resource_id": resource["id"], "start": "2025-06-02", "end": "2025-06-07",
     })
     assert resp.status_code == 422
+
+
+async def test_bulk_fetch_matches_individual_calls(
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
+):
+    """The batch endpoint (2026-07-17 perf fix, replacing the Resources tab's
+    old one-request-per-resource pattern) must return exactly what N
+    individual GET calls would have — same calendar-driven defaults, same
+    overrides, just built off one shared calendar lookup instead of N."""
+    await _anchor(db, live_schedule_period)
+    activity = await _create_activity(client, project, live_schedule_period, duration_hours=40)
+    resource_a = await _create_resource(client, project, name="Electrician", max_hours_per_day="8")
+    resource_b = await _create_resource(client, project, name="Plumber", max_hours_per_day="6")
+    await _create_assignment(client, activity, resource_a, utilisation_pct="50")
+    await _create_assignment(client, activity, resource_b, utilisation_pct="100")
+
+    individual_a = await _get_spread(client, resource_a["id"], "2025-06-02", "2025-06-07")
+    individual_b = await _get_spread(client, resource_b["id"], "2025-06-02", "2025-06-07")
+
+    resp = await client.post("/api/v1/resource-assignment-spreads/bulk-fetch", json={
+        "resource_ids": [resource_a["id"], resource_b["id"]],
+        "start": "2025-06-02", "end": "2025-06-07",
+    })
+    assert resp.status_code == 200, resp.text
+    batch = resp.json()["spreads"]
+
+    assert batch[resource_a["id"]] == individual_a
+    assert batch[resource_b["id"]] == individual_b
+
+
+async def test_bulk_fetch_silently_skips_invalid_resource_ids(
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
+):
+    """A material resource (not time-based, GET 422s on it individually — see
+    test_material_resource_rejected above) or a resource_id that doesn't
+    exist at all must not fail the whole batch — same "isolate the bad
+    entry" reasoning the frontend's own per-resource Promise.allSettled had
+    before this endpoint existed. Missing from the response entirely, not a
+    422/404 for the whole request."""
+    material = await _create_resource(client, project, resource_type="material", unit="m3", rate="20")
+    labour = await _create_resource(client, project, name="Electrician")
+    missing_id = "00000000-0000-0000-0000-000000000000"
+
+    resp = await client.post("/api/v1/resource-assignment-spreads/bulk-fetch", json={
+        "resource_ids": [material["id"], labour["id"], missing_id],
+        "start": "2025-06-02", "end": "2025-06-07",
+    })
+    assert resp.status_code == 200, resp.text
+    batch = resp.json()["spreads"]
+
+    assert material["id"] not in batch
+    assert missing_id not in batch
+    assert labour["id"] in batch
+
+
+async def test_bulk_fetch_empty_resource_ids(
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
+):
+    resp = await client.post("/api/v1/resource-assignment-spreads/bulk-fetch", json={
+        "resource_ids": [], "start": "2025-06-02", "end": "2025-06-07",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["spreads"] == {}

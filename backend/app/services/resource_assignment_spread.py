@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -49,15 +50,103 @@ def default_hours_for_day(
     return (Decimal(str(resource.max_hours_per_day)) * utilisation / Decimal(100)).quantize(_HOURS)
 
 
+async def get_spreads_for_resources(
+    db: AsyncSession, resource_ids: list[uuid.UUID], start: date, end: date
+) -> dict[uuid.UUID, tuple[list[dict], list[dict]]]:
+    """Batched form of get_spread_for_resource — one calendar lookup shared
+    across every resource, instead of the old one-HTTP-request-per-resource
+    Resources-tab pattern each independently rebuilding the exact same
+    project-wide calendar/exceptions/breaks data from scratch (2026-07-17
+    perf fix, per a real perf audit: a 22-resource tab load was ~176 DB
+    queries across 22 separate requests; this collapses it to ~1 request,
+    ~10). A resource_id that doesn't exist or isn't time-based is silently
+    omitted from the result rather than raising — batch callers (see
+    get_spread_for_resource below, and the bulk-fetch API route) decide for
+    themselves whether a missing entry means "skip it" or "404."
+
+    Assumes every resource_id belongs to the same project — true for every
+    current caller (a Resources tab batches within one project at a time);
+    the calendar lookup is scoped to whichever project the first resource
+    found belongs to."""
+    if not resource_ids:
+        return {}
+
+    resources = [
+        r for r in (
+            await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
+        ).scalars().all()
+        if r.resource_type in _TIME_BASED_TYPES
+    ]
+    if not resources:
+        return {}
+
+    lookup = await _build_calendar_lookup(db, resources[0].project_id)
+
+    assignments = list((
+        await db.execute(
+            select(ResourceAssignment).where(ResourceAssignment.resource_id.in_([r.id for r in resources]))
+        )
+    ).scalars().all())
+
+    activities_by_id: dict[uuid.UUID, Activity] = {}
+    overrides_by_key: dict[tuple[uuid.UUID, date], Decimal] = {}
+    if assignments:
+        activities_by_id = {a.id: a for a in (
+            await db.execute(select(Activity).where(Activity.id.in_([a.activity_id for a in assignments])))
+        ).scalars().all()}
+        overrides_by_key = {
+            (o.resource_assignment_id, o.work_date): o.hours
+            for o in (await db.execute(
+                select(ResourceAssignmentSpread).where(
+                    ResourceAssignmentSpread.resource_assignment_id.in_([a.id for a in assignments]),
+                    ResourceAssignmentSpread.work_date >= start,
+                    ResourceAssignmentSpread.work_date < end,
+                )
+            )).scalars().all()
+        }
+
+    assignments_by_resource: dict[uuid.UUID, list[ResourceAssignment]] = defaultdict(list)
+    for a in assignments:
+        assignments_by_resource[a.resource_id].append(a)
+
+    results: dict[uuid.UUID, tuple[list[dict], list[dict]]] = {}
+    for resource in resources:
+        resource_calendar = lookup.resolve_calendar_id(resource.calendar_id)
+
+        days: list[dict] = []
+        d = start
+        while d < end:
+            capacity = resource.max_hours_per_day if lookup.is_working_day(resource_calendar, d) else Decimal("0.00")
+            days.append({"date": d, "capacity": capacity})
+            d += timedelta(days=1)
+
+        cells: list[dict] = []
+        for a in assignments_by_resource.get(resource.id, []):
+            activity = activities_by_id.get(a.activity_id)
+            calendar = lookup.resolve(activity) if activity is not None else resource_calendar
+            d = start
+            while d < end:
+                override = overrides_by_key.get((a.id, d))
+                hours = override if override is not None else default_hours_for_day(lookup, calendar, resource, a, activity, d)
+                cells.append({"assignment_id": a.id, "date": d, "hours": hours, "is_override": override is not None})
+                d += timedelta(days=1)
+
+        results[resource.id] = (days, cells)
+
+    return results
+
+
 async def get_spread_for_resource(
     db: AsyncSession, resource_id: uuid.UUID, start: date, end: date
 ) -> tuple[list[dict], list[dict]]:
     """Day-by-day hours (override-or-default) for every assignment under one
     resource across [start, end), plus that resource's own per-day capacity —
-    the one call the Resource Tracking spreadsheet needs; bucketing into
-    whatever zoom the frontend is showing happens client-side, same as
-    GanttChart's own zoom (day-granularity here is the source of truth
-    regardless of display zoom)."""
+    bucketing into whatever zoom the frontend is showing happens client-side,
+    same as GanttChart's own zoom (day-granularity here is the source of
+    truth regardless of display zoom). Single-resource callers only (a
+    leveling refetch of just-moved resource, the standalone useResourceSpread
+    hook) — a Resources-tab load of many resources at once should call
+    get_spreads_for_resources directly instead, see its own header."""
     resource = await db.get(Resource, resource_id)
     if resource is None:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -65,51 +154,8 @@ async def get_spread_for_resource(
         raise HTTPException(
             status_code=422, detail="Resource Tracking currently only covers labour/equipment resources"
         )
-
-    assignments = list((
-        await db.execute(select(ResourceAssignment).where(ResourceAssignment.resource_id == resource_id))
-    ).scalars().all())
-
-    lookup = await _build_calendar_lookup(db, resource.project_id)
-    resource_calendar = lookup.resolve_calendar_id(resource.calendar_id)
-
-    days: list[dict] = []
-    d = start
-    while d < end:
-        capacity = resource.max_hours_per_day if lookup.is_working_day(resource_calendar, d) else Decimal("0.00")
-        days.append({"date": d, "capacity": capacity})
-        d += timedelta(days=1)
-
-    if not assignments:
-        return days, []
-
-    activities_by_id = {a.id: a for a in (
-        await db.execute(select(Activity).where(Activity.id.in_([a.activity_id for a in assignments])))
-    ).scalars().all()}
-
-    overrides_by_key: dict[tuple[uuid.UUID, date], Decimal] = {
-        (o.resource_assignment_id, o.work_date): o.hours
-        for o in (await db.execute(
-            select(ResourceAssignmentSpread).where(
-                ResourceAssignmentSpread.resource_assignment_id.in_([a.id for a in assignments]),
-                ResourceAssignmentSpread.work_date >= start,
-                ResourceAssignmentSpread.work_date < end,
-            )
-        )).scalars().all()
-    }
-
-    cells: list[dict] = []
-    for a in assignments:
-        activity = activities_by_id.get(a.activity_id)
-        calendar = lookup.resolve(activity) if activity is not None else resource_calendar
-        d = start
-        while d < end:
-            override = overrides_by_key.get((a.id, d))
-            hours = override if override is not None else default_hours_for_day(lookup, calendar, resource, a, activity, d)
-            cells.append({"assignment_id": a.id, "date": d, "hours": hours, "is_override": override is not None})
-            d += timedelta(days=1)
-
-    return days, cells
+    results = await get_spreads_for_resources(db, [resource_id], start, end)
+    return results.get(resource_id, ([], []))
 
 
 async def set_spread_range(
