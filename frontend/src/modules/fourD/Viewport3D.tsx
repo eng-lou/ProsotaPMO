@@ -1307,6 +1307,24 @@ const DEG_TO_RAD = Math.PI / 180
 // endpoint.
 const ANIMATION_VISIBILITY_EPSILON = 0.02
 
+// Caps how many materials get their GPU-facing `needsUpdate` flag set in a
+// single frame (2026-07-21 perf fix, per Maro — same bounded-budget idiom as
+// geometrySubdivision.ts's own MAX_TOTAL_SUBDIVIDED_TRIANGLES). Jumping the
+// timeline a long way (vs. smooth Play, where only a handful of elements
+// cross a state boundary in any given frame) can flip many linked elements'
+// state at once, and `material.needsUpdate = true` forces three.js to
+// synchronously recompile that material's shader program the next time it
+// renders — genuinely expensive, and this session's earlier fix (see
+// target.materials' own loop below) already established that doing this for
+// every changed material in one frame is fine at structural+architectural
+// scale but not at six combined discipline files' worth of linked elements.
+// Spreads a big jump's material changes across a handful of frames instead
+// of one — a brief, staggered "pop in" for the elements past this frame's
+// budget rather than a multi-second freeze. Pure pacing, no semantic change:
+// ordinary Play-speed scrubbing never comes close to this many changes in a
+// single frame, so behaviour there is unaffected.
+const MAX_NEEDS_UPDATE_PER_FRAME = 40
+
 function collectStandardMaterials(object: THREE.Object3D): { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] {
   const found: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] = []
   object.traverse(child => {
@@ -1756,6 +1774,7 @@ export function TimelinePlayback({
     const nowMs = now.getTime()
     const dateChanged = lastAppliedDateMs.current !== nowMs
     lastAppliedDateMs.current = nowMs
+    let needsUpdateBudget = MAX_NEEDS_UPDATE_PER_FRAME
 
     for (const target of targetsRef.current) {
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
@@ -1817,7 +1836,22 @@ export function TimelinePlayback({
           if (material.transparent !== nextTransparent) { material.transparent = nextTransparent; changed = true }
           if (material.opacity !== state.opacity) { material.opacity = state.opacity; changed = true }
           if (!material.color.equals(_scratchColor)) { material.color.copy(_scratchColor); changed = true }
-          if (changed) material.needsUpdate = true
+          // Frame-budgeted (2026-07-21) — see MAX_NEEDS_UPDATE_PER_FRAME's
+          // own header. The property values above are always written
+          // immediately regardless of budget (cheap, no GPU cost); only the
+          // `needsUpdate` flag itself — the expensive part — can be
+          // deferred to a later frame. pendingAnimUpdate (material.userData,
+          // same idiom as lambertVariant/hiddenLineVariant below) persists
+          // across frames so a material that missed this frame's budget
+          // isn't silently dropped: `changed` alone can't be relied on for
+          // this, since by the next frame the properties already match (we
+          // just wrote them) and would otherwise never re-trigger the flag.
+          if (changed) material.userData.pendingAnimUpdate = true
+          if (material.userData.pendingAnimUpdate && needsUpdateBudget > 0) {
+            material.needsUpdate = true
+            material.userData.pendingAnimUpdate = false
+            needsUpdateBudget--
+          }
 
           // Combined with ModelObjects' own showFaces/isolate/hidden verdict
           // (cached on mount/settings-change as userData.baseVisible, since
