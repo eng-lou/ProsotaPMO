@@ -50,9 +50,9 @@ export interface IfcModelHandle {
   api: IfcAPI
   modelID: number
   object: THREE.Group
-  // Null when the file had no repeated geometry at all (every element
-  // unique) — nothing to batch, every element already went the individual-
-  // mesh route during import.
+  // Null only if the file had zero placeable geometry at all (2026-07-21 —
+  // every element's geometry goes into the shared batch now, unique or
+  // repeated; see elementBatching.ts's own header for why this changed).
   batch: BatchState | null
 }
 
@@ -155,10 +155,11 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
 
   // Pass 1 (cheap — just reads the already-computed flatMesh structure, no
   // GetGeometry/GetVertexArray calls): tally how many placements reference
-  // each geometryExpressID. Anything appearing exactly once keeps today's
-  // fully individual THREE.Mesh path, untouched, below. Anything repeated
-  // goes into the shared batch instead (this module's own header explains
-  // why).
+  // each geometryExpressID. Every geometry goes into the shared batch below
+  // regardless of this count (2026-07-21 — see elementBatching.ts's own
+  // header for why this used to stop at count > 1 and no longer does); the
+  // count itself is still needed for BatchedMesh's fixed-capacity
+  // construction (Pass 2) and to size each geometry's own instance array.
   const occurrenceCount = new Map<number, number>()
   // Recenter offset (2026-07-19 fix, per Maro: columns specifically
   // shaking while orbiting — confirmed via direct evidence, not assumed:
@@ -221,24 +222,29 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   }
   const recenterOffset = sharedRecenterOffset
 
-  // Pass 2: build the BufferGeometry once per unique *repeated* shape
-  // (also dedupes the redundant GetGeometry/GetVertexArray calls the old
-  // one-call-per-placement code used to make even for identical geometry —
-  // a free import-time speedup, not just a rendering one), and tally the
-  // exact vertex/index/instance totals THREE.BatchedMesh needs fixed at
-  // construction time (no capacity growth in three@0.169 — verified
-  // directly in node_modules/three/src/objects/BatchedMesh.js, not
-  // assumed).
+  // Pass 2: build the BufferGeometry once per unique shape (also dedupes the
+  // redundant GetGeometry/GetVertexArray calls the old one-call-per-placement
+  // code used to make even for identical geometry — a free import-time
+  // speedup, not just a rendering one), and tally the exact vertex/index/
+  // instance totals THREE.BatchedMesh needs fixed at construction time (no
+  // capacity growth in three@0.169 — verified directly in
+  // node_modules/three/src/objects/BatchedMesh.js, not assumed).
+  //
+  // Every geometry, not just ones occurring more than once (2026-07-21 — see
+  // elementBatching.ts's own header) — batching every shape (unique or
+  // repeated) into the one shared BatchedMesh is what actually consolidates
+  // a real building's draw calls, since most schedulable elements (walls,
+  // beams, ducts) have unique geometry and the repeated-only version never
+  // touched them at all.
   let totalVertexCount = 0
   let totalIndexCount = 0
   let totalInstanceCount = 0
-  const repeatedGeometries = new Map<number, THREE.BufferGeometry>()
+  const batchGeometries = new Map<number, THREE.BufferGeometry>()
   for (const [geomId, count] of occurrenceCount) {
-    if (count <= 1) continue
     const ifcGeom = api.GetGeometry(modelID, geomId)
     const vertexData = api.GetVertexArray(ifcGeom.GetVertexData(), ifcGeom.GetVertexDataSize())
     const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
-    repeatedGeometries.set(geomId, buildGeometryFromIfc(vertexData, indexData))
+    batchGeometries.set(geomId, buildGeometryFromIfc(vertexData, indexData))
     totalVertexCount += vertexData.length / 6
     totalIndexCount += indexData.length
     totalInstanceCount += count
@@ -246,8 +252,8 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   }
 
   let batch: BatchState | null = null
-  if (repeatedGeometries.size > 0) {
-    // Base colour white — a repeated element's own real colour rides on
+  if (batchGeometries.size > 0) {
+    // Base colour white — each batched element's own real colour rides on
     // its *per-instance* colour (setColorAt below), which three.js's
     // batching shader multiplies against this material colour; a non-white
     // base would tint every batched element uniformly regardless of its
@@ -261,8 +267,8 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     // bounding-sphere test (perObjectFrustumCulled) and re-sorts draw order
     // by camera distance (sortObjects). 2026-07-19 fix, per Maro: "its some
     // elements mainly the columns" shaking while orbiting — columns are
-    // exactly the kind of numerous, repeated-geometry element that ends up
-    // batched, and an instance whose bounding sphere sits near a frustum
+    // exactly the kind of numerous element that ends up batched, and an
+    // instance whose bounding sphere sits near a frustum
     // boundary can flip in/out of that per-frame test purely from floating-
     // point noise in the recomputed projection*view matrix during
     // continuous rotation, a well-documented flicker source for batched/
@@ -279,7 +285,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     // Keyed the other way round from geometryByIfcId (2026-07-21 perf fix)
     // — see BatchState.geometryById's own header in elementBatching.ts.
     const geometryById = new Map<number, THREE.BufferGeometry>()
-    for (const [geomId, geometry] of repeatedGeometries) {
+    for (const [geomId, geometry] of batchGeometries) {
       const geometryId = batchedMesh.addGeometry(geometry)
       geometryByIfcId.set(geomId, { geometry, geometryId })
       geometryById.set(geometryId, geometry)
@@ -288,14 +294,14 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     group.add(batchedMesh)
   }
 
-  // Pass 3: place every element — a batch instance for repeated geometry,
-  // or today's fully individual THREE.Mesh for anything unique. Same final
-  // visual result either way, just a different draw-call cost.
+  // Pass 3: place every element — a batch instance for anything whose
+  // placement matrix isn't mirrored, or the individual THREE.Mesh path for
+  // the (typically small) mirrored fraction. Same final visual result
+  // either way, just a different draw-call cost.
   for (let i = 0; i < meshCount; i++) {
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
       const placed = flatMesh.geometries.get(j)
-      const count = occurrenceCount.get(placed.geometryExpressID) ?? 1
 
       const matrix = new THREE.Matrix4().fromArray(placed.flatTransformation)
       // Recenter near the origin (2026-07-19 fix) — see this function's own
@@ -311,16 +317,15 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       }
       // THREE.BatchedMesh.setMatrixAt explicitly does not support negatively
       // scaled matrices (documented directly on the method, not assumed) —
-      // and real IFC files genuinely have these among repeated-geometry
-      // placements (IfcMappedItem reflections, e.g. a mirrored fastener
-      // type placed on the opposite side of something — the exact same
-      // class of data this session's Unreal work already found in this
-      // file family). Anything with a negative determinant falls back to
-      // the individual-mesh path unconditionally, regardless of how many
-      // times its geometry repeats — correctness over the batching win for
-      // the (typically small) fraction of placements this affects.
+      // and real IFC files genuinely have these (IfcMappedItem reflections,
+      // e.g. a mirrored fastener type placed on the opposite side of
+      // something — the exact same class of data this session's Unreal work
+      // already found in this file family). Anything with a negative
+      // determinant falls back to the individual-mesh path unconditionally
+      // — correctness over the batching win for the (typically small)
+      // fraction of placements this affects.
       const isMirrored = matrix.determinant() < 0
-      if (count > 1 && batch && !isMirrored) {
+      if (batch && !isMirrored) {
         const entry = batch.geometryByIfcId.get(placed.geometryExpressID)
         if (!entry) continue
         const instanceId = batch.mesh.addInstance(entry.geometryId)

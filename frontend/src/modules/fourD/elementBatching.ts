@@ -18,19 +18,30 @@ export interface BatchInstanceInfo {
   matrix: THREE.Matrix4
 }
 
-// One shared THREE.BatchedMesh carries every element whose geometry repeats
-// elsewhere in the file (2026-07-17, per Maro: "improve the original Prosota
-// web version... the recommended strong fix" — the root cause this whole
-// module was originally diagnosed for: one THREE.Mesh + one unique
-// THREE.MeshStandardMaterial per element means element count directly
-// becomes draw-call count). Only *repeated* geometry (e.g. typical
-// fasteners/members reused via IfcMappedItem) goes into the batch; anything
-// appearing exactly once keeps the fully individual THREE.Mesh path
-// (ifcModel.ts's own loadIfcModel), so every existing per-element feature
-// needs zero changes for it. A batched element only ever costs a real
-// THREE.Mesh the moment something actually needs to touch it individually
-// — see ensureMaterialized below, the one primitive every feature that
-// needs a specific expressID's real Object3D calls before manipulating it.
+// One shared THREE.BatchedMesh carries every element in the file (2026-07-17,
+// per Maro: "improve the original Prosota web version... the recommended
+// strong fix" — the root cause this whole module was originally diagnosed
+// for: one THREE.Mesh + one unique THREE.MeshStandardMaterial per element
+// means element count directly becomes draw-call count).
+//
+// Originally scoped to only *repeated* geometry (e.g. typical fasteners/
+// members reused via IfcMappedItem) — broadened to *every* element
+// (2026-07-21, per Maro, after the repeated-only version made no measurable
+// difference against real combined multi-discipline files: a real building's
+// actual schedulable elements — walls, beams, slabs, ducts — are almost all
+// *unique* geometry, so the repeated-only net only ever caught a small
+// minority of fasteners/brackets, never the elements a construction schedule
+// actually sequences. THREE.BatchedMesh doesn't require repeated geometry —
+// adding N different geometries, each with its own single instance, gets the
+// exact same draw-call consolidation). Anything with a mirrored (negative-
+// determinant) placement still keeps the individual THREE.Mesh path
+// unconditionally (ifcModel.ts's own loadIfcModel — BatchedMesh.setMatrixAt
+// explicitly doesn't support negative scale), so every existing per-element
+// feature needs zero changes for it. A batched element only ever costs a
+// real THREE.Mesh the moment something actually needs to touch it
+// individually — see ensureMaterialized below, the one primitive every
+// feature that needs a specific expressID's real Object3D calls before
+// manipulating it.
 export interface BatchState {
   mesh: THREE.BatchedMesh
   // An array, not a single BatchInstanceInfo — one expressID can carry more
