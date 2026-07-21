@@ -1,4 +1,5 @@
 export interface DashboardKpis {
+  plan_start: string | null
   planned_finish: string | null
   planned_finish_status: 'on_time' | 'delayed' | 'unknown'
   open_issues: number
@@ -7,6 +8,55 @@ export interface DashboardKpis {
   bac: string | null
   eac: string | null
   cpi: string | null
+  eac_remaining_at_plan: string | null
+  eac_composite: string | null
+}
+
+export interface DcmaQualitySummary {
+  activity_count: number
+  logic_score: number | null
+  total_checks: number
+  passing_count: number
+  failing_count: number
+  warning_count: number
+  scope_name: string | null
+}
+
+export interface ClashByTest {
+  test_id: string
+  test_name: string
+  test_type: string
+  total: number
+  new_count: number
+  reviewed_count: number
+  approved_count: number
+}
+
+export interface ClashSummary {
+  test_count: number
+  total_clashes: number
+  new_count: number
+  reviewed_count: number
+  approved_count: number
+  by_test: ClashByTest[]
+}
+
+export interface ClashPairSummary {
+  id: string
+  test_id: string
+  test_name: string
+  element_a_label: string
+  element_b_label: string
+  distance_mm: number | null
+  status: 'new' | 'reviewed' | 'approved'
+}
+
+export interface ProjectInfoSummary {
+  data_date: string | null
+  total_activities: number
+  total_relationships: number
+  total_resources: number
+  has_baseline: boolean
 }
 
 export interface ScheduleBuckets {
@@ -23,6 +73,118 @@ export interface MilestoneTimelineItem {
   bl_finish: string | null
   is_critical: boolean | null
   variance_days: number | null
+}
+
+export interface ScheduleActivitySummary {
+  id: string
+  code: string
+  task_name: string
+  start: string | null
+  finish: string | null
+  bl_finish: string | null
+  variance_days: number | null
+  total_float_hours: string | null
+  is_critical: boolean | null
+  pct_complete: string | null
+  schedule_category: string | null
+  suspend_date: string | null
+  resume_date: string | null
+}
+
+export interface LookaheadItem {
+  id: string
+  code: string
+  task_name: string
+  start: string | null
+  finish: string | null
+  pct_complete: string | null
+  total_float_hours: string | null
+  is_critical: boolean | null
+  has_incomplete_predecessor: boolean
+}
+
+export interface LookaheadSummary {
+  window_weeks: number
+  total_in_window: number
+  critical_in_window: number
+  healthy_float_count: number
+  incomplete_predecessor_count: number
+  next_milestone_name: string | null
+  next_milestone_date: string | null
+}
+
+export interface RiskMitigationActionSummary {
+  id: string
+  risk_id: string
+  risk_code: string
+  code: string
+  description: string
+  owner: string | null
+  due_date: string | null
+  status: string
+  pct_complete: number
+}
+
+export interface CostElementSummary {
+  id: string
+  code: string
+  description: string
+  element_group: string | null
+  cost_owner: string | null
+  status: string | null
+  bac: string | null
+  ac: string | null
+  pct_complete: number | null
+  cpi: string | null
+  eac: string | null
+  vac: string | null
+}
+
+export interface ResourceAssignmentSummary {
+  id: string
+  resource_name: string
+  resource_type: 'labour' | 'equipment' | 'material' | 'subcontractor' | 'cost' | 'crew'
+  discipline: string | null
+  company: string | null
+  role: string | null
+  budget: string
+  activity_id: string
+  activity_task_name: string
+}
+
+export interface IcdItemSummary {
+  id: string
+  code: string
+  title: string
+  item_type: 'issue' | 'change' | 'decision'
+  status: string
+  priority: string | null
+  owner: string | null
+  raised_date: string | null
+  due_date: string | null
+  closed_date: string | null
+  severity: string | null
+  decision_maker: string | null
+  required_by: string | null
+  ccb_decision: string | null
+  cost_impact: string | null
+  schedule_impact_days: number | null
+}
+
+export interface RiskSummary {
+  id: string
+  code: string
+  title: string
+  category: string | null
+  area: string | null
+  status: string
+  risk_owner: string | null
+  risk_type: 'threat' | 'opportunity'
+  response_strategy: string | null
+  rating: string | null
+  emv_cost: string | null
+  emv_schedule_days: string | null
+  date_raised: string | null
 }
 
 export interface TopRisk {
@@ -52,9 +214,21 @@ export interface DashboardOverviewResponse {
   kpis: DashboardKpis
   schedule_buckets: ScheduleBuckets
   milestones: MilestoneTimelineItem[]
+  schedule_activities: ScheduleActivitySummary[]
+  lookahead_items: LookaheadItem[]
+  lookahead_summary: LookaheadSummary
+  cost_elements: CostElementSummary[]
+  resource_assignments: ResourceAssignmentSummary[]
+  icd_items: IcdItemSummary[]
+  risks: RiskSummary[]
+  mitigation_actions: RiskMitigationActionSummary[]
   top_risks: TopRisk[]
   risk_overview: RiskOverview
   risk_exposure: RiskExposureBand[]
+  dcma_quality: DcmaQualitySummary
+  clash_summary: ClashSummary
+  clash_pairs: ClashPairSummary[]
+  project_info: ProjectInfoSummary
 }
 
 // --- Baseline Comparison (Phase 1b) ---

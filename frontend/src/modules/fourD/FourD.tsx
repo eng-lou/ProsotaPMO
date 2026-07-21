@@ -26,6 +26,7 @@ import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
+import { uploadFourDVideo } from './fourDVideos'
 import { CameraViewPanel } from './CameraViewPanel'
 import {
   addCollectionMember, createCollection, deleteCollection, listCollections, removeCollectionMember, updateCollection,
@@ -55,7 +56,7 @@ import type { IfcModelHandle } from './ifcModel'
 // site like the rest of ifcModel.ts) because the render-body TransformPanel
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
-import { ensureMaterialized } from './elementBatching'
+import { ensureMaterialized, materializeAll } from './elementBatching'
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
@@ -193,6 +194,23 @@ function loadPanelOpen(key: string, defaultOpen = true): boolean {
 // ever rendered directly (e.g. in isolation).
 export function FourD({ active = true }: { active?: boolean } = {}) {
   const { selectedProject } = useProject()
+  // hasEverBeenActive (2026-07-20, optimization pass) — flips true the
+  // first time this tab is actually opened and stays true for the rest of
+  // the session (never reverts to false). PersistentFourD mounts this
+  // component the instant a project is selected and keeps it mounted
+  // forever after (hidden via CSS, not unmounted, so switching tabs
+  // resumes instantly) — without this gate, ~20 independent data-loading
+  // effects below (camera views, collections, annotations, clash tests,
+  // measurements, model3d files, ...) all fired their own fetch the moment
+  // a project was selected, regardless of whether /4d was ever opened.
+  // Deliberately does NOT re-gate on every active transition after the
+  // first one — once you've opened /4d in a session, switching projects
+  // still refreshes its data as before; only the "never opened it at all"
+  // case is what this closes.
+  const [hasEverBeenActive, setHasEverBeenActive] = useState(active)
+  useEffect(() => {
+    if (active) setHasEverBeenActive(true)
+  }, [active])
   // refetchPeriod (2026-07-09 fix, per Maro: "the activity table and gantt
   // still doesnt show what's in the schedule even clicking the refresh
   // icon") — this hook's own `period` only ever gets (re-)resolved once,
@@ -303,11 +321,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [modelElementLinks, setModelElementLinks] = useState<ModelElementLink[]>([])
   const [linkError, setLinkError] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listModelElementLinks(selectedProject.id).then(links => { if (!cancelled) setModelElementLinks(links) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   const handleLinkElement = async (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => {
     try {
@@ -337,11 +355,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [sectionBoxes, setSectionBoxes] = useState<SectionBox[]>([])
   const [sectionBoxError, setSectionBoxError] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listSectionBoxes(selectedProject.id).then(boxes => { if (!cancelled) setSectionBoxes(boxes) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   // Seeds a new box around whatever's currently the "active" whole object
   // (Transform panel's own target — see activeSceneObject below) — matches
@@ -410,7 +428,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         // click (handleClick's own materialize call covers that path).
         let found: Object3D | null = null
         if (handle) {
-          const { ensureMaterialized } = await import('./elementBatching')
           found = ensureMaterialized(handle.object, selectedExpressId)
         }
         if (found && handle) {
@@ -435,7 +452,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           // All is most of them — same "materialize first" convention
           // elementBatching.ts's own header documents for every other
           // whole-model scan in this app.
-          const { materializeAll } = await import('./elementBatching')
           materializeAll(handle.object)
           handle.object.traverse(child => { if (selectedExpressIds.has(child.userData.expressID)) found.push(child) })
         }
@@ -516,11 +532,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [collections, setCollections] = useState<CollectionType[]>([])
   const [collectionError, setCollectionError] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listCollections(selectedProject.id).then(cs => { if (!cancelled) setCollections(cs) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   // "Split an element by level" (2026-07-15, per Maro) — project-scoped,
   // persisted server-side (element_split.py). Same fetch-on-project-change
@@ -529,11 +545,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // once ifcHandles is declared.
   const [elementSplits, setElementSplits] = useState<ElementSplit[]>([])
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listElementSplits(selectedProject.id).then(s => { if (!cancelled) setElementSplits(s) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
   const refreshElementSplits = () => {
     if (!selectedProject) return
     listElementSplits(selectedProject.id).then(setElementSplits)
@@ -799,12 +815,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [pathError, setPathError] = useState<string | null>(null)
   const [addingPointsForPathId, setAddingPointsForPathId] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listPaths(selectedProject.id).then(ps => { if (!cancelled) setPaths(ps) })
     listPathFollowers(selectedProject.id).then(fs => { if (!cancelled) setPathFollowers(fs) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   const pathErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -950,11 +966,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [addingAnnotationKind, setAddingAnnotationKind] = useState<AnnotationKind | null>(null)
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listAnnotations(selectedProject.id).then(as => { if (!cancelled) setAnnotations(as) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   // Default icon per kind (2026-07-12, per Maro: "so what's the difference
   // [between Comment and Footnote]") — Placemark keeps the pin, Footnote
@@ -1046,17 +1062,36 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [cameraViewError, setCameraViewError] = useState<string | null>(null)
   const [applyCameraViewRequest, setApplyCameraViewRequest] = useState<{ pose: CameraViewPose; nonce: number } | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listCameraViews(selectedProject.id).then(views => { if (!cancelled) setCameraViews(views) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
-  const handleSaveCameraView = async (pose: CameraViewPose) => {
+  // viewport_state (2026-07-20, per Maro: "capture not just orbit angle but
+  // contextual visibility as well") — the same 5 pieces of state
+  // handleShowAll (below) already clears together, plus which IFC model
+  // isolatedExpressIds is scoped to and whether clash colors were on.
+  // Annotations aren't captured — they're project-wide persistent markers,
+  // unaffected by which camera view is active (see CameraViewportState's
+  // own docstring, backend/app/schemas/camera_view.py).
+  const handleSaveCameraView = async (pose: CameraViewPose, thumbnailDataUrl: string | null) => {
     if (!selectedProject) return
     try {
       setCameraViewError(null)
-      const view = await createCameraView({ project_id: selectedProject.id, ...pose })
+      const view = await createCameraView({
+        project_id: selectedProject.id, ...pose,
+        viewport_state: {
+          isolate_mode: isolateMode,
+          isolated_object_ids: [...isolatedObjectIds],
+          isolated_express_ids: [...isolatedExpressIds],
+          isolated_ifc_model_id: activeIfcModelId,
+          hidden_ids: [...hiddenIds],
+          hidden_express_ids: [...hiddenExpressIds],
+          show_clash_colors: settings.showClashColors,
+        },
+        ...(thumbnailDataUrl ? { thumbnail_data_url: thumbnailDataUrl } : {}),
+      })
       setCameraViews(prev => [...prev, view])
     } catch (err) {
       setCameraViewError(err instanceof Error ? err.message : 'Failed to save camera view')
@@ -1064,7 +1099,33 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   const handleApplyCameraView = (view: CameraView) => {
     setApplyCameraViewRequest({ pose: view, nonce: Date.now() })
+    const vs = view.viewport_state
+    if (vs) {
+      setIsolateMode(vs.isolate_mode)
+      setIsolatedObjectIds(new Set(vs.isolated_object_ids))
+      setIsolatedExpressIds(new Set(vs.isolated_express_ids))
+      setActiveIfcModelId(vs.isolated_ifc_model_id)
+      setHiddenIds(new Set(vs.hidden_ids))
+      setHiddenExpressIds(new Set(vs.hidden_express_ids))
+      setSettings({ ...settings, showClashColors: vs.show_clash_colors })
+    }
   }
+  // 4D Video persistence (2026-07-20) — Export Video's own local download
+  // (Viewport3D.tsx) is unchanged; this additionally uploads the same
+  // recorded Blob so the dashboard's "4D Video" widget has something to
+  // list. A quiet console warning on failure, not a blocking error dialog —
+  // the export itself (and its local download) already succeeded by this
+  // point, same "the thing the user actually asked for already happened"
+  // reasoning as not surfacing a hard error over a secondary side effect.
+  const handleExportVideoUpload = async (blob: Blob, durationSec: number) => {
+    if (!selectedProject) return
+    try {
+      await uploadFourDVideo(selectedProject.id, `4D Sequence ${new Date().toLocaleString()}`, durationSec, blob)
+    } catch (err) {
+      console.error('Failed to persist 4D video export', err)
+    }
+  }
+
   const handleRenameCameraView = async (id: string, name: string) => {
     try {
       setCameraViewError(null)
@@ -1470,11 +1531,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [measurementHoverPoint, setMeasurementHoverPoint] = useState<MeasurementPoint | null>(null)
 
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listMeasurements(selectedProject.id).then(ms => { if (!cancelled) setMeasurements(ms) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   const measurementErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -1979,11 +2040,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [clashError, setClashError] = useState<string | null>(null)
   const [clashRunProgress, setClashRunProgress] = useState<{ testId: string; done: number; total: number } | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listClashTests(selectedProject.id).then(ts => { if (!cancelled) setClashTests(ts) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   const clashErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -2409,8 +2470,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // re-render every time it changes.
   const elementTransformsRef = useRef<ElementTransform[]>([])
 
+  // Guards against this effect's restore work actually running twice for
+  // the same project (2026-07-20, real symptom: the same single persisted
+  // IFC file loading 4 separate times, each handle appearing one after
+  // another as its own slow parse finished — "IFC Data (4)" for one saved
+  // file). React 18 StrictMode (enabled in main.tsx, deliberately, to catch
+  // exactly this class of bug) double-invokes every effect in development —
+  // run, cleanup, run again — and this effect's own cleanup only sets
+  // `cancelled`, which the loop below only checks *between* files, not
+  // while one file's load is already in flight; a file whose restore had
+  // already started past that check when cleanup fired still finishes and
+  // gets pushed into state, so the second (real) invocation restoring
+  // everything again duplicates it. A ref (not state — this must be set
+  // synchronously, before the first `await`, and refs alone survive
+  // StrictMode's cleanup/remount within the same true mount) makes every
+  // invocation past the first a no-op for this project, however many times
+  // React happens to fire it.
+  const restoreStartedForProjectIdRef = useRef<string | null>(null)
+
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
+    if (restoreStartedForProjectIdRef.current === selectedProject.id) return
+    restoreStartedForProjectIdRef.current = selectedProject.id
     let cancelled = false
     ;(async () => {
       // Reset first (2026-07-19), before any model for this (possibly new)
@@ -2560,7 +2641,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProject?.id])
+  }, [selectedProject?.id, hasEverBeenActive])
 
   // Unloads one specific IFC model, by its scene-object id (2026-07-09 —
   // now that more than one can be loaded at once, "unload" has to say
@@ -3167,10 +3248,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null,
   )
 
-  const viewportObjects: ImportedObject[] = sceneObjects.map(o => ({
+  // Memoized (2026-07-20, optimization pass — a confirmed regression, not a
+  // new suggestion): Viewport3D.tsx's own "heavyDeps" reference-equality
+  // check (built specifically because a real 5k+-element IFC model was
+  // "struggling") skips its expensive full-mesh pass — geometry
+  // subdivision, texture, variance/clash colour, render-mode sync — unless
+  // this array's own reference actually changes. Without useMemo here, a
+  // brand-new array of brand-new object literals was built on every FourD
+  // render (this component has dozens of useState hooks and stays
+  // permanently mounted), so that check always saw "changed" and the
+  // expensive pass reran on every unrelated render — typing in a field,
+  // opening a side panel, anything — silently defeating the fix it exists
+  // to honour.
+  const viewportObjects: ImportedObject[] = useMemo(() => sceneObjects.map(o => ({
     id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id) && (!isolateMode || isolatedObjectIds.has(o.id)),
-  }))
+  })), [sceneObjects, hiddenIds, isolateMode, isolatedObjectIds])
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
 
@@ -3187,11 +3280,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [elementParents, setElementParents] = useState<ElementParentType[]>([])
   const [elementParentError, setElementParentError] = useState<string | null>(null)
   useEffect(() => {
-    if (!selectedProject) return
+    if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
     listElementParents(selectedProject.id).then(eps => { if (!cancelled) setElementParents(eps) })
     return () => { cancelled = true }
-  }, [selectedProject])
+  }, [selectedProject, hasEverBeenActive])
 
   const elementParentErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -4020,6 +4113,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       sectionBoxTool={sectionBoxTool}
       onSaveCameraView={handleSaveCameraView}
       applyCameraViewRequest={applyCameraViewRequest}
+      onExportVideo={handleExportVideoUpload}
       paths={resolvedPaths}
       pathFollowers={pathFollowers}
       addingPointsForPathId={addingPointsForPathId}

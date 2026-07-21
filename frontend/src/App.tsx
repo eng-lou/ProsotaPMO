@@ -1,3 +1,4 @@
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Layout } from './components/Layout'
@@ -10,7 +11,14 @@ import { Dashboard } from './modules/dashboard/Dashboard'
 import { RiskRegister } from './modules/risks/RiskRegister'
 import { CostPlan } from './modules/costs/CostPlan'
 import { IcdTracker } from './modules/icd/IcdTracker'
-import { FourD } from './modules/fourD/FourD'
+
+// Lazy (2026-07-20, optimization pass) — FourD pulls in Three.js,
+// react-three-fiber/drei/postprocessing, recharts, and ~50 sibling files;
+// statically importing it here put all of that (confirmed via a real
+// `npm run build`: ~3.8MB raw / ~1MB gzipped) in the main bundle for every
+// user, even one who only ever opens /dashboard. FourD is a named export,
+// not a default one, hence the .then() adapter React.lazy needs.
+const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: m.FourD })))
 
 const Placeholder = ({ title, subtitle = 'Coming soon.' }: { title: string; subtitle?: string }) => (
   <div className="p-8">
@@ -51,9 +59,24 @@ function LoginPage() {
 function PersistentFourD() {
   const location = useLocation()
   const active = location.pathname === '/4d'
+  // hasEverBeenActive (2026-07-20) — the component (and its lazy chunk)
+  // isn't even mounted until the very first visit to /4d, so a user who
+  // never opens it never pays for FourD at all, not even the Suspense
+  // fallback flash. Once mounted, it never unmounts (per this component's
+  // own header above) — same "flips true once, stays true" pattern
+  // FourD.tsx's own hasEverBeenActive uses internally for its data fetches.
+  const [hasEverBeenActive, setHasEverBeenActive] = useState(active)
+  useEffect(() => {
+    if (active) setHasEverBeenActive(true)
+  }, [active])
+
+  if (!hasEverBeenActive) return null
+
   return (
     <div className={active ? 'h-full' : 'hidden'}>
-      <FourD active={active} />
+      <Suspense fallback={<div className="p-8 text-gray-400 text-sm">Loading 4D…</div>}>
+        <FourD active={active} />
+      </Suspense>
     </div>
   )
 }

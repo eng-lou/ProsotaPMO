@@ -287,8 +287,15 @@ interface Props {
   // forwardRef/useImperativeHandle setup (the more common way to expose
   // imperative actions to a parent) — this component's already large, and
   // a changing-prop-as-command needs no change to its own export shape.
-  onSaveCameraView: (pose: CameraViewPose) => void
+  onSaveCameraView: (pose: CameraViewPose, thumbnailDataUrl: string | null) => void
   applyCameraViewRequest: { pose: CameraViewPose; nonce: number } | null
+  // 4D Video persistence (2026-07-20, per Maro: a dashboard widget to "open
+  // one of the videos 4d sequence vids we've captured") — Export Video
+  // still downloads locally exactly as before (unchanged, no regression);
+  // this additionally hands the recorded Blob up to FourD.tsx so it can be
+  // uploaded and picked from later, same "callback up, parent does the
+  // actual persistence" split onSaveCameraView already uses.
+  onExportVideo?: (blob: Blob, durationSec: number) => void
   // Paths / Follow Path (2026-07-11, per Maro's Blender curve reference —
   // see path.py/path_follower.py's own docstrings). paths/pathFollowers are
   // project-scoped, passed straight through like sectionBoxes above.
@@ -1976,7 +1983,7 @@ export function Viewport3D({
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
-  onSaveCameraView, applyCameraViewRequest,
+  onSaveCameraView, applyCameraViewRequest, onExportVideo,
   scheduleStart, scheduleEnd,
   paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
@@ -2301,14 +2308,39 @@ export function Viewport3D({
   // (with a name the user can rename afterward, same "create with a
   // sensible default, rename via double-click" convention Section Box's
   // own "+ Add" already uses).
-  const handleSaveCameraView = () => {
+  //
+  // Thumbnail capture (2026-07-20, per Maro: "contextual visibility... I
+  // want it to go back to exactly what it was at the time") — reuses
+  // handleCaptureImage's own "hide path helpers, wait a few real frames for
+  // that to actually land in a drawn frame, then read pixels" approach, but
+  // toDataURL() (synchronous, gives back the data URI string directly)
+  // instead of toBlob()+download, and deliberately skips the DPR/HDR
+  // render-quality boost that Capture/Export Video use — this is a small
+  // dashboard-widget thumbnail, not an export, so native resolution keeps
+  // the saved payload modest.
+  const captureThumbnail = (): Promise<string | null> => {
+    const canvas = rendererRef.current?.domElement
+    if (!canvas) return Promise.resolve(null)
+    return new Promise(resolve => {
+      setHidePathHelpers(true)
+      requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const dataUrl = canvas.toDataURL('image/png')
+        setHidePathHelpers(false)
+        resolve(dataUrl)
+      })))
+    })
+  }
+
+  const handleSaveCameraView = async () => {
     const camera = cameraRef.current
     const controls = controlsRef.current
     if (!camera || !controls) return
-    onSaveCameraView({
+    const pose = {
       position_x: camera.position.x, position_y: camera.position.y, position_z: camera.position.z,
       target_x: controls.target.x, target_y: controls.target.y, target_z: controls.target.z,
-    })
+    }
+    const thumbnailDataUrl = await captureThumbnail()
+    onSaveCameraView(pose, thumbnailDataUrl)
   }
 
   // Video export (2026-07-10, per Maro's original "AO, video, still renders
@@ -2387,6 +2419,7 @@ export function Viewport3D({
       a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
       a.click()
       URL.revokeObjectURL(url)
+      onExportVideo?.(blob, renderCaptureSettings.videoDurationSec)
     } finally {
       setIsExportingVideo(false)
       setCaptureDprMultiplier(null)
