@@ -26,7 +26,7 @@ import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
-import { ensureMaterialized, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
+import { ensureMaterialized, getBatchedInstanceInfo, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
@@ -1300,6 +1300,30 @@ interface ResolvedTimelineTarget {
   cachedState: AppliedAnimationState | null
 }
 
+// Batched-visibility fast path (2026-07-21, per Maro — see
+// getBatchedInstanceInfo's own header in elementBatching.ts) — for a
+// schedule-linked element that's still batched AND whose profile is pure
+// opacity/colour (transform_kind 'none', the default every schedule-
+// generated link actually uses), animating it never needs a real mesh or
+// material at all: THREE.BatchedMesh.setVisibleAt/setColorAt drive the same
+// visible presence + colour tint directly on the shared batch, at zero
+// extra draw-call cost regardless of how many elements this covers. No
+// `object`/`materials`/transform fields at all — by construction (the
+// transform_kind === 'none' eligibility check below), this target never has
+// a transform component to apply.
+interface ResolvedBatchVisibilityTarget {
+  mesh: THREE.BatchedMesh
+  instances: { instanceId: number; baseColor: THREE.Color }[]
+  links: ResolvedTimelineLink[]
+  cachedActiveLink: ResolvedTimelineLink | null
+  cachedState: AppliedAnimationState | null
+  // Colour, unlike visibility just above, has no other writer racing with
+  // it (nothing else calls setColorAt on a linked instance), so a plain
+  // last-written cache is safe here and avoids a getColorAt readback +
+  // THREE.Color allocation every frame for every instance.
+  lastColorHex: string | null
+}
+
 const DEG_TO_RAD = Math.PI / 180
 // Below this, an element counts as "animation-hidden" for both rendering
 // and click-through purposes (2026-07-15, per Maro: "if elements are
@@ -1487,6 +1511,7 @@ export function TimelinePlayback({
 }) {
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
   const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
+  const batchVisibilityTargetsRef = useRef<ResolvedBatchVisibilityTarget[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -1569,6 +1594,14 @@ export function TimelinePlayback({
         return target
       }
 
+      // Batched-visibility fast path's own dedupe map (2026-07-21) — see
+      // ResolvedBatchVisibilityTarget's own header. Keyed by the batch
+      // mesh's uuid + expressID rather than object identity (there's no
+      // per-element Object3D to key on at all for a still-batched element)
+      // so more than one link pointing at the same element still shares one
+      // target, same reasoning as byObject above.
+      const batchVisibilityByKey = new Map<string, ResolvedBatchVisibilityTarget>()
+
       // Mode A — schedule-driven, via ModelElementLink (unchanged resolution
       // logic: mesh-kind by filename, ifc-kind via GlobalId->expressID).
       //
@@ -1638,22 +1671,52 @@ export function TimelinePlayback({
           // every currently-loaded one instead of assuming a single global
           // handle, same reasoning as linkedElements.ts's own
           // resolveInAnyHandle.
-          //
-          // getMaterializedMeshes, not getExpressIdIndex (2026-07-21 fix,
-          // per Maro — see elementBatching.ts's own header) — a real IFC
-          // element whose geometry repeats gets batched into the shared
-          // THREE.BatchedMesh (elementBatching.ts) and has no individual
-          // THREE.Mesh/userData.expressID at all until something pulls it
-          // out. getExpressIdIndex's plain traverse could never see those,
-          // so any schedule-linked element that happened to still be
-          // batched silently never animated. Materializes on demand (cheap
-          // now that ensureMaterialized is O(1), not the whole-model
-          // traverse this session's earlier bug made it) — only the
-          // elements actually linked to an activity ever leave the batch,
-          // everything else on screen stays batched.
           for (const handle of ifcHandles) {
             const expressId = ifcModel.getExpressIdFromGuid(handle, link.element_ref)
             if (expressId === undefined) continue
+
+            // Batched-visibility fast path (2026-07-21, per Maro — see
+            // ResolvedBatchVisibilityTarget's own header) — tried *before*
+            // getMaterializedMeshes below, and only for transform_kind
+            // 'none' (pure opacity/colour, the profile every schedule-
+            // generated link actually uses by default — confirmed by
+            // tracing DEFAULT_ANIMATION_CONFIG). getBatchedInstanceInfo
+            // returns null (not eligible) for anything already individual —
+            // never batched to begin with, or already materialized for some
+            // other reason (a manual edit, a previous non-'none' profile,
+            // Select All, ...) — in which case this falls through to the
+            // normal materializing path exactly as before, unchanged.
+            if (profile.transform_kind === 'none') {
+              const batchInfo = getBatchedInstanceInfo(handle.object, expressId)
+              if (batchInfo) {
+                const key = `${batchInfo.mesh.uuid}:${expressId}`
+                let bvTarget = batchVisibilityByKey.get(key)
+                if (!bvTarget) {
+                  bvTarget = {
+                    mesh: batchInfo.mesh, instances: batchInfo.instances, links: [],
+                    cachedActiveLink: null, cachedState: null, lastColorHex: null,
+                  }
+                  batchVisibilityByKey.set(key, bvTarget)
+                }
+                bvTarget.links.push({ activity: window, profile, axis: profile.axis })
+                objects = []
+                break
+              }
+            }
+
+            // getMaterializedMeshes, not getExpressIdIndex (2026-07-21 fix,
+            // per Maro — see elementBatching.ts's own header) — a real IFC
+            // element whose geometry repeats gets batched into the shared
+            // THREE.BatchedMesh (elementBatching.ts) and has no individual
+            // THREE.Mesh/userData.expressID at all until something pulls it
+            // out. getExpressIdIndex's plain traverse could never see those,
+            // so any schedule-linked element that happened to still be
+            // batched silently never animated. Materializes on demand (cheap
+            // now that ensureMaterialized is O(1), not the whole-model
+            // traverse this session's earlier bug made it) — reached for
+            // anything the fast path above didn't already handle: a
+            // transform-driven profile, or an element that wasn't eligible
+            // for the fast path.
             const matches = getMaterializedMeshes(handle.object, expressId)
             if (matches.length > 0) { objects = matches; break }
           }
@@ -1728,6 +1791,7 @@ export function TimelinePlayback({
 
       if (!cancelled) {
         targetsRef.current = [...byObject.values()]
+        batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
         pathTargetsRef.current = nextPathTargets
         // Immediately reflects the latest keyframe data (2026-07-09) —
         // adding/removing/editing a keyframe elsewhere (TransformPanel's
@@ -1775,7 +1839,9 @@ export function TimelinePlayback({
 
   useFrame(() => {
     const now = dateRef.current
-    if (!now || (targetsRef.current.length === 0 && pathTargetsRef.current.length === 0)) return
+    if (!now || (
+      targetsRef.current.length === 0 && pathTargetsRef.current.length === 0 && batchVisibilityTargetsRef.current.length === 0
+    )) return
     const nowMs = now.getTime()
     const dateChanged = lastAppliedDateMs.current !== nowMs
     lastAppliedDateMs.current = nowMs
@@ -1938,6 +2004,53 @@ export function TimelinePlayback({
             edgesMaterial.opacity = state.opacity
           }
         }
+      }
+    }
+
+    // Batched-visibility fast path (2026-07-21) — see
+    // ResolvedBatchVisibilityTarget's own header. No transform, no
+    // individual mesh/material at all: just a per-instance visible flip
+    // (and, only for profiles that ask for it, a colour tint) directly on
+    // the shared THREE.BatchedMesh — draw-call count for this element never
+    // changes no matter how the schedule links it.
+    for (const bv of batchVisibilityTargetsRef.current) {
+      if (dateChanged) {
+        bv.cachedActiveLink = pickActiveLink(bv.links, now)
+        bv.cachedState = bv.cachedActiveLink
+          ? computeAppliedAnimationStateAt(bv.cachedActiveLink.activity, bv.cachedActiveLink.profile, now)
+          : null
+      }
+      const state = bv.cachedState
+      const nextVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
+      // Diffed against the batch's own CURRENT per-instance value (not a
+      // separately-cached "what we last wrote" flag) — same reasoning as the
+      // material loop above: ModelObjects' own settings-driven visibility
+      // pass (showFaces/isolate/hidden) also calls setVisibleAt on this same
+      // BatchedMesh whenever those settings change, entirely independent of
+      // the timeline's date, and it doesn't know about the schedule's own
+      // verdict any more than this loop knows about isolate/hidden state. A
+      // lastVisible-only cache would silently miss that external write and
+      // leave the instance stuck at whatever the settings pass last set
+      // until the timeline's date happens to change again; reading
+      // getVisibleAt fresh here means an external change is corrected on
+      // the very next frame regardless of dateChanged, exactly like the
+      // material properties above.
+      for (const { instanceId } of bv.instances) {
+        if (bv.mesh.getVisibleAt(instanceId) !== nextVisible) bv.mesh.setVisibleAt(instanceId, nextVisible)
+      }
+      // null once the profile's own colour window has passed (see
+      // computeAppliedAnimationStateAt's own header) — restores each
+      // instance's real imported colour rather than leaving the last tint
+      // applied stuck on forever.
+      const nextColorHex = state?.color ?? null
+      if (bv.lastColorHex !== nextColorHex) {
+        if (nextColorHex) {
+          _scratchColor.set(nextColorHex)
+          for (const { instanceId } of bv.instances) bv.mesh.setColorAt(instanceId, _scratchColor)
+        } else {
+          for (const { instanceId, baseColor } of bv.instances) bv.mesh.setColorAt(instanceId, baseColor)
+        }
+        bv.lastColorHex = nextColorHex
       }
     }
 

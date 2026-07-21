@@ -191,6 +191,35 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   return firstMesh
 }
 
+// For TimelinePlayback's batched-visibility fast path (Viewport3D.tsx,
+// 2026-07-21) — per Maro, after the O(n²)/un-batching fixes above still
+// weren't enough: every schedule-linked element gets materialized into its
+// own individual mesh + unique material specifically so it can animate,
+// which means draw-call count still equals *linked* element count even
+// with batching preserved for everything else — the real ceiling for a
+// six-combined-discipline schedule where most elements end up linked. Most
+// schedule-generated links use the plain default profile (opacity 0->1, no
+// transform at all — confirmed by tracing DEFAULT_ANIMATION_CONFIG through
+// computeAppliedAnimationStateAt), which needs nothing more than a per-
+// instance visible/hidden flip — something THREE.BatchedMesh already does
+// natively (setVisibleAt, itself internally diffed and O(1) draw-call cost
+// regardless of instance count) with zero shader work and zero
+// materialization. Returns null (not eligible) if the element isn't
+// currently batched at all — already individual, for any reason — so the
+// caller falls back to the existing full-materialization path unchanged.
+export function getBatchedInstanceInfo(
+  rootObject: THREE.Object3D, expressID: number,
+): { mesh: THREE.BatchedMesh; instances: { instanceId: number; baseColor: THREE.Color }[] } | null {
+  const materialized = getMeshIndex(rootObject).get(expressID)
+  if (materialized && materialized.length > 0) return null
+
+  const batch = rootObject.userData.batch as BatchState | null | undefined
+  const infos = batch?.byExpressId.get(expressID)
+  if (!batch || !infos || infos.length === 0) return null
+
+  return { mesh: batch.mesh, instances: infos.map(info => ({ instanceId: info.instanceId, baseColor: info.color })) }
+}
+
 // For schedule extraction (ifcScheduleExtraction.ts) — 2026-07-21 perf fix,
 // per Maro: extraction only ever needs a world-space bounding box to
 // estimate a length/area quantity (measureElement), but it used to call
