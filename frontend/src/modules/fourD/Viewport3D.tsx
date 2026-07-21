@@ -26,7 +26,7 @@ import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
-import { ensureMaterialized, materializeAll, type BatchState } from './elementBatching'
+import { ensureMaterialized, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
@@ -1482,17 +1482,9 @@ export function TimelinePlayback({
       // elements... are visible" — the previous resolution below called
       // `handle.object.traverse()` — a full walk of the *entire* IFC
       // model's object graph — once for every single ModelElementLink row,
-      // to find that one link's own mesh. For a real project (the Snowdon
-      // sample has 1,158 links across a few-thousand-element model) that's
-      // millions of node visits done synchronously in this one effect,
-      // easily taking long enough that every linked element still showed
-      // its native, fully-opaque just-imported material — precisely
-      // matching "the whole model appears on day one" — well past the
-      // point a user would have already looked and screenshotted it, even
-      // though the per-frame opacity math (computeAppliedAnimationStateAt)
-      // was always correct the moment it actually got applied. Building
-      // one expressID->mesh map per handle up front turns that into a
-      // single traverse per handle plus a plain Map lookup per link.
+      // to find that one link's own mesh. Building one expressID->mesh map
+      // per handle up front turns that into a single traverse per handle
+      // plus a plain Map lookup per link.
       // Array per expressID, not a single mesh (2026-07-15 fix, per Maro:
       // "these framing elements... stay solid at every date" — verified
       // against the real Snowdon file: loadIfcModel (ifcModel.ts) creates
@@ -1508,6 +1500,14 @@ export function TimelinePlayback({
       // as "the whole joist never animates." A simple single-piece column
       // or beam (the common case) still gets a one-element array here, so
       // this changes nothing for the elements that already worked.
+      //
+      // Only used by the ifc_split branch below now (2026-07-21) — real IFC
+      // elements (the `ifcModel` branch) resolve via getMaterializedMeshes
+      // instead, since a plain traverse here can never see a still-batched
+      // element (elementBatching.ts's own BatchedMesh optimization). Split
+      // clones (elementSplitTargets.ts) are always real individual meshes,
+      // never batched, so a plain traverse still finds them correctly and
+      // cheaply — no need to route them through the batch-aware path too.
       const expressIdIndexByHandle = new Map<IfcModelHandle, Map<number, THREE.Object3D[]>>()
       const getExpressIdIndex = (handle: IfcModelHandle): Map<number, THREE.Object3D[]> => {
         let index = expressIdIndexByHandle.get(handle)
@@ -1615,11 +1615,24 @@ export function TimelinePlayback({
           // every currently-loaded one instead of assuming a single global
           // handle, same reasoning as linkedElements.ts's own
           // resolveInAnyHandle.
+          //
+          // getMaterializedMeshes, not getExpressIdIndex (2026-07-21 fix,
+          // per Maro — see elementBatching.ts's own header) — a real IFC
+          // element whose geometry repeats gets batched into the shared
+          // THREE.BatchedMesh (elementBatching.ts) and has no individual
+          // THREE.Mesh/userData.expressID at all until something pulls it
+          // out. getExpressIdIndex's plain traverse could never see those,
+          // so any schedule-linked element that happened to still be
+          // batched silently never animated. Materializes on demand (cheap
+          // now that ensureMaterialized is O(1), not the whole-model
+          // traverse this session's earlier bug made it) — only the
+          // elements actually linked to an activity ever leave the batch,
+          // everything else on screen stays batched.
           for (const handle of ifcHandles) {
             const expressId = ifcModel.getExpressIdFromGuid(handle, link.element_ref)
             if (expressId === undefined) continue
-            const matches = getExpressIdIndex(handle).get(expressId)
-            if (matches && matches.length > 0) { objects = matches; break }
+            const matches = getMaterializedMeshes(handle.object, expressId)
+            if (matches.length > 0) { objects = matches; break }
           }
         }
         if (objects.length === 0) continue

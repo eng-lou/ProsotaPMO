@@ -6,7 +6,7 @@ import * as THREE from 'three'
 // IfcDataPanel.tsx already use everywhere else to keep web-ifc out of the
 // main bundle.
 import type { IfcModelHandle, IfcTreeNode } from './ifcModel'
-import { ensureMaterialized } from './elementBatching'
+import { getExpressIdWorldBounds } from './elementBatching'
 
 // IFC Schedule Wizard, step 1 (2026-07-13, per Maro: "generate a resource
 // loaded schedule based on an imported ifc") — extracts the elements a
@@ -367,22 +367,6 @@ async function buildStoreyMap(
   return byExpressId
 }
 
-// The mesh(es) tagged with this expressID (a structural element can be
-// made of more than one mesh/material island — box the union of all of
-// them) — same userData.expressID lookup Viewport3D.tsx uses everywhere,
-// just collecting instead of stopping at the first match.
-function findMeshesForExpressId(root: THREE.Object3D, expressID: number): THREE.Mesh[] {
-  // ensureMaterialized first (2026-07-17) — see elementBatching.ts's own
-  // header: materializes every batched piece for this expressID so the
-  // traverse below actually finds all of them instead of silently missing
-  // whichever pieces were still batched.
-  ensureMaterialized(root, expressID)
-  const found: THREE.Mesh[] = []
-  root.traverse(child => {
-    if (child instanceof THREE.Mesh && child.userData.expressID === expressID) found.push(child)
-  })
-  return found
-}
 
 // The only categories a real IfcElementQuantity area is worth reading for
 // (2026-07-18) — mirrors scheduleGeneration.ts's own COUNT_BASED set
@@ -401,10 +385,8 @@ const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Roo
 // getElementQuantityArea (ifcModel.ts) and AREA_PRICED_CATEGORIES above for
 // why a real Qto value is tried first when the file actually has one.
 function measureElement(
-  meshes: THREE.Mesh[], category: ScheduleCategory, toMetres: number,
+  box: THREE.Box3, category: ScheduleCategory, toMetres: number,
 ): { quantity: number; quantityUnit: 'm' | 'm²' } {
-  const box = new THREE.Box3()
-  for (const mesh of meshes) box.union(new THREE.Box3().setFromObject(mesh))
   const size = box.getSize(new THREE.Vector3()).multiplyScalar(toMetres)
   const dims = [size.x, size.y, size.z].sort((a, b) => b - a)
   if (category === 'Columns' || category === 'Beams') {
@@ -468,8 +450,14 @@ export async function extractScheduleElements(
       : (ifcType === 'IfcMember' || ifcType === 'IfcPlate') && isCurtainWallMember(name) ? 'Curtain Walls'
       : MEP_FAMILY_TYPES.has(ifcType) ? (resolveMepCategory(name) ?? rawCategory)
       : rawCategory
-    const meshes = findMeshesForExpressId(handle.object, expressID)
-    if (meshes.length > 0 && globalId) {
+    // getExpressIdWorldBounds, not a materializing mesh lookup (2026-07-21
+    // perf fix, per Maro: "generating the 4D link... cripples the
+    // platform") — see that function's own header in elementBatching.ts.
+    // Computes the identical bounding box without ever pulling a batched
+    // element out of the shared THREE.BatchedMesh, so generating a schedule
+    // no longer permanently un-batches nearly the entire model.
+    const box = getExpressIdWorldBounds(handle.object, expressID)
+    if (box && globalId) {
       const storey = storeyByExpressId.get(expressID)
       // Real IfcElementQuantity NetArea/GrossArea preferred over the
       // bounding-box estimate (2026-07-18) — only worth checking for the
@@ -484,7 +472,7 @@ export async function extractScheduleElements(
         : null
       const { quantity, quantityUnit } = realArea !== null
         ? { quantity: realArea, quantityUnit: 'm²' as const }
-        : measureElement(meshes, category, toMetres)
+        : measureElement(box, category, toMetres)
       elements.push({
         expressID, globalId, name, ifcType, category,
         material: classifyMaterial(name),

@@ -276,11 +276,15 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     batchedMesh.perObjectFrustumCulled = false
     batchedMesh.sortObjects = false
     const geometryByIfcId = new Map<number, { geometry: THREE.BufferGeometry; geometryId: number }>()
+    // Keyed the other way round from geometryByIfcId (2026-07-21 perf fix)
+    // — see BatchState.geometryById's own header in elementBatching.ts.
+    const geometryById = new Map<number, THREE.BufferGeometry>()
     for (const [geomId, geometry] of repeatedGeometries) {
       const geometryId = batchedMesh.addGeometry(geometry)
       geometryByIfcId.set(geomId, { geometry, geometryId })
+      geometryById.set(geometryId, geometry)
     }
-    batch = { mesh: batchedMesh, byExpressId: new Map(), expressIdByInstanceId: new Map(), geometryByIfcId }
+    batch = { mesh: batchedMesh, byExpressId: new Map(), expressIdByInstanceId: new Map(), geometryByIfcId, geometryById }
     group.add(batchedMesh)
   }
 

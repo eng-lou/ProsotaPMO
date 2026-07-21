@@ -49,9 +49,46 @@ export interface BatchState {
   // always exactly one specific piece, so this direction stays 1:1.
   expressIdByInstanceId: Map<number, number>
   // Keyed by web-ifc's own geometryExpressID, not our synthetic geometryId
-  // — ensureMaterialized needs to go from "which instance" back to "which
-  // shape" to build a standalone mesh for it.
+  // — getExpressIdWorldBounds needs to go from "which instance" back to
+  // "which shape" to compute a world-space bounding box without
+  // materializing anything.
   geometryByIfcId: Map<number, { geometry: THREE.BufferGeometry; geometryId: number }>
+  // Keyed by THREE.BatchedMesh's own synthetic geometryId (the id
+  // `batchedMesh.addGeometry()` returns) — 2026-07-21 perf fix, per Maro:
+  // "generating the 4D link... literally cripples the platform" for real
+  // multi-file models. ensureMaterialized used to find a batched instance's
+  // source geometry by scanning every entry of geometryByIfcId.values()
+  // looking for a matching geometryId — an O(n) scan, per instance, on top
+  // of the O(n) traverse this whole file's other fix (the expressID mesh
+  // index below) already went after. Built once alongside geometryByIfcId
+  // in ifcModel.ts's loadIfcModel (same geometryId, just the other key),
+  // turning that scan into an O(1) lookup too.
+  geometryById: Map<number, THREE.BufferGeometry>
+}
+
+// Every element that's a real, individual THREE.Mesh right now — whether it
+// was never batched (unique geometry, placed directly in loadIfcModel's Pass
+// 3) or was pulled out of the batch later by ensureMaterialized — kept on
+// rootObject.userData so any caller with just an Object3D reference can reach
+// it (same idiom as userData.batch itself). 2026-07-21 perf fix, per Maro:
+// ensureMaterialized used to answer "is this expressID already materialized?"
+// by calling rootObject.traverse() — a walk of the *entire* model's object
+// graph — on every single call. Schedule generation
+// (ifcScheduleExtraction.ts) calls ensureMaterialized once per candidate
+// schedulable element (thousands, for a real building), making that a
+// genuinely O(n²) cost in element count — confirmed as the actual mechanism
+// behind "generating the 4D link... cripples the platform" for real
+// multi-discipline files. finalizeIndividualMesh (below) is the one place a
+// mesh becomes real either way, so registering it there is the single choke
+// point that keeps this index complete without any other call site needing
+// to know it exists.
+function getMeshIndex(rootObject: THREE.Object3D): Map<number, THREE.Mesh[]> {
+  let index = rootObject.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
+  if (!index) {
+    index = new Map()
+    rootObject.userData.expressIdMeshIndex = index
+  }
+  return index
 }
 
 export function buildElementMaterial(color: { x: number; y: number; z: number; w: number }): THREE.MeshStandardMaterial {
@@ -66,6 +103,13 @@ export function buildElementMaterial(color: { x: number; y: number; z: number; w
 export function finalizeIndividualMesh(mesh: THREE.Mesh, expressID: number, matrix: THREE.Matrix4, group: THREE.Object3D) {
   mesh.applyMatrix4(matrix)
   mesh.userData.expressID = expressID
+  // Registers into getMeshIndex's own map — see that function's header.
+  // Runs here rather than at each of this function's two call sites (initial
+  // load's Pass 3, and ensureMaterialized's batch pull-out below) so neither
+  // has to separately remember to do it.
+  const index = getMeshIndex(group)
+  const existing = index.get(expressID)
+  if (existing) existing.push(mesh); else index.set(expressID, [mesh])
   // Its real placement within the model, not 0/0/0 — captured here, right
   // after applyMatrix4 decomposes the placement matrix into this mesh's
   // own local position/rotation/scale, so TransformPanel.tsx's
@@ -111,11 +155,11 @@ export function finalizeIndividualMesh(mesh: THREE.Mesh, expressID: number, matr
 // round-tripping would add real complexity (re-syncing every edit back
 // into the batch's per-instance matrix/colour) for no real benefit.
 export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number): THREE.Mesh | null {
-  let existing: THREE.Mesh | null = null
-  rootObject.traverse(child => {
-    if (!existing && child instanceof THREE.Mesh && child.userData.expressID === expressID) existing = child
-  })
-  if (existing) return existing
+  // O(1) index lookup, not a full-model traverse (2026-07-21 perf fix) —
+  // see getMeshIndex's own header for the real, measured cost this used to
+  // have at schedule-generation scale.
+  const existing = getMeshIndex(rootObject).get(expressID)
+  if (existing && existing.length > 0) return existing[0]
 
   const batch = rootObject.userData.batch as BatchState | null | undefined
   const infos = batch?.byExpressId.get(expressID)
@@ -125,10 +169,10 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   for (const info of infos) {
     batch.mesh.setVisibleAt(info.instanceId, false)
 
-    let sourceGeometry: THREE.BufferGeometry | null = null
-    for (const entry of batch.geometryByIfcId.values()) {
-      if (entry.geometryId === info.geometryId) { sourceGeometry = entry.geometry; break }
-    }
+    // O(1) via geometryById (2026-07-21 perf fix) — this used to scan every
+    // entry of geometryByIfcId.values() looking for a matching geometryId,
+    // an O(n) cost per instance on top of the traverse fixed above.
+    const sourceGeometry = batch.geometryById.get(info.geometryId)
     if (!sourceGeometry) continue
 
     // Cloned, not shared with the cache entry — every other existing
@@ -145,6 +189,64 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   }
   batch.byExpressId.delete(expressID)
   return firstMesh
+}
+
+// For schedule extraction (ifcScheduleExtraction.ts) — 2026-07-21 perf fix,
+// per Maro: extraction only ever needs a world-space bounding box to
+// estimate a length/area quantity (measureElement), but it used to call
+// ensureMaterialized for every candidate element to get one, which — combined
+// with that function's own O(n) traverse (see getMeshIndex's header) —
+// permanently un-batched essentially the *entire* model the moment a
+// schedule was generated, since extraction touches nearly every schedulable
+// element. This computes the same box a materialized mesh would have
+// (THREE.Box3.setFromObject's own non-precise path: geometry.boundingBox
+// transformed by the object's cached matrixWorld) directly from the batch's
+// own stored geometry + instance matrix, without ever pulling the element out
+// of the batch. Falls back to the real per-mesh path for anything already
+// individual (never-batched, or previously materialized for some other
+// reason) so behaviour is identical for those. Returns null only if the
+// expressID genuinely has no geometry anywhere (batched or individual).
+export function getExpressIdWorldBounds(rootObject: THREE.Object3D, expressID: number): THREE.Box3 | null {
+  const materialized = getMeshIndex(rootObject).get(expressID)
+  if (materialized && materialized.length > 0) {
+    const box = new THREE.Box3()
+    for (const mesh of materialized) box.union(new THREE.Box3().setFromObject(mesh))
+    return box
+  }
+
+  const batch = rootObject.userData.batch as BatchState | null | undefined
+  const infos = batch?.byExpressId.get(expressID)
+  if (!batch || !infos || infos.length === 0) return null
+
+  const box = new THREE.Box3()
+  let any = false
+  for (const info of infos) {
+    const geometry = batch.geometryById.get(info.geometryId)
+    if (!geometry) continue
+    if (!geometry.boundingBox) geometry.computeBoundingBox()
+    if (!geometry.boundingBox) continue
+    // rootObject.matrixWorld, not just info.matrix (2026-07-21) — info.matrix
+    // is only this instance's placement *relative to rootObject*; the model
+    // as a whole can itself be moved/rotated (TransformPanel edits on the
+    // whole import) after load, exactly like the already-materialized branch
+    // above accounts for via mesh.matrixWorld. Read as-is (no forced
+    // recompute), matching Box3.setFromObject's own non-precise path, which
+    // trusts whatever matrixWorld the last render tick already computed.
+    const worldMatrix = rootObject.matrixWorld.clone().multiply(info.matrix)
+    box.union(geometry.boundingBox.clone().applyMatrix4(worldMatrix))
+    any = true
+  }
+  return any ? box : null
+}
+
+// For TimelinePlayback (Viewport3D.tsx) — a schedule-linked element can carry
+// more than one placed geometry piece (see BatchState.byExpressId's own
+// header), and animation needs to drive every piece in lockstep, not just
+// the first one ensureMaterialized returns. Materializes on demand (a no-op
+// if already real) then reads every piece back from the shared index.
+export function getMaterializedMeshes(rootObject: THREE.Object3D, expressID: number): THREE.Mesh[] {
+  ensureMaterialized(rootObject, expressID)
+  return getMeshIndex(rootObject).get(expressID) ?? []
 }
 
 // For the handful of features that need to scan *every* element of a model
