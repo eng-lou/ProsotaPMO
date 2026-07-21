@@ -369,6 +369,11 @@ const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
 // avoids allocating a fresh THREE.Color per material per frame just to
 // compare a candidate colour against what's already applied.
 const _scratchColor = new THREE.Color()
+// Reused every frame by TimelinePlayback's own transform diff below
+// (2026-07-21 perf fix) — see that diff's own header for why.
+const _scratchPosition = new THREE.Vector3()
+const _scratchScale = new THREE.Vector3()
+const _scratchEuler = new THREE.Euler()
 // Variance colour-coding (2026-07-12, per Maro: "Colour coded elements by
 // variance") — reuses the Scheduling module's own already-working
 // baseline feature (Activity.variance_days, set once a baseline is
@@ -1794,14 +1799,36 @@ export function TimelinePlayback({
       if (hasKeyframes) {
         if (dateChanged) applyKeyframedTransform(target, now, upAxis)
       } else if (state && activeLink) {
-        target.object.position.set(
+        // Diffed before writing, not applied unconditionally (2026-07-21
+        // perf fix, per Maro: "animation literally doesn't play and instead
+        // snaps to position due to ridiculous lag" — this block used to
+        // rewrite position/rotation/scale on `target.object` every single
+        // frame regardless of whether the computed values had actually
+        // changed since last frame. `dateChanged` being true just means
+        // `now` moved at all, not that *this specific target's* animation
+        // state moved — most elements in a real multi-discipline schedule
+        // are already fully installed and done animating (offset 0,
+        // multiplier 1) for the overwhelming majority of the timeline, so
+        // this was three Vector3/Euler writes, every frame, for effectively
+        // every already-settled element, at a scale (six combined
+        // discipline files' worth of linked elements) where that adds up to
+        // real per-frame cost. Comparing against `target.object`'s own
+        // CURRENT values (not a separately-cached "last written" value)
+        // keeps the same "an external change gets corrected next frame"
+        // correctness the material diff below already relies on, while
+        // skipping the write for every target whose computed pose hasn't
+        // actually moved.
+        _scratchPosition.set(
           target.basePosition.x + state.positionOffset[0],
           target.basePosition.y + state.positionOffset[1],
           target.basePosition.z + state.positionOffset[2],
         )
-        target.object.rotation.copy(target.baseRotation)
-        target.object.rotation[activeLink.axis] += state.rotationOffsetDeg * DEG_TO_RAD
-        target.object.scale.copy(target.baseScale).multiplyScalar(state.scaleMultiplier)
+        _scratchEuler.copy(target.baseRotation)
+        _scratchEuler[activeLink.axis] += state.rotationOffsetDeg * DEG_TO_RAD
+        _scratchScale.copy(target.baseScale).multiplyScalar(state.scaleMultiplier)
+        if (!target.object.position.equals(_scratchPosition)) target.object.position.copy(_scratchPosition)
+        if (!target.object.rotation.equals(_scratchEuler)) target.object.rotation.copy(_scratchEuler)
+        if (!target.object.scale.equals(_scratchScale)) target.object.scale.copy(_scratchScale)
       }
 
       // Opacity/colour always come from the profile alone (if any) — never
