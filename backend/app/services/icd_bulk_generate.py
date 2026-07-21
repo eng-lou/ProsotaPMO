@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -10,7 +11,7 @@ from app.models.icd_item import IcdItem
 from app.models.period import Period
 from app.models.record_link import RecordLink
 from app.schemas.icd_bulk_generate import IcdBulkGenerateRequest, IcdBulkGenerateResponse
-from app.services.reference_codes import next_code
+from app.services.reference_codes import next_codes_batch
 
 _CODE_PREFIXES = {"issue": "ISS", "change": "CHA", "decision": "DEC"}
 
@@ -77,10 +78,25 @@ async def bulk_generate(db: AsyncSession, data: IcdBulkGenerateRequest) -> IcdBu
     created_count = updated_count = 0
     item_ids: list[uuid.UUID] = []
 
+    # Codes are numbered per item_type (ISS-0001/CHA-0001/DEC-0001 each their
+    # own sequence), so the starting number is computed once per type here
+    # (at most 3 queries total) rather than once per new item — a real
+    # rescan generating dozens of new watch-flags used to do one aggregate
+    # query per item just for its code.
+    new_counts_by_type = Counter(
+        d.item_type for d in data.items if (d.item_type, d.title) not in existing_by_type_title
+    )
+    code_iters = {
+        item_type: iter(await next_codes_batch(
+            db, IcdItem, _CODE_PREFIXES[item_type], data.project_id, count, extra_filter=IcdItem.item_type == item_type,
+        ))
+        for item_type, count in new_counts_by_type.items()
+    }
+
     for d in data.items:
         existing = existing_by_type_title.get((d.item_type, d.title))
         if existing is None:
-            code = await next_code(db, IcdItem, _CODE_PREFIXES[d.item_type], data.project_id, extra_filter=IcdItem.item_type == d.item_type)
+            code = next(code_iters[d.item_type])
             item = IcdItem(
                 id=uuid.uuid4(), project_id=data.project_id, period_id=data.period_id, code=code,
                 item_type=d.item_type, title=d.title, description=d.description, status="open",

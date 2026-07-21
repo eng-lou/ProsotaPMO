@@ -30,14 +30,14 @@ class ResourceAssignment(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     activity_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # No ondelete cascade here, deliberately — deleting a Resource that's still
     # assigned somewhere is blocked at the service layer (app/services/resource.py)
     # rather than silently cascading away cost data; the FK's default RESTRICT
     # behaviour is a backstop against any code path that bypasses that check.
     resource_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False, index=True
     )
     # Free text, matching the prototype's "Role" column (e.g. "Site Engineer") —
     # independent of the resource's own name, since the same named resource could

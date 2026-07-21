@@ -91,8 +91,16 @@ async def _get_or_create_live_period(db: AsyncSession, project_id: uuid.UUID) ->
     return period
 
 
-async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.UUID) -> None:
-    """Called after every resource assignment create/update/delete for an activity."""
+async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.UUID, *, commit: bool = True) -> None:
+    """Called after every resource assignment create/update/delete for an activity.
+
+    commit=False (2026-07-20, optimization pass) — schedule_bulk_generate.py
+    and p6_import.py call this once per resource-assigned activity in a
+    loop after a real bulk import/generation; each call committing
+    individually meant a resource-loaded generation of a few hundred
+    activities did a few hundred serialized commits back-to-back. Every
+    other caller (resource_assignment.py, resource_assignment_spread.py) is
+    a single real-time edit and keeps the default (commit immediately)."""
     activity = await db.get(Activity, activity_id)
     if activity is None:
         return
@@ -121,7 +129,8 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
         if element is not None:
             await db.execute(delete(CostRateLine).where(CostRateLine.cost_element_id == element.id))
             await db.delete(element)
-            await db.commit()
+            if commit:
+                await db.commit()
         return
 
     resources_result = await db.execute(
@@ -173,7 +182,10 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
             cost_element_id=element.id, description=label, qty=qty, unit=resource.unit, rate=resource.rate,
         ))
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
 
 
 async def sync_cost_element_pct_complete(db: AsyncSession, activity: Activity) -> None:
@@ -220,4 +232,24 @@ async def delete_linked_cost_element(db: AsyncSession, activity_id: uuid.UUID) -
         return
     await db.execute(delete(CostRateLine).where(CostRateLine.cost_element_id == element.id))
     await db.delete(element)
+    await db.commit()
+
+
+async def delete_linked_cost_elements_bulk(db: AsyncSession, activity_ids: set[uuid.UUID]) -> None:
+    """Same cleanup as delete_linked_cost_element, batched for a whole WBS
+    subtree being deleted at once (app/services/activity.py:delete_activity's
+    cascade) — one query to find every schedule-managed linked element
+    across the entire subtree, one batched rate-line delete, one batched
+    element delete, one commit, instead of that same round-trip per
+    activity in the subtree."""
+    if not activity_ids:
+        return
+    elements = (await db.execute(
+        select(CostElement).where(CostElement.linked_activity_id.in_(activity_ids), CostElement.source == "schedule")
+    )).scalars().all()
+    if not elements:
+        return
+    element_ids = [el.id for el in elements]
+    await db.execute(delete(CostRateLine).where(CostRateLine.cost_element_id.in_(element_ids)))
+    await db.execute(delete(CostElement).where(CostElement.id.in_(element_ids)))
     await db.commit()

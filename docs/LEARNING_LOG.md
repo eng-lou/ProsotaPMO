@@ -1813,3 +1813,216 @@ tool, BOQ delete-all/print, Risk/Cost bulk generation, section box
 rotation) — asked Maro explicitly whether to keep that separate or bundle
 it in, since none of it had been touched or re-verified in this
 continuation; he chose one combined commit.
+
+---
+
+## 2026-07-20 — Controls Dashboard becomes a real widget library; Camera Views learn to remember more than the camera
+
+**Part 1: from six fixed panels to a PowerBI-style canvas.** The Controls
+Dashboard's Overview tab used to be six hard-coded panels in a fixed
+layout. Maro wanted it to become a free canvas instead — add, remove,
+resize, and drag widgets anywhere, save named layouts, like PowerBI. The
+backend reused the exact "named saved layout, one active per project"
+pattern the 4D module's own dock layout already had (`DashboardLayout`
+mirrors `DockLayout`). The frontend grid went through three real
+iterations before landing: first the `react-grid-layout` npm package, then
+a patched version of it, both of which turned out to have a width-tracking
+bug that never resolved to a real number — rather than keep chasing an
+opaque bug in a brand-new major version of someone else's library with no
+way to watch it run live, the library was dropped entirely in favour of a
+small, fully self-written grid (own pixel math, own drag/resize via
+mousedown/mousemove/mouseup, same pattern the 4D module's own split-pane
+resizing already used). Confirmed working in the browser before anything
+else got built on top of it.
+
+**Part 2: a reference-driven gap analysis, then ~45 new widgets in a day.**
+Once the canvas itself was solid, the question became "what widgets should
+actually live in it?" Maro shared screenshots of two real commercial
+tools — a Primavera-style EVM/resourcing dashboard and a BEXEL Manager 5D
+BIM report suite — and the ask was to cross-check everything in them
+against what Prosota could already do. That produced a genuinely useful
+split: some things were **quick wins** (a DCMA 14-point quality score and a
+Clash Detective summary were both real, fully-built, fully-tested backend
+modules that had simply never been surfaced on a dashboard before — pure
+reuse, zero new logic), some were **real but bounded gaps** (a resource's
+true "actual" cost needs a new join; a Camera View gallery needed a
+thumbnail feature that didn't exist yet), and some were **genuinely
+blocked** (a live, PowerBI-style resource-histogram-by-week needs
+real values captured repeatedly over time, which is a "needs real usage,"
+not a "write more code," problem — same root issue as the S-curve gap from
+the baseline-comparison work). Sorting the reference material into "just
+reuse this," "build this, it's bounded," and "this needs a decision or
+more historical data first" turned an overwhelming wishlist into eight
+concrete, shippable batches — Schedule, Risk, Cost, Resources,
+Issues/Changes/Decisions, then a "quick wins" batch, then Camera
+Views/4D Video, then a final round of Look-Ahead Planner/Mitigation
+Actions/Risk Ageing/a templated "AI narrative." Every batch followed the
+same shape: one shared backend fetch per module (schedule_activities,
+risks, cost_elements, ...) that many small frontend widgets all read from
+client-side, rather than one bespoke query per widget — and every batch
+got the same verification pass (new backend tests, full suite, `tsc`,
+build) before moving to the next.
+
+One nice discovery along the way: an "AI Narrative" widget in the
+reference material — sentences like "Mechanical: 2% complete, behind plan"
+— turned out to just be templated string formatting over numbers already
+being computed anyway, not a real model call at all. That's a genuinely
+different, much cheaper thing than the real "AI Insight Generator" already
+planned for later (which does need a real LLM), and it shipped the same
+day as one of the cheap quick wins.
+
+**Part 3: Camera Views learn to remember the whole scene, not just the
+angle.** The existing Camera View feature (save an orbit angle, click to
+jump back) only ever stored position/target. Maro's ask: isolate just the
+columns, click a clash result (which already selects and red-tints the
+pair), add an annotation, save the view — then after resetting everything
+to "show all," clicking that saved view should bring back the isolation
+exactly, not just the camera angle. Investigation showed the isolation/
+hidden-element machinery, the clash-selection behaviour, and a snapshot
+mechanism (the existing "Capture" button) already existed — this was
+"capture and restore more of what's already there," not inventing a new
+interaction. A saved view now also stores which elements were isolated,
+which IFC model that isolation belonged to, whether clash colouring was
+on, and a PNG thumbnail. The thumbnail turned into its own small lesson:
+the plan started out mirroring `Model3DFile`'s disk-storage pattern (built
+for multi-hundred-MB IFC files), but a closer look at the existing
+codebase found `ProjectLetterhead.logo_data_url` — a small image already
+stored as a base64 string directly in a database column, because a logo
+(like a thumbnail) is nowhere near IFC-file scale. Following that existing
+precedent instead cut out an entire storage subsystem and two new API
+endpoints that would have been unnecessary complexity.
+
+The same reasoning extended to 4D video: Export Video already recorded a
+timeline animation to a downloadable `.webm`, but never stored it
+anywhere — so "pick one of the videos we've captured" needed a small new
+`FourDVideo` table (this time genuinely disk-stored, since a video really
+is large enough to justify it) alongside the existing local download,
+which was left completely unchanged.
+
+One real, subtle bug surfaced by Maro along the way, unrelated to any of
+the above: after a while, the 4D module would show four copies of the same
+single IFC file. A direct database check ruled out duplicate rows in one
+query — only one row existed. So the duplication was happening entirely in
+memory, on the frontend. The actual cause: React's Strict Mode
+(deliberately enabled in this app specifically to catch bugs like this
+one) runs every effect twice in development to catch missing cleanup, and
+the effect that restores saved IFC files on page load only set a
+`cancelled` flag in its cleanup — checked *between* files in its loop, not
+*during* one file's own slow parse. A file already mid-load when Strict
+Mode's synthetic cleanup fired finished anyway, and the second (real)
+invocation restored everything again from scratch, doubling it up. Fixed
+with the standard pattern for exactly this situation: a ref (not state)
+set synchronously before the very first `await`, so any further
+invocation for the same project becomes a guaranteed no-op no matter how
+many times React happens to fire the effect — while still correctly
+re-running if the user genuinely switches to a different project and back.
+
+Two smaller test-authoring lessons repeated themselves this session,
+worth remembering: (1) a computed field manually set via a test helper
+must actually be the right *type* (`Decimal`, not a string that merely
+looks like one) — a string slipped through silently until a genuinely new
+code path (the DCMA quality check) tried to do real arithmetic on it; (2)
+manually setting a schedule-computed field (like `start`) has to happen
+*after* any API call that triggers a real CPM recompute (like creating a
+relationship), never before — otherwise the recompute silently overwrites
+the very value the test just set.
+
+By the end of the day: roughly 45 new dashboard widgets across every
+module, a fully rewritten Camera View feature that captures real scene
+context instead of just a camera angle, a new video-persistence feature,
+and two real bugs (one pre-existing, one from earlier in the same
+session) fixed along the way. Full backend suite green throughout, `tsc`
+and the production build clean after every batch, and every 4D-touching
+change confirmed by Maro directly in the browser before moving on.
+
+---
+
+## 2026-07-20 (continued) — Prosota reaches v1; a full optimization pass
+
+With the Controls Dashboard and Camera Views/4D Video work done, Maro
+called this v1 and asked for a proper speed-and-scale pass: review the
+code, find the waste, make it built to scale. Rather than guess at what
+"probably needs optimizing," this ran as a real audit first — two
+background research passes (one over backend query patterns, one over
+frontend bundle size and runtime behaviour) plus a first-hand look at the
+dashboard code from earlier in the session — and only started changing
+anything once there was a concrete, evidence-backed list to work from.
+That list turned into a plan, reviewed and approved before any of it was
+touched, then executed in priority order.
+
+**The single biggest, safest finding: this database had no indexes at
+all.** Not "some missing" — a search for every column marked as
+indexed across every table came back with zero results, out of 103
+foreign-key columns. Postgres never indexes a foreign key automatically
+(unlike some databases), so every single query filtering by "which
+project" or "which period" — which is nearly every query this app ever
+runs — was scanning the whole table. Adding an index doesn't change what
+a query returns, only how fast it runs, which made this the rare kind of
+fix that's both the highest-impact and the lowest-risk available: a
+small script added the missing column everywhere it was needed (skipping
+columns that already had a unique constraint, which already implies an
+index), one migration, one clean run of the full test suite.
+
+**A confirmed regression, not a new suggestion.** The 4D viewport had a
+real, deliberate performance fix built earlier in the project's life: a
+check that skips an expensive per-mesh pass (texture, shading, colour)
+unless the actual 3D scene really changed, built specifically because a
+model with over 5,000 elements was struggling. That check works by
+comparing object references — "is this literally the same object as last
+time, or a new one?" — and the object it was checking had quietly started
+being rebuilt from scratch on every single render of the page, for
+reasons completely unrelated to the 3D scene itself (typing in a field,
+opening a side panel). The check always saw "a new object," always
+assumed something real had changed, and the expensive pass ran constantly
+without anyone asking it to. The fix was one line — wrapping that object
+in React's `useMemo`, which only rebuilds it when its real inputs
+change — but finding it required actually reading what the earlier fix's
+own comments said it depended on, not just profiling for something slow.
+
+**The 4D module was loading for everyone, whether they used it or not.**
+The 4D viewer — a genuinely heavy piece of software (a full 3D engine plus
+IFC file parsing) — was built into the very first thing every user's
+browser downloaded, and it started fetching its own data (saved camera
+views, clash tests, measurements, and about twenty other things) the
+moment a project was selected, regardless of whether that user ever
+opened the 4D tab at all. Fixed in two parts: the whole module now only
+loads its code the first time someone actually navigates to it (a
+one-line change using a standard React technique, `lazy` loading), and
+its own data only starts fetching from that same first visit onward too.
+Confirmed with a real production build: the main bundle almost everyone
+downloads dropped by about 200KB (compressed), and the 4D module's own
+~700KB became something only paid for by people who actually use it.
+
+**A dashboard dragging a widget around was recalculating every other
+widget's numbers, dozens of times a second.** Moving or resizing one
+widget on the Controls Dashboard was updating on every single pixel of
+mouse movement with no throttling, and every other widget on the board
+was recalculating its own data (sorting lists, filtering tables) on every
+one of those updates, even though nothing about their own data had
+changed. Fixed with two standard, well-known techniques: capping the
+update to once per screen refresh (a browser API called
+`requestAnimationFrame`, already used elsewhere for smooth animation) and
+wrapping the widgets in React's `memo`, which skips re-running a
+component's own work when nothing it actually depends on has changed.
+
+**A handful of real "doing the same thing over and over when once would
+do" bugs**, the kind that are invisible with a handful of test rows but
+add up fast at real scale: generating a schedule from an IFC file, a
+batch of cost/risk/issue items, or importing a P6 file was numbering each
+new item one at a time — a database round-trip *per item* just to work
+out its reference number — instead of working out the whole batch's
+numbers in one go and then just counting up locally. Deleting a whole
+branch of a schedule was cleaning up its linked costs one activity at a
+time instead of once for the whole branch. And a dashboard widget
+computing schedule quality (DCMA's 14-point check) was independently
+re-fetching the entire schedule from the database, even though the
+dashboard had already fetched that exact same data moments earlier for
+its own use — now it reuses what's already there.
+
+Every one of these changes was checked against the existing test suite
+(769 backend tests, unchanged pass count throughout — these were all
+"do the same thing, just not wastefully" changes, not new behaviour) plus
+`tsc` and a real production build after each stage. The frontend changes
+still need Maro's own hands-on check in the browser — dragging a
+dashboard widget, opening the 4D module for the first time in a session —
+since none of this can be seen from the code alone.

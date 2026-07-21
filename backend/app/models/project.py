@@ -19,7 +19,7 @@ class Project(Base, TimestampMixin):
     __tablename__ = "projects"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organisations.id"), nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organisations.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     client_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

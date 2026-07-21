@@ -29,7 +29,7 @@ class Resource(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # labour | equipment | material | subcontractor | cost | crew — determines both
     # what rate/unit mean and how an assignment's budget is costed (see
@@ -63,7 +63,7 @@ class Resource(Base, TimestampMixin):
     # Activity.calendar_id: removing a custom calendar shouldn't block the
     # delete or leave a dangling reference.
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL"), index=True
     )
     # Classification fields (2026-07-08, per Maro, scoped down from a much larger
     # external schema proposal — see docs/ or project memory for the full

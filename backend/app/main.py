@@ -22,6 +22,7 @@ from app.api.cost_elements import router as cost_elements_router
 from app.api.cost_rate_lines import router as cost_rate_lines_router
 from app.api.cost_variance_criteria import router as cost_variance_criteria_router
 from app.api.dashboard import router as dashboard_router
+from app.api.dashboard_layouts import router as dashboard_layouts_router
 from app.api.dock_layouts import router as dock_layouts_router
 from app.api.element_keyframes import router as element_keyframes_router
 from app.api.element_parents import router as element_parents_router
@@ -33,6 +34,7 @@ from app.api.icd_bulk_generate import router as icd_bulk_generate_router
 from app.api.icd_comments import router as icd_comments_router
 from app.api.icd_criteria import router as icd_criteria_router
 from app.api.icd_items import router as icd_items_router
+from app.api.fourd_videos import router as fourd_videos_router
 from app.api.gantt_layouts import router as gantt_layouts_router
 from app.api.material_presets import router as material_presets_router
 from app.api.measurements import router as measurements_router
@@ -135,6 +137,7 @@ app.include_router(animation_profiles_router, prefix="/api/v1", dependencies=_au
 app.include_router(element_keyframes_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(material_presets_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(model3d_files_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(fourd_videos_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(section_boxes_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(camera_views_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(collections_router, prefix="/api/v1", dependencies=_auth)
@@ -149,6 +152,7 @@ app.include_router(element_parents_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(element_splits_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(measurements_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(dashboard_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(dashboard_layouts_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

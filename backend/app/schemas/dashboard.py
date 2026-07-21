@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 
 class DashboardKpis(BaseModel):
+    plan_start: datetime | None
     planned_finish: datetime | None
     # on_time | delayed | unknown (no top-level finish/baseline yet)
     planned_finish_status: str
@@ -17,6 +18,78 @@ class DashboardKpis(BaseModel):
     bac: Decimal | None
     eac: Decimal | None
     cpi: Decimal | None
+    # Two more PMBOK EAC formulas alongside the classic BAC/CPI already above
+    # (Batch 6, 2026-07-20, per the EAC Forecast Comparison gap flagged in
+    # WIDGET_LIBRARY_PLAN.md §E.1) — "AC + remaining at plan rate" and the
+    # SPI x CPI composite. A fourth, manual "AC + custom ETC" method from the
+    # same reference is deliberately not modelled here — it's an interactive
+    # what-if input, not a derived figure a read-only dashboard tile can show.
+    eac_remaining_at_plan: Decimal | None
+    eac_composite: Decimal | None
+
+
+class DcmaQualitySummary(BaseModel):
+    """Live-computed DCMA 14-point score for whatever scope (whole schedule
+    or one sub-project) the dashboard's own subproject_id param already
+    selects — reuses scheduling_quality.compute_quality (the same engine
+    the Scheduling module's own "Run Quality Analysis" action calls) rather
+    than depending on the user having saved a SchedulingQualityRun, so the
+    dashboard always reflects the schedule as it stands right now."""
+
+    activity_count: int
+    logic_score: float | None
+    total_checks: int
+    passing_count: int
+    failing_count: int
+    warning_count: int
+    scope_name: str | None
+
+
+class ClashByTest(BaseModel):
+    test_id: uuid.UUID
+    test_name: str
+    test_type: str
+    total: int
+    new_count: int
+    reviewed_count: int
+    approved_count: int
+
+
+class ClashSummary(BaseModel):
+    """Reuses the existing Clash Detective data (ClashTest/ClashResult,
+    2026-07-12) — every clash across every test in the project, never
+    recomputed here (clash geometry only ever exists client-side, see
+    ClashTest's own docstring)."""
+
+    test_count: int
+    total_clashes: int
+    new_count: int
+    reviewed_count: int
+    approved_count: int
+    by_test: list[ClashByTest]
+
+
+class ClashPairSummary(BaseModel):
+    """One clashing element pair, raw enough for a detailed clash table
+    widget (test/elements/distance/status) — same "one fetch, many views"
+    split every other widget batch uses. Never a second, independently-
+    fetched clash list."""
+
+    id: uuid.UUID
+    test_id: uuid.UUID
+    test_name: str
+    element_a_label: str
+    element_b_label: str
+    distance_mm: float | None
+    status: str
+
+
+class ProjectInfoSummary(BaseModel):
+    data_date: date | None
+    total_activities: int
+    total_relationships: int
+    total_resources: int
+    has_baseline: bool
 
 
 class ScheduleBuckets(BaseModel):
@@ -33,6 +106,181 @@ class MilestoneTimelineItem(BaseModel):
     bl_finish: datetime | None
     is_critical: bool | None
     variance_days: int | None
+
+
+class ScheduleActivitySummary(BaseModel):
+    """One non-summary, non-archived activity in the currently-scoped
+    schedule (whole/sub-project, per get_overview's own subproject_id/
+    critical_only params) — raw enough for several Schedule-module widgets
+    (float distribution, activities-by-trade, baseline variance, critical
+    activities) to aggregate client-side from one shared fetch, same
+    "one fetch, many views" split the six original widgets already use.
+    Never a second, independently-fetched activity list."""
+
+    id: uuid.UUID
+    code: str
+    task_name: str
+    start: datetime | None
+    finish: datetime | None
+    bl_finish: datetime | None
+    variance_days: int | None
+    total_float_hours: Decimal | None
+    is_critical: bool | None
+    pct_complete: Decimal | None
+    schedule_category: str | None
+    # Batch 6 (2026-07-20) — lets the Activity Status widget distinguish a
+    # currently-suspended activity from a plain in-progress one (Phase 11's
+    # suspend/resume actuals — see Activity's own docstring). Suspended =
+    # suspend_date set, resume_date not yet.
+    suspend_date: datetime | None
+    resume_date: datetime | None
+
+
+class LookaheadItem(BaseModel):
+    """One task-type activity starting within the Look-Ahead Planner's own
+    6-week window (Batch 8, 2026-07-20) — the frontend sub-filters this
+    same list to a 2/4/6-week view rather than fetching three times, same
+    "one fetch, many views" split every other widget batch uses.
+    has_incomplete_predecessor is true when any of this activity's own
+    predecessors (ActivityRelationship) is below 100% complete — a real
+    schedule-logic check, not a guess."""
+
+    id: uuid.UUID
+    code: str
+    task_name: str
+    start: datetime | None
+    finish: datetime | None
+    pct_complete: Decimal | None
+    total_float_hours: Decimal | None
+    is_critical: bool | None
+    has_incomplete_predecessor: bool
+
+
+class LookaheadSummary(BaseModel):
+    """The "Look-Ahead Intelligence" bullet counts — every figure here is a
+    plain count/lookup over lookahead_items and the existing milestones
+    list, never a model call (see WIDGET_LIBRARY_PLAN.md §E.4's own note on
+    templated-sentence widgets being fakeable without an LLM)."""
+
+    window_weeks: int
+    total_in_window: int
+    critical_in_window: int
+    healthy_float_count: int
+    incomplete_predecessor_count: int
+    next_milestone_name: str | None
+    next_milestone_date: datetime | None
+
+
+class RiskMitigationActionSummary(BaseModel):
+    """Every mitigation action across every risk in the period — raw
+    per-action rows (owner/due_date/status/pct_complete) for a Mitigation
+    Actions table widget, same "one fetch, many views" split as every
+    other batch."""
+
+    id: uuid.UUID
+    risk_id: uuid.UUID
+    risk_code: str
+    code: str
+    description: str
+    owner: str | None
+    due_date: date | None
+    status: str
+    pct_complete: int
+
+
+class CostElementSummary(BaseModel):
+    """Every cost element in the period, raw enough for several Cost-module
+    widgets (breakdown by group/owner, budget utilisation, BAC vs EAC,
+    elements table) to aggregate client-side from one shared fetch — same
+    "one fetch, many views" split schedule_activities/risks already use.
+    bac/ac are the already-resolved figures (computed_budget/computed_actuals
+    for a percentage element, budget/actuals for a fixed one — see
+    cost_element._resolve_bac_ac's own docstring), never the raw possibly-
+    None budget/actuals columns a percentage element leaves blank."""
+
+    id: uuid.UUID
+    code: str
+    description: str
+    element_group: str | None
+    cost_owner: str | None
+    status: str | None
+    bac: Decimal | None
+    ac: Decimal | None
+    pct_complete: int | None
+    cpi: Decimal | None
+    eac: Decimal | None
+    vac: Decimal | None
+
+
+class ResourceAssignmentSummary(BaseModel):
+    """Every resource assignment in the currently-scoped schedule period,
+    denormalized with its resource's own display fields (name/type/
+    discipline/company) and its computed budget (resource_costing.
+    compute_assignment_budget — the same formula the Resources tab and
+    cost_sync's own Cost Plan sync already use, never a second,
+    independently-derived figure) — raw enough for the Resources-module
+    widgets (breakdown by type/discipline/company, assignments table, top
+    resources by cost) to aggregate client-side from one shared fetch, same
+    "one fetch, many views" split every other widget batch already uses."""
+
+    id: uuid.UUID
+    resource_name: str
+    resource_type: str
+    discipline: str | None
+    company: str | None
+    role: str | None
+    budget: Decimal
+    activity_id: uuid.UUID
+    activity_task_name: str
+
+
+class IcdItemSummary(BaseModel):
+    """Every issue/change/decision in the period (one shared table,
+    item_type discriminator — see IcdItem's own docstring), raw enough for
+    the Issues/Decisions/Changes widgets (by status, ageing, owner
+    workload, decisions pending, CCB breakdown) to aggregate client-side
+    from one shared fetch — same "one fetch, many views" split
+    schedule_activities/risks/cost_elements already use."""
+
+    id: uuid.UUID
+    code: str
+    title: str
+    item_type: str
+    status: str
+    priority: str | None
+    owner: str | None
+    raised_date: date | None
+    due_date: date | None
+    closed_date: date | None
+    severity: str | None
+    decision_maker: str | None
+    required_by: date | None
+    ccb_decision: str | None
+    cost_impact: Decimal | None
+    schedule_impact_days: int | None
+
+
+class RiskSummary(BaseModel):
+    """Every open-or-closed risk in the period, raw enough for several
+    Risk-module widgets (by category/theme, by owner, threats vs
+    opportunities, response strategy, register table) to aggregate
+    client-side from one shared fetch — same "one fetch, many views" split
+    schedule_activities already uses for Schedule widgets. Never a second,
+    independently-fetched risk list."""
+
+    id: uuid.UUID
+    code: str
+    title: str
+    category: str | None
+    area: str | None
+    status: str
+    risk_owner: str | None
+    risk_type: str
+    response_strategy: str | None
+    rating: Decimal | None
+    emv_cost: Decimal | None
+    emv_schedule_days: Decimal | None
+    date_raised: date | None
 
 
 class TopRisk(BaseModel):
@@ -62,9 +310,21 @@ class DashboardOverviewResponse(BaseModel):
     kpis: DashboardKpis
     schedule_buckets: ScheduleBuckets
     milestones: list[MilestoneTimelineItem]
+    schedule_activities: list[ScheduleActivitySummary]
+    lookahead_items: list[LookaheadItem]
+    lookahead_summary: LookaheadSummary
+    cost_elements: list[CostElementSummary]
+    resource_assignments: list[ResourceAssignmentSummary]
+    icd_items: list[IcdItemSummary]
+    risks: list[RiskSummary]
+    mitigation_actions: list[RiskMitigationActionSummary]
     top_risks: list[TopRisk]
     risk_overview: RiskOverview
     risk_exposure: list[RiskExposureBand]
+    dcma_quality: DcmaQualitySummary
+    clash_summary: ClashSummary
+    clash_pairs: list[ClashPairSummary]
+    project_info: ProjectInfoSummary
 
 
 # --- Baseline Comparison (Phase 1b) ---

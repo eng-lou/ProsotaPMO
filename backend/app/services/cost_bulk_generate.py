@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.cost_element import CostElement
 from app.models.period import Period
 from app.schemas.cost_bulk_generate import CostBulkGenerateRequest, CostBulkGenerateResponse
-from app.services.reference_codes import next_code
+from app.services.reference_codes import next_codes_batch
 
 
 async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
@@ -38,8 +38,8 @@ async def bulk_generate(db: AsyncSession, data: CostBulkGenerateRequest) -> Cost
         to_create = [e for e in data.elements if e.description not in existing_descriptions]
 
     created_ids: list[uuid.UUID] = []
-    for e in to_create:
-        code = await next_code(db, CostElement, "CST", data.project_id)
+    codes = await next_codes_batch(db, CostElement, "CST", data.project_id, len(to_create))
+    for e, code in zip(to_create, codes):
         element = CostElement(
             id=uuid.uuid4(), project_id=data.project_id, period_id=data.period_id, code=code,
             element_type=e.element_type, rate=e.rate, element_group=e.element_group,

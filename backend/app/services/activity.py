@@ -183,13 +183,25 @@ async def _next_role_code(db: AsyncSession, project_id: uuid.UUID, role: str) ->
     app/services/reference_codes.py:next_code() used by Risk/Cost/ICD (exactly one
     prefix per project), activities carry four different prefixes in the same
     table, so the max-lookup must also filter to this role's own prefix."""
+    codes = await _next_role_codes_batch(db, project_id, role, 1)
+    return codes[0]
+
+
+async def _next_role_codes_batch(db: AsyncSession, project_id: uuid.UUID, role: str, count: int) -> list[str]:
+    """Same numbering as _next_role_code, but for generating `count` codes at
+    once (schedule_bulk_generate.py's own IFC-driven generation) — one
+    aggregate query for the starting number per role, then a plain Python
+    increment per row, instead of one aggregate query (plus the autoflush
+    it forces on every SQLAlchemy select()) per activity being inserted."""
+    if count <= 0:
+        return []
     stmt = select(func.max(cast(func.split_part(Activity.code, "-", 2), Integer))).where(
         Activity.project_id == project_id,
         Activity.code.like(f"{role}-%"),
     )
     current_max = (await db.execute(stmt)).scalar()
-    next_seq = (current_max or 0) + 1
-    return f"{role}-{next_seq:04d}"
+    start_seq = (current_max or 0) + 1
+    return [f"{role}-{seq:04d}" for seq in range(start_seq, start_seq + count)]
 
 
 def _build_children_map(activities: list[Activity]) -> dict[uuid.UUID | None, list[Activity]]:
@@ -961,9 +973,9 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     # A schedule-managed cost element (Resources module) has no meaning once its
     # activity is gone — clean it up explicitly rather than leaving an orphaned,
     # still-budgeted line behind. Manually-unlinked elements are left alone, same
-    # rule as everywhere else in app/services/cost_sync.py.
-    for doomed_id in doomed_ids:
-        await cost_sync.delete_linked_cost_element(db, doomed_id)
+    # rule as everywhere else in app/services/cost_sync.py. Batched (one query,
+    # one commit) rather than one round-trip per activity in the subtree.
+    await cost_sync.delete_linked_cost_elements_bulk(db, doomed_ids)
 
     if not cascade:
         result = await db.execute(select(Activity).where(Activity.parent_id == activity_id))

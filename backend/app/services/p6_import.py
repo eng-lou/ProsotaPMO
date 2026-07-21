@@ -341,7 +341,8 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     await scheduling_cpm.recompute_schedule(db, period.id)
     await _recompute_hierarchy(db, period.id)
     for activity_id in activities_with_assignments:
-        await cost_sync.sync_cost_element_from_resources(db, activity_id)
+        await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
+    await db.commit()
 
     return P6ImportSummary(
         schedule_variant_id=variant.id, schedule_period_id=period.id, variant_name=variant.name,

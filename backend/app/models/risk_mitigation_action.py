@@ -20,7 +20,7 @@ class RiskMitigationAction(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     risk_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("risks.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("risks.id", ondelete="CASCADE"), nullable=False, index=True
     )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)

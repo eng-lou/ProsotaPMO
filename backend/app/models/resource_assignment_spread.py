@@ -30,7 +30,7 @@ class ResourceAssignmentSpread(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     resource_assignment_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("resource_assignments.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("resource_assignments.id", ondelete="CASCADE"), nullable=False, index=True
     )
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
     hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)

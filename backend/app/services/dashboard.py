@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -9,43 +9,63 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.activity_relationship import ActivityRelationship
 from app.models.baseline_set import BaselineSet
 from app.models.cost_baseline import CostBaseline, CostBaselineItem
 from app.models.cost_element import CostElement
 from app.models.icd_baseline import IcdBaseline, IcdBaselineItem
 from app.models.icd_item import IcdItem
 from app.models.period import Period
+from app.models.resource import Resource
+from app.models.resource_assignment import ResourceAssignment
 from app.models.risk import Risk
 from app.models.risk_baseline import RiskBaseline, RiskBaselineItem
+from app.models.risk_mitigation_action import RiskMitigationAction
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
 from app.schemas.dashboard import (
     BaselineComparisonResponse,
+    ClashByTest,
+    ClashPairSummary,
+    ClashSummary,
     CostComparison,
     CostComparisonItem,
     CostComparisonSummary,
+    CostElementSummary,
     DashboardKpis,
     DashboardOverviewResponse,
+    DcmaQualitySummary,
     IcdComparison,
     IcdComparisonItem,
     IcdComparisonSummary,
     IcdComparisonTypeCounts,
+    IcdItemSummary,
+    LookaheadItem,
+    LookaheadSummary,
     MilestoneTimelineItem,
+    ProjectInfoSummary,
     RiskComparison,
     RiskComparisonItem,
     RiskComparisonSummary,
+    RiskMitigationActionSummary,
+    ResourceAssignmentSummary,
     RiskExposureBand,
     RiskOverview,
+    RiskSummary,
+    ScheduleActivitySummary,
     ScheduleBuckets,
     ScheduleComparison,
     ScheduleComparisonItem,
     ScheduleComparisonSummary,
     TopRisk,
 )
+from app.services import clash_test as clash_test_svc
+from app.services import scheduling_quality as quality_svc
 from app.services.activity import _subtree_ids
 from app.services.cost_element import _schedule_evm, list_cost_elements, rollup_evm_from_totals
+from app.services.resource_costing import compute_assignment_budget
 
 _MONEY = Decimal("0.01")
 
@@ -78,8 +98,9 @@ async def _live_schedule_spi(db: AsyncSession, project_id: uuid.UUID, period_id:
 
 
 async def _kpis(
-    db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID, schedule_activities: list[Activity]
-) -> DashboardKpis:
+    db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID,
+    schedule_activities: list[Activity], icd_items: list[IcdItem],
+) -> tuple[DashboardKpis, list]:
     # The whole network's own latest finish — not restricted to a top-level
     # "P" WBS summary, since a schedule with more than one root branch (no
     # single enclosing "Programme" row) would otherwise never have one and
@@ -87,31 +108,15 @@ async def _kpis(
     # rollup equal to this same max anyway, so reading every leaf directly
     # gives the identical answer and works regardless of hierarchy shape.
     planned_finish = max((a.finish for a in schedule_activities if a.finish is not None), default=None)
+    plan_start = min((a.start for a in schedule_activities if a.start is not None), default=None)
     planned_finish_status = "unknown"
     if planned_finish is not None:
         bl_finishes = [a.bl_finish for a in schedule_activities if a.bl_finish is not None]
         if bl_finishes:
             planned_finish_status = "delayed" if planned_finish > max(bl_finishes) else "on_time"
 
-    issues_result = await db.execute(
-        select(IcdItem).where(
-            IcdItem.project_id == project_id,
-            IcdItem.period_id == period_id,
-            IcdItem.item_type == "issue",
-            IcdItem.status != "closed",
-        )
-    )
-    open_issues = len(issues_result.scalars().all())
-
-    changes_result = await db.execute(
-        select(IcdItem).where(
-            IcdItem.project_id == project_id,
-            IcdItem.period_id == period_id,
-            IcdItem.item_type == "change",
-            IcdItem.status != "closed",
-        )
-    )
-    open_changes = len(changes_result.scalars().all())
+    open_issues = len([i for i in icd_items if i.item_type == "issue" and i.status != "closed"])
+    open_changes = len([i for i in icd_items if i.item_type == "change" and i.status != "closed"])
 
     schedule_spi, elements = await _live_schedule_spi(db, project_id, period_id)
 
@@ -137,7 +142,20 @@ async def _kpis(
             ev_cost_total += bac * Decimal(el.pct_complete) / Decimal(100)
     cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total) if has_cost_evm else {}
 
+    # Two more PMBOK EAC formulas (Batch 6) alongside cost_rollup["eac"]
+    # (BAC/CPI) above — "remaining work at the original plan rate" and the
+    # SPI x CPI composite, the same three classic methods
+    # WIDGET_LIBRARY_PLAN.md §E.1's EAC Forecast Comparison gap calls for.
+    # Both need real EV/AC (has_cost_evm) and, for the composite, a real
+    # schedule_spi — left None rather than a misleading number otherwise.
+    eac_remaining_at_plan = (ac_total + (bac_total - ev_cost_total)).quantize(_MONEY) if has_cost_evm else None
+    cpi = cost_rollup.get("cpi")
+    eac_composite = None
+    if has_cost_evm and schedule_spi is not None and cpi is not None and schedule_spi != 0 and cpi != 0:
+        eac_composite = (ac_total + (bac_total - ev_cost_total) / (schedule_spi * cpi)).quantize(_MONEY)
+
     return DashboardKpis(
+        plan_start=plan_start,
         planned_finish=planned_finish,
         planned_finish_status=planned_finish_status,
         open_issues=open_issues,
@@ -145,8 +163,10 @@ async def _kpis(
         schedule_spi=schedule_spi,
         bac=bac_total.quantize(_MONEY) if has_cost_evm else None,
         eac=cost_rollup.get("eac"),
-        cpi=cost_rollup.get("cpi"),
-    )
+        cpi=cpi,
+        eac_remaining_at_plan=eac_remaining_at_plan,
+        eac_composite=eac_composite,
+    ), elements
 
 
 def _schedule_buckets(activities: list[Activity], critical_attr: str) -> ScheduleBuckets:
@@ -175,16 +195,259 @@ def _milestones(activities: list[Activity]) -> list[MilestoneTimelineItem]:
     return items
 
 
-async def _top_risks(db: AsyncSession, period_id: uuid.UUID) -> list[TopRisk]:
-    result = await db.execute(select(Risk).where(Risk.period_id == period_id))
-    risks = list(result.scalars().all())
-    risks.sort(key=lambda r: r.rating if r.rating is not None else Decimal(-1), reverse=True)
+def _cost_element_summaries(elements: list) -> list[CostElementSummary]:
+    summaries = []
+    for el in elements:
+        bac, ac = _resolve_bac_ac(el)
+        summaries.append(CostElementSummary(
+            id=el.id, code=el.code, description=el.description, element_group=el.element_group,
+            cost_owner=el.cost_owner, status=el.status, bac=bac, ac=ac, pct_complete=el.pct_complete,
+            cpi=el.cpi, eac=el.eac, vac=el.vac,
+        ))
+    return summaries
+
+
+async def _dcma_quality_summary(
+    db: AsyncSession, schedule_period_id: uuid.UUID, subproject_id: uuid.UUID | None,
+    all_activities: list[Activity], relationships: list[ActivityRelationship],
+) -> DcmaQualitySummary:
+    # all_activities/relationships (2026-07-20, optimization pass) — reuses
+    # get_overview's own already-fetched whole-schedule data instead of
+    # compute_quality independently re-running both full-table queries on
+    # every single dashboard load (see that function's own docstring on why
+    # this is a safe substitution).
+    report = await quality_svc.compute_quality(
+        db, schedule_period_id, subproject_id,
+        pre_fetched_activities=all_activities, pre_fetched_relationships=relationships,
+    )
+    checks = report["checks"]
+    return DcmaQualitySummary(
+        activity_count=report["activity_count"],
+        logic_score=report["logic_score"],
+        total_checks=len(checks),
+        passing_count=sum(1 for c in checks if c["status"] == "pass"),
+        failing_count=sum(1 for c in checks if c["status"] == "fail"),
+        warning_count=sum(1 for c in checks if c["status"] == "warn"),
+        scope_name=report.get("scope_name"),
+    )
+
+
+async def _clash_summary_and_pairs(db: AsyncSession, project_id: uuid.UUID) -> tuple[ClashSummary, list[ClashPairSummary]]:
+    tests = await clash_test_svc.list_clash_tests(db, project_id)
+    all_results = [r for t in tests for r in t.results]
+    by_test = [
+        ClashByTest(
+            test_id=t.id, test_name=t.name, test_type=t.test_type, total=len(t.results),
+            new_count=sum(1 for r in t.results if r.status == "new"),
+            reviewed_count=sum(1 for r in t.results if r.status == "reviewed"),
+            approved_count=sum(1 for r in t.results if r.status == "approved"),
+        )
+        for t in tests
+    ]
+    summary = ClashSummary(
+        test_count=len(tests),
+        total_clashes=len(all_results),
+        new_count=sum(1 for r in all_results if r.status == "new"),
+        reviewed_count=sum(1 for r in all_results if r.status == "reviewed"),
+        approved_count=sum(1 for r in all_results if r.status == "approved"),
+        by_test=by_test,
+    )
+    pairs = [
+        ClashPairSummary(
+            id=r.id, test_id=t.id, test_name=t.name,
+            element_a_label=r.element_a_label, element_b_label=r.element_b_label,
+            distance_mm=r.distance_mm, status=r.status,
+        )
+        for t in tests for r in t.results
+    ]
+    return summary, pairs
+
+
+async def _project_info(
+    db: AsyncSession, project_id: uuid.UUID, schedule_period_id: uuid.UUID, all_activities: list[Activity],
+) -> tuple[ProjectInfoSummary, SchedulePeriod | None, list[ActivityRelationship]]:
+    period = await db.get(SchedulePeriod, schedule_period_id)
+    activity_ids = [a.id for a in all_activities]
+    relationships = (await db.execute(
+        select(ActivityRelationship).where(ActivityRelationship.predecessor_id.in_(activity_ids))
+    )).scalars().all() if activity_ids else []
+    resources = (await db.execute(select(Resource).where(Resource.project_id == project_id))).scalars().all()
+    info = ProjectInfoSummary(
+        data_date=period.cutoff_date if period is not None else None,
+        total_activities=len(all_activities),
+        total_relationships=len(relationships),
+        total_resources=len(resources),
+        has_baseline=any(a.bl_finish is not None for a in all_activities),
+    )
+    return info, period, list(relationships)
+
+
+async def _resource_assignment_summaries(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[ResourceAssignmentSummary]:
+    """Same join/denormalize shape as resource_assignment.py's own
+    list_assignments_for_period/_attach_resource_fields, reimplemented
+    directly here (rather than importing those) because this needs
+    discipline/company alongside the fields that helper already denormalizes,
+    and a dashboard-scoped ResourceAssignmentSummary rather than mutating
+    transient attributes onto the ORM row."""
+    result = await db.execute(
+        select(ResourceAssignment)
+        .join(Activity, Activity.id == ResourceAssignment.activity_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
+    )
+    assignments = list(result.scalars().all())
+    if not assignments:
+        return []
+
+    resource_ids = {a.resource_id for a in assignments}
+    resources_by_id = {
+        r.id: r for r in (await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))).scalars().all()
+    }
+    activity_ids = {a.activity_id for a in assignments}
+    activities_by_id = {
+        a.id: a for a in (await db.execute(select(Activity).where(Activity.id.in_(activity_ids)))).scalars().all()
+    }
+
+    summaries = []
+    for a in assignments:
+        resource = resources_by_id.get(a.resource_id)
+        if resource is None:
+            continue
+        activity = activities_by_id.get(a.activity_id)
+        summaries.append(ResourceAssignmentSummary(
+            id=a.id, resource_name=resource.name, resource_type=resource.resource_type,
+            discipline=resource.discipline, company=resource.company, role=a.role,
+            budget=compute_assignment_budget(resource, activity, a),
+            activity_id=a.activity_id,
+            activity_task_name=activity.task_name if activity is not None else "Unknown",
+        ))
+    return summaries
+
+
+def _icd_item_summaries(items: list[IcdItem]) -> list[IcdItemSummary]:
+    return [
+        IcdItemSummary(
+            id=i.id, code=i.code, title=i.title, item_type=i.item_type, status=i.status,
+            priority=i.priority, owner=i.owner, raised_date=i.raised_date, due_date=i.due_date,
+            closed_date=i.closed_date, severity=i.severity, decision_maker=i.decision_maker,
+            required_by=i.required_by, ccb_decision=i.ccb_decision, cost_impact=i.cost_impact,
+            schedule_impact_days=i.schedule_impact_days,
+        )
+        for i in items
+    ]
+
+
+def _schedule_activities(activities: list[Activity]) -> list[ScheduleActivitySummary]:
+    """Raw per-task rows for Batch 1's dashboard widgets (float distribution,
+    activities-by-category, baseline variance, critical activities) — one
+    shared fetch they each aggregate client-side, same split _milestones/
+    the other builders already use. Milestones are deliberately excluded:
+    they're what _milestones/milestone_timeline already cover, and
+    wbs_summary rows never carry float/criticality (outside the CPM
+    network) so they'd only pollute every aggregation below."""
+    return [
+        ScheduleActivitySummary(
+            id=a.id, code=a.code, task_name=a.task_name, start=a.start, finish=a.finish, bl_finish=a.bl_finish,
+            variance_days=a.variance_days, total_float_hours=a.total_float_hours,
+            is_critical=a.is_critical, pct_complete=a.pct_complete, schedule_category=a.schedule_category,
+            suspend_date=a.suspend_date, resume_date=a.resume_date,
+        )
+        for a in activities
+        if a.activity_type == "task"
+    ]
+
+
+def _lookahead(
+    all_activities: list[Activity], scoped_activities: list[Activity], relationships: list[ActivityRelationship],
+    milestones: list[MilestoneTimelineItem], now: datetime,
+) -> tuple[list[LookaheadItem], LookaheadSummary]:
+    """Look-Ahead Planner (Batch 8, 2026-07-20) — task-type activities
+    starting within a fixed 6-week window from now, each flagged with
+    whether any of its own predecessors is still below 100% complete (a
+    real ActivityRelationship-driven check, matching what a planner would
+    actually mean by "ready to start"). The frontend sub-filters this same
+    6-week list down to a 2/4-week view rather than three separate fetches.
+    "Healthy float" mirrors the >80h threshold FloatDistributionWidget's own
+    bucket already uses for "not near-critical". Predecessor completion is
+    resolved against all_activities (never scoped_activities) — a
+    sub-project-scoped candidate's real-world predecessor can sit outside
+    that scope, and treating "not in scope" as "incomplete" would be a
+    false positive, not a narrower-but-correct view."""
+    window_weeks = 6
+    window_end = now + timedelta(weeks=window_weeks)
+    pct_complete_by_id = {a.id: a.pct_complete for a in all_activities}
+    predecessors_by_successor: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for r in relationships:
+        predecessors_by_successor.setdefault(r.successor_id, []).append(r.predecessor_id)
+
+    def has_incomplete_predecessor(activity_id: uuid.UUID) -> bool:
+        for pred_id in predecessors_by_successor.get(activity_id, []):
+            pred_pct = pct_complete_by_id.get(pred_id)
+            if pred_pct is None or pred_pct < 100:
+                return True
+        return False
+
+    in_window = [
+        a for a in scoped_activities
+        if a.activity_type == "task" and a.start is not None and now <= a.start <= window_end
+    ]
+    items = [
+        LookaheadItem(
+            id=a.id, code=a.code, task_name=a.task_name, start=a.start, finish=a.finish,
+            pct_complete=a.pct_complete, total_float_hours=a.total_float_hours, is_critical=a.is_critical,
+            has_incomplete_predecessor=has_incomplete_predecessor(a.id),
+        )
+        for a in in_window
+    ]
+    next_milestone = next((m for m in milestones if m.finish is not None and m.finish >= now), None)
+    summary = LookaheadSummary(
+        window_weeks=window_weeks,
+        total_in_window=len(items),
+        critical_in_window=sum(1 for i in items if i.is_critical is True),
+        healthy_float_count=sum(1 for i in items if i.total_float_hours is not None and i.total_float_hours > 80),
+        incomplete_predecessor_count=sum(1 for i in items if i.has_incomplete_predecessor),
+        next_milestone_name=next_milestone.task_name if next_milestone else None,
+        next_milestone_date=next_milestone.finish if next_milestone else None,
+    )
+    return items, summary
+
+
+async def _mitigation_actions(db: AsyncSession, risks: list[Risk]) -> list[RiskMitigationActionSummary]:
+    if not risks:
+        return []
+    risk_code_by_id = {r.id: r.code for r in risks}
+    actions = (await db.execute(
+        select(RiskMitigationAction).where(RiskMitigationAction.risk_id.in_(risk_code_by_id.keys()))
+    )).scalars().all()
+    return [
+        RiskMitigationActionSummary(
+            id=a.id, risk_id=a.risk_id, risk_code=risk_code_by_id[a.risk_id], code=a.code,
+            description=a.description, owner=a.owner, due_date=a.due_date,
+            status=a.status, pct_complete=a.pct_complete,
+        )
+        for a in actions
+    ]
+
+
+def _top_risks(risks: list[Risk]) -> list[TopRisk]:
+    ranked = sorted(risks, key=lambda r: r.rating if r.rating is not None else Decimal(-1), reverse=True)
     return [
         TopRisk(
             id=r.id, code=r.code, title=r.title, status=r.status,
             rating=r.rating, emv_cost=r.emv_cost, emv_schedule_days=r.emv_schedule_days,
         )
-        for r in risks[:5]
+        for r in ranked[:5]
+    ]
+
+
+def _risk_summaries(risks: list[Risk]) -> list[RiskSummary]:
+    return [
+        RiskSummary(
+            id=r.id, code=r.code, title=r.title, category=r.category, area=r.area, status=r.status,
+            risk_owner=r.risk_owner, risk_type=r.risk_type, response_strategy=r.response_strategy,
+            rating=r.rating, emv_cost=r.emv_cost, emv_schedule_days=r.emv_schedule_days,
+            date_raised=r.date_raised,
+        )
+        for r in risks
     ]
 
 
@@ -196,10 +459,7 @@ def _band_of(value: Decimal) -> int:
     return min(4, max(0, int(value * 5)))
 
 
-async def _risk_overview_and_exposure(db: AsyncSession, period_id: uuid.UUID) -> tuple[RiskOverview, list[RiskExposureBand]]:
-    result = await db.execute(select(Risk).where(Risk.period_id == period_id))
-    risks = list(result.scalars().all())
-
+def _risk_overview_and_exposure(risks: list[Risk]) -> tuple[RiskOverview, list[RiskExposureBand]]:
     open_risks = [r for r in risks if r.status != "closed"]
     closed_count = len(risks) - len(open_risks)
 
@@ -255,19 +515,51 @@ async def get_overview(
 
     bucket_activities = [a for a in scoped_activities if getattr(a, critical_attr) is True] if critical_only else scoped_activities
 
-    kpis = await _kpis(db, project_id, period_id, all_activities)
+    icd_result = await db.execute(
+        select(IcdItem).where(IcdItem.project_id == project_id, IcdItem.period_id == period_id)
+    )
+    icd_items = list(icd_result.scalars().all())
+
+    kpis, cost_elements = await _kpis(db, project_id, period_id, all_activities, icd_items)
     schedule_buckets = _schedule_buckets(bucket_activities, critical_attr)
     milestones = _milestones(scoped_activities)
-    top_risks = await _top_risks(db, period_id)
-    risk_overview, risk_exposure = await _risk_overview_and_exposure(db, period_id)
+    schedule_activities = _schedule_activities(scoped_activities)
+    cost_element_summaries = _cost_element_summaries(cost_elements)
+    icd_item_summaries = _icd_item_summaries(icd_items)
+    resource_assignment_summaries = await _resource_assignment_summaries(db, schedule_period_id)
+
+    risks_result = await db.execute(select(Risk).where(Risk.period_id == period_id))
+    risks = list(risks_result.scalars().all())
+    top_risks = _top_risks(risks)
+    risk_summaries = _risk_summaries(risks)
+    risk_overview, risk_exposure = _risk_overview_and_exposure(risks)
+    mitigation_actions = await _mitigation_actions(db, risks)
+
+    project_info, period, relationships = await _project_info(db, project_id, schedule_period_id, all_activities)
+    dcma_quality = await _dcma_quality_summary(db, schedule_period_id, subproject_id, all_activities, relationships)
+    clash_summary, clash_pairs = await _clash_summary_and_pairs(db, project_id)
+    now = datetime.combine(period.cutoff_date, time.min) if period is not None and period.cutoff_date is not None else datetime.now()
+    lookahead_items, lookahead_summary = _lookahead(all_activities, scoped_activities, relationships, milestones, now)
 
     return DashboardOverviewResponse(
         kpis=kpis,
         schedule_buckets=schedule_buckets,
         milestones=milestones,
+        schedule_activities=schedule_activities,
+        lookahead_items=lookahead_items,
+        lookahead_summary=lookahead_summary,
+        cost_elements=cost_element_summaries,
+        resource_assignments=resource_assignment_summaries,
+        icd_items=icd_item_summaries,
+        risks=risk_summaries,
+        mitigation_actions=mitigation_actions,
         top_risks=top_risks,
         risk_overview=risk_overview,
         risk_exposure=risk_exposure,
+        dcma_quality=dcma_quality,
+        clash_summary=clash_summary,
+        clash_pairs=clash_pairs,
+        project_info=project_info,
     )
 
 

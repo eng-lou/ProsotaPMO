@@ -61,8 +61,23 @@ def _status_max(actual: float, threshold: float) -> Status:
 
 
 async def compute_quality(
-    db: AsyncSession, schedule_period_id: uuid.UUID, scope_subproject_id: uuid.UUID | None = None
+    db: AsyncSession, schedule_period_id: uuid.UUID, scope_subproject_id: uuid.UUID | None = None,
+    pre_fetched_activities: list[Activity] | None = None,
+    pre_fetched_relationships: list[ActivityRelationship] | None = None,
 ) -> dict:
+    """pre_fetched_activities/pre_fetched_relationships (2026-07-20,
+    optimization pass) — dashboard.py's get_overview already fetches the
+    whole schedule's own activities/relationships for its own widgets;
+    without these, every single dashboard load independently re-ran both
+    full-table queries again here. Safe to substitute: this function's own
+    _cpm_participants/participant_ids filtering already narrows whatever
+    raw list it's given down to real task/milestone, non-archived
+    participants (and relationships to those with both endpoints among
+    them), so a caller's already-filtered superset produces an identical
+    result to this function's own raw fetch — never a second,
+    independently-scoped activity/relationship set. None (the default)
+    fetches exactly as before, for the standalone "Run Quality Analysis"
+    endpoint which has no such list to share."""
     period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
         raise HTTPException(status_code=404, detail="Schedule period not found")
@@ -90,8 +105,11 @@ async def compute_quality(
         scope_name = subproject.name
         scope_ids = await _subtree_ids(db, schedule_period_id, subproject.root_wbs_id)
 
-    activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
-    all_activities = list(activities_result.scalars().all())
+    if pre_fetched_activities is not None:
+        all_activities = list(pre_fetched_activities)
+    else:
+        activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
+        all_activities = list(activities_result.scalars().all())
     if scope_ids is not None:
         all_activities = [a for a in all_activities if a.id in scope_ids]
     participants = _cpm_participants(all_activities)
@@ -104,13 +122,17 @@ async def compute_quality(
     float_attr = "sub_total_float_hours" if scope_ids is not None else "total_float_hours"
     critical_attr = "sub_is_critical" if scope_ids is not None else "is_critical"
 
-    rel_result = await db.execute(
-        select(ActivityRelationship)
-        .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.schedule_period_id == schedule_period_id)
-    )
+    if pre_fetched_relationships is not None:
+        raw_relationships = pre_fetched_relationships
+    else:
+        rel_result = await db.execute(
+            select(ActivityRelationship)
+            .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
+            .where(Activity.schedule_period_id == schedule_period_id)
+        )
+        raw_relationships = list(rel_result.scalars().all())
     relationships = [
-        r for r in rel_result.scalars().all()
+        r for r in raw_relationships
         if r.predecessor_id in participant_ids and r.successor_id in participant_ids
     ]
     by_id = {a.id: a for a in participants}

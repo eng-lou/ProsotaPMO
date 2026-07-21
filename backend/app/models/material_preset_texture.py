@@ -36,7 +36,7 @@ class MaterialPresetTexture(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    preset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("material_presets.id", ondelete="CASCADE"), nullable=False)
+    preset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("material_presets.id", ondelete="CASCADE"), nullable=False, index=True)
     slot: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     storage_filename: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)

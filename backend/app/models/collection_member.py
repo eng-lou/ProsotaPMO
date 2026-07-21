@@ -32,7 +32,7 @@ class CollectionMember(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    collection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False)
+    collection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True)
     source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc" | "mesh"
     element_ref: Mapped[str] = mapped_column(String(300), nullable=False)
     element_label: Mapped[str] = mapped_column(String(300), nullable=False)

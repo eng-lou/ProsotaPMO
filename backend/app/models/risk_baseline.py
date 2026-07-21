@@ -24,7 +24,7 @@ class RiskBaseline(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -32,7 +32,7 @@ class RiskBaseline(Base, TimestampMixin):
     # (see baseline_set.py). SET NULL on delete: removing a set must never
     # delete the module baselines it happened to link, only un-link them.
     baseline_set_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL"), index=True
     )
 
 
@@ -51,10 +51,10 @@ class RiskBaselineItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     baseline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("risk_baselines.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("risk_baselines.id", ondelete="CASCADE"), nullable=False, index=True
     )
     risk_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("risks.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("risks.id", ondelete="CASCADE"), nullable=False, index=True
     )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)

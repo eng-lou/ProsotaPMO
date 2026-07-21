@@ -72,7 +72,7 @@ class ElementKeyframe(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc" | "mesh"
     element_ref: Mapped[str] = mapped_column(String(300), nullable=False)
     field: Mapped[str] = mapped_column(String(20), nullable=False)  # "pos_x" .. "scale_z"

@@ -32,7 +32,7 @@ class UserDefinedFieldDefinition(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     entity_type: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -68,7 +68,7 @@ class UserDefinedFieldValue(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     field_definition_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("user_defined_field_definitions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("user_defined_field_definitions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     value_text: Mapped[str | None] = mapped_column(String(500))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -16,7 +16,7 @@ from app.models.resource_assignment import ResourceAssignment
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.schedule_bulk_generate import BulkAssignmentInput, ScheduleBulkGenerateRequest, ScheduleBulkGenerateResponse
 from app.services import cost_sync, scheduling_cpm
-from app.services.activity import _activity_role, _apply_computed_fields, _next_role_code, _recompute_hierarchy, _require_live_schedule_period
+from app.services.activity import _activity_role, _apply_computed_fields, _next_role_codes_batch, _recompute_hierarchy, _require_live_schedule_period
 from app.services.scheduling_cpm import _find_cycle
 
 
@@ -195,6 +195,24 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
 
     # --- Everything validated — now actually persist it.
 
+    # Every activity's role is already fully determined by this point
+    # (staged.activity_type + parent_real_id, both already resolved in
+    # ordered_inserts) — so the starting code number for each of P/W/T/M is
+    # computed once per role here (at most 4 queries total), instead of
+    # once per activity being inserted. A real IFC-driven generation of a
+    # few hundred activities used to do a few hundred serialized aggregate
+    # queries (plus the autoflush each one forces) just for code numbering,
+    # before the actual CPM/hierarchy work below even starts.
+    roles_by_temp_id = {
+        temp_id: _activity_role(activity_by_temp_id[temp_id].activity_type, parent_real_id)
+        for temp_id, parent_real_id, _sort_order in ordered_inserts
+    }
+    role_counts = Counter(roles_by_temp_id.values())
+    role_code_iters = {
+        role: iter(await _next_role_codes_batch(db, data.project_id, role, count))
+        for role, count in role_counts.items()
+    }
+
     activities_by_real_id: dict[uuid.UUID, Activity] = {}
     for temp_id, parent_real_id, sort_order in ordered_inserts:
         staged = activity_by_temp_id[temp_id]
@@ -203,8 +221,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         # finish_milestone rows, not 0-duration tasks) — brand-new leaf either
         # way; wbs_summary promotion still happens automatically below via
         # _recompute_hierarchy once everything's inserted.
-        role = _activity_role(staged.activity_type, parent_real_id)
-        code = await _next_role_code(db, data.project_id, role)
+        role = roles_by_temp_id[temp_id]
+        code = next(role_code_iters[role])
         activity_id = real_id_by_temp_id[temp_id]
         activity = Activity(
             id=activity_id,
@@ -300,7 +318,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     # run — cost_sync'ing right after insert would price everything off a
     # still-null duration_days and silently write a zero budget.
     for activity_id in activities_with_assignments:
-        await cost_sync.sync_cost_element_from_resources(db, activity_id)
+        await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
+    await db.commit()
 
     # A real, reproduced bug (2026-07-13, per Maro's screenshot: the root
     # WBS's own rolled-up Start showed 2030, years after its own earliest

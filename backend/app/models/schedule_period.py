@@ -45,7 +45,7 @@ class SchedulePeriod(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     schedule_variant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schedule_variants.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("schedule_variants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     period_label: Mapped[str] = mapped_column(String(100), nullable=False)
     start_date: Mapped[date | None] = mapped_column(Date)

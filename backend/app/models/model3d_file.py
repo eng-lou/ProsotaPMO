@@ -40,7 +40,7 @@ class Model3DFile(Base, TimestampMixin):
     __tablename__ = "model3d_files"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc" | "mesh"
     source_up_axis: Mapped[str] = mapped_column(String(1), nullable=False, default="y")  # "y" | "z"

@@ -227,9 +227,18 @@ async def _clear_baseline_fields(db: AsyncSession, schedule_period_id: uuid.UUID
         a.bl_finish = None
         a.bl_duration_hours = None
         a.variance_days = None
+    # Refresh only the rows actually changed by this pass — captured *before*
+    # flush, since flushing clears SQLAlchemy's dirty-tracking (an activity
+    # whose bl_* fields were already null isn't touched by the assignment
+    # above). Same fix as activity.py's own _recompute_hierarchy/
+    # scheduling_cpm.py's recompute_schedule, which independently measured
+    # "refresh every activity in the period regardless of whether it
+    # changed" as a real, one-extra-round-trip-per-activity performance bug.
+    dirty_ids = {a.id for a in activities if db.is_modified(a)}
     await db.flush()
     for a in activities:
-        await db.refresh(a)
+        if a.id in dirty_ids:
+            await db.refresh(a)
     return activities
 
 
@@ -272,9 +281,14 @@ async def assign_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> list[Acti
             (a.finish - a.bl_finish).days if a.finish is not None and a.bl_finish is not None else None
         )
 
+    # Same dirty-subset-only refresh as _clear_baseline_fields above — an
+    # activity with no snapshot AND no previously-assigned bl_* fields
+    # isn't actually touched by the loop above (still None -> None).
+    dirty_ids = {a.id for a in activities if db.is_modified(a)}
     await db.commit()
     for a in activities:
-        await db.refresh(a)
+        if a.id in dirty_ids:
+            await db.refresh(a)
     await _attach_evm_fields(db, activities)
     return activities
 

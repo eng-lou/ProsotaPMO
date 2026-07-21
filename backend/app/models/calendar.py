@@ -28,7 +28,7 @@ class Calendar(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_project_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -65,7 +65,7 @@ class CalendarBreak(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     calendar_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False, index=True
     )
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
@@ -87,7 +87,7 @@ class CalendarException(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     calendar_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False, index=True
     )
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)

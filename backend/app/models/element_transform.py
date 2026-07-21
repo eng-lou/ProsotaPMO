@@ -61,8 +61,8 @@ class ElementTransform(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    model3d_file_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("model3d_files.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    model3d_file_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("model3d_files.id", ondelete="CASCADE"), nullable=False, index=True)
     element_ref: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     position_x: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

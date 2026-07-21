@@ -48,6 +48,7 @@ from app.models.element_keyframe import ElementKeyframe
 from app.models.material_preset import MaterialPreset
 from app.models.material_preset_texture import MaterialPresetTexture
 from app.models.model3d_file import Model3DFile
+from app.models.fourd_video import FourDVideo
 from app.models.section_box import SectionBox
 from app.models.camera_view import CameraView
 from app.models.element_transform import ElementTransform
@@ -59,6 +60,7 @@ from app.models.clash_result import ClashResult
 from app.models.element_parent import ElementParent
 from app.models.element_split import ElementSplit
 from app.models.measurement import Measurement
+from app.models.dashboard_layout import DashboardLayout
 
 __all__ = [
     "Base",
@@ -119,6 +121,7 @@ __all__ = [
     "MaterialPreset",
     "MaterialPresetTexture",
     "Model3DFile",
+    "FourDVideo",
     "SectionBox",
     "CameraView",
     "ElementTransform",
@@ -130,4 +133,5 @@ __all__ = [
     "ElementParent",
     "ElementSplit",
     "Measurement",
+    "DashboardLayout",
 ]

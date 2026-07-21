@@ -35,7 +35,7 @@ class ClashResult(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    clash_test_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clash_tests.id", ondelete="CASCADE"), nullable=False)
+    clash_test_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clash_tests.id", ondelete="CASCADE"), nullable=False, index=True)
     element_a_source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc" | "mesh"
     element_a_ref: Mapped[str] = mapped_column(String(300), nullable=False)
     element_a_label: Mapped[str] = mapped_column(String(300), nullable=False)

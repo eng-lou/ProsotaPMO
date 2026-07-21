@@ -64,11 +64,11 @@ class ModelElementLink(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    activity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    activity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False, index=True)
     source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc" | "mesh"
     element_ref: Mapped[str] = mapped_column(String(300), nullable=False)
     element_label: Mapped[str] = mapped_column(String(300), nullable=False)
     animation_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("animation_profiles.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), ForeignKey("animation_profiles.id", ondelete="SET NULL"), nullable=True, index=True
     )

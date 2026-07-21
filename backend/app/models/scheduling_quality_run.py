@@ -27,7 +27,7 @@ class SchedulingQualityRun(Base, TimestampMixin):
     # docs/SCHEDULE_VARIANTS_PLAN.md) — a quality run analyses a schedule, not a
     # reporting cycle, so it moves with Activity onto SchedulePeriod.
     schedule_period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     report: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -39,5 +39,5 @@ class SchedulingQualityRun(Base, TimestampMixin):
     # frozen at save time; this FK is SET NULL, not cascade-deleted, if the
     # tag itself is later removed — see app/services/schedule_subproject.py).
     scope_subproject_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schedule_subprojects.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("schedule_subprojects.id", ondelete="SET NULL"), index=True
     )

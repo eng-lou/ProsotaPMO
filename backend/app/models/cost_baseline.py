@@ -22,12 +22,12 @@ class CostBaseline(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("periods.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
     baseline_set_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL"), index=True
     )
 
 
@@ -48,10 +48,10 @@ class CostBaselineItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     baseline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("cost_baselines.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("cost_baselines.id", ondelete="CASCADE"), nullable=False, index=True
     )
     cost_element_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("cost_elements.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("cost_elements.id", ondelete="CASCADE"), nullable=False, index=True
     )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)

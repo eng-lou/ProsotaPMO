@@ -11,7 +11,7 @@ from app.models.cost_element import CostElement
 from app.models.period import Period
 from app.models.risk import Risk
 from app.schemas.risk_bulk_generate import RiskBulkGenerateRequest, RiskBulkGenerateResponse
-from app.services.reference_codes import next_code
+from app.services.reference_codes import next_code, next_codes_batch
 from app.services.risk import _apply_computed_fields
 
 _CONTINGENCY_DESCRIPTION = "Contingency (Risk-Derived)"
@@ -45,8 +45,8 @@ async def bulk_generate(db: AsyncSession, data: RiskBulkGenerateRequest) -> Risk
 
     created_ids: list[uuid.UUID] = []
     total_emv_cost = Decimal("0")
-    for r in to_create:
-        code = await next_code(db, Risk, "RSK", data.project_id)
+    codes = await next_codes_batch(db, Risk, "RSK", data.project_id, len(to_create))
+    for r, code in zip(to_create, codes):
         risk = Risk(
             id=uuid.uuid4(), project_id=data.project_id, period_id=data.period_id, code=code,
             title=r.title, category=r.category, area=r.area, status="open",

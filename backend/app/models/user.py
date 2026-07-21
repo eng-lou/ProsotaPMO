@@ -17,7 +17,7 @@ class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organisations.id"), nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organisations.id"), nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     auth0_sub: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -19,7 +19,7 @@ class CostCommitment(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cost_element_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("cost_elements.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("cost_elements.id", ondelete="CASCADE"), nullable=False, index=True
     )
     po_reference: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(String(500), nullable=False)

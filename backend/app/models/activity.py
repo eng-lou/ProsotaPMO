@@ -35,21 +35,21 @@ class Activity(Base, TimestampMixin):
     # input; auto-maintained by _recompute_hierarchy alongside activity_type.
     wbs_role: Mapped[str] = mapped_column(String(2), nullable=False, default="T")
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Which schedule this activity belongs to (2026-07-07, per Maro —
     # docs/SCHEDULE_VARIANTS_PLAN.md). Denormalised alongside schedule_period_id
     # (rather than derived via a join every time) specifically so the code-
     # uniqueness constraint above can be a real DB constraint.
     schedule_variant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schedule_variants.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("schedule_variants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Was `period_id` (FK to the shared `periods` table Risk/Cost/ICD still use)
     # until the schedule-variants split — see SchedulePeriod's own docstring for
     # why this needed to become a genuinely separate table, not just a renamed
     # column pointing at the same one.
     schedule_period_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("schedule_periods.id", ondelete="CASCADE"), nullable=False, index=True
     )
     task_name: Mapped[str] = mapped_column(String(500), nullable=False)
     # task | milestone | wbs_summary. Milestones always have zero duration; wbs_summary
@@ -62,7 +62,7 @@ class Activity(Base, TimestampMixin):
     # the activity list *is* the WBS (MS Project style, per Maro 2026-07-02). Cascades on
     # delete: removing a summary task removes its subtree, matching MS Project behaviour.
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), index=True
     )
     # Sibling order within a parent — entirely server-managed (see _recompute_hierarchy),
     # never accepted as API input, same discipline as wbs_path below.
@@ -134,7 +134,7 @@ class Activity(Base, TimestampMixin):
     # on delete: removing a custom calendar reverts any activities using it back to the
     # project default rather than blocking the delete or leaving a dangling reference.
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL"), index=True
     )
     # Matches Risk/ICD/Cost's field of the same name — manually settable, and
     # auto-bumped whenever a reassessment is logged against this activity
@@ -167,7 +167,7 @@ class Activity(Base, TimestampMixin):
     # app/services/scheduling_cpm.py) — null for any activity outside every
     # tagged branch, same as the master fields are null for wbs_summary rows.
     owning_party_org_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organisations.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("organisations.id", ondelete="SET NULL"), index=True
     )
     sub_total_float_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     sub_is_critical: Mapped[bool | None] = mapped_column(Boolean)

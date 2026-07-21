@@ -39,7 +39,7 @@ class Path(Base, TimestampMixin):
     __tablename__ = "paths"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False, default="Path")
     points: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     # Cyclic U (2026-07-11) — Blender's own term for a curve that loops back

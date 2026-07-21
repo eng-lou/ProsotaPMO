@@ -24,9 +24,46 @@ async def test_create_and_list_camera_view(client: AsyncClient, project: Project
     assert created["name"] == "East Elevation"
     assert created["project_id"] == str(project.id)
     assert created["position_x"] == 10.0
+    # Never accepted/saved unless the caller actually sends them — a plain
+    # camera-only save (no isolation/thumbnail captured) stays null, not a
+    # fabricated empty object.
+    assert created["viewport_state"] is None
+    assert created["thumbnail_data_url"] is None
 
     listing = (await client.get("/api/v1/camera-views/", params={"project_id": str(project.id)})).json()
     assert any(v["id"] == created["id"] for v in listing)
+
+
+async def test_create_camera_view_with_viewport_state_and_thumbnail(client: AsyncClient, project: Project):
+    viewport_state = {
+        "isolate_mode": True,
+        "isolated_object_ids": ["ifc-0"],
+        "isolated_express_ids": [101, 102],
+        "isolated_ifc_model_id": "ifc-0",
+        "hidden_ids": [],
+        "hidden_express_ids": [],
+        "show_clash_colors": True,
+    }
+    resp = await client.post("/api/v1/camera-views/", json=_view_payload(
+        str(project.id), viewport_state=viewport_state, thumbnail_data_url="data:image/png;base64,abc123",
+    ))
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["viewport_state"] == viewport_state
+    assert created["thumbnail_data_url"] == "data:image/png;base64,abc123"
+
+
+async def test_update_camera_view_viewport_state(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/camera-views/", json=_view_payload(str(project.id)))).json()
+    assert created["viewport_state"] is None
+
+    viewport_state = {
+        "isolate_mode": False, "isolated_object_ids": [], "isolated_express_ids": [],
+        "isolated_ifc_model_id": None, "hidden_ids": ["mesh-1"], "hidden_express_ids": [], "show_clash_colors": False,
+    }
+    resp = await client.patch(f"/api/v1/camera-views/{created['id']}", json={"viewport_state": viewport_state})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["viewport_state"] == viewport_state
 
 
 async def test_rename_and_reposition_camera_view(client: AsyncClient, project: Project):

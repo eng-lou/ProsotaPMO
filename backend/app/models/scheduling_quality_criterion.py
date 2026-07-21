@@ -24,6 +24,6 @@ class SchedulingQualityCriterion(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("project_id", "check_number", name="uq_scheduling_quality_criteria_project_check"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     check_number: Mapped[int] = mapped_column(Integer, nullable=False)
     threshold: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)

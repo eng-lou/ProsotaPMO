@@ -35,13 +35,13 @@ class ClashTest(Base, TimestampMixin):
     __tablename__ = "clash_tests"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="Clash Test")
     group_a_collection_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True
     )
     group_b_collection_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True
     )
     test_type: Mapped[str] = mapped_column(String(10), nullable=False, default="hard")  # "hard" | "clearance"
     tolerance_mm: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

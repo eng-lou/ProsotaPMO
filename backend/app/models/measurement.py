@@ -61,7 +61,7 @@ class Measurement(Base, TimestampMixin):
     __tablename__ = "measurements"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False, default="Measurement")
     kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "length" | "area"
     points: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

@@ -28,9 +28,9 @@ class Collection(Base, TimestampMixin):
     __tablename__ = "collections"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     parent_collection_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=True
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="Collection")
     sort_order: Mapped[int | None] = mapped_column(Integer, nullable=True)

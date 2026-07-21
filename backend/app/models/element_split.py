@@ -43,7 +43,7 @@ class ElementSplit(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "ifc"
     element_ref: Mapped[str] = mapped_column(String(300), nullable=False)
     cut_elevations_m: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
