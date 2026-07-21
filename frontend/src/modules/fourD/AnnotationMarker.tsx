@@ -118,7 +118,12 @@ export function AnnotationMarker({
       if (!activity || !activity.start || !activity.finish) continue
       const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
       if (!profile) continue
-      resolved.push({ activity, profile, axis: profile.axis })
+      // Parsed once here, not per frame — see timelinePlayback.ts's own
+      // pickActiveLink header for why (2026-07-21 perf fix).
+      resolved.push({
+        activity, startMs: new Date(activity.start).getTime(), finishMs: new Date(activity.finish).getTime(),
+        profile, axis: profile.axis,
+      })
     }
     return resolved
   }, [modelElementLinks, activities, animationProfiles, annotation.id])
@@ -144,7 +149,7 @@ export function AnnotationMarker({
         if (vz !== null) z = vz
       } else {
         const activeLink = pickActiveLink(links, now)
-        const state = activeLink ? computeAppliedAnimationStateAt(activeLink.activity, activeLink.profile, now) : null
+        const state = activeLink ? computeAppliedAnimationStateAt(activeLink, now) : null
         if (state) {
           x += state.positionOffset[0]
           y += state.positionOffset[1]

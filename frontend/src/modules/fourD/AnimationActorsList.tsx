@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
 import type { AnimationProfile } from './animationProfiles'
@@ -281,7 +281,28 @@ function ActorRow({
 // that carries a Preset link, a Follow Path binding, or any Transform
 // keyframe gets its own row here, confirmed scoping answer covering all
 // three kinds together.
-export function AnimationActorsList({
+// Memoized (2026-07-21 perf fix, per Maro: "the animation timeline is
+// still dragging"/"zero motion" during Play, even after every fix so far
+// to the 3D rendering pipeline itself — this component is a completely
+// separate DOM-based dope-sheet, not part of that pipeline at all, and
+// turned out to be the real bottleneck. Every one of its props
+// (modelElementLinks, elementKeyframes, pathFollowers, ...) comes from
+// FourD.tsx/TimelineWindow.tsx and is stable across an ordinary re-render —
+// none of them depend on the current playhead date — but TimelineWindow.tsx
+// updates its own `displayDate` React state on every single
+// requestAnimationFrame tick while playing, and this component sat
+// unmemoized as its child, so it re-rendered 60 times a second regardless.
+// Combined with the O(actors × links) work this used to redo from scratch
+// per render (see the grouping useMemo below, added the same fix), a real
+// six-combined-discipline schedule (tens of thousands of links) turned
+// every rAF tick into multiple seconds of synchronous main-thread work —
+// blocking not just this DOM tree but the WebGL canvas's own render loop,
+// which shares the same single JS thread. That's the actual mechanism
+// behind "keeps the 3D in a static empty state... then goes back to
+// empty... zero motion": the browser was mostly frozen re-computing this
+// list, occasionally unblocking just long enough to paint whichever date
+// the (still-advancing, wall-clock-driven) playhead had reached by then.
+export const AnimationActorsList = memo(function AnimationActorsList({
   scheduleStart, scheduleEnd, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles,
   timeDisplayMode, speedDaysPerSecond, fps,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelectActor,
@@ -305,35 +326,74 @@ export function AnimationActorsList({
   const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
   const format: DisplayFormat = { scheduleStart, timeDisplayMode, speedDaysPerSecond, fps }
 
-  const actors = useMemo((): Actor[] => {
+  // One O(n) grouping pass, not an O(links)/O(keyframes) filter *per actor*
+  // (2026-07-21 perf fix — see this component's own header). At real
+  // schedule scale that per-actor `.filter()`/`.some()` in the render body
+  // below used to be O(actors × links) + O(actors × keyframes), redone on
+  // every render (and, per this component's own memo above, that used to
+  // mean every single animation frame). Grouped once here, keyed the same
+  // way `actors` itself is deduped (`${sourceKind}:${elementRef}`), so the
+  // render below becomes a plain O(1) Map lookup per actor instead.
+  const { actors, linksByActor, keyframesByActor, pathBoundActors } = useMemo(() => {
     const byKey = new Map<string, Actor>()
     const annotationById = new Map(annotations.map(a => [a.id, a]))
+    const linksByActor_ = new Map<string, ModelElementLink[]>()
+    const keyframesByActor_ = new Map<string, ElementKeyframe[]>()
+    const pathBoundActors_ = new Set<string>()
+
     const labelFor = (sourceKind: ActorSourceKind, elementRef: string): string => {
       if (sourceKind === 'mesh') return elementRef
-      if (sourceKind === 'annotation') {
-        const a = annotationById.get(elementRef)
-        return a ? `[${a.kind}] ${a.text || '(no note)'}` : elementRef
-      }
-      const link = modelElementLinks.find(l => l.source_kind === 'ifc' && l.element_ref === elementRef)
-      return link?.element_label || elementRef
+      const a = annotationById.get(elementRef)
+      return a ? `[${a.kind}] ${a.text || '(no note)'}` : elementRef
     }
     const add = (sourceKind: ActorSourceKind, elementRef: string) => {
       const key = `${sourceKind}:${elementRef}`
-      if (!byKey.has(key)) byKey.set(key, { sourceKind, elementRef, label: labelFor(sourceKind, elementRef) })
+      if (!byKey.has(key)) byKey.set(key, { sourceKind, elementRef, label: '' })
+      return key
     }
+    // ifc-kind excluded entirely (2026-07-21, per Maro: "we can do without
+    // showing this list [for IFC]... if I want to see activity progression
+    // I can bring the Activities/Gantt widgets in") — confirmed against
+    // Viewport3D.tsx's own Mode B/C resolution (both explicitly mesh-kind
+    // only, see their own "v1 scope" comments) that a real IFC element can
+    // *never* actually reach the Location/Rotation/Scale/3D Path sub-tracks
+    // below, whatever ElementKeyframe/PathFollower rows might technically
+    // exist for one — the only sub-track an ifc actor could ever show is
+    // Preset, and PresetTrack is deliberately read-only (its own header:
+    // editing belongs to ElementLinkFields' unlink/reassign flow, not
+    // here), so it was always just redundant read-only bars duplicating
+    // what Activities/Gantt already shows — while also being by far the
+    // largest share of rows (one per schedule-linked element, thousands on
+    // a real multi-discipline schedule) and therefore this list's dominant
+    // cost. Mesh/annotation actors are unaffected — Mode B/C (the actually
+    // editable sub-tracks) are exactly the reason this list exists for
+    // them.
     for (const link of modelElementLinks) {
-      if (link.source_kind === 'mesh' || link.source_kind === 'ifc' || link.source_kind === 'annotation') add(link.source_kind, link.element_ref)
+      if (link.source_kind !== 'mesh' && link.source_kind !== 'annotation') continue
+      const key = add(link.source_kind, link.element_ref)
+      const group = linksByActor_.get(key)
+      if (group) group.push(link); else linksByActor_.set(key, [link])
     }
     for (const k of elementKeyframes) {
-      if (k.source_kind === 'mesh' || k.source_kind === 'ifc' || k.source_kind === 'annotation') add(k.source_kind, k.element_ref)
+      if (k.source_kind !== 'mesh' && k.source_kind !== 'annotation') continue
+      const key = add(k.source_kind, k.element_ref)
+      const group = keyframesByActor_.get(key)
+      if (group) group.push(k); else keyframesByActor_.set(key, [k])
     }
     for (const f of pathFollowers) {
       // "camera" (2026-07-11) has no viewport UI to bind it yet — see
       // path_follower.py's own docstring — so it never actually appears
       // here in practice; skipped rather than added as a same-scoped gap.
-      if (f.target_kind === 'mesh' || f.target_kind === 'ifc') add(f.target_kind, f.element_ref)
+      if (f.target_kind !== 'mesh') continue
+      const key = add(f.target_kind, f.element_ref)
+      pathBoundActors_.add(key)
     }
-    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label))
+    for (const actor of byKey.values()) actor.label = labelFor(actor.sourceKind, actor.elementRef)
+
+    return {
+      actors: [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label)),
+      linksByActor: linksByActor_, keyframesByActor: keyframesByActor_, pathBoundActors: pathBoundActors_,
+    }
   }, [modelElementLinks, elementKeyframes, pathFollowers, annotations])
 
   if (actors.length === 0) {
@@ -342,25 +402,37 @@ export function AnimationActorsList({
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto border-t border-gray-100">
-      {actors.map(actor => (
-        <ActorRow
-          key={`${actor.sourceKind}:${actor.elementRef}`}
-          actor={actor}
-          links={modelElementLinks.filter(l => l.source_kind === actor.sourceKind && l.element_ref === actor.elementRef)}
-          keyframes={elementKeyframes.filter(k => k.source_kind === actor.sourceKind && k.element_ref === actor.elementRef)}
-          isPathBound={pathFollowers.some(f => f.target_kind === actor.sourceKind && f.element_ref === actor.elementRef)}
-          activities={activities}
-          animationProfiles={animationProfiles}
-          scheduleStart={scheduleStart}
-          scheduleEnd={scheduleEnd}
-          totalMs={totalMs}
-          format={format}
-          onJumpTo={onJumpTo}
-          onMoveKeyframes={onMoveKeyframes}
-          onDeleteKeyframes={onDeleteKeyframes}
-          onSelect={actor.sourceKind === 'ifc' ? null : () => onSelectActor(actor.sourceKind, actor.elementRef)}
-        />
-      ))}
+      {actors.map(actor => {
+        const key = `${actor.sourceKind}:${actor.elementRef}`
+        return (
+          <ActorRow
+            key={key}
+            actor={actor}
+            links={linksByActor.get(key) ?? EMPTY_LINKS}
+            keyframes={keyframesByActor.get(key) ?? EMPTY_KEYFRAMES}
+            isPathBound={pathBoundActors.has(key)}
+            activities={activities}
+            animationProfiles={animationProfiles}
+            scheduleStart={scheduleStart}
+            scheduleEnd={scheduleEnd}
+            totalMs={totalMs}
+            format={format}
+            onJumpTo={onJumpTo}
+            onMoveKeyframes={onMoveKeyframes}
+            onDeleteKeyframes={onDeleteKeyframes}
+            onSelect={actor.sourceKind === 'ifc' ? null : () => onSelectActor(actor.sourceKind, actor.elementRef)}
+          />
+        )
+      })}
     </div>
   )
-}
+})
+
+// Shared empty-array constants (2026-07-21) — an actor with no links or no
+// keyframes is the common case; returning the same stable empty array
+// instead of allocating a fresh `[]` per actor per render keeps ActorRow's
+// own `useMemo`s (groupByDay, keyed on `keyframes`) actually able to skip
+// recomputation when nothing changed, rather than seeing a "new" array
+// reference every time and recomputing anyway.
+const EMPTY_LINKS: ModelElementLink[] = []
+const EMPTY_KEYFRAMES: ElementKeyframe[] = []

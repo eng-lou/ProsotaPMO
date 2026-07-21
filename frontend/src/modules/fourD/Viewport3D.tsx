@@ -1634,6 +1634,13 @@ export function TimelinePlayback({
           ? { start: activity.bl_start, finish: activity.bl_finish }
           : { start: activity.start, finish: activity.finish }
         if (!window.start || !window.finish) continue
+        // Parsed once here, not per frame (2026-07-21 perf fix) — see
+        // pickActiveLink's own header in timelinePlayback.ts for why this
+        // specifically used to matter: every ResolvedTimelineLink built from
+        // this loop ends up read once per frame during actual Play/scrub,
+        // at real-schedule scale.
+        const windowStartMs = new Date(window.start).getTime()
+        const windowFinishMs = new Date(window.finish).getTime()
         const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
         if (!profile) continue
 
@@ -1698,7 +1705,7 @@ export function TimelinePlayback({
                   }
                   batchVisibilityByKey.set(key, bvTarget)
                 }
-                bvTarget.links.push({ activity: window, profile, axis: profile.axis })
+                bvTarget.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
                 objects = []
                 break
               }
@@ -1725,7 +1732,7 @@ export function TimelinePlayback({
 
         for (const object of objects) {
           const target = getOrCreate(object)
-          target.links.push({ activity: window, profile, axis: profile.axis })
+          target.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
         }
       }
 
@@ -1856,7 +1863,7 @@ export function TimelinePlayback({
       if (dateChanged) {
         target.cachedActiveLink = pickActiveLink(target.links, now)
         target.cachedState = target.cachedActiveLink
-          ? computeAppliedAnimationStateAt(target.cachedActiveLink.activity, target.cachedActiveLink.profile, now)
+          ? computeAppliedAnimationStateAt(target.cachedActiveLink, now)
           : null
       }
       const activeLink = target.cachedActiveLink
@@ -2017,7 +2024,7 @@ export function TimelinePlayback({
       if (dateChanged) {
         bv.cachedActiveLink = pickActiveLink(bv.links, now)
         bv.cachedState = bv.cachedActiveLink
-          ? computeAppliedAnimationStateAt(bv.cachedActiveLink.activity, bv.cachedActiveLink.profile, now)
+          ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now)
           : null
       }
       const state = bv.cachedState

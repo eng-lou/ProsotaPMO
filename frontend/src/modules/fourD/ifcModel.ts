@@ -298,6 +298,20 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   // placement matrix isn't mirrored, or the individual THREE.Mesh path for
   // the (typically small) mirrored fraction. Same final visual result
   // either way, just a different draw-call cost.
+  // Counted (not just tallied via batch.mesh.instanceCount, which the
+  // BatchedMesh API doesn't expose as a public getter anyway) so the
+  // console.info below can report, per file, exactly what fraction of a
+  // real load actually reached the batched path (2026-07-21, per Maro
+  // reporting "still slow" after the ALL-geometry batching fix landed and
+  // asking directly whether it was even running against the model he was
+  // testing — this makes that answerable from the browser console on the
+  // next real test instead of staying a guess: if mirroredCount turns out
+  // to be a *large* fraction of a real file rather than the "typically
+  // small" one assumed above, the individual-mesh fallback would still
+  // dominate the draw-call count despite this fix being live and correct).
+  let batchedInstanceCount = 0
+  let individualMeshCount = 0
+  let mirroredCount = 0
   for (let i = 0; i < meshCount; i++) {
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
@@ -325,6 +339,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       // — correctness over the batching win for the (typically small)
       // fraction of placements this affects.
       const isMirrored = matrix.determinant() < 0
+      if (isMirrored) mirroredCount++
       if (batch && !isMirrored) {
         const entry = batch.geometryByIfcId.get(placed.geometryExpressID)
         if (!entry) continue
@@ -341,6 +356,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
         infos.push({ geometryId: entry.geometryId, instanceId, color, colorAlpha: placed.color.w, matrix })
         batch.byExpressId.set(flatMesh.expressID, infos)
         batch.expressIdByInstanceId.set(instanceId, flatMesh.expressID)
+        batchedInstanceCount++
         continue
       }
 
@@ -351,6 +367,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       const mesh = new THREE.Mesh(geometry, buildElementMaterial(placed.color))
       finalizeIndividualMesh(mesh, flatMesh.expressID, matrix, group)
       ifcGeom.delete()
+      individualMeshCount++
     }
     // No flatMesh.delete() here despite web-ifc-api.d.ts declaring one
     // (2026-07-11 fix — real IFC file import threw "flatMesh.delete is not
@@ -360,6 +377,22 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     // runtime in this web-ifc build; the .d.ts's delete(): void on it is
     // wrong. Nothing to free here either way — it's just a plain object.
   }
+
+  // Hard evidence for the 2026-07-21 batching fix actually running against
+  // whatever's being loaded right now, not a reassurance to take on faith
+  // (per Maro asking directly, after "still slow" persisted, whether it was
+  // even reaching the model he was testing) — check this line in the
+  // browser console on the next real-file test. A low batched% here is a
+  // real, different finding (most of this particular file's placements are
+  // mirrored, so they're legitimately falling back to the slow individual-
+  // mesh path per the isMirrored comment above) rather than the fix not
+  // being live at all.
+  const totalPlacements = batchedInstanceCount + individualMeshCount
+  console.info(
+    `[4D] ${file.name}: ${totalPlacements} placements — `
+    + `${batchedInstanceCount} batched (${totalPlacements ? Math.round(batchedInstanceCount / totalPlacements * 100) : 0}%), `
+    + `${individualMeshCount} individual (${mirroredCount} mirrored, ${batchGeometries.size} unique shapes)`,
+  )
 
   // No axis-conversion rotation baked in here (2026-07-08 fix, per Maro:
   // default Rotation X showing -90 and the whole model rendering off-axis)

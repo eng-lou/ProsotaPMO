@@ -14,20 +14,48 @@ import type { ElementKeyframe } from './elementKeyframes'
 // precedes every link's start is safe, not just a default-of-convenience.
 export interface ResolvedTimelineLink {
   activity: Pick<Activity, 'start' | 'finish'>
+  // Epoch-ms of activity.start/finish, parsed once when the link is built
+  // (Viewport3D.tsx's Mode A resolution / AnnotationMarker.tsx's own
+  // useMemo), not per frame — see pickActiveLink/computeAppliedAnimationStateAt's
+  // own headers below for why that used to matter at real schedule scale.
+  startMs: number
+  finishMs: number
   profile: AnimationProfileConfig
   axis: Axis
 }
 
+// Rewritten (2026-07-21, per Maro: "the animation timeline is still
+// dragging" even after the geometry-batching fix landed and was confirmed
+// live via ifcModel.ts's own console.info — a real, separate bottleneck:
+// this used to spread-clone `links` into a new array and `.sort()` it with
+// a comparator that called `new Date(a.activity.start!)` — genuine ISO
+// *string parsing*, not just object construction — on every single
+// comparison, then re-parsed every link's start a second time in the loop
+// below. Called once per schedule-linked element (batched or materialized)
+// every frame the timeline's date changes, i.e. essentially every frame
+// during actual Play/scrub (the cachedActiveLink/cachedState gate a few
+// hundred lines below only helps while *paused*) — at six-combined-
+// discipline-file scale (confirmed ~55,000 total placements via that same
+// console.info) that was tens of thousands of array allocations, sorts, and
+// ISO-string reparses of the exact same two date strings, every frame,
+// 60 times a second. Now a single O(links-per-element) linear scan (that
+// count is normally 1) over already-numeric startMs, with zero allocation
+// and zero Date construction — semantics unchanged: the link with the
+// latest start at-or-before `now`, falling back to the earliest-starting
+// link if `now` precedes every one of them (activities before their own
+// start already read as "at rest" via computeAppliedAnimationStateAt's own
+// clamping, so that fallback is correctness, not just convenience — see
+// this file's own header above).
 export function pickActiveLink(links: ResolvedTimelineLink[], now: Date): ResolvedTimelineLink | null {
   if (links.length === 0) return null
   const nowMs = now.getTime()
-  const sorted = [...links].sort((a, b) => new Date(a.activity.start!).getTime() - new Date(b.activity.start!).getTime())
-  let active = sorted[0]
-  for (const link of sorted) {
-    if (new Date(link.activity.start!).getTime() <= nowMs) active = link
-    else break
+  let earliest = links[0]
+  let active: ResolvedTimelineLink | null = null
+  for (const link of links) {
+    if (link.startMs < earliest.startMs) earliest = link
+    if (link.startMs <= nowMs && (active === null || link.startMs > active.startMs)) active = link
   }
-  return active
+  return active ?? earliest
 }
 
 const DAY_MS = 86_400_000
@@ -220,39 +248,43 @@ function lerpColor(fromHex: string, toHex: string, t: number): string {
 // profile reads naturally as "falls away as the task finishes", while the
 // same preset on an on_start profile reads as "falls into place as the task
 // begins".
+// Takes the whole ResolvedTimelineLink now, not separate activity/profile
+// params (2026-07-21 perf fix — see pickActiveLink's own header for the
+// full "why"): reads link.startMs/link.finishMs, already parsed once at
+// link-build time, instead of re-parsing link.activity.start/finish's raw
+// ISO strings via `new Date(...)` on every one of these calls — this runs
+// exactly as often as pickActiveLink does, same hot per-frame path, same
+// six-combined-discipline-file scale.
 export function computeAppliedAnimationStateAt(
-  activity: Pick<Activity, 'start' | 'finish'>,
-  profile: AnimationProfileConfig,
+  link: Pick<ResolvedTimelineLink, 'startMs' | 'finishMs' | 'profile'>,
   now: Date,
 ): AppliedAnimationState | null {
-  if (!activity.start || !activity.finish) return null
-  const start = new Date(activity.start)
-  const finish = new Date(activity.finish)
+  const { startMs: start, finishMs: finish, profile } = link
   const nowMs = now.getTime()
 
   let color: string | null = null
   if (profile.color_from || profile.color_to) {
     const from = profile.color_from ?? profile.color_to!
     const to = profile.color_to ?? profile.color_from!
-    if (nowMs >= start.getTime() && nowMs <= finish.getTime()) {
-      const t = finish.getTime() > start.getTime() ? (nowMs - start.getTime()) / (finish.getTime() - start.getTime()) : 1
+    if (nowMs >= start && nowMs <= finish) {
+      const t = finish > start ? (nowMs - start) / (finish - start) : 1
       color = lerpColor(from, to, clamp01(t))
     }
   }
 
   let rawProgress: number
   if (profile.trigger === 'over_duration') {
-    rawProgress = finish.getTime() > start.getTime()
-      ? clamp01((nowMs - start.getTime()) / (finish.getTime() - start.getTime()))
-      : (nowMs >= finish.getTime() ? 1 : 0)
+    rawProgress = finish > start
+      ? clamp01((nowMs - start) / (finish - start))
+      : (nowMs >= finish ? 1 : 0)
   } else if (profile.trigger === 'on_start') {
     const windowDays = profile.duration_frames ?? 1
-    const windowEnd = start.getTime() + windowDays * DAY_MS
-    rawProgress = nowMs <= start.getTime() ? 0 : nowMs >= windowEnd ? 1 : (nowMs - start.getTime()) / (windowEnd - start.getTime())
+    const windowEnd = start + windowDays * DAY_MS
+    rawProgress = nowMs <= start ? 0 : nowMs >= windowEnd ? 1 : (nowMs - start) / (windowEnd - start)
   } else {
     const windowDays = profile.duration_frames ?? 1
-    const windowStart = finish.getTime() - windowDays * DAY_MS
-    rawProgress = nowMs <= windowStart ? 1 : nowMs >= finish.getTime() ? 0 : 1 - (nowMs - windowStart) / (finish.getTime() - windowStart)
+    const windowStart = finish - windowDays * DAY_MS
+    rawProgress = nowMs <= windowStart ? 1 : nowMs >= finish ? 0 : 1 - (nowMs - windowStart) / (finish - windowStart)
   }
 
   const eased = applyEasing(rawProgress, profile.interpolation)

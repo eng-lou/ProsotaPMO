@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
 import { AnimationActorsList } from './AnimationActorsList'
@@ -170,6 +170,33 @@ export function TimelineWindow({
     return activities.filter(a => linkedIds.has(a.id) && a.start && a.finish)
   }, [activities, links])
 
+  // Stable across the per-frame `displayDate` updates that drive Play
+  // (2026-07-21 perf fix, per Maro: "the animation timeline is still
+  // dragging" — see AnimationActorsList.tsx's own header for the full
+  // mechanism). Defined here, before the early return below, specifically
+  // so it's a hook call made unconditionally on every render (Rules of
+  // Hooks) — the null check inside covers the same "not ready yet" case
+  // the early return handles, just without skipping the hook itself.
+  // Every other setCurrent call site in this component (handleScrub, step,
+  // jumpToToday, ...) is a direct user click/drag, not a per-frame update,
+  // so reusing this same stable function costs them nothing.
+  const setCurrent = useCallback((next: Date) => {
+    if (!scheduleStart || !scheduleEnd) return
+    const clamped = clampToRange(next, scheduleStart, scheduleEnd)
+    dateRef.current = clamped
+    setDisplayDate(clamped)
+  }, [scheduleStart, scheduleEnd, dateRef])
+
+  // Passed to AnimationActorsList as onJumpTo — has to be its own stable
+  // reference too (not just an inline `date => {...}` at the JSX call
+  // site below, which would be a fresh function every render regardless of
+  // setCurrent's own stability) for that component's React.memo to
+  // actually hold across Play's per-frame re-renders.
+  const onActorJumpTo = useCallback((date: Date) => {
+    setIsPlaying(false)
+    setCurrent(date)
+  }, [setCurrent])
+
   if (!scheduleStart || !scheduleEnd) {
     return (
       <div className="h-full flex items-center justify-center p-6">
@@ -189,12 +216,6 @@ export function TimelineWindow({
   // as one plain number here rather than parsed back out of the formatted
   // display string (fragile the moment that format ever changes).
   const elapsedSeconds = speedDaysPerSecond > 0 ? (current.getTime() - scheduleStart.getTime()) / DAY_MS / speedDaysPerSecond : 0
-
-  const setCurrent = (next: Date) => {
-    const clamped = clampToRange(next, scheduleStart, scheduleEnd)
-    dateRef.current = clamped
-    setDisplayDate(clamped)
-  }
 
   const handleScrub = (value: number) => {
     setIsPlaying(false)
@@ -387,7 +408,7 @@ export function TimelineWindow({
         timeDisplayMode={timeDisplayMode}
         speedDaysPerSecond={speedDaysPerSecond}
         fps={fps}
-        onJumpTo={date => { setIsPlaying(false); setCurrent(date) }}
+        onJumpTo={onActorJumpTo}
         onMoveKeyframes={onMoveKeyframes}
         onDeleteKeyframes={onDeleteKeyframes}
         onSelectActor={onSelectActor}
