@@ -214,6 +214,36 @@ function isCurtainWallMember(name: string): boolean {
   return CURTAIN_WALL_NAME_KEYWORDS.some(k => lower.includes(k))
 }
 
+// Site/landscape re-bucketing for IfcSlab specifically (2026-07-22, per
+// Maro, after a real Hotel export produced a 1,570-day activity —
+// root-caused via a real diagnostic, not guessed: "01-NGL — Slabs —
+// Install Metal Deck & Rebar" summed real, correctly-measured Qto areas
+// from elements named "Floor:000-ASPHALT ROAD" (~9,470 m²) and multiple
+// "Floor:000-GREEN AREA" instances (each in the hundreds of m²) alongside
+// genuine building footings (~95 m² each) — a Revit modeler using the
+// Floor tool for site paving/lawn exports those as plain IfcSlab, same
+// generic type a real building floor uses, and IFC_TYPE_CATEGORIES' own
+// blanket IfcSlab -> 'Slabs' mapping has no way to tell them apart by type
+// alone. "01-NGL" (Natural Ground Level) is exactly the storey a sitewide
+// road/lawn would sit on, so summing them into one building-slab activity
+// produced a multi-year duration for something that was never structural
+// concrete work to begin with. Checked before the BASESLAB rebucket below
+// — an element is either a real foundation slab or a site/landscape one,
+// never both, so which check runs first only matters for keeping the two
+// branches readable, not for correctness. Same "broad and heuristic, not
+// authoritative" contract as isCurtainWallMember above — an unmatched
+// site element quietly stays in 'Slabs', visible and freely re-bucketable
+// by hand, not silently dropped.
+const SITE_FLOOR_NAME_KEYWORDS = [
+  'asphalt', 'road', 'roadway', 'driveway', 'pavement', 'paving', 'footpath', 'sidewalk', 'walkway',
+  'green area', 'grass', 'lawn', 'landscap', 'kerb', 'curb', 'parking',
+]
+
+function isSiteFloorElement(name: string): boolean {
+  const lower = name.toLowerCase()
+  return SITE_FLOOR_NAME_KEYWORDS.some(k => lower.includes(k))
+}
+
 // MEP re-bucketing (2026-07-17) — same reasoning/precedent as
 // isCurtainWallMember above (Name already read for free, keyword-matching
 // it costs nothing where a per-element pset walk over thousands of Flow*
@@ -446,7 +476,8 @@ export async function extractScheduleElements(
     // pipe from a conduit run here; falls back to rawCategory's own raw
     // IFC_TYPE_CATEGORIES default when nothing matches.
     const category: ScheduleCategory =
-      ifcType === 'IfcSlab' && predefinedType === 'BASESLAB' ? 'Foundation'
+      ifcType === 'IfcSlab' && isSiteFloorElement(name) ? 'Site & Landscaping'
+      : ifcType === 'IfcSlab' && predefinedType === 'BASESLAB' ? 'Foundation'
       : (ifcType === 'IfcMember' || ifcType === 'IfcPlate') && isCurtainWallMember(name) ? 'Curtain Walls'
       : MEP_FAMILY_TYPES.has(ifcType) ? (resolveMepCategory(name) ?? rawCategory)
       : rawCategory

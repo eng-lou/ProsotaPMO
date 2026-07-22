@@ -17,7 +17,7 @@ from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefine
 from app.schemas.schedule_bulk_generate import BulkAssignmentInput, ScheduleBulkGenerateRequest, ScheduleBulkGenerateResponse
 from app.services import cost_sync, scheduling_cpm
 from app.services.activity import _activity_role, _apply_computed_fields, _next_role_codes_batch, _recompute_hierarchy, _require_live_schedule_period
-from app.services.scheduling_cpm import _find_cycle
+from app.services.scheduling_cpm import _find_cycle, _find_cycle_path
 
 
 # Persists a whole staged schedule (WBS + activities + resources +
@@ -191,7 +191,40 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         relationship_edges.append((predecessor_id, successor_id))
         node_ids = {n for edge in edges for n in edge}
         if _find_cycle(edges, node_ids):
-            raise HTTPException(status_code=422, detail="Generated relationships would create a circular dependency")
+            # _find_cycle_path re-walks the same graph once more, purely to
+            # turn "a cycle exists somewhere" into "here's the actual loop"
+            # (2026-07-21, per Maro — a real rejection against a real, large
+            # generated schedule with no way to tell which of its ~200
+            # relationships were actually involved; this is the fourth time
+            # this exact rejection has come up on a real model, per the
+            # three earlier root-caused fixes already in scheduleGeneration.
+            # ts's own comments — better to make the next one diagnosable
+            # from the error alone than guess at a fifth scenario blind).
+            # temp_id_by_real_id only covers this payload's own new
+            # activities — a cycle that loops back through an activity
+            # already in the DB (this schedule period had prior data before
+            # this generation ran) needs a real query for its task_name.
+            cycle_path = _find_cycle_path(edges, node_ids) or []
+            temp_id_by_real_id = {v: k for k, v in real_id_by_temp_id.items()}
+            unresolved_ids = [n for n in cycle_path if n not in temp_id_by_real_id]
+            existing_names_by_id: dict[uuid.UUID, str] = {}
+            if unresolved_ids:
+                existing_names_result = await db.execute(
+                    select(Activity.id, Activity.task_name).where(Activity.id.in_(unresolved_ids))
+                )
+                existing_names_by_id = dict(existing_names_result.all())
+
+            def describe(node_id: uuid.UUID) -> str:
+                temp_id = temp_id_by_real_id.get(node_id)
+                if temp_id is not None:
+                    return activity_by_temp_id[temp_id].task_name
+                return existing_names_by_id.get(node_id, str(node_id))
+
+            cycle_description = " -> ".join(describe(n) for n in cycle_path)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Generated relationships would create a circular dependency: {cycle_description}",
+            )
 
     # --- Everything validated — now actually persist it.
 
@@ -295,10 +328,19 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         if not staged.element_refs:
             continue
         activity_id = real_id_by_temp_id[staged.temp_id]
-        for element_ref in staged.element_refs:
+        # element_labels, not task_name, when the frontend actually sent one
+        # per element (2026-07-22, per Maro — see BulkActivityInput's own
+        # header on element_labels). Falls back to task_name per element
+        # exactly as before whenever the lengths don't line up — a caller
+        # that never sends labels at all (element_labels stays [], the
+        # schema default) shouldn't get an IndexError, just the old
+        # behaviour.
+        labels_match = len(staged.element_labels) == len(staged.element_refs)
+        for i, element_ref in enumerate(staged.element_refs):
+            element_label = staged.element_labels[i] if labels_match else staged.task_name
             db.add(ModelElementLink(
                 id=uuid.uuid4(), project_id=data.project_id, activity_id=activity_id,
-                source_kind="ifc", element_ref=element_ref, element_label=staged.task_name,
+                source_kind="ifc", element_ref=element_ref, element_label=element_label,
             ))
             link_count += 1
 

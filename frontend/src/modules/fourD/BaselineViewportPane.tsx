@@ -121,6 +121,12 @@ export function BaselineViewportPane({
             paths={paths}
             pathFollowers={pathFollowers}
             dateField="baseline"
+            // Always null (2026-07-22) — this pane is a read-only cloned
+            // snapshot with no click/selection interaction of its own, so
+            // it can never trigger the live pane's own materialize-on-click
+            // migration this prop exists to catch (see TimelinePlayback's
+            // own selectedExpressId header).
+            selectedExpressId={null}
           />
           <group rotation={axisCorrectionRotation('y', upAxis)}>
             <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />

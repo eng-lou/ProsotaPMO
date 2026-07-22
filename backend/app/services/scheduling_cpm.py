@@ -528,6 +528,46 @@ def _find_cycle(edges: list[tuple[uuid.UUID, uuid.UUID]], node_ids: set[uuid.UUI
     return any(colour[n] == WHITE and visit(n) for n in node_ids)
 
 
+# Same DFS as _find_cycle above, but returns the actual loop (as a list of
+# node ids, first==last) instead of a bare bool (2026-07-21, per Maro — a
+# real "circular dependency" rejection against a real, large generated
+# schedule with no way to tell which of its ~200 relationships were
+# actually involved). schedule_bulk_generate.py's own per-edge validation
+# loop still calls _find_cycle for the bool fast-path on every candidate
+# edge (unchanged, still O(1) extra work per edge) — this only ever runs
+# once, after that check has already found a cycle, purely to turn "which
+# edge" into an answer instead of a guess.
+def _find_cycle_path(edges: list[tuple[uuid.UUID, uuid.UUID]], node_ids: set[uuid.UUID]) -> list[uuid.UUID] | None:
+    graph: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+    for pred, succ in edges:
+        graph[pred].append(succ)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    colour = {n: WHITE for n in node_ids}
+    stack: list[uuid.UUID] = []
+
+    def visit(node: uuid.UUID) -> list[uuid.UUID] | None:
+        colour[node] = GRAY
+        stack.append(node)
+        for nxt in graph.get(node, []):
+            if colour.get(nxt, WHITE) == GRAY:
+                return stack[stack.index(nxt):] + [nxt]
+            if colour.get(nxt, WHITE) == WHITE:
+                found = visit(nxt)
+                if found is not None:
+                    return found
+        colour[node] = BLACK
+        stack.pop()
+        return None
+
+    for n in node_ids:
+        if colour[n] == WHITE:
+            found = visit(n)
+            if found is not None:
+                return found
+    return None
+
+
 async def would_create_cycle(
     db: AsyncSession, schedule_period_id: uuid.UUID, predecessor_id: uuid.UUID, successor_id: uuid.UUID
 ) -> bool:

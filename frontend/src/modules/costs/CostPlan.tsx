@@ -9,6 +9,7 @@ import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { resourceLabelForActivity } from '@/lib/resourceLabel'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
+import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { UdfCell } from '@/modules/scheduling/UdfCell'
@@ -179,6 +180,7 @@ export function CostPlan() {
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
+  const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [elements, setElements] = useState<CostElement[]>([])
   const [risks, setRisks] = useState<RiskSummary[]>([])
   const [criteria, setCriteria] = useState<CostVarianceCriterion[]>([])
@@ -997,7 +999,27 @@ export function CostPlan() {
         >
           🏷️ Fields
         </button>
+        <button
+          onClick={() => setBaselineWidgetOpen(o => !o)}
+          title="Capture a named, dated baseline snapshot of the cost plan"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🎯 Baseline
+        </button>
       </div>
+
+      {baselineWidgetOpen && period && (
+        <BaselineManagerWidget
+          apiBasePath="/api/v1/cost-baselines"
+          periodId={period.id}
+          itemNounPlural="Elements"
+          moduleLabel="the Cost Plan"
+          dismissKeyPrefix="cost"
+          onClose={() => setBaselineWidgetOpen(false)}
+        />
+      )}
 
       {udfWidgetOpen && (
         <UserDefinedFieldsWidget

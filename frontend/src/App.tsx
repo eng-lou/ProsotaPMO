@@ -6,19 +6,28 @@ import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ConfirmHost } from './lib/confirmWithDontAsk'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
-import { Scheduling } from './modules/scheduling/Scheduling'
-import { Dashboard } from './modules/dashboard/Dashboard'
-import { RiskRegister } from './modules/risks/RiskRegister'
-import { CostPlan } from './modules/costs/CostPlan'
-import { IcdTracker } from './modules/icd/IcdTracker'
 
-// Lazy (2026-07-20, optimization pass) — FourD pulls in Three.js,
-// react-three-fiber/drei/postprocessing, recharts, and ~50 sibling files;
-// statically importing it here put all of that (confirmed via a real
-// `npm run build`: ~3.8MB raw / ~1MB gzipped) in the main bundle for every
-// user, even one who only ever opens /dashboard. FourD is a named export,
-// not a default one, hence the .then() adapter React.lazy needs.
+// Lazy (2026-07-20, FourD; extended 2026-07-21 to every other routed
+// module) — FourD pulls in Three.js, react-three-fiber/drei/
+// postprocessing, recharts, and ~50 sibling files; statically importing it
+// put all of that (confirmed via a real `npm run build`: ~3.8MB raw / ~1MB
+// gzipped) in the main bundle for every user, even one who only ever opens
+// /dashboard. That fix was scoped to FourD alone at the time, but
+// Scheduling/Dashboard/RiskRegister/CostPlan/IcdTracker were left eagerly
+// imported here too — confirmed via a real build that they were the actual
+// bulk of a 3.1MB main chunk vite's own build output was warning about
+// (per Maro: "carry on with optimisations"), same root cause as FourD's
+// original one, just never extended past it. `<Routes>` only ever renders
+// one of these at a time by construction, so a user on any one route was
+// always paying to download every *other* route's code too. Every one of
+// these five is a named export, not a default one, hence the same .then()
+// adapter React.lazy needs that FourD's own comment already explains.
 const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: m.FourD })))
+const Scheduling = lazy(() => import('./modules/scheduling/Scheduling').then(m => ({ default: m.Scheduling })))
+const Dashboard = lazy(() => import('./modules/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
+const RiskRegister = lazy(() => import('./modules/risks/RiskRegister').then(m => ({ default: m.RiskRegister })))
+const CostPlan = lazy(() => import('./modules/costs/CostPlan').then(m => ({ default: m.CostPlan })))
+const IcdTracker = lazy(() => import('./modules/icd/IcdTracker').then(m => ({ default: m.IcdTracker })))
 
 const Placeholder = ({ title, subtitle = 'Coming soon.' }: { title: string; subtitle?: string }) => (
   <div className="p-8">
@@ -102,18 +111,26 @@ function AuthenticatedApp() {
       ) : (
         <Layout>
           <PersistentFourD />
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/projects" element={<ProjectSelector />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/scheduling" element={<Scheduling />} />
-            <Route path="/risks" element={<RiskRegister />} />
-            <Route path="/costs" element={<CostPlan />} />
-            <Route path="/icd" element={<IcdTracker />} />
-            <Route path="/files" element={<Placeholder title="File Manager" />} />
-            <Route path="/periods" element={<Placeholder title="Period Manager" />} />
-            <Route path="/exports" element={<Placeholder title="Export Centre" />} />
-          </Routes>
+          {/* One shared boundary, not one per lazy route (2026-07-21) —
+              <Routes> only ever mounts one matched route at a time, so at
+              most one of these five lazy chunks is ever loading at once;
+              a single fallback here is exactly as correct as wrapping each
+              <Route> individually and doesn't repeat the same fallback
+              markup five times. */}
+          <Suspense fallback={<div className="p-8 text-gray-400 text-sm">Loading…</div>}>
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/projects" element={<ProjectSelector />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/scheduling" element={<Scheduling />} />
+              <Route path="/risks" element={<RiskRegister />} />
+              <Route path="/costs" element={<CostPlan />} />
+              <Route path="/icd" element={<IcdTracker />} />
+              <Route path="/files" element={<Placeholder title="File Manager" />} />
+              <Route path="/periods" element={<Placeholder title="Period Manager" />} />
+              <Route path="/exports" element={<Placeholder title="Export Centre" />} />
+            </Routes>
+          </Suspense>
         </Layout>
       )}
     </BrowserRouter>

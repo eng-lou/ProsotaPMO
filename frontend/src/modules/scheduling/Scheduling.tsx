@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -11,6 +12,7 @@ import { useSchedulingHighlights } from '@/lib/schedulingHighlights'
 import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
+import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
 import { buildResourceRecipe } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
@@ -68,6 +70,7 @@ export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical' | 'pct_complete' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
+  | 'element_count' | 'elements'
 
 export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
   { key: 'code', label: 'Code', width: 'w-24' },
@@ -86,6 +89,8 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'sub_critical', label: 'Sub Critical', width: 'w-20', title: 'Critical within its own tagged sub-project\'s branch, even if not critical on the master schedule — the whole point of tagging a sub-project. Blank for anything outside a tagged sub-project.' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
+  { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
+  { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
   { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
   { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Uses this activity\'s own live dates, not the assigned baseline.' },
   { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
@@ -150,6 +155,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
   pct_complete: 70, resources: 130,
   bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
+  element_count: 70, elements: 130,
 }
 export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
 
@@ -165,7 +171,10 @@ type SortKey = ResizableColumnKey
 // rows after a real Generate Schedule, and an O(n) `.filter()` per call
 // there is exactly the "O(activities × assignments), redone on every
 // render" pattern that was freezing this page.
-function sortValue(a: Activity, key: SortKey, resourceAssignments: Map<string, ResourceAssignment[]>): string | number | null {
+function sortValue(
+  a: Activity, key: SortKey, resourceAssignments: Map<string, ResourceAssignment[]>,
+  elementLinksByActivityId: Map<string, ModelElementLink[]>,
+): string | number | null {
   switch (key) {
     case 'code': return a.code
     case 'wbs': return a.wbs_path
@@ -197,15 +206,26 @@ function sortValue(a: Activity, key: SortKey, resourceAssignments: Map<string, R
     case 'spi': return a.spi !== null ? Number(a.spi) : null
     case 'eac': return a.eac !== null ? Number(a.eac) : null
     case 'etc': return a.etc !== null ? Number(a.etc) : null
+    case 'element_count': {
+      const count = elementLinksByActivityId.get(a.id)?.length ?? 0
+      return count > 0 ? count : null
+    }
+    case 'elements': {
+      const links = elementLinksByActivityId.get(a.id) ?? []
+      return links.length ? links[0].element_label : null
+    }
     default: return null
   }
 }
 
 // Nulls always sort last regardless of direction (a blank Start/Var/etc. isn't
 // "smaller" than a real value, it's unknown/not-yet-applicable).
-function compareBySortKey(a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: Map<string, ResourceAssignment[]>): number {
-  const av = sortValue(a, key, resourceAssignments)
-  const bv = sortValue(b, key, resourceAssignments)
+function compareBySortKey(
+  a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: Map<string, ResourceAssignment[]>,
+  elementLinksByActivityId: Map<string, ModelElementLink[]>,
+): number {
+  const av = sortValue(a, key, resourceAssignments, elementLinksByActivityId)
+  const bv = sortValue(b, key, resourceAssignments, elementLinksByActivityId)
   if (av === null && bv === null) return 0
   if (av === null) return 1
   if (bv === null) return -1
@@ -266,6 +286,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   pct_complete: 80,
   resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
+  element_count: 80, elements: 130,
 }
 
 const COLUMN_WIDTHS_STORAGE_KEY = 'prosota_scheduling_column_widths'
@@ -457,6 +478,14 @@ export function Scheduling() {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [resources, setResources] = useState<Resource[]>([])
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
+  // Project-scoped, not schedule_period-scoped (2026-07-22, per Maro: "a
+  // derived schedule column... how many 3d elements are assigned... another
+  // column to see the dropdown... so i browse down the list") — same API
+  // FourD.tsx already uses to restore/manage these links, listed here purely
+  // read-only so the grid can show what's already there; ModelElementLink
+  // itself has no schedule_period_id at all (see that model's own header —
+  // element_ref is a loose string identity, not scoped to a period).
+  const [modelElementLinks, setModelElementLinks] = useState<ModelElementLink[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // expandedId now drives one unified activity-detail panel (fields + Logic +
@@ -464,6 +493,23 @@ export function Scheduling() {
   // "+ Add Activity" just creates a blank row and jumps straight here too
   // (2026-07-03, per Maro) rather than opening a separate modal form.
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Which row's "Browse Elements" dropdown is currently open, plus where to
+  // anchor it (2026-07-22, per Maro's own "another column to see the
+  // dropdown of 3d elements assigned so i browse down the list") — a
+  // lightweight popover anchored to that row's own cell, not the full
+  // expandedId detail panel (Resources' own click-to-expand pattern above):
+  // browsing a possibly long element list is a quick lookup, not an edit,
+  // so it doesn't need this page's whole side panel machinery. Rendered via
+  // a React portal straight onto document.body (see its own render site
+  // below) rather than as a plain absolutely-positioned child of the
+  // triggering <td> — confirmed live that every grid cell in this table has
+  // its own overflow:hidden (needed elsewhere for text truncation), which
+  // silently clips a same-subtree popover at the cell's own edge no matter
+  // how correctly it's positioned; a portal escapes that ancestor
+  // clipping entirely. x/y are the trigger button's own getBoundingClientRect
+  // (viewport-relative), read once on click — doesn't track scroll/resize
+  // while open, an accepted tradeoff for a dismiss-on-click-anywhere popover.
+  const [elementsBrowse, setElementsBrowse] = useState<{ activityId: string; x: number; y: number } | null>(null)
   // Detail panel visibility (2026-07-03, per Maro): default auto-hides unless
   // an activity is selected; pinning keeps it permanently docked (showing a
   // placeholder when nothing's selected) so a planner working through rows
@@ -518,6 +564,17 @@ export function Scheduling() {
   // now does an O(1) Map lookup instead.
   const activityById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
   const assignmentsByActivityId = useMemo(() => groupAssignmentsByActivityId(resourceAssignments), [resourceAssignments])
+  // Same O(1)-lookup reasoning as assignmentsByActivityId above — a real
+  // generated schedule can carry tens of thousands of these links.
+  const elementLinksByActivityId = useMemo(() => {
+    const map = new Map<string, ModelElementLink[]>()
+    for (const link of modelElementLinks) {
+      const list = map.get(link.activity_id)
+      if (list) list.push(link)
+      else map.set(link.activity_id, [link])
+    }
+    return map
+  }, [modelElementLinks])
 
   // True if any ancestor (parent, grandparent, ...) is currently collapsed —
   // walks parent_id against the *full* activity list (not visibleActivities),
@@ -1409,7 +1466,7 @@ export function Scheduling() {
     async function load() {
       try {
         setLoading(true)
-        const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes] = await Promise.all([
+        const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes, elementLinks] = await Promise.all([
           api.get<Activity[]>('/api/v1/activities/', {
             params: { project_id: selectedProject!.id, schedule_period_id: period!.id },
           }),
@@ -1425,6 +1482,7 @@ export function Scheduling() {
           api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
             params: { schedule_period_id: period!.id },
           }),
+          listModelElementLinks(selectedProject!.id),
         ])
         if (!cancelled) {
           setActivities(activitiesRes.data)
@@ -1432,6 +1490,7 @@ export function Scheduling() {
           setCalendars(calendarsRes.data)
           setResources(resourcesRes.data)
           setResourceAssignments(assignmentsRes.data)
+          setModelElementLinks(elementLinks)
         }
       } catch {
         if (!cancelled) setError('Failed to load schedule')
@@ -1460,7 +1519,7 @@ export function Scheduling() {
     const result: Activity[] = []
     const visit = (parentId: string | null) => {
       const siblings = [...(byParent.get(parentId) ?? [])]
-        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, assignmentsByActivityId))
+        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId))
       for (const a of siblings) {
         result.push(a)
         visit(a.id)
@@ -1474,7 +1533,7 @@ export function Scheduling() {
       for (const a of activities) if (!seen.has(a.id)) result.push(a)
     }
     return result
-  }, [activities, sortColumn, sortDirection, assignmentsByActivityId])
+  }, [activities, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId])
 
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -1695,7 +1754,7 @@ export function Scheduling() {
 
   const refresh = async () => {
     if (!period) return
-    const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes] = await Promise.all([
+    const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes, elementLinks] = await Promise.all([
       api.get<Activity[]>('/api/v1/activities/', {
         params: { project_id: selectedProject.id, schedule_period_id: period.id },
       }),
@@ -1711,7 +1770,9 @@ export function Scheduling() {
       api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
         params: { schedule_period_id: period.id },
       }),
+      listModelElementLinks(selectedProject.id),
     ])
+    setModelElementLinks(elementLinks)
     setActivities(activitiesRes.data)
     setRelationships(relationshipsRes.data)
     setCalendars(calendarsRes.data)
@@ -3146,6 +3207,8 @@ export function Scheduling() {
               {isColumnVisible('sub_critical') && <col style={{ width: columnWidths.sub_critical }} />}
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
+              {isColumnVisible('element_count') && <col style={{ width: columnWidths.element_count }} />}
+              {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
               {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
               {isColumnVisible('pv') && <col style={{ width: columnWidths.pv }} />}
               {isColumnVisible('ev') && <col style={{ width: columnWidths.ev }} />}
@@ -3196,6 +3259,8 @@ export function Scheduling() {
                 {isColumnVisible('sub_critical') && <ResizableTh width={columnWidths.sub_critical} onResizeStart={startColumnResize('sub_critical')} {...sortHeader('sub_critical')} title="Critical within its own tagged sub-project's branch, even if not critical on the master schedule — blank outside any tagged sub-project">Sub Critical</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
+                {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
+                {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
                 {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} {...sortHeader('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
                 {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} {...sortHeader('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
                 {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} {...sortHeader('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
@@ -3452,6 +3517,33 @@ export function Scheduling() {
                         {assigned.length === 0 ? <span className="text-gray-300">—</span> : (
                           <span className="truncate block max-w-[8rem]">{names}</span>
                         )}
+                      </td>
+                    )
+                  })()}
+                  {isColumnVisible('element_count') && (() => {
+                    const count = elementLinksByActivityId.get(a.id)?.length ?? 0
+                    return (
+                      <td className="px-3 py-1 text-gray-600 text-right tabular-nums">
+                        {count === 0 ? <span className="text-gray-300">—</span> : count.toLocaleString()}
+                      </td>
+                    )
+                  })()}
+                  {isColumnVisible('elements') && (() => {
+                    const links = elementLinksByActivityId.get(a.id) ?? []
+                    return (
+                      <td className="px-3 py-1 text-gray-600">
+                        <button
+                          onClick={e => {
+                            if (elementsBrowse?.activityId === a.id) { setElementsBrowse(null); return }
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            setElementsBrowse({ activityId: a.id, x: rect.left, y: rect.bottom })
+                          }}
+                          disabled={links.length === 0}
+                          className="text-left w-full truncate disabled:text-gray-300 disabled:cursor-default hover:text-blue-600 disabled:hover:text-gray-300"
+                          title={links.length > 0 ? 'Browse linked 3D elements' : 'No 3D elements linked to this activity'}
+                        >
+                          {links.length === 0 ? '—' : `Browse (${links.length}) ▾`}
+                        </button>
                       </td>
                     )
                   })()}
@@ -3761,6 +3853,36 @@ export function Scheduling() {
         </div>
       </div>
     )}
+    {elementsBrowse && (() => {
+      const links = elementLinksByActivityId.get(elementsBrowse.activityId) ?? []
+      if (links.length === 0) return null
+      // Portal straight onto document.body (2026-07-22) — see
+      // elementsBrowse's own state header above for why: every grid cell
+      // has its own overflow:hidden, which clips a same-subtree popover no
+      // matter how it's positioned. Fixed (viewport-relative) coordinates,
+      // not absolute — x/y were already read as getBoundingClientRect
+      // values at click time.
+      return createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setElementsBrowse(null)} />
+          <div
+            className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg py-1"
+            style={{ left: elementsBrowse.x, top: elementsBrowse.y + 4 }}
+          >
+            {links.map(link => (
+              <div
+                key={link.id}
+                className="px-2.5 py-1 text-xs text-gray-700 truncate border-b border-gray-50 last:border-b-0"
+                title={`${link.element_label} (${link.element_ref})`}
+              >
+                {link.element_label}
+              </div>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )
+    })()}
     </>
   )
 }

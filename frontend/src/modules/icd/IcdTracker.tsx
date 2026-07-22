@@ -7,6 +7,7 @@ import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
+import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
@@ -53,6 +54,7 @@ export function IcdTracker() {
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
+  const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [items, setItems] = useState<IcdItem[]>([])
   const [risks, setRisks] = useState<RiskSummary[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
@@ -503,7 +505,27 @@ export function IcdTracker() {
         >
           📄 Page Setup
         </button>
+        <button
+          onClick={() => setBaselineWidgetOpen(o => !o)}
+          title="Capture a named, dated baseline snapshot of the ICD tracker"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🎯 Baseline
+        </button>
       </div>
+
+      {baselineWidgetOpen && period && (
+        <BaselineManagerWidget
+          apiBasePath="/api/v1/icd-baselines"
+          periodId={period.id}
+          itemNounPlural="Items"
+          moduleLabel="the ICD Tracker"
+          dismissKeyPrefix="icd"
+          onClose={() => setBaselineWidgetOpen(false)}
+        />
+      )}
 
       {letterheadWidgetOpen && letterhead && (
         <LetterheadEditorWidget

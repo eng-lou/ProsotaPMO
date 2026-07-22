@@ -48,6 +48,16 @@ class BulkActivityInput(BaseModel):
     # activity has a real id — see model_element_link.py's own docstring
     # on why element_ref is a loose string, not a hard FK.
     element_refs: list[str] = []
+    # Same order/length as element_refs (2026-07-22, per Maro: "another
+    # column to see the dropdown of 3d elements assigned so i browse down
+    # the list" — see bulk_generate's own ModelElementLink write below for
+    # why this matters: without a real per-element label, every one of a
+    # generation's ModelElementLink rows fell back to this activity's own
+    # task_name, so a browse-the-elements UI built on top of that would
+    # have shown the identical string N times over). Optional/empty for
+    # any caller that genuinely has nothing better — falls back to
+    # task_name per element exactly as before, not a hard requirement.
+    element_labels: list[str] = []
     # Which ScheduleCategory/CategoryPhase (frontend's own
     # ifcScheduleExtraction.ts/scheduleGeneration.ts) this activity was
     # generated as — None for a synthetic WBS/root/closeout node (see

@@ -102,6 +102,36 @@ function getMeshIndex(rootObject: THREE.Object3D): Map<number, THREE.Mesh[]> {
   return index
 }
 
+// Whether this expressID actually has real, placeable geometry — either
+// still in the shared batch, or already an individual mesh (2026-07-21,
+// per Maro: "select from spatial/class select and it turned up empty
+// everytime" on a real hotel model, but "works fine when i click directly
+// in viewport" — that contrast is the tell. A raycast click can only ever
+// land on something that's actually rendered; IfcDataPanel.tsx's own
+// storey/class selectors instead read straight off the IFC data model
+// (getSpatialStructure's tree, GetLineIDsWithType) and can name entities
+// that were never placeable at all — an IfcCurtainWall is routinely just a
+// semantic container in a real Revit export, with zero geometry of its
+// own; the actual visible mullions/glazing are separate IfcMember/IfcPlate
+// elements underneath it (already discovered and worked around once
+// before in this exact codebase — see ifcScheduleExtraction.ts's own
+// isCurtainWallMember/CURTAIN_WALL_NAME_KEYWORDS header). Selecting a
+// geometry-less expressID and then hitting Isolate hides literally
+// everything else with nothing of its own to show in exchange — the empty
+// viewport this was reported against. Every expressID with real geometry
+// ends up in exactly one of these two places at import time (ifcModel.ts's
+// loadIfcModel Pass 3: the shared batch for a non-mirrored placement,
+// finalizeIndividualMesh's own getMeshIndex registration for the mirrored-
+// fallback path) — neither ever gets an entry for one that never had
+// placed geometry to begin with, so this is a direct, complete check, not
+// a heuristic.
+export function hasGeometry(rootObject: THREE.Object3D, expressID: number): boolean {
+  const batch = rootObject.userData.batch as BatchState | null | undefined
+  if (batch?.byExpressId.has(expressID)) return true
+  const meshIndex = rootObject.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
+  return meshIndex?.has(expressID) ?? false
+}
+
 export function buildElementMaterial(color: { x: number; y: number; z: number; w: number }): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: new THREE.Color(color.x, color.y, color.z),

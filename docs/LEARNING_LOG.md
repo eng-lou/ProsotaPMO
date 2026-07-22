@@ -2026,3 +2026,214 @@ Every one of these changes was checked against the existing test suite
 still need Maro's own hands-on check in the browser — dragging a
 dashboard widget, opening the 4D module for the first time in a session —
 since none of this can be seen from the code alone.
+
+## 2026-07-21 — Chasing "still slow" on the 4D timeline to its real cause, then a Baseline Manager for the rest of the app
+
+Picked back up on the 4D performance work from the previous session's
+optimization pass. The batching fix that had just landed (every element's
+geometry consolidated into one shared draw-call-efficient object, not
+just repeated shapes) was the right fix for *orbiting/viewing* a big
+model — but Maro reported "still slow" on the animation timeline itself,
+and, fairly, pushed back: how do we actually know the fix is even running
+against the model being tested, rather than some stale build or cached
+state? That was a good question to take seriously rather than wave away.
+The answer turned out to be provable, not just arguable — a one-line
+diagnostic added to the model loader that prints, per file, exactly how
+many placements ended up batched vs not. Tested against the real 6-file
+combined-discipline reference set, it confirmed 100% batching, zero stale
+anything — real, hard evidence instead of reassurance.
+
+**Which meant the remaining slowness had to be something else entirely,
+and it was two somethings, both real.** First, the code that figures out
+"which scheduled activity is currently controlling this element's
+animation" was re-parsing the same date strings and re-sorting a small
+array from scratch for every single linked element, every single frame
+the clock moved — which, during actual playback, is every frame. At real
+schedule scale (tens of thousands of linked elements) that's a genuinely
+large amount of repeated, unnecessary work landing 60 times a second.
+Fixed by parsing each date once, when the link is first set up, instead
+of over and over during playback.
+
+**The second one was the real story, though, and it was never in the 3D
+code at all.** The "Animation Timeline" panel's own actor list — the
+scrollable list of every animated object with its own sub-track, sitting
+right underneath the 3D viewport — was rebuilding itself from scratch,
+checking every element against every scheduled link one at a time,
+*every single animation frame*, because nothing was stopping it from
+re-rendering just because the clock ticked. That's a browser-choking
+amount of repeated work happening on the exact same single thread that
+also has to run the 3D engine — which is exactly why the symptom looked
+like "the 3D view freezes on an empty scene, jumps to a fully-built one,
+then jumps back to empty, with no motion in between": the browser wasn't
+failing to animate, it was mostly frozen doing that list's own unrelated
+math, only occasionally free to actually paint a frame. Once that list
+was taught to only rebuild when its underlying data actually changes
+(not every clock tick), and to do that rebuild efficiently instead of
+checking every element against every link one at a time, playback went
+from broken to smooth. Confirmed by Maro directly in the browser against
+the real reference model — first genuinely "seamless" report of this
+session's whole performance thread.
+
+Also trimmed that same actor list down per Maro's own observation: it was
+showing one row per individual schedule-linked model element — thousands
+of them on a real project — even though those rows can never actually be
+edited from there (that kind of link is deliberately read-only in this
+view; editing it lives elsewhere) and the same information is already
+available from the Activities/Gantt view. Removing that whole category of
+row both matched how Maro actually wants to work and further shrank the
+list's own cost, since it had been the overwhelming majority of what was
+in it.
+
+**Two more real, separate optimizations followed the same evidence-first
+pattern.** A small piece of the actor list (the coloured bar showing a
+linked Activity's own dates) was rebuilding its own lookup tables from
+the *entire* project's activities and animation profiles every time any
+single row of the list rendered — moved to build those lookups once for
+the whole list instead. And a much bigger, unrelated finding: only the 4D
+module had ever been set up to load its own code on-demand (from an
+earlier session) — Scheduling, the Dashboard, Risk Register, Cost Plan,
+and the ICD Tracker were all still being downloaded together, upfront, by
+every single user on their very first visit, regardless of which one (if
+any) they actually opened. Extending that same on-demand-loading pattern
+to all five cut the very first, unavoidable download from about 3.1MB
+down to about 460KB — before anyone's even chosen which part of the app
+they want to work in.
+
+**Then a smaller, product-shaped piece of work: Risk, Cost, and ICD each
+got their own Baseline Manager**, the same "capture a named, dated
+snapshot, see the history, delete an old one" tool Scheduling already
+had. The backend side of this had actually already been built months
+earlier, as part of the Controls Dashboard's own baseline-comparison
+feature — Risk, Cost, and ICD baselines could already be captured and
+compared, just only in bulk from the Dashboard, with no way to manage
+them from inside their own modules. One new, shared component (rather
+than three separate near-identical copies, since the three modules'
+underlying data shapes turned out to be genuinely identical) closed that
+gap simply, reusing real backend work that had been sitting unused.
+
+**Finally, a real question about the actual authoring workflow: does this
+app need Revit files directly, or does it need IFC?** It needs IFC —
+there's no reader for Revit's own native file format here, nor a
+realistic open one anywhere. The useful part of the answer was pinning
+down the *right* export settings from Revit, checked directly against
+what this app's own code actually reads rather than generic advice: plain
+IFC (not the XML or zipped variants, which the parser used here can't
+open at all), Revit's "Export base quantities" turned on (without it, the
+app can only guess an element's area from its rough bounding box instead
+of reading Revit's own real figures — confirmed as a real, present gap by
+checking the actual reference files in this project, none of which had
+it enabled), and "Keep Tessellated Geometry as Triangulation" turned on
+(this one explains a whole category of red console warnings seen
+throughout this session's own real-file testing — without it, the app has
+to do its own triangle-conversion work on raw exported solid geometry,
+and errors on some of it; Revit doing that conversion itself at export
+time sidesteps the whole problem). Written directly into the code next to
+the exact logic each setting affects, and into the Import button's own
+on-hover help, so this doesn't stay something only remembered from a
+chat.
+
+## 2026-07-22 — A real Hotel model, a real cycle, and a real animation regression (with one real mistake along the way)
+
+Picked back up 4D testing against a genuinely large real file this time
+(Snowdon Towers Sample Structural.ifc, and separately a 159MB real Hotel
+export) instead of small test models, which surfaced several real bugs
+too rare to hit on anything smaller.
+
+**Shadow/AO polish first.** A hard diagonal band across a flat wall face
+("shouldn't be there at all," per Maro) turned out to be shadow acne — the
+directional light's fixed `shadow-bias` had been tuned against a much
+larger real building, so on a smaller model the same bias became too
+small a fraction of the shadow camera's own depth precision. Switched to
+`shadow-normalBias`, scaled to `modelRadius` the same way the frustum
+already is, so it stays correct regardless of model scale. Separately,
+N8AO's ambient-occlusion contact ring around close-set objects read as an
+unrealistic hard halo at its old intensity (2) — dropped to 0.8, confirmed
+live it now reads as a soft, physically-plausible occlusion instead.
+
+**A real circular-dependency rejection on Generate Schedule**, the fourth
+distinct shape this exact bug has taken (three earlier ones already
+patched individually, per this file's own July 17 entries) — this time
+from a storey with no structural category at all, whose handoff-chain
+fallback anchor landed on an activity downstream of the same storey's own
+facade activity, closing a loop back through the global "Structure
+Complete" gate. Rather than patch a fifth shape, `scheduleGeneration.ts`
+now guarantees the generator's *output* can never cycle at all: every
+activity gets ranked by a real topological sort, ties (and any actual
+cycle) broken by the generator's own deterministic default order, and only
+edges consistent with that final ranking survive. A structural guarantee,
+not another special case — confirmed against the real 159MB Hotel file,
+which now generates successfully every time.
+
+**A 1,570-day activity duration**, also on that real Hotel file, chased
+through two wrong turns before the real answer: first assumed a missing
+unit conversion on the real Qto data and "fixed" it by applying
+`toMetres²` — which was backwards, and confirmed live to shrink a real
+~95m² footing down to 0.0000955 m². Reverted, then found the actual cause
+with a live diagnostic against the real file: elements literally named
+"Floor:000-ASPHALT ROAD" and "Floor:000-GREEN AREA" — site/landscape work
+modeled with Revit's Floor tool — export as plain IfcSlab, the same type a
+real building floor slab uses, and were getting swept into "Slabs"
+alongside genuine footings. Fixed at the actual source (a name-keyword
+re-bucket into Site & Landscaping, same pattern already used for curtain
+walls), plus a permanent outlier-quantity clamp as backstop so no future
+export's naming quirk can produce another absurd duration, per Maro's own
+explicit ask.
+
+**The model silently failing to auto-restore on reload** — a real
+StrictMode regression: a ref-guard added the day before (to stop React 18
+dev-mode's double-invoke from restoring the same file twice) meant the
+*surviving* invocation of the restore effect could never start at all,
+since the ref was already claimed by the one StrictMode was about to
+cancel. Every restore's real work belonged to the invocation that got
+thrown away. Fixed by checking the ref's own live value at each step
+instead of a plain per-invocation cancelled flag — survives the
+StrictMode remount transparently, still correctly abandons stale work on
+a real project switch.
+
+**The most involved fix: clicking a schedule-linked element while
+animated permanently stopped it following the schedule**, "even though i
+click away," per Maro's own real repro. Root cause, confirmed via live
+diagnostics rather than assumed: a click materializes that one element out
+of the shared batched mesh into its own individual mesh, but the only
+thing that ever decides what drives an element's schedule-based
+visibility — a `resolve()` effect in TimelinePlayback — has no dependency
+that fires on a mid-session materialization, so the newly-individual mesh
+never gets an entry anywhere and nothing touches it again. **First fix
+attempt was wrong and shipped anyway**: re-running that whole resolve()
+effect on every click technically closed the gap but caused a real
+regression Maro caught immediately — every click started hiding the rest
+of the model, reading as an accidental Isolate. Reverted outright rather
+than chase why. The real fix is surgical instead: a small, separate effect
+that migrates *only* the one clicked element from the batch's
+already-resolved animation data into its own proper individual entry — an
+O(1) lookup, not a model-wide re-index — leaving the expensive full
+resolve untouched. Verified correctly this time with real instrumentation
+(not just code reading) against the actual failure case before shipping:
+confirmed the fix work genuinely, then found the "still looks broken"
+follow-up screenshots were themselves stale HMR state from a very long
+single dev session, not a flaw in the fix — confirmed clean on a real hard
+reload.
+
+**Also shipped**: a "3D Elements" count + "Browse Elements" dropdown
+column pair in Scheduling (per Maro's own ask), which surfaced a real,
+separate bug on the way — `ModelElementLink.element_label` for
+schedule-generated links had always stored the *activity's* name on every
+linked element instead of the element's own name, contradicting that
+field's own documented contract. Threaded a real per-element label
+through the generation pipeline so the new Browse column actually shows
+distinct, useful names. And a real 404 spam on every transform edit
+(dragging/rotating an object), caused by a `model3d_file_id` whose row had
+silently never made it to the database (a large upload abandoned by a
+reload mid-transfer) — self-heals the same way an earlier Section Box fix
+already proved out, and now surfaces a real, visible error instead of
+silently losing the edit with nothing but a console log nobody would ever
+see.
+
+**The honest lesson of the night**: the animation-materialize regression
+happened because a plausible-sounding fix went out without checking it
+against a real animated model first, breaking the same discipline that
+caught every one of the *other* bugs above (Snowdon/Hotel real-file
+testing, live diagnostics before believing a hypothesis). Caught it fast
+because Maro was testing live and said so immediately — but the fix
+process that actually worked, every single time tonight, was: reproduce
+for real, instrument for real, read the real evidence, *then* fix.

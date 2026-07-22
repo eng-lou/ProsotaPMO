@@ -56,7 +56,7 @@ import type { IfcModelHandle } from './ifcModel'
 // site like the rest of ifcModel.ts) because the render-body TransformPanel
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
-import { ensureMaterialized, materializeAll } from './elementBatching'
+import { ensureMaterialized, hasGeometry, materializeAll } from './elementBatching'
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
@@ -2492,7 +2492,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!selectedProject || !hasEverBeenActive) return
     if (restoreStartedForProjectIdRef.current === selectedProject.id) return
     restoreStartedForProjectIdRef.current = selectedProject.id
-    let cancelled = false
+    // Checked at every yield point below instead of a plain per-invocation
+    // `cancelled` boolean (2026-07-21 fix, per Maro: "the ifc model has
+    // disappeared again" — a real, silent regression from the ref-guard
+    // above, added 2026-07-20 to stop React 18 StrictMode's dev-only
+    // mount->cleanup->mount double-invoke from restoring the same file
+    // twice. StrictMode's cleanup still fires for the *first* invocation
+    // exactly as before, and a plain `cancelled` flag closed over that
+    // first invocation still flips true on that cleanup — but now the
+    // ref-guard also stops the *second* invocation (the one StrictMode
+    // intends to keep) from ever starting its own run at all, since the
+    // ref was already claimed. Net effect: every restore's real work
+    // belonged to the one invocation StrictMode was about to cancel, and
+    // nothing else was left to pick it up — models loaded, but every
+    // setIfcHandles/setSceneObjects call after the next `cancelled` check
+    // silently no-opped, so the viewport simply never showed them.
+    // Reading the ref's own current value instead of a closed-over
+    // boolean survives that exact double-invoke transparently (this run's
+    // project id is still what the ref holds, so every check below keeps
+    // passing) while still correctly stopping stale work the moment a
+    // genuinely different project's own restore effect claims the ref.
+    const projectIdForThisRestore = selectedProject.id
+    const stale = () => restoreStartedForProjectIdRef.current !== projectIdForThisRestore
     ;(async () => {
       // Reset first (2026-07-19), before any model for this (possibly new)
       // project gets restored/loaded below — see ifcModel.ts's own
@@ -2507,7 +2528,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         listModel3DFiles(selectedProject.id).catch(err => { listFailure = err; return [] }),
         listElementTransforms(selectedProject.id).catch(err => { listFailure ??= err; return [] }),
       ])
-      if (cancelled) return
+      if (stale()) return
       // Distinguishes "you genuinely have no saved models" from "the
       // request to check failed" (2026-07-11) — these two used to look
       // identical (both landed on an empty `files` array), which is
@@ -2570,7 +2591,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
 
       for (const download of downloads) {
-        if (cancelled) return
+        if (stale()) return
         const { file, blob, error: downloadError } = await download
         if (downloadError) {
           console.error(`Failed to download persisted model "${file.name}"`, downloadError)
@@ -2584,7 +2605,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           if (file.kind === 'ifc') {
             const { loadIfcModel } = await import('./ifcModel')
             const handle = await loadIfcModel(restoredFile)
-            if (cancelled) { const { disposeIfcModel } = await import('./ifcModel'); disposeIfcModel(handle); return }
+            if (stale()) { const { disposeIfcModel } = await import('./ifcModel'); disposeIfcModel(handle); return }
             applyTransform(handle.object, wholeFileTransform)
             // Element-scoped transforms (2026-07-11) — a specific IFC
             // sub-element repositioned independently of its parent model,
@@ -2614,7 +2635,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             }])
           } else {
             const object = await loadModel3DFile(restoredFile)
-            if (cancelled) return
+            if (stale()) return
             applyTransform(object, wholeFileTransform)
             const id = crypto.randomUUID()
             object.name = file.name
@@ -2639,7 +2660,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         }
       }
     })()
-    return () => { cancelled = true }
+    // No cleanup here (2026-07-21) — see stale()'s own header just above:
+    // restoreStartedForProjectIdRef is the real guard against both stale
+    // work (a later project switch) and StrictMode's double-invoke (a
+    // same-project remount), so there's nothing left for an unmount
+    // cleanup to correctly do — a plain `cancelled = true` here is exactly
+    // the bug this fix removes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject?.id, hasEverBeenActive])
 
@@ -2839,7 +2865,26 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // what the previous iteration just set.
   const handleSelectExpressIds = (expressIDs: number[], additive: boolean, objectId: string) => {
     if (expressIDs.length === 0) return
-    const next = additive ? new Set([...selectedExpressIds, ...expressIDs]) : new Set(expressIDs)
+    // Filtered down to expressIDs that actually have placeable geometry
+    // (2026-07-21, per Maro: "select from spatial/class select... turned
+    // up empty everytime" on a real hotel model, but "works fine when i
+    // click directly in viewport" — see hasGeometry's own header in
+    // elementBatching.ts for the full mechanism. Select by Storey/Type
+    // reads straight off the IFC data model and can legitimately name
+    // entities (an IfcCurtainWall container, most commonly) that were
+    // never placed as real geometry at all — a raycast click could never
+    // select one of those in the first place, since there's nothing there
+    // to click. Selecting one anyway and hitting Isolate hid literally
+    // everything else with nothing of its own to show in exchange, which
+    // is exactly the empty viewport this was reported against. Falls back
+    // to the unfiltered list only if filtering would leave nothing at all
+    // selected (e.g. every match this time genuinely lacks geometry) —
+    // still selects *something* rather than silently doing nothing, even
+    // though isolating it would still show empty.
+    const handle = getIfcHandleFor(objectId)
+    const geometryFiltered = handle ? expressIDs.filter(id => hasGeometry(handle.object, id)) : expressIDs
+    const resolvedIds = geometryFiltered.length > 0 ? geometryFiltered : expressIDs
+    const next = additive ? new Set([...selectedExpressIds, ...resolvedIds]) : new Set(resolvedIds)
     setSelectedExpressIds(next)
     // Only a genuine single-element result gets a "primary" element
     // (2026-07-17 fix — see handleBoxSelect's own header for why); "select
@@ -3386,6 +3431,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const persistActiveTransform = () => {
     if (!activeTransformObject || !activeSceneObject?.fileId) return
     const modelFileId = activeSceneObject.fileId
+    const sceneObjectId = activeSceneObject.id
+    const sceneObjectName = activeSceneObject.name
+    const sceneObjectKind = activeSceneObject.kind
     const object = activeTransformObject
     const elementScoped = isElementTransform
     const handle = activeIfcHandle
@@ -3397,6 +3445,38 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         const { getGuidFromExpressId } = await import('./ifcModel')
         elementRef = getGuidFromExpressId(handle, expressId) ?? null
       }
+      // Self-heals a stale/never-persisted fileId the same way
+      // handleCreateSectionBox's own 2026-07-09 fix already does (2026-07-22,
+      // per a real incident: a gizmo drag on "Snowdon Towers Sample
+      // Structural.ifc" 404'd on every single save, repeatedly, with the
+      // only trace being a console.error nobody would ever see — confirmed
+      // directly against the real dev database: model3d_files had zero rows
+      // for that file at all, meaning persistModelFile's own fire-and-
+      // forget upload — see its own header on why it's fire-and-forget in
+      // the first place — never actually landed, most likely a reload or
+      // navigation away mid-upload for a real building-scale file. Unlike
+      // the Section Box fix, "re-check by name and correct the id" isn't
+      // guaranteed to find anything here — the file may never have been
+      // persisted under any id — so this also has to cover that case
+      // (nothing found at all), not just "found under a different id."
+      // Either way, the one thing this must never go back to doing is
+      // failing this same edit silently: the whole point of this fix is
+      // that a user actively editing an object deserves to know their work
+      // isn't being saved, not find out on the next reload.
+      let modelFileIdToUse = modelFileId
+      const files = await listModel3DFiles(selectedProject!.id).catch(() => null)
+      const current = files?.find(f => f.name === sceneObjectName && f.kind === sceneObjectKind)
+      if (current && current.id !== modelFileIdToUse) {
+        modelFileIdToUse = current.id
+        setSceneObjects(prev => prev.map(o => (o.id === sceneObjectId ? { ...o, fileId: current.id } : o)))
+      } else if (!current) {
+        setImportError(
+          `Couldn't save the last edit to "${sceneObjectName}" — this model was never fully saved to the server ` +
+          `(likely a reload or navigation away while a large file was still uploading). Re-import it to fix this ` +
+          `and any other unsaved position/rotation/scale edits made since.`,
+        )
+        return
+      }
       try {
         // Carries object.userData.pivotPoint forward on *every* save, not
         // just a Set Pivot edit itself (2026-07-12) — a plain gizmo drag
@@ -3405,7 +3485,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         // can't distinguish "not provided" from "explicitly cleared" here.
         const currentPivot = getPivot(object)
         const saved = await saveElementTransform({
-          model3d_file_id: modelFileId, element_ref: elementRef,
+          model3d_file_id: modelFileIdToUse, element_ref: elementRef,
           position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
           rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
           scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
@@ -3417,6 +3497,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         ]
       } catch (err) {
         console.error('Failed to save transform', err)
+        setImportError(`Couldn't save the last edit to "${sceneObjectName}" (${sectionBoxErrorMessage(err, 'unknown error')}).`)
       }
     }
 
@@ -4269,7 +4350,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}
-          title="Import a GLTF/GLB, OBJ, FBX, or IFC model into the viewport"
+          title="Import a GLTF/GLB, OBJ, FBX, or IFC model into the viewport. Exporting from Revit? File type IFC (not IfcXML/zip) — turn on Export base quantities (Property Sets tab) and Keep Tessellated Geometry as Triangulation (Advanced tab)."
           className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
         >
           ⬆ Import Model

@@ -399,6 +399,17 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
 export interface CategoryGroup {
   name: string
   elementRefs: string[]
+  // Same order/length as elementRefs — each element's own real Name (2026-07-22,
+  // per Maro: "another column to see the dropdown of 3d elements assigned so
+  // i browse down the list" — see this module's own ModelElementLink write
+  // in schedule_bulk_generate.py for why a real per-element label matters
+  // here specifically: element_label is documented, backend-side, as "a
+  // human-readable snapshot [of the element]", but the bulk-generate path
+  // had never had a real one available to give it, so every one of a real
+  // generation's thousands of links carried the same, unhelpful value (its
+  // own activity's task_name, repeated) — a "browse the elements" column
+  // built on top of that would have shown the identical string N times).
+  elementLabels: string[]
   quantity: number
 }
 export interface StoreyGroup {
@@ -437,14 +448,18 @@ const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
 // guess, degrade gracefully" rule ifcModel.ts's own unit-conversion
 // fallback follows).
 export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
-  interface Bucket { storeyName: string; elevationMetres: number | null; categories: Map<ScheduleCategory, { elementRefs: string[]; quantity: number }> }
+  interface Bucket { storeyName: string; elevationMetres: number | null; categories: Map<ScheduleCategory, { elementRefs: string[]; elementLabels: string[]; quantity: number }> }
   const byStorey = new Map<string, Bucket>()
   for (const el of elements) {
     let group = byStorey.get(el.storeyName)
     if (!group) { group = { storeyName: el.storeyName, elevationMetres: el.storeyElevation, categories: new Map() }; byStorey.set(el.storeyName, group) }
     let bucket = group.categories.get(el.category)
-    if (!bucket) { bucket = { elementRefs: [], quantity: 0 }; group.categories.set(el.category, bucket) }
+    if (!bucket) { bucket = { elementRefs: [], elementLabels: [], quantity: 0 }; group.categories.set(el.category, bucket) }
     bucket.elementRefs.push(el.globalId)
+    // el.name falls back to el.ifcType (2026-07-22) — a handful of real
+    // elements genuinely have no Name set in the source file; showing the
+    // IFC type is still more useful for browsing than an empty string.
+    bucket.elementLabels.push(el.name || el.ifcType)
     bucket.quantity += COUNT_BASED.has(el.category) ? 1 : el.quantity
   }
   return [...byStorey.values()]
@@ -481,6 +496,12 @@ export interface StagedActivity {
   parent_temp_id: string | null
   duration_hours: number
   element_refs: string[]
+  // Same order/length as element_refs (2026-07-22) — see CategoryGroup's
+  // own elementLabels header for why this exists: without it,
+  // schedule_bulk_generate.py has nothing but this activity's own
+  // task_name to fall back to for every one of these elements' real
+  // ModelElementLink.element_label.
+  element_labels: string[]
   // Persisted on the real Activity row (Activity.schedule_category/
   // schedule_phase_key, backend) — null for the synthetic root/storey-WBS/
   // milestone nodes this module also generates, set for every real category-
@@ -712,10 +733,70 @@ interface StoreyHandoff {
 // resolvePhases, computeDurationHours) still fully drives realistic
 // *durations* — none of that goes away, only the step that used to also
 // turn those same rates into real Resource/ResourceAssignment rows.
+// A permanent backstop against one bad quantity ever again producing an
+// absurd multi-year activity duration (2026-07-22, per Maro: "make sure an
+// outlier never does something that silly" — a real Hotel export, WITH
+// "Export base quantities" on, still turned one Slabs phase into a 1,570-day
+// activity; root-caused to a real unit-conversion bug in
+// getElementQuantityArea, ifcModel.ts, now fixed separately — but the
+// actual lesson here is broader than that one bug: this function trusts
+// whatever quantity extraction handed it, from a real Qto, a bounding-box
+// guess, or any future measurement path this app grows, and none of those
+// can ever be guaranteed free of a bad value on some real file this hasn't
+// been tested against yet. Rather than trust the source, this compares
+// each storey's own quantity for a category against every OTHER storey's
+// quantity for that *same* category — a hotel's floor slabs are naturally
+// comparable to each other in a way nothing else in this generator's own
+// data already checks. Requires at least 3 storeys with that category
+// present before attempting this at all (fewer data points can't
+// distinguish "the real outlier" from "just genuinely different" — a
+// building with, say, only a ground floor and a roof sharing one category
+// is left completely alone). OUTLIER_MULTIPLE is deliberately generous
+// (10x its own peers' median) — real floor-to-floor variation (a smaller
+// penthouse, a larger podium level) should never come close to that; only
+// something like the mis-bucketed sitewide-slab/unit-conversion class of
+// bug this was written against would. Clamps down to the threshold itself,
+// not the median — the clamped activity still reads as the largest of its
+// peers (a real, if imprecise, signal that something about that storey
+// genuinely differs), just bounded to a plausible magnitude instead of an
+// absurd one.
+const OUTLIER_MULTIPLE = 10
+
+function clampOutlierQuantities(storeys: StoreyGroup[]): StoreyGroup[] {
+  const quantitiesByCategory = new Map<string, number[]>()
+  for (const storey of storeys) {
+    for (const category of storey.categories) {
+      const list = quantitiesByCategory.get(category.name) ?? []
+      list.push(category.quantity)
+      quantitiesByCategory.set(category.name, list)
+    }
+  }
+
+  const capByCategory = new Map<string, number>()
+  for (const [name, quantities] of quantitiesByCategory) {
+    if (quantities.length < 3) continue
+    const sorted = [...quantities].sort((a, b) => a - b)
+    const median = sorted.length % 2 === 1
+      ? sorted[(sorted.length - 1) / 2]
+      : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+    if (median > 0) capByCategory.set(name, median * OUTLIER_MULTIPLE)
+  }
+  if (capByCategory.size === 0) return storeys
+
+  return storeys.map(storey => ({
+    ...storey,
+    categories: storey.categories.map(category => {
+      const cap = capByCategory.get(category.name)
+      return cap !== undefined && category.quantity > cap ? { ...category, quantity: cap } : category
+    }),
+  }))
+}
+
 export function buildStagedSchedule(
   projectId: string, schedulePeriodId: string, storeys: StoreyGroup[], rates: Record<string, CategoryRate>,
   rootName: string, calendarId: string | null,
 ): { staged: StagedSchedule; summary: ProposedScheduleSummary } {
+  storeys = clampOutlierQuantities(storeys)
   const activities: StagedActivity[] = []
   const relationships: StagedRelationship[] = []
   let elementCount = 0
@@ -735,7 +816,7 @@ export function buildStagedSchedule(
   // rows, never reparents existing ones.
   const rootTempId = 'wbs-root'
   activities.push({
-    temp_id: rootTempId, task_name: rootName, parent_temp_id: null, duration_hours: 0, element_refs: [],
+    temp_id: rootTempId, task_name: rootName, parent_temp_id: null, duration_hours: 0, element_refs: [], element_labels: [],
     category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
   })
 
@@ -768,15 +849,15 @@ export function buildStagedSchedule(
   const structureCompleteTempId = 'act-structure-complete-all-levels'
   activities.push({
     temp_id: milestonesWbsTempId, task_name: 'Project Milestones', parent_temp_id: rootTempId,
-    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+    duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
   })
   activities.push({
     temp_id: constructionStartTempId, task_name: 'Construction Start', parent_temp_id: milestonesWbsTempId,
-    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'start_milestone', discipline: null,
+    duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'start_milestone', discipline: null,
   })
   activities.push({
     temp_id: substantialCompletionTempId, task_name: 'Substantial Completion', parent_temp_id: milestonesWbsTempId,
-    duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+    duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
   })
 
   // No Resource/StagedAssignment rows generated here (2026-07-17 — see this
@@ -795,7 +876,7 @@ export function buildStagedSchedule(
     const wbsTempId = `wbs-storey-${storeyIndex}`
     activities.push({
       temp_id: wbsTempId, task_name: storey.storeyName, parent_temp_id: rootTempId, duration_hours: 0,
-      element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+      element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
     })
 
     let previousTempId: string | null = null
@@ -826,6 +907,7 @@ export function buildStagedSchedule(
           // every intermediate step — avoids the same IFC elements being
           // linked to N separate activities for one physical installation.
           element_refs: phaseIndex === phases.length - 1 ? category.elementRefs : [],
+          element_labels: phaseIndex === phases.length - 1 ? category.elementLabels : [],
           category: category.name, phase_key: phase.key, quantity: category.quantity, activity_type: 'task',
           discipline: disciplineFor(category.name, phase.key),
         })
@@ -916,7 +998,7 @@ export function buildStagedSchedule(
   if (lastWallsTempIds.length > 0 && firstFacadeTempIds.length > 0) {
     activities.push({
       temp_id: structureCompleteTempId, task_name: 'Structure Complete — All Levels', parent_temp_id: milestonesWbsTempId,
-      duration_hours: 0, element_refs: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+      duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
     })
     for (const fromId of lastWallsTempIds) {
       relationships.push({ predecessor_temp_id: fromId, successor_temp_id: structureCompleteTempId, relationship_type: 'FS', lag_hours: 0 })
@@ -962,13 +1044,89 @@ export function buildStagedSchedule(
     }
   }
 
+  const acyclicRelationships = makeRelationshipsAcyclic(activities, relationships)
+
   return {
-    staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: calendarId, activities, resources, assignments, relationships },
+    staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: calendarId, activities, resources, assignments, relationships: acyclicRelationships },
     summary: {
       storeyCount: storeys.length,
       activityCount: activities.length,
-      relationshipCount: relationships.length,
+      relationshipCount: acyclicRelationships.length,
       elementCount,
     },
   }
+}
+
+// A hard, structural guarantee that this generator can never hand
+// schedule_bulk_generate.py a cyclic relationship set (2026-07-21, per
+// Maro, after a real cycle on a real Hotel model: "this issue needs to be
+// fixed once and for all... there shouldn't be a circular relationship
+// ever, if confused simplify the relationship - fs"). The real cycle:
+// "12-CEILING LEVEL" has no structural category at all (curtain walls,
+// coverings, furnishings only), so the structural-handoff chain's own
+// fallback anchor (firstNonFacadeTempId/lastNonFacadeTempId, meant for a
+// pure-MEP/finishes storey with genuinely nothing else to anchor on — see
+// StoreyHandoff's own header) lands on that storey's Furnishings phase —
+// which, in THIS storey's own local chain, sits AFTER its own Curtain
+// Walls phase, itself fed by the global "Structure Complete" gate. That
+// closes a loop: gate -> this storey's Curtain Walls -> (local chain) ->
+// Furnishings -> (handoff fallback) -> next storey's Slabs -> (local
+// chain) -> next storey's Walls -> gate. This is the fourth distinct real
+// cycle shape this generator has produced (three earlier ones already
+// root-caused and patched individually — the facade-only-storey anchor
+// fix and the local Facade-before-Walls skip above are two of them) — a
+// fourth targeted patch would only close this one specific shape, the
+// same way the first three didn't close this one. This function instead
+// makes the *output* provably acyclic regardless of which storey/category
+// arrangement produced it, so a fifth real-world IFC file with yet another
+// odd storey shape can degrade this generator's plan quality, but can
+// never again produce a request schedule_bulk_generate.py rejects outright
+// — automation later in the pipeline (Resources/Cost/Risk generation, all
+// built on top of a committed schedule) can always assume one exists.
+//
+// Method: rank every activity by a real topological sort (Kahn's
+// algorithm) over the candidate edges, breaking ties — and, critically,
+// breaking any actual cycle — by falling back to `activities`' own
+// insertion order (root -> milestones -> storey by storey -> category by
+// category -> phase by phase), which is already a real, deterministic,
+// PM-meaningful default sequence on its own. Only ever forced when no
+// node is genuinely "ready" (in-degree 0), i.e., exactly when a cycle
+// exists among whatever's left — everywhere else this is a completely
+// normal topological sort and every edge survives untouched. Once every
+// activity has a final rank, keep only the edges consistent with it
+// (predecessor's rank < successor's rank) — a relationship set built
+// entirely from one strict total order can never cycle, by construction,
+// so this is a proof, not a heuristic. Activity count stays in the low
+// hundreds even for a huge IFC import (this is WBS granularity —
+// storeys x categories x phases — not raw element count), so the plain
+// linear "find the next ready activity" scan below is trivial, not worth
+// a real priority-queue implementation.
+function makeRelationshipsAcyclic(activities: StagedActivity[], relationships: StagedRelationship[]): StagedRelationship[] {
+  const order = activities.map(a => a.temp_id)
+  const adjacency = new Map<string, string[]>(order.map(id => [id, []]))
+  const inDegree = new Map<string, number>(order.map(id => [id, 0]))
+  for (const rel of relationships) {
+    adjacency.get(rel.predecessor_temp_id)?.push(rel.successor_temp_id)
+    inDegree.set(rel.successor_temp_id, (inDegree.get(rel.successor_temp_id) ?? 0) + 1)
+  }
+
+  const rank = new Map<string, number>()
+  const done = new Set<string>()
+  while (rank.size < order.length) {
+    let next = order.find(id => !done.has(id) && (inDegree.get(id) ?? 0) === 0)
+    // No zero-in-degree activity left among what's remaining -> the
+    // remaining activities form a cycle. Force-picking the next one in
+    // `order` instead of getting stuck is exactly "simplify the
+    // relationship" per Maro — whichever edge(s) pointed backward into
+    // this activity get dropped by the final filter below; the rest of
+    // the cycle unwinds completely normally from here on.
+    next ??= order.find(id => !done.has(id))!
+    rank.set(next, rank.size)
+    done.add(next)
+    for (const successor of adjacency.get(next) ?? []) {
+      if (!done.has(successor)) inDegree.set(successor, (inDegree.get(successor) ?? 0) - 1)
+    }
+  }
+
+  return relationships.filter(rel => (rank.get(rel.predecessor_temp_id) ?? -1) < (rank.get(rel.successor_temp_id) ?? -1))
 }

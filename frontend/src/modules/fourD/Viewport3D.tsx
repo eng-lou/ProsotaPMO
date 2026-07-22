@@ -26,7 +26,7 @@ import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
-import { ensureMaterialized, getBatchedInstanceInfo, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
+import { ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
@@ -129,12 +129,27 @@ export interface ResolvedSectionBox {
 // assumed): defaults are 16/8, boosted to 64/32 while genuinely idle — see
 // this file's own boostQuality state/comment for the "real-time path
 // tracer, scoped down" reasoning this serves.
+// intensity dropped 2 -> 0.8 (2026-07-21, per Maro: "the dark ring is
+// unrealistic" — confirmed live: at 2, N8AO's contact occlusion around a
+// small object sitting on a larger face reads as a hard omnidirectional
+// dark halo, not a soft, physically-plausible occlusion, regardless of the
+// sun's own direction). Also confirmed live: this ring only shows for
+// Flat Shaded/Rendered — it's absent for Gouraud/Hidden Line, where a
+// still-batched element's material is swapped to a Lambert/Basic variant
+// (see the "Render mode" fix a few hundred lines down in this same file);
+// root cause not yet pinned down (N8AO derives its AO from the depth
+// buffer, not per-object material, so the correlation is real but not
+// yet explained). Left as a known, deliberately unchased gap per Maro —
+// AO/Shadows are both off by default and not something this project
+// currently relies on; worth a real diagnostic pass (same evidence-first
+// approach as the isolate/dope-sheet fixes elsewhere in this file) only if
+// that changes.
 const AmbientOcclusionEffect = lazy(() =>
   import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
     default: ({ boostQuality }: { boostQuality: boolean }) => (
       <EffectComposer enableNormalPass>
         <N8AO
-          aoRadius={1} intensity={2} distanceFalloff={1}
+          aoRadius={1} intensity={0.8} distanceFalloff={1}
           aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
         />
       </EffectComposer>
@@ -592,6 +607,36 @@ function ModelObjects({
     // out. Displacement+subdivision is a niche feature; an occasional
     // slightly-generous budget on a selection-only pass is an accepted
     // trade for not walking every mesh on every click.
+    // Shared by both the heavy full-batch pass and the cheap touched-only
+    // pass below (2026-07-21) — recomputes and writes exactly one batched
+    // element's own highlight colour, given whichever expressIDs the
+    // caller has decided need it this render. Reads selectedExpressId/
+    // selectedExpressIds directly off this effect's own closure (same as
+    // every other selection check in this file), not passed as params.
+    const applyBatchSelectionColour = (batch: BatchState, expressIDs: number[]) => {
+      const isBatchExpressSelected = selectedExpressId !== null && batch.byExpressId.has(selectedExpressId)
+      for (const expressID of expressIDs) {
+        const infos = batch.byExpressId.get(expressID)
+        if (!infos) continue
+        // Same two tiers as the individual-mesh path's own
+        // isExpressSelected/isExpressAlsoSelected (a stronger lerp for the
+        // one primary/only selected element, a lighter one for "also
+        // selected" — several picked together via Select by Type, the
+        // actually-common case for a still-batched element).
+        const isExpressSelected = isBatchExpressSelected && expressID === selectedExpressId
+        const isExpressAlsoSelected = selectedExpressIds.has(expressID)
+        const lerpAmount = isExpressSelected ? 0.6 : isExpressAlsoSelected ? 0.35 : 0
+        for (const info of infos) {
+          if (lerpAmount > 0) {
+            _scratchColor.copy(info.color).lerp(SELECTED_EMISSIVE, lerpAmount)
+            batch.mesh.setColorAt(info.instanceId, _scratchColor)
+          } else {
+            batch.mesh.setColorAt(info.instanceId, info.color)
+          }
+        }
+      }
+    }
+
     let remainingSubdivisionBudget = MAX_TOTAL_SUBDIVIDED_TRIANGLES
     for (const { id, kind, object } of objects) {
       const isObjectSelected = selectedObjectIds.has(id)
@@ -607,8 +652,27 @@ function ModelObjects({
       // selection membership — the cheapest possible skip, before even
       // walking its mesh tree.
       if (!heavyChanged && !touchedObjectIds.has(id) && touchedExpressIds.size === 0) continue
+      const batchMeshForSkip = object.userData.batch as BatchState | undefined
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
+        // The shared BatchedMesh itself (2026-07-21 fix, per Maro: "not
+        // selecting and not isolating, i dont see the highlight color
+        // change" — reproduced live: per-instance visibility was correct
+        // (visibleCount matched isolatedExpressIds exactly) but nothing
+        // rendered because THREE.BatchedMesh extends THREE.Mesh, so this
+        // traverse — meant only for real, individual IFC element meshes —
+        // was also walking straight into the batch mesh itself. It has no
+        // userData.expressID of its own, so the generic per-mesh formula
+        // below (isolatedOut checks isolatedExpressIds.has(expressID),
+        // undefined never matches) always decided it "isn't part of the
+        // isolated set" and set the *entire batch's* own top-level
+        // `.visible = false` — hiding every still-batched element
+        // regardless of how correctly the dedicated batch-visibility block
+        // below had just set each one's own per-instance flag. The batch
+        // mesh's visibility is entirely that dedicated block's job, same
+        // "owns its own lifecycle" reasoning as the isSplitPreview skip
+        // just below.
+        if (child === batchMeshForSkip?.mesh) return
         // Split-by-level's own live preview planes (SplitByLevelPanel.tsx)
         // are plain MeshBasicMaterial quads added straight into
         // handle.object, not real IFC/split elements — this whole effect's
@@ -1005,18 +1069,76 @@ function ModelObjects({
       // (see elementBatching.ts's own header), mirroring the same
       // baseVisible formula the traverse above applies per individual
       // mesh. Deliberately narrower than that formula — no render-mode
-      // material swap, no variance/clash tint, no texture override, no
-      // selection highlight — a batched element hasn't been individually
-      // touched by definition, so none of those can apply to it yet;
-      // selection specifically always materializes immediately
-      // (Viewport3D.tsx's own handleClick), so a "selected but still
-      // batched" state never actually occurs. Gated on heavyChanged, not
-      // run on every pass like the traverse above — visibility here never
-      // depends on which specific expressID is currently selected (the
-      // only thing a cheap selection-only pass updates), so there's
-      // nothing for a non-heavy pass to do here.
+      // material swap, no variance/clash tint, no texture override — a
+      // batched element hasn't been individually touched by definition, so
+      // none of those can apply to it yet.
+      //
+      // Selection highlight is the one exception (2026-07-21 fix, per
+      // Maro: "not selecting... i dont see the highlight color change" —
+      // this comment used to claim "selection specifically always
+      // materializes immediately... so a selected but still batched state
+      // never actually occurs," which is only true for a single direct
+      // click (Viewport3D.tsx's own handleClick does call
+      // ensureMaterialized as a side effect of that specific selection
+      // path) — a panel-driven Select by Storey/Type never materializes
+      // anything (elementBatching.ts's own ensureMaterialized is only ever
+      // called with the single, primary `selectedExpressId`, which is null
+      // the instant more than one element is selected), so "selected but
+      // still batched" is the *common* case for that flow, not an
+      // impossible one. The individual-mesh path's own highlight
+      // (isExpressSelected/isExpressAlsoSelected below) works by tinting
+      // each mesh's own private material's emissive channel — not
+      // available here, since every still-batched element shares one
+      // material instance; THREE.BatchedMesh's own per-instance colour
+      // (setColorAt, already how each element's real IFC colour rides on
+      // this shared material in the first place — see ifcModel.ts's own
+      // loadIfcModel) is the one per-instance channel actually available,
+      // so the highlight here is a colour lerp toward the same
+      // SELECTED_EMISSIVE blue instead of a real emissive glow, restored
+      // to each instance's own true captured colour (info.color) the
+      // moment it's no longer selected.
+      //
+      // KNOWN GAP, not yet visually confirmed: the write itself is
+      // provably correct (read back byte-for-byte identical to what was
+      // written, live, via getColorAt) and the compiled vertex shader does
+      // contain USE_BATCHING_COLOR, but the tint doesn't actually show up
+      // on screen in real testing — narrowed this far but not fully
+      // resolved, possibly the same class of three.js 0.169 BatchedMesh
+      // colour-support rough edge ifcModel.ts's own needsUpdate comment
+      // documents (a confirmed real bug there, `object.colorTexture` vs
+      // the real `_colorsTexture` property, though forcing that recompile
+      // alone didn't fix this specific symptom either). Left in rather
+      // than reverted since the data path is genuinely correct and
+      // harmless either way — isolate/Frame Selected (the actual reported
+      // "not selecting and not isolating" bug) are fully fixed and
+      // confirmed live; this highlight is the one remaining, separate,
+      // purely cosmetic gap.
       const batch = object.userData.batch as BatchState | undefined
-      if (heavyChanged && batch) {
+      if (batch && heavyChanged) {
+        // Diagnosed 2026-07-21, per Maro: "still not isolating" even for a
+        // selection dominated by ordinary walls, confirmed (via a since-
+        // removed console diagnostic — isolatedExpressIds matched 14/14
+        // batch keys, so the IDs were never the problem) not to be a
+        // selection/matching bug at all. The real cause: this block and
+        // TimelinePlayback's own batched-visibility fast path (Viewport3D.tsx,
+        // 2026-07-21 — see ResolvedBatchVisibilityTarget's own header) both
+        // call THREE.BatchedMesh.setVisibleAt on the exact same instances,
+        // and TimelinePlayback's runs unconditionally every single
+        // animation frame — so for any schedule-linked batched element, its
+        // per-frame write always wins moments later regardless of what
+        // Isolate just set here, with zero awareness that Isolate even
+        // exists. The individual-mesh animation path two blocks below
+        // never had this problem — it already composes the schedule's own
+        // opacity-driven visibility with `mesh.userData.baseVisible` (this
+        // same isolate/hide verdict, cached per mesh) instead of
+        // overwriting outright. batchBaseVisibleByInstanceId is that same
+        // idiom for a batched instance, since there's no per-instance
+        // Object3D to hang userData off directly — stored on the shared
+        // BatchedMesh itself, read by TimelinePlayback's fast path to AND
+        // into its own per-frame verdict instead of overwriting it.
+        const baseVisibleByInstanceId = (
+          batch.mesh.userData.batchBaseVisibleByInstanceId ??= new Map<number, boolean>()
+        ) as Map<number, boolean>
         for (const [expressID, infos] of batch.byExpressId) {
           const isolatedOut = isolateMode && (
             isolatingSubElements ? !isolatedExpressIds.has(expressID) : !isObjectIsolated
@@ -1024,8 +1146,85 @@ function ModelObjects({
           const elementKey = kind === 'ifc' ? `${id}::${expressID}` : null
           const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
           const visible = settings.showFaces && !isolatedOut && !isChildHidden
-          for (const info of infos) batch.mesh.setVisibleAt(info.instanceId, visible)
+          for (const info of infos) {
+            batch.mesh.setVisibleAt(info.instanceId, visible)
+            baseVisibleByInstanceId.set(info.instanceId, visible)
+          }
         }
+        // Colour highlight (2026-07-21) — deliberately walks the *entire*
+        // batch here too, on this same full pass, rather than only ever
+        // being driven by the cheap touchedExpressIds-only pass just below:
+        // a heavy pass can fire for reasons that have nothing to do with
+        // selection (Isolate, Hide, a settings toggle), and this batch's
+        // instances need their colour to still reflect whatever's
+        // *currently* selected regardless of what actually triggered this
+        // particular pass — recomputing all of it here is the simplest way
+        // to guarantee that without a second selection-membership diff.
+        applyBatchSelectionColour(batch, [...batch.byExpressId.keys()])
+
+        // Render mode (2026-07-21 fix, per Maro: "render modes not
+        // working" — a direct, self-inflicted regression from this same
+        // session's own batchMeshForSkip fix a few messages up: skipping
+        // the batch mesh out of the per-individual-mesh traversal entirely
+        // was necessary to stop it being wrongly treated as "not part of
+        // the isolated set" (see that fix's own header), but that same
+        // traversal was *also* the only place Wireframe/Flat Shaded/
+        // Gouraud/Hidden Line ever got applied to anything — including,
+        // incidentally, the batch's own shared material, since before that
+        // fix the traversal walked into it too. Skipping it wholesale
+        // fixed isolate but silently took render-mode switching down with
+        // it for every still-batched element (functionally the whole
+        // model now that everything batches — see ifcModel.ts's own
+        // 2026-07-21 "batch ALL geometry" header). Unlike the individual-
+        // mesh path, there's exactly one shared material for the entire
+        // batch, and render mode is a scene-wide setting, not a per-
+        // element one — no per-instance tiering needed here the way
+        // selection colour above needs it, just the same
+        // wireframe/flatShading toggles and Gouraud/Hidden Line swap the
+        // individual-mesh path already does, applied once. standardMaterial
+        // captured once (same idiom as child.userData.standardMaterial
+        // below) so a later pass reads the real underlying material even
+        // after batch.mesh.material has been swapped to a Lambert/Basic
+        // stand-in — without it, a Gouraud pass would treat its own
+        // MeshLambertMaterial as "the real material" on the next call and
+        // corrupt it. Deliberately no selection-tier tinting/variance/
+        // clash/texture-override handling here (unlike the individual-mesh
+        // block) — selection already has its own dedicated per-instance
+        // colour treatment just above; variance/clash/texture-override
+        // were already documented as not applying to batched elements
+        // before today and aren't part of what was reported broken here.
+        if (!batch.mesh.userData.standardMaterial) batch.mesh.userData.standardMaterial = batch.mesh.material
+        const batchMat = batch.mesh.userData.standardMaterial as THREE.MeshStandardMaterial
+        const batchWantsWireframe = settings.renderMode === 'wireframe'
+        const batchWantsFlatShading = settings.renderMode === 'flat'
+        if (batchMat.flatShading !== batchWantsFlatShading) batchMat.needsUpdate = true
+        batchMat.wireframe = batchWantsWireframe
+        batchMat.flatShading = batchWantsFlatShading
+        if (settings.renderMode === 'gouraud') {
+          batch.mesh.material = getGouraudVariant(batchMat)
+        } else if (settings.renderMode === 'hiddenLine') {
+          batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR)
+        } else {
+          batch.mesh.material = batchMat
+        }
+      } else if (batch && kind === 'ifc' && touchedExpressIds.size > 0) {
+        // The cheap sibling of the pass above (2026-07-21 fix, per Maro:
+        // "the selection highlight isnt responsive... it still persists"
+        // on Deselect All, or when picking a *different* set from the IFC
+        // Data panel, "until i isolate") — colour used to only ever be
+        // recomputed on a heavy pass (above), but selectedExpressId/
+        // selectedExpressIds aren't in heavyDeps at all (deliberately —
+        // see this effect's own header on why a selection-only change
+        // stays cheap for individual meshes), so a pure selection change
+        // never triggered the block above, and a still-batched element's
+        // highlight only ever caught up the next time something *else*
+        // happened to force a heavy pass. touchedExpressIds already tells
+        // this same render exactly which expressIDs' selection membership
+        // just flipped (computed once above, the same diff the individual-
+        // mesh path already relies on) — restricting to just those keeps
+        // this exactly as cheap as that path, an O(touched) update instead
+        // of an O(whole batch) rescan for every click.
+        applyBatchSelectionColour(batch, [...touchedExpressIds])
       }
     }
     // Narrowed from the whole `settings` object (2026-07-15) — this effect
@@ -1486,6 +1685,7 @@ function applyPathFollow(target: ResolvedPathTarget, now: Date) {
 // own header just below for exactly what that does and doesn't affect.
 export function TimelinePlayback({
   dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles, activeObjectId, onTick, paths, pathFollowers,
+  selectedExpressId,
   dateField = 'live',
 }: {
   dateRef: React.MutableRefObject<Date | null>
@@ -1500,6 +1700,38 @@ export function TimelinePlayback({
   ifcHandles: IfcModelHandle[]
   activeObjectId: string | null
   onTick: () => void
+  // Drives ONLY the small migrateSelectedExpressId effect below, never the
+  // main resolve() effect (2026-07-22 fix, per Maro: "when i click an
+  // element in animation, it then ignores the animation completely...
+  // scrubbed to the first frame but these two elements i clicked some time
+  // ago are showing even though they are not meant to be seen now" —
+  // reproduced live and confirmed: a click's own materialize side effect
+  // (Viewport3D.tsx's own handleClick, ensureMaterialized) pulls that one
+  // element out of the shared BatchedMesh into a real individual Mesh, but
+  // only resolve() below ever populates targetsRef/batchVisibilityTargetsRef
+  // — what every animation frame actually reads from — and it has no
+  // dependency that fires on a mid-session materialization, so the newly-
+  // individual mesh has no entry in either ref and nothing drives its
+  // schedule-based visibility ever again, "clicking away" included.
+  // A first attempt fixed this by adding selectedExpressId straight to
+  // resolve()'s own dependency array — technically correct in principle,
+  // but confirmed live to cause a real regression (every click briefly/
+  // durably hid the rest of the model, reading as an accidental Isolate):
+  // resolve() re-derives targetsRef/batchVisibilityTargetsRef for the
+  // *entire* model from scratch, an expensive full re-traversal never
+  // meant to run on every click, and something about re-running it
+  // specifically off a selection change broke more than it fixed. Reverted
+  // that outright rather than chase the exact mechanism further.
+  // migrateSelectedExpressId below is the real fix: surgical, not a full
+  // re-resolve — reuses the *already-resolved* ResolvedBatchVisibilityTarget
+  // for this one specific expressID (built by the last real resolve() pass,
+  // still perfectly valid for every other element) to construct a proper
+  // individual ResolvedTimelineTarget for the now-materialized mesh, moves
+  // it into targetsRef, and drops the stale batch entry — an O(1) map
+  // lookup plus one small object construction, not a model-wide re-index,
+  // so it's safe to run on every single click with no risk of reintroducing
+  // that regression.
+  selectedExpressId: number | null
   // 'baseline' (2026-07-12) — Mode A (the only animation source that reads
   // Activity dates at all) resolves each link's window from
   // activity.bl_start/bl_finish instead of activity.start/finish. Mode B
@@ -1512,6 +1744,13 @@ export function TimelinePlayback({
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
   const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
   const batchVisibilityTargetsRef = useRef<ResolvedBatchVisibilityTarget[]>([])
+  // expressID -> { handle, target } for every element resolve() just gave a
+  // ResolvedBatchVisibilityTarget (2026-07-22) — see migrateSelectedExpressId's
+  // own header below for what this feeds. Rebuilt in lockstep with
+  // batchVisibilityTargetsRef on every real resolve() pass; entries are
+  // deleted as elements get individually migrated out, so a repeat click on
+  // an already-migrated element is a single Map.has() miss, not repeated work.
+  const expressIdToBatchTargetRef = useRef<Map<number, { handle: IfcModelHandle; target: ResolvedBatchVisibilityTarget }>>(new Map())
 
   useEffect(() => {
     let cancelled = false
@@ -1601,6 +1840,9 @@ export function TimelinePlayback({
       // so more than one link pointing at the same element still shares one
       // target, same reasoning as byObject above.
       const batchVisibilityByKey = new Map<string, ResolvedBatchVisibilityTarget>()
+      // Rebuilt in lockstep with batchVisibilityByKey every real resolve()
+      // pass (2026-07-22) — see this ref's own declaration above.
+      expressIdToBatchTargetRef.current.clear()
 
       // Mode A — schedule-driven, via ModelElementLink (unchanged resolution
       // logic: mesh-kind by filename, ifc-kind via GlobalId->expressID).
@@ -1704,6 +1946,12 @@ export function TimelinePlayback({
                     cachedActiveLink: null, cachedState: null, lastColorHex: null,
                   }
                   batchVisibilityByKey.set(key, bvTarget)
+                  // One expressID per bvTarget, always (2026-07-22) — this
+                  // key is `${mesh.uuid}:${expressId}`, so reusing the same
+                  // expressId always lands on the same bvTarget regardless
+                  // of which link put it there; feeds
+                  // migrateSelectedExpressId's own O(1) lookup below.
+                  expressIdToBatchTargetRef.current.set(expressId, { handle, target: bvTarget })
                 }
                 bvTarget.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
                 objects = []
@@ -1821,6 +2069,53 @@ export function TimelinePlayback({
     resolve()
     return () => { cancelled = true }
   }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField])
+
+  // Surgical migration for one just-materialized element (2026-07-22) — see
+  // this component's own selectedExpressId prop header for the full story
+  // (a click's own materialize side effect otherwise permanently detaches
+  // that element from schedule-driven animation, and a first, reverted fix
+  // attempt tried solving it by re-running the whole resolve() effect above
+  // on every click instead, which caused a real regression of its own).
+  // Deliberately its own tiny effect, not folded into resolve(): this only
+  // ever touches the one element selectedExpressId currently refers to — an
+  // O(1) Map lookup, and only if that lookup actually hits, one small
+  // object build — never a model-wide re-index. Viewport3D's own render
+  // body already calls ensureMaterialized synchronously for the active
+  // selection (the TransformPanel gizmo's own target resolution) before any
+  // effect ever runs, so by the time this fires, getMaterializedMeshes
+  // below is guaranteed to see whatever that call just produced.
+  useEffect(() => {
+    if (selectedExpressId === null) return
+    const entry = expressIdToBatchTargetRef.current.get(selectedExpressId)
+    if (!entry) return
+    const { handle, target: bvTarget } = entry
+    const meshes = getMaterializedMeshes(handle.object, selectedExpressId)
+    // Not actually materialized (yet, or ever, e.g. a transform-driven
+    // profile's own selectedExpressId that was never routed onto the
+    // batch fast path to begin with) — left in the map so a later
+    // selection change checks again cheaply instead of assuming this one
+    // negative result forever.
+    if (meshes.length === 0) return
+
+    expressIdToBatchTargetRef.current.delete(selectedExpressId)
+    batchVisibilityTargetsRef.current = batchVisibilityTargetsRef.current.filter(t => t !== bvTarget)
+    // bvTarget.links carries the exact same {activity, startMs, finishMs,
+    // profile, axis} entries the batch fast path was already driving this
+    // element with — reused verbatim, not re-derived, since nothing about
+    // which activities/profiles link to this element changed, only how
+    // it's rendered (individual mesh vs. batch instance) did.
+    const migrated: ResolvedTimelineTarget[] = meshes.map(object => ({
+      object, links: [...bvTarget.links],
+      basePosition: object.position.clone(),
+      baseRotation: object.rotation.clone(),
+      baseScale: object.scale.clone(),
+      materials: collectStandardMaterials(object),
+      keyframeTracks: {},
+      cachedActiveLink: null,
+      cachedState: null,
+    }))
+    targetsRef.current = [...targetsRef.current, ...migrated]
+  }, [selectedExpressId])
 
   // Tracks the last date keyframed transforms were actually applied for
   // (2026-07-09 fix, per Maro: "keyframing locks the model in place when
@@ -2028,21 +2323,28 @@ export function TimelinePlayback({
           : null
       }
       const state = bv.cachedState
-      const nextVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
-      // Diffed against the batch's own CURRENT per-instance value (not a
-      // separately-cached "what we last wrote" flag) — same reasoning as the
-      // material loop above: ModelObjects' own settings-driven visibility
-      // pass (showFaces/isolate/hidden) also calls setVisibleAt on this same
-      // BatchedMesh whenever those settings change, entirely independent of
-      // the timeline's date, and it doesn't know about the schedule's own
-      // verdict any more than this loop knows about isolate/hidden state. A
-      // lastVisible-only cache would silently miss that external write and
-      // leave the instance stuck at whatever the settings pass last set
-      // until the timeline's date happens to change again; reading
-      // getVisibleAt fresh here means an external change is corrected on
-      // the very next frame regardless of dateChanged, exactly like the
-      // material properties above.
+      const scheduleVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
+      // Composed with ModelObjects' own isolate/hide verdict, not just the
+      // schedule's (2026-07-21 fix, per Maro: "still not isolating" — a
+      // real, confirmed bug, not the theoretical "corrected next frame"
+      // this comment used to claim). ModelObjects' settings-driven pass
+      // (showFaces/isolate/hidden) also calls setVisibleAt on this same
+      // BatchedMesh, but only on its own much rarer heavyChanged trigger,
+      // while this loop runs unconditionally every animation frame — so
+      // "an external change is corrected on the very next frame" only ever
+      // ran in this loop's own favour: the instant a schedule-linked
+      // element was isolated, this loop's next tick silently reasserted
+      // scheduleVisible over it, with zero awareness isolate mode even
+      // existed, permanently. batchBaseVisibleByInstanceId (set by that
+      // same ModelObjects pass, immediately above in this same file) is
+      // that verdict, cached per instance the same way an individual
+      // mesh's own userData.baseVisible already is — ANDed in here exactly
+      // like `(mesh.userData.baseVisible ?? true) && state.opacity > ...`
+      // already does for the individual-mesh path a few dozen lines above.
+      const baseVisibleByInstanceId = bv.mesh.userData.batchBaseVisibleByInstanceId as Map<number, boolean> | undefined
       for (const { instanceId } of bv.instances) {
+        const baseVisible = baseVisibleByInstanceId?.get(instanceId) ?? true
+        const nextVisible = baseVisible && scheduleVisible
         if (bv.mesh.getVisibleAt(instanceId) !== nextVisible) bv.mesh.setVisibleAt(instanceId, nextVisible)
       }
       // null once the profile's own colour window has passed (see
@@ -2373,14 +2675,36 @@ export function Viewport3D({
     if (!camera || !controls) return
     const box = new THREE.Box3()
     let any = false
+    // getExpressIdWorldBounds, not a plain traverse (2026-07-21 fix, per
+    // Maro: "its not frame selecting or isolating or nothing" for a panel-
+    // driven selection, "if i click in viewport though it works" — a plain
+    // `object.traverse(child => child instanceof THREE.Mesh && ...)` can
+    // only ever find expressIDs that are already real, individual meshes.
+    // A direct click always is one (Viewport3D.tsx's own handleClick calls
+    // ensureMaterialized as a side effect of selecting it); a panel-driven
+    // Select by Storey/Type never materializes anything (see
+    // elementBatching.ts's own ensureMaterialized header — only ever
+    // called with the single `selectedExpressId`, which is null the moment
+    // more than one element is selected), so every one of those still
+    // lives purely as instances inside the shared BatchedMesh with no
+    // individual Object3D for a traverse to ever find. The old code's own
+    // "any" stayed false for a real panel selection, silently falling
+    // through past it to the *whole-object* box below — a real bounding
+    // box, just the entire building's, not the actual isolated subset,
+    // which usually reads as "nothing visible" once nearly everything else
+    // is hidden and the handful of actually-isolated elements are too
+    // small against that much wider framing to make out. getExpressIdWorldBounds
+    // (elementBatching.ts, built earlier this session for schedule
+    // extraction) already handles both cases — a real per-mesh box for an
+    // already-materialized element, computed directly off the batch's own
+    // stored geometry+instance matrix for one that isn't — without
+    // forcing materialization either way.
     if (selectedExpressIds.size > 0) {
       for (const { object } of importedObjects) {
-        object.traverse(child => {
-          if (child instanceof THREE.Mesh && selectedExpressIds.has(child.userData.expressID)) {
-            box.expandByObject(child)
-            any = true
-          }
-        })
+        for (const expressID of selectedExpressIds) {
+          const elementBox = getExpressIdWorldBounds(object, expressID)
+          if (elementBox) { box.union(elementBox); any = true }
+        }
       }
     }
     if (!any) {
@@ -2975,7 +3299,27 @@ export function Viewport3D({
             clipped, disconnected-looking shadow. */}
         <directionalLight
           position={sunPosition} intensity={1} castShadow={settings.shadows}
-          shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]} shadow-bias={-0.0005}
+          shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]}
+          // normalBias, not (only) bias (2026-07-21 fix, per Maro: a real,
+          // flat exterior wall self-shadowing with a hard diagonal band
+          // that "shouldn't be there at all" — textbook shadow acne, not a
+          // real architectural feature casting it. The old fixed
+          // shadow-bias={-0.0005} was a depth-space constant, implicitly
+          // tuned against whatever real building this app was last tested
+          // against (Snowdon/Hotel, both far bigger than modelRadius's own
+          // 10-unit floor) — shadow-camera-far scales with modelRadius (see
+          // sunRadius above), so the same fixed bias is a different
+          // fraction of the depth buffer's usable precision at a different
+          // model scale, too small exactly on a small model like this one
+          // and producing acne. normalBias offsets along the surface's own
+          // normal in world space instead of light-space depth, so it
+          // scales with real geometry rather than the frustum's far plane —
+          // the standard three.js fix for acne on flat/near-grazing
+          // surfaces (a vertical wall under a fairly low sun elevation is
+          // exactly that case) — proportioned to modelRadius the same way
+          // the frustum itself already is, so it stays correctly scaled
+          // whether this is a small test file or a real full-scale import.
+          shadow-normalBias={modelRadius * 0.002}
           shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
           shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}
           shadow-camera-near={0.5} shadow-camera-far={sunRadius + modelRadius * 2}
@@ -3077,6 +3421,7 @@ export function Viewport3D({
             onTick={onTransformChange}
             paths={paths}
             pathFollowers={pathFollowers}
+            selectedExpressId={selectedExpressId}
           />
           {!hidePathHelpers && (
             <PathGizmos

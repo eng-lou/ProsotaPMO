@@ -394,6 +394,33 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     + `${individualMeshCount} individual (${mirroredCount} mirrored, ${batchGeometries.size} unique shapes)`,
   )
 
+  // Forces one fresh shader compile now that every real per-instance
+  // colour (Pass 3's own setColorAt calls above) is actually in place
+  // (2026-07-21 fix, per Maro: "not selecting... i dont see the highlight
+  // color change" — traced all the way down to a genuine three.js
+  // 0.169.0 bug, not anything in this app's own code: WebGLRenderer.js's
+  // own staleness check for whether a BatchedMesh's cached shader program
+  // still matches its current colour state reads `object.colorTexture`
+  // — a property that doesn't exist on BatchedMesh at all (verified
+  // directly in three.js's own source, same as this file's other verified-
+  // not-assumed precedents) — the real internal field is `_colorsTexture`,
+  // so that check can never actually fire. If this material's shader ever
+  // got compiled even once before colours existed (plausible depending on
+  // exact render/mount timing, effectively a race this app has no control
+  // over), it stays permanently missing per-instance colour support for
+  // the rest of the session, with zero automatic recovery — setColorAt
+  // keeps writing correct data (confirmed directly: read back byte-for-
+  // byte identical to what was written) into a texture the shader was
+  // simply never told to sample. `needsUpdate` bypasses that whole broken
+  // staleness check by forcing a normal fresh compile, which reads
+  // `object._colorsTexture` correctly (WebGLPrograms.js's own initial
+  // parameter computation, unaffected by the bug above) — one-time cost,
+  // right here, guaranteed after every real colour is already in place.
+  if (batch) {
+    const mat = batch.mesh.material
+    if (Array.isArray(mat)) mat.forEach(m => { m.needsUpdate = true }); else mat.needsUpdate = true
+  }
+
   // No axis-conversion rotation baked in here (2026-07-08 fix, per Maro:
   // default Rotation X showing -90 and the whole model rendering off-axis)
   // — this `group` is the exact object TransformPanel/gizmo edit, so baking
@@ -652,6 +679,48 @@ export async function getElementNameAndPredefinedType(
 // PropsNames.psets in web-ifc's own source) returns a mix of both kinds;
 // only the ones with a `.Quantities` array (not `.HasProperties`) are
 // quantity sets.
+//
+// Recommended Revit IFC export settings (2026-07-21, per Maro, going
+// forward for every new export) — confirmed against this app's own actual
+// import pipeline, not generic advice:
+//   - General tab: File type = plain IFC, never IfcXML or a zipped
+//     variant — loadIfcModel above calls web-ifc's OpenModel on raw STEP-
+//     format bytes; anything else fails to load entirely.
+//   - Property Sets tab: "Export base quantities" ON — the exact gap this
+//     function's own header documents above; without it every non-
+//     rectangular element's area is a bounding-box guess instead of
+//     Revit's own real NetArea/GrossArea.
+//   - Advanced tab: "Keep Tessellated Geometry as Triangulation" ON — a
+//     real Revit export without this produces raw BREP solids that
+//     web-ifc has to triangulate itself at import time, and its
+//     triangulator throws a real, repeated
+//     `[WEB-IFC][error][TriangulateBounds()] No basis found for brep!`
+//     for certain degenerate faces (confirmed against a real 6-file
+//     Snowdon-scale import, hundreds of these per file). Pre-triangulated
+//     geometry from Revit skips that conversion — and its failure mode —
+//     for those elements entirely.
+//   - Level of Detail tab: Medium, not the highest tessellation setting —
+//     more detail is directly more vertices for loadIfcModel's own Pass 2/3
+//     to parse and batch, independent of anything the batching rewrite
+//     above already optimized.
+// No toMetres scaling here — confirmed wrong, not just unneeded (2026-07-22,
+// per Maro, after a real Hotel export WITH base quantities enabled still
+// produced an absurd multi-year activity duration). First suspected this
+// function needed the same toMetres scaling measureElement's bounding-box
+// fallback already applies (this file's own now-reverted comment argued
+// exactly that) — but a real diagnostic against the actual file (logging
+// raw AreaValue alongside toMetres for every Slabs element on the affected
+// storey) proved that wrong: raw AreaValue numbers already read as
+// plausible real-world m² as-is (a footing ~95, an asphalt road ~9,470, a
+// green area ~1,119) — applying toMetres² on top shrank a genuine ~95 m²
+// footing down to ~0.0000955 m². IFC's own AREAUNIT is declared
+// independently of LENGTHUNIT precisely for this reason (a
+// IfcQuantityArea.Unit override, or the project's own default AREAUNIT,
+// neither of which has to be "LENGTHUNIT squared") — Revit's real export
+// behaviour here is to declare AREAUNIT as SQUARE_METRE outright regardless
+// of a millimetre LENGTHUNIT, so AreaValue already needs no conversion.
+// (The real cause of that absurd duration was a *classification* bug, not
+// a units one — see isSiteFloorElement's own header, ifcScheduleExtraction.ts.)
 export async function getElementQuantityArea(handle: IfcModelHandle, expressID: number): Promise<number | null> {
   const psets = await handle.api.properties.getPropertySets(handle.modelID, expressID, true, false)
   let grossArea: number | null = null

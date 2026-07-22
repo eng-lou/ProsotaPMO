@@ -145,17 +145,15 @@ function KeyframeTrack({
 // which belongs to ElementLinkFields' own unlink/reassign flow, not this
 // view.
 function PresetTrack({
-  links, activities, animationProfiles, scheduleStart, totalMs, onJumpTo,
+  links, activityById, profileById, scheduleStart, totalMs, onJumpTo,
 }: {
   links: ModelElementLink[]
-  activities: Activity[]
-  animationProfiles: AnimationProfile[]
+  activityById: Map<string, Activity>
+  profileById: Map<string, AnimationProfile>
   scheduleStart: Date
   totalMs: number
   onJumpTo: (date: Date) => void
 }) {
-  const activityById = new Map(activities.map(a => [a.id, a]))
-  const profileById = new Map(animationProfiles.map(p => [p.id, p]))
   const bars = links
     .map(link => ({ link, activity: activityById.get(link.activity_id) }))
     .filter((x): x is { link: ModelElementLink; activity: Activity } => !!x.activity?.start && !!x.activity?.finish)
@@ -188,15 +186,15 @@ interface SubTrackDef {
 }
 
 function ActorRow({
-  actor, links, keyframes, isPathBound, activities, animationProfiles, scheduleStart, scheduleEnd, totalMs, format,
+  actor, links, keyframes, isPathBound, activityById, profileById, scheduleStart, scheduleEnd, totalMs, format,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelect,
 }: {
   actor: Actor
   links: ModelElementLink[]
   keyframes: ElementKeyframe[]
   isPathBound: boolean
-  activities: Activity[]
-  animationProfiles: AnimationProfile[]
+  activityById: Map<string, Activity>
+  profileById: Map<string, AnimationProfile>
   scheduleStart: Date
   scheduleEnd: Date
   totalMs: number
@@ -228,7 +226,7 @@ function ActorRow({
 
   const subTracks: SubTrackDef[] = []
   if (links.length > 0) {
-    subTracks.push({ label: 'Preset', content: <PresetTrack links={links} activities={activities} animationProfiles={animationProfiles} scheduleStart={scheduleStart} totalMs={totalMs} onJumpTo={onJumpTo} /> })
+    subTracks.push({ label: 'Preset', content: <PresetTrack links={links} activityById={activityById} profileById={profileById} scheduleStart={scheduleStart} totalMs={totalMs} onJumpTo={onJumpTo} /> })
   }
   if (hasPath) {
     subTracks.push({ label: '3D Path', content: <KeyframeTrack dayGroups={pathGroups} {...trackProps} /> })
@@ -396,6 +394,15 @@ export const AnimationActorsList = memo(function AnimationActorsList({
     }
   }, [modelElementLinks, elementKeyframes, pathFollowers, annotations])
 
+  // Built once here, not per PresetTrack render (2026-07-21 perf fix) —
+  // PresetTrack used to build these same two Maps itself, from the full
+  // project-wide `activities`/`animationProfiles` arrays, on every one of
+  // its own renders (one per actor with a Preset link). Harmless at small
+  // scale, real waste at hundreds of activities x hundreds of Preset-linked
+  // mesh/annotation actors, redone every time this list re-renders.
+  const activityById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
+  const profileById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p])), [animationProfiles])
+
   if (actors.length === 0) {
     return <p className="px-3 py-3 text-xs text-gray-400">No animated actors yet — link an object to an Activity+Profile, bind it to a Path, or keyframe its Transform to see it here.</p>
   }
@@ -411,8 +418,8 @@ export const AnimationActorsList = memo(function AnimationActorsList({
             links={linksByActor.get(key) ?? EMPTY_LINKS}
             keyframes={keyframesByActor.get(key) ?? EMPTY_KEYFRAMES}
             isPathBound={pathBoundActors.has(key)}
-            activities={activities}
-            animationProfiles={animationProfiles}
+            activityById={activityById}
+            profileById={profileById}
             scheduleStart={scheduleStart}
             scheduleEnd={scheduleEnd}
             totalMs={totalMs}

@@ -8,6 +8,7 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
+import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
 import { HeatMatrix } from '@/components/HeatMatrix'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
@@ -72,6 +73,7 @@ export function RiskRegister() {
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
+  const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [risks, setRisks] = useState<Risk[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
   // Schedule + resource data for "Generate Risk Register" (2026-07-18) — see
@@ -495,7 +497,27 @@ export function RiskRegister() {
         >
           📄 Page Setup
         </button>
+        <button
+          onClick={() => setBaselineWidgetOpen(o => !o)}
+          title="Capture a named, dated baseline snapshot of the risk register"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
+            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          🎯 Baseline
+        </button>
       </div>
+
+      {baselineWidgetOpen && period && (
+        <BaselineManagerWidget
+          apiBasePath="/api/v1/risk-baselines"
+          periodId={period.id}
+          itemNounPlural="Risks"
+          moduleLabel="the Risk Register"
+          dismissKeyPrefix="risk"
+          onClose={() => setBaselineWidgetOpen(false)}
+        />
+      )}
 
       {letterheadWidgetOpen && letterhead && (
         <LetterheadEditorWidget
