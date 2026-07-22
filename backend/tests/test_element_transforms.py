@@ -137,6 +137,36 @@ async def test_pivot_fields_round_trip_and_survive_unrelated_saves(client: Async
     assert moved["pivot_z"] == 3.0
 
 
+async def test_pivot_rotation_fields_default_null(client: AsyncClient, project: Project):
+    file_id = await _create_model_file(client, project)
+    created = (await client.post("/api/v1/element-transforms/", json={"model3d_file_id": file_id, **_transform()})).json()
+    assert created["pivot_rotation_x"] is None
+    assert created["pivot_rotation_y"] is None
+    assert created["pivot_rotation_z"] is None
+
+
+async def test_pivot_rotation_fields_round_trip_and_survive_unrelated_saves(client: AsyncClient, project: Project):
+    # "Pivot Rotation" (2026-07-22) — same always-together/carried-forward
+    # convention as pivot_x/y/z above, see that test's own comment.
+    file_id = await _create_model_file(client, project)
+
+    with_pivot_rotation = (await client.post("/api/v1/element-transforms/", json={
+        "model3d_file_id": file_id, **_transform(pivot_rotation_x=0.1, pivot_rotation_y=0.2, pivot_rotation_z=0.3),
+    })).json()
+    assert with_pivot_rotation["pivot_rotation_x"] == 0.1
+    assert with_pivot_rotation["pivot_rotation_y"] == 0.2
+    assert with_pivot_rotation["pivot_rotation_z"] == 0.3
+
+    moved = (await client.post("/api/v1/element-transforms/", json={
+        "model3d_file_id": file_id, **_transform(position_x=42.0, pivot_rotation_x=0.1, pivot_rotation_y=0.2, pivot_rotation_z=0.3),
+    })).json()
+    assert moved["id"] == with_pivot_rotation["id"]
+    assert moved["position_x"] == 42.0
+    assert moved["pivot_rotation_x"] == 0.1
+    assert moved["pivot_rotation_y"] == 0.2
+    assert moved["pivot_rotation_z"] == 0.3
+
+
 async def test_deleting_model_file_cascades_its_transforms(client: AsyncClient, project: Project):
     file_id = await _create_model_file(client, project)
     created = (await client.post("/api/v1/element-transforms/", json={"model3d_file_id": file_id, **_transform()})).json()

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Mesh, Vector3, type Object3D } from 'three'
+import { Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
@@ -64,8 +64,8 @@ import { computeVisibleActivities, ScheduleWindow } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
 import { computeKeyframeRange, computeScheduleRange, padDegenerateRange, unionRanges } from './timelinePlayback'
-import type { GizmoMode, KeyframeSupport, PathProgressSupport, PivotSupport } from './TransformPanel'
-import { getPivot, setPivot } from './elementPivot'
+import type { GizmoMode, GizmoSpace, KeyframeSupport, PathProgressSupport, PivotRotationSupport, PivotSupport } from './TransformPanel'
+import { getPivot, getPivotRotation, setPivot, setPivotRotation } from './elementPivot'
 import { deleteElementParent, listElementParents, upsertElementParent, type ElementParent as ElementParentType } from './elementParents'
 import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
@@ -2265,6 +2265,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // handleSelectObject below for how they're kept in sync.
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
+  // Local/Global (2026-07-22) — see TransformPanel.tsx's own Props header
+  // for space's doc comment. Defaults to 'world' since that's three.js's
+  // own TransformControls default, unchanged for every object until
+  // someone actually sets a Pivot Rotation and switches this deliberately.
+  const [gizmoSpace, setGizmoSpace] = useState<GizmoSpace>('world')
   // "Pick in Viewport" for Set Pivot (2026-07-12) — arms the same
   // PathAddPointCatcher raycast-then-ground-plane-fallback Paths/
   // Annotations already reuse verbatim (Viewport3D.tsx), just for a third
@@ -2559,14 +2564,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
       const applyTransform = (object: Object3D, t: ElementTransform | undefined) => {
         if (!t) return
-        // Pivot first (2026-07-12) — setPivot's own compensating
-        // translateX/Y/Z would otherwise be immediately overwritten by the
-        // position.set() below anyway, but running it first means that
-        // .set() correctly lands on the saved *final* authored position
-        // rather than fighting a pivot-driven position change applied
-        // after the fact. See elementPivot.ts's own header.
+        // Pivot first (2026-07-12, extended 2026-07-22 for pivot rotation)
+        // — setPivot/setPivotRotation's own compensating position/
+        // quaternion writes would otherwise be immediately overwritten by
+        // the .set() calls below anyway, but running them first means
+        // those correctly land on the saved *final* authored position/
+        // rotation rather than fighting a pivot-driven change applied
+        // after the fact — geometry recentering is the part that actually
+        // matters here, since nothing else re-derives it. See
+        // elementPivot.ts's own header.
         if (t.pivot_x !== null && t.pivot_y !== null && t.pivot_z !== null) {
           setPivot(object, new Vector3(t.pivot_x, t.pivot_y, t.pivot_z))
+        }
+        if (t.pivot_rotation_x !== null && t.pivot_rotation_y !== null && t.pivot_rotation_z !== null) {
+          setPivotRotation(object, new Euler(t.pivot_rotation_x, t.pivot_rotation_y, t.pivot_rotation_z))
         }
         object.position.set(t.position_x, t.position_y, t.position_z)
         object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
@@ -3445,7 +3456,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // — a single shared timeout ref would otherwise just clearTimeout the
   // still-pending save for whatever was being edited before.
   const persistActiveTransform = () => {
-    if (!activeTransformObject || !activeSceneObject?.fileId) return
+    // Deliberately does NOT bail here just because fileId is currently
+    // null (2026-07-22 fix, per a real incident found while testing Pivot
+    // Rotation: a plain, pre-existing Rotation field edit on "Snowdon
+    // Towers Sample Site.ifc" produced zero network activity at all, no
+    // error, nothing — this same guard used to also require
+    // activeSceneObject.fileId, which silently skipped doSave (and the
+    // self-heal/error-surfacing logic inside it, a few lines down) for
+    // every single edit on any object whose fileId hadn't resolved yet.
+    // That's exactly the "nothing found at all" case doSave's own
+    // self-heal comment already says it needs to cover — it just never
+    // got the chance to run.
+    if (!activeTransformObject || !activeSceneObject) return
     const modelFileId = activeSceneObject.fileId
     const sceneObjectId = activeSceneObject.id
     const sceneObjectName = activeSceneObject.name
@@ -3493,19 +3515,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         )
         return
       }
+      // Unreachable in practice — the branches above either heal
+      // modelFileIdToUse to a real id or return early — but modelFileId
+      // itself is typed string | null (2026-07-22 fix, see this
+      // function's own header), so this satisfies the type checker too.
+      if (!modelFileIdToUse) return
       try {
-        // Carries object.userData.pivotPoint forward on *every* save, not
-        // just a Set Pivot edit itself (2026-07-12) — a plain gizmo drag
-        // must not silently clear a previously-set pivot back to null; see
+        // Carries object.userData.pivotPoint/pivotRotation forward on
+        // *every* save, not just a Set Pivot/Pivot Rotation edit itself
+        // (2026-07-12, extended 2026-07-22) — a plain gizmo drag must not
+        // silently clear a previously-set pivot back to null; see
         // element_transform.py's own schema doc comment on why the backend
         // can't distinguish "not provided" from "explicitly cleared" here.
         const currentPivot = getPivot(object)
+        const currentPivotRotation = getPivotRotation(object)
         const saved = await saveElementTransform({
           model3d_file_id: modelFileIdToUse, element_ref: elementRef,
           position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
           rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
           scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
           pivot_x: currentPivot?.x ?? null, pivot_y: currentPivot?.y ?? null, pivot_z: currentPivot?.z ?? null,
+          pivot_rotation_x: currentPivotRotation?.x ?? null,
+          pivot_rotation_y: currentPivotRotation?.y ?? null,
+          pivot_rotation_z: currentPivotRotation?.z ?? null,
         })
         elementTransformsRef.current = [
           ...elementTransformsRef.current.filter(t => !(t.model3d_file_id === saved.model3d_file_id && t.element_ref === saved.element_ref)),
@@ -3529,6 +3561,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     persistActiveTransform()
   }
 
+  // Timeline playback's own per-frame re-render signal (TimelinePlayback's
+  // onTick, forwarded through Viewport3D's onTimelineTick) — deliberately
+  // does NOT call persistActiveTransform (2026-07-22 fix, per a real
+  // incident found while testing Pivot Rotation: this used to share
+  // handleTransformChange with a real gizmo edit, and since this fires
+  // every frame for as long as anything is selected, it perpetually reset
+  // persistActiveTransform's own 700ms save-debounce — a manual edit only
+  // ever actually saved the moment you deselected the object, letting the
+  // last-queued timer finally survive long enough to run). This one only
+  // needs TransformPanel's number fields to reflect what playback is doing
+  // live; there is nothing here for persistActiveTransform to save in the
+  // first place — playback-driven position/rotation is never itself
+  // persisted as a manual transform.
+  const handleTransformTick = () => setTransformTick(t => t + 1)
+
   // "Set Pivot" (2026-07-12) — see elementPivot.ts's own header. Shared by
   // both the typed X/Y/Z fields (already-local-space point) and the
   // viewport-click catcher (handlePickPivotPoint below, which does the
@@ -3537,6 +3584,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!activeTransformObject) return
     setPivot(activeTransformObject, point)
     setPivotPicking(false)
+    handleTransformChange()
+  }
+
+  // "Pivot Rotation" (2026-07-22) — mirrors handleSetPivotPoint exactly;
+  // see PivotRotationSupport's own header for why there's no picking mode.
+  const handleSetPivotRotation = (euler: Euler | null) => {
+    if (!activeTransformObject) return
+    setPivotRotation(activeTransformObject, euler)
     handleTransformChange()
   }
 
@@ -3770,6 +3825,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     onTogglePicking: () => setPivotPicking(prev => !prev),
     onChange: handleSetPivotPoint,
     onReset: () => handleSetPivotPoint(null),
+  }
+
+  // "Pivot Rotation" support (2026-07-22) — mirrors pivotSupport exactly.
+  const pivotRotationSupport: PivotRotationSupport = {
+    euler: activeTransformObject ? getPivotRotation(activeTransformObject) : undefined,
+    onChange: handleSetPivotRotation,
+    onReset: () => handleSetPivotRotation(null),
   }
 
   // Body per window key — WindowChrome (below) owns the shared header/dock-
@@ -4190,7 +4252,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         />
       }
       gizmoMode={gizmoMode}
+      gizmoSpace={gizmoSpace}
       onTransformChange={handleTransformChange}
+      onTimelineTick={handleTransformTick}
       environmentUrl={customEnvironment?.url ?? null}
       onEnvironmentError={handleEnvironmentError}
       customTextures={customTextures}
@@ -4424,6 +4488,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           unitDisplay={ifcUnitDisplay}
           gizmoMode={gizmoMode}
           onGizmoModeChange={setGizmoMode}
+          gizmoSpace={gizmoSpace}
+          onGizmoSpaceChange={setGizmoSpace}
           activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
           onUploadTexture={handleUploadActiveTexture}
           onTextureFieldChange={handleTextureFieldChange}
@@ -4442,6 +4508,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           keyframeSupport={keyframeSupport}
           pathProgress={pathProgressSupport}
           pivot={pivotSupport}
+          pivotRotation={pivotRotationSupport}
           onChangeSourceUpAxis={axis => { if (activeObjectId) handleSetSourceUpAxis(activeObjectId, axis) }}
         />
         <SideDock side="left" panels={leftDockPanels} />

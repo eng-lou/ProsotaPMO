@@ -53,7 +53,22 @@ class ElementTransform(Base, TimestampMixin):
     float for the same (model3d_file_id, element_ref) target, and pivot
     is exactly that same shape, just consumed differently client-side
     (an offset applied once at restore time, before position/rotation/
-    scale, rather than set directly on the object every frame)."""
+    scale, rather than set directly on the object every frame).
+
+    pivot_rotation_x/y/z (2026-07-22, per Maro: dragging an element with
+    the Move gizmo travelled at an angle relative to an adjacent element
+    it needed to stay flush with) is pivot_x/y/z's rotational counterpart
+    — a *local*-space Euler offset (radians, same 'XYZ' order as
+    rotation_x/y/z) redefining the object's own axis orientation without
+    visibly rotating it, exactly as pivot_x/y/z redefines its origin
+    without visibly moving it. The point of it: once set, switching the
+    Move gizmo to Local space (elementPivot.ts's own header explains the
+    compensating-geometry mechanics) drags the object along *this* frame
+    instead of raw world axes — e.g. aligned to an adjacent road's actual
+    angle — without touching rotation_x/y/z, which stays whatever the
+    object's true visible orientation is. Null (all three, always
+    together) means "no override," the default for every existing row
+    before this feature existed."""
 
     __tablename__ = "element_transforms"
     __table_args__ = (
@@ -77,3 +92,6 @@ class ElementTransform(Base, TimestampMixin):
     pivot_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     pivot_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     pivot_z: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pivot_rotation_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pivot_rotation_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pivot_rotation_z: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -2535,3 +2535,85 @@ not proof; `curl .../openapi.json` and grep for the new field name is.
 And when a process refuses to die via the normal tools, that's not a
 reason to keep retrying the same kill — it's a sign there are two of them
 and you're only killing one.
+
+## 2026-07-22 (later same day) — "Pivot Rotation," and a save that only ever completes once you look away
+
+Maro's ask, in his own words: "i want to be able to change pivot
+rotation, right now although the car and road are adjacent, if i move
+the car it will move at an angle" — turned out to mean the plain Move
+gizmo, not a Follow Path binding (confirmed by asking first rather than
+guessing, given path_follower.py's `orient_to_path` was an equally
+plausible reading). The existing "Set Pivot" feature (elementPivot.ts,
+2026-07-12) already redefines an object's rotation/scale *origin*
+without moving its visible geometry — Pivot Rotation is the same idea
+for *orientation*: redefine what an object's own local axes point in,
+without visibly rotating it, so switching the Move gizmo to Local space
+(a three.js capability that already existed but had never been wired
+into this app's own UI) drags along that custom frame instead of either
+raw world axes or the object's true visible rotation.
+
+**The math**: geometry (or, for a Group, every child's position *and*
+own quaternion) gets pre-rotated by the *inverse* of the pivot rotation
+offset, while the object's own quaternion gains the offset on top —
+`object.quaternion = Q0 * R`, geometry pre-rotated by `R⁻¹`, so the two
+cancel out visually. Order matters: the existing position-pivot
+compensation (`object.translateX/Y/Z`, which moves along whatever the
+object's *current* local axes are) has to run *before* `R` gets folded
+into the quaternion, or it would translate along the new, rotated axes
+instead of the ones the geometry was actually recentered in — a subtle
+one-line reordering bug that's easy to get backwards and only shows up
+the moment someone sets both a pivot point *and* a pivot rotation on the
+same object. Verified by algebra first, then live: setting a 90° pivot
+rotation left two screenshots pixel-identical, while the Local-mode
+gizmo's own arrows visibly swung round to the new frame — a good general
+pattern for confirming a "should look unchanged" compensation actually
+is, rather than trusting the derivation alone.
+
+**Bug found along the way, #1**: testing this against the sample "Snowdon
+Towers Sample Site.ifc" file, *no* transform edit ever produced a single
+network request — not the new Pivot Rotation fields, not even the
+plain, years-old Rotation field. Root cause: `FourD.tsx`'s
+`persistActiveTransform` bailed out entirely (`if (!activeTransformObject
+|| !activeSceneObject?.fileId) return`) whenever `fileId` was still null,
+*before* ever reaching the self-heal logic a few lines further down that
+was specifically written to recover exactly that case (its own comment
+even says so). Fixed by only gating on the object/scene-object existing,
+letting the self-heal (or its own proper user-facing error) actually run.
+
+**Bug found along the way, #2, hiding behind #1**: fixing that still
+produced zero network activity. A one-line `console.log` inside
+`persistActiveTransform` showed it firing *dozens of times a second* —
+`TimelinePlayback`'s own per-frame `onTick` (`Viewport3D.tsx`: `if
+(activeObjectId) onTick()`) is wired to the exact same callback
+(`onTransformChange`) a real gizmo edit uses, completely unconditionally,
+for as long as *any* object is selected. Since `persistActiveTransform`
+clears and reschedules its own 700ms debounce on every call, a
+continuously-refiring `onTick` means the debounce can never survive long
+enough to fire while the object stays selected — the save only actually
+lands the moment you deselect (or switch to a different object), letting
+the last-scheduled timer finally run undisturbed. Confirmed directly:
+deselecting produced the exact POST that had been silently queued the
+whole time.
+
+Flagged to Maro rather than silently fixed alongside bug #1 — he asked
+for it fixed in the same pass. The real fix: give `onTick` its own
+callback (`Viewport3D`'s new `onTimelineTick` prop → `FourD.tsx`'s new
+`handleTransformTick`, which only does `setTransformTick(t => t + 1)`)
+instead of sharing `onTransformChange` with a real gizmo edit
+(`handleTransformChange`, which still also calls
+`persistActiveTransform`). Re-verified live afterward, deliberately
+*without* deselecting this time (the whole point) — the save now landed
+on its own, correct pivot rotation value included, while the object
+stayed selected throughout.
+
+**The lesson**: "zero network requests, zero errors" doesn't mean "the
+guard is wrong" — it can just as easily mean "the thing scheduling the
+request is being cancelled before it ever gets a chance to run." A
+single `console.log` at the top of the suspect function, read for
+*frequency* rather than presence/absence, found in one shot what several
+rounds of XHR-log-diffing across page reloads had missed. And a save
+mechanism that "eventually" works once you stop touching the thing you
+just edited is not obviously broken in normal use — it took deliberately
+keeping an object selected while checking the network tab, which is
+precisely what testing (and not `console.log`-first debugging) does
+differently from a user's own workflow.

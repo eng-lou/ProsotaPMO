@@ -7,6 +7,7 @@ import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import { fromDisplayLength, lengthUnitSuffix, toDisplayLength, type IfcUnitDisplay } from './ifcUnitDisplay'
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale'
+export type GizmoSpace = 'world' | 'local'
 
 // Manual keyframing support for the active object (2026-07-08, per Maro:
 // "the blender way with the keyframes as long as you have 3d/ifc object in
@@ -49,10 +50,31 @@ export interface PivotSupport {
   onReset: () => void
 }
 
+// "Pivot Rotation" (2026-07-22, per Maro: dragging an element with the
+// Move gizmo travelled at an angle relative to an adjacent element it
+// needed to stay flush with) — see elementPivot.ts's own header for why
+// this exists and PivotSupport's own header just above for the shared
+// "read/write the live object" convention. No picking mode here (unlike
+// PivotSupport's viewport-click point picker) — there's no single click
+// that defines an orientation the way one defines a point.
+export interface PivotRotationSupport {
+  euler: THREE.Euler | undefined
+  onChange: (euler: THREE.Euler) => void
+  onReset: () => void
+}
+
 interface Props {
   object: THREE.Object3D
   mode: GizmoMode
   onModeChange: (mode: GizmoMode) => void
+  // Local/Global toggle for the gizmo (2026-07-22) — three.js's
+  // TransformControls has always supported this (it defaults to
+  // "world"), just never exposed in this app's UI before Pivot Rotation
+  // needed it: dragging Move in "local" space follows the object's own
+  // (possibly pivot-rotated) axes instead of raw world X/Y/Z, which is
+  // the whole point of being able to set a custom pivot rotation at all.
+  space: GizmoSpace
+  onSpaceChange: (space: GizmoSpace) => void
   upAxis: UpAxis
   // Non-null once this object is bound to a Path (paths.ts/pathFollowers.ts)
   // — its position is then *derived* from path_progress each frame
@@ -73,6 +95,7 @@ interface Props {
   unitDisplay: IfcUnitDisplay
   keyframes: KeyframeSupport | null
   pivot: PivotSupport
+  pivotRotation: PivotRotationSupport
   // Forces a re-render after a field edit (2026-07-08 fix, per Maro: typed
   // 10 into a Location field, the model moved, but the field itself
   // reverted to showing 0) — every Field's onChange mutates `object`
@@ -186,7 +209,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, onFieldChange }: Props) {
+export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -218,6 +241,27 @@ export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgres
           </button>
         ))}
       </div>
+      {/* Local/Global (2026-07-22) — see this file's own Props header for
+          space's doc comment. Not shown for Scale, which three.js's
+          TransformControls always applies in local space regardless of
+          this setting (scaling along world axes isn't a meaningful
+          operation once an object is rotated). */}
+      {mode !== 'scale' && (
+        <div className="flex items-center gap-1 px-3 pb-1.5">
+          {(['world', 'local'] as GizmoSpace[]).map(s => (
+            <button
+              key={s}
+              onClick={() => onSpaceChange(s)}
+              title={s === 'local' ? "Drag along the object's own axes (including any Pivot Rotation set below)" : 'Drag along the fixed world axes'}
+              className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                space === s ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {s === 'world' ? 'Global' : 'Local'}
+            </button>
+          ))}
+        </div>
+      )}
 
       {pathProgress && (
         <>
@@ -281,6 +325,49 @@ export function TransformPanel({ object, mode, onModeChange, upAxis, pathProgres
           disabled={!pivot.point}
           title="Restore the file's own original origin"
           className="text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+        >
+          Reset
+        </button>
+      </div>
+
+      {/* "Pivot Rotation" (2026-07-22) — redefines what the object's own
+          local axes point in, without visibly rotating it (same "moves the
+          origin, not the geometry" idea as Pivot above, applied to
+          orientation). Switch Move to Local (the toggle above) to actually
+          drag along this frame — with Move left on Global, this only
+          affects the Rotate gizmo's own Local mode. */}
+      <SectionLabel label="Pivot Rotation" />
+      <p className="px-3 pb-1 text-[10px] text-gray-400">
+        What Local space means for this object — e.g. align it to an adjacent element's angle, without changing how it looks.
+      </p>
+      {AXES.map(axis => {
+        const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'rotation')
+        const current = pivotRotation.euler?.[localAxis] ?? 0
+        const displayValue = sign * current * RAD_TO_DEG
+        return (
+          <div key={`pivot-rotation-${axis}`} className="flex items-center gap-1.5 px-3 py-0.5">
+            <span className="w-3 text-[11px] text-gray-400 shrink-0">{axis.toUpperCase()}</span>
+            <ResettableNumberInput
+              step={1}
+              value={Number.isFinite(displayValue) ? Number(displayValue.toFixed(3)) : 0}
+              defaultValue={0}
+              onChange={v => {
+                const next = (pivotRotation.euler ?? new THREE.Euler()).clone()
+                next[localAxis] = sign * v * DEG_TO_RAD
+                pivotRotation.onChange(next)
+              }}
+              className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+            />
+            <span className="w-4 text-[10px] text-gray-400 shrink-0">°</span>
+          </div>
+        )
+      })}
+      <div className="flex items-center gap-1.5 px-3 py-1">
+        <button
+          onClick={pivotRotation.onReset}
+          disabled={!pivotRotation.euler}
+          title="Restore the file's own original orientation"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
         >
           Reset
         </button>

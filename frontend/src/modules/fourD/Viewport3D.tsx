@@ -17,7 +17,7 @@ import type { ModelElementLink } from './modelElementLinks'
 import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type AppliedAnimationState, type ResolvedTimelineLink } from './timelinePlayback'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ViewerSettings } from './viewerSettings'
-import type { GizmoMode } from './TransformPanel'
+import type { GizmoMode, GizmoSpace } from './TransformPanel'
 import type { CustomTextureSet } from './customTextures'
 import { axisCorrectionRotation, resolveDisplayAxis, type UpAxis } from './upAxis'
 import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline'
@@ -252,7 +252,19 @@ interface Props {
   // there's nothing to show, so this is unconditionally placed here.
   linkedActivitiesWidget: React.ReactNode
   gizmoMode: GizmoMode
+  // Local/Global (2026-07-22) — see TransformPanel.tsx's own Props header
+  // for space's doc comment; passed straight through to TransformControls,
+  // which already supports this natively (defaults to "world" itself,
+  // just left unwired in this app's own props until Pivot Rotation gave
+  // it a reason to matter).
+  gizmoSpace: GizmoSpace
   onTransformChange: () => void
+  // Playback's own per-frame "the Properties panel needs to re-render"
+  // signal — deliberately a distinct prop from onTransformChange above
+  // (2026-07-22 fix, see TimelinePlayback's own onTick header for why:
+  // sharing a callback with a real gizmo edit starved that edit's own
+  // save-debounce for as long as anything stayed selected).
+  onTimelineTick: () => void
   environmentUrl: string | null
   onEnvironmentError: (message: string) => void
   customTextures: Record<string, CustomTextureSet>
@@ -1666,6 +1678,16 @@ function collectStandardMaterials(object: THREE.Object3D): { material: THREE.Mes
 // was moving it, so it just showed a stale snapshot. Only fires while
 // something's actually selected (activeObjectId set) — no point poking
 // FourD.tsx to re-render a panel that isn't even visible.
+//
+// Deliberately a *separate* callback from TransformControls' own onChange
+// (2026-07-22 fix, per a real incident found while testing Pivot Rotation:
+// this used to be wired to the exact same onTransformChange the gizmo uses,
+// which also schedules persistActiveTransform's 700ms save-debounce — since
+// this fires every single frame for as long as anything is selected, that
+// debounce could never survive long enough to actually fire; a manual edit
+// only ever got saved the moment you deselected the object, letting the
+// last-queued timer finally run undisturbed). This one only ever needs to
+// force a re-render — it must never also trigger a save of its own.
 // Applies whichever of Mode A (activity+profile) / Mode B (keyframeTracks)
 // a target actually has, per this component's own header on which one wins
 // for transform. Keyframe values are stored in *display* space (whatever
@@ -2711,7 +2733,7 @@ export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
-  gizmoMode, onTransformChange,
+  gizmoMode, gizmoSpace, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
@@ -3659,7 +3681,7 @@ export function Viewport3D({
             upAxis={settings.upAxis}
             ifcHandles={ifcHandles}
             activeObjectId={activeObjectId}
-            onTick={onTransformChange}
+            onTick={onTimelineTick}
             paths={paths}
             pathFollowers={pathFollowers}
             selectedExpressId={selectedExpressId}
@@ -3754,6 +3776,7 @@ export function Viewport3D({
           <TransformControls
             object={activeObject.object}
             mode={gizmoMode}
+            space={gizmoMode === 'scale' ? 'local' : gizmoSpace}
             onChange={onTransformChange}
             // Tagged isPathGizmo (2026-07-12 fix, per Maro: "pick in
             // viewport is very bad" — picking a wrong point) — the gizmo's

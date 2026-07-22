@@ -25,6 +25,12 @@ class TransformValues(BaseModel):
     pivot_x: float | None = None
     pivot_y: float | None = None
     pivot_z: float | None = None
+    # "Pivot Rotation" (2026-07-22) — pivot_x/y/z's rotational counterpart,
+    # same always-together/null-means-no-override convention. See
+    # element_transform.py's own model docstring for what it's for.
+    pivot_rotation_x: float | None = None
+    pivot_rotation_y: float | None = None
+    pivot_rotation_z: float | None = None
 
 
 # One request shape, upserted server-side (see service's save_transform) --

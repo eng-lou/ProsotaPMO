@@ -27,6 +27,12 @@ export interface ElementTransform {
   pivot_x: number | null
   pivot_y: number | null
   pivot_z: number | null
+  // "Pivot Rotation" (2026-07-22) — pivot_x/y/z's rotational counterpart,
+  // same null-means-no-override convention. See elementPivot.ts's own
+  // header for what it's for.
+  pivot_rotation_x: number | null
+  pivot_rotation_y: number | null
+  pivot_rotation_z: number | null
   created_at: string
   updated_at: string
 }
@@ -44,6 +50,9 @@ export interface TransformValues {
   pivot_x: number | null
   pivot_y: number | null
   pivot_z: number | null
+  pivot_rotation_x: number | null
+  pivot_rotation_y: number | null
+  pivot_rotation_z: number | null
 }
 
 export async function listElementTransforms(projectId: string): Promise<ElementTransform[]> {

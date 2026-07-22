@@ -5,7 +5,7 @@ import { ResettableNumberInput } from './ResettableNumberInput'
 import { TextureFields } from './TextureFields'
 import { MaterialPresetPicker } from './MaterialPresetPicker'
 import type { MaterialPreset } from './materialPresets'
-import { TransformPanel, type GizmoMode, type KeyframeSupport, type PathProgressSupport, type PivotSupport } from './TransformPanel'
+import { TransformPanel, type GizmoMode, type GizmoSpace, type KeyframeSupport, type PathProgressSupport, type PivotRotationSupport, type PivotSupport } from './TransformPanel'
 import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
@@ -50,6 +50,8 @@ interface Props {
   unitDisplay: IfcUnitDisplay
   gizmoMode: GizmoMode
   onGizmoModeChange: (mode: GizmoMode) => void
+  gizmoSpace: GizmoSpace
+  onGizmoSpaceChange: (space: GizmoSpace) => void
   activeObjectTextures: CustomTextureSet | undefined
   onUploadTexture: (slot: TextureSlot, file: File) => void
   onClearTexture: (slot: TextureSlot) => void
@@ -87,6 +89,7 @@ interface Props {
   keyframeSupport: KeyframeSupport | null
   pathProgress: PathProgressSupport | null
   pivot: PivotSupport
+  pivotRotation: PivotRotationSupport
   onChangeSourceUpAxis: (axis: UpAxis) => void
 }
 
@@ -109,11 +112,11 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
+  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
-  keyframeSupport, pathProgress, pivot, onChangeSourceUpAxis,
+  keyframeSupport, pathProgress, pivot, pivotRotation, onChangeSourceUpAxis,
 }: Props) {
   const hdrInputRef = useRef<HTMLInputElement>(null)
   // Apply Transform's own confirmation (2026-07-09, per Maro's doubt that
@@ -346,9 +349,10 @@ export function PropertiesPanel({
             )}
           </div>
           <TransformPanel
-            object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange} upAxis={settings.upAxis}
+            object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange}
+            space={gizmoSpace} onSpaceChange={onGizmoSpaceChange} upAxis={settings.upAxis}
             lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
-            keyframes={keyframeSupport} pathProgress={pathProgress} pivot={pivot} onFieldChange={onTransformChange}
+            keyframes={keyframeSupport} pathProgress={pathProgress} pivot={pivot} pivotRotation={pivotRotation} onFieldChange={onTransformChange}
           />
 
           <SectionHeader label="Material / Texture" />
