@@ -453,6 +453,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           // elementBatching.ts's own header documents for every other
           // whole-model scan in this app.
           materializeAll(handle.object)
+          // Same TimelinePlayback re-derive trigger Select All's own
+          // materializeAll needs — see materializeVersion's own state
+          // comment for why this call site needs it too.
+          setMaterializeVersion(v => v + 1)
           handle.object.traverse(child => { if (selectedExpressIds.has(child.userData.expressID)) found.push(child) })
         }
         bounds = found.length > 0 ? computeLocalBoundsForObjects(target.object, found) : computeLocalBoundsForObject(target.object)
@@ -2229,6 +2233,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // model (see handleSelectExpressId below).
   const [activeIfcModelId, setActiveIfcModelId] = useState<string | null>(null)
   const [selectedExpressId, setSelectedExpressId] = useState<number | null>(null)
+  // Bumped after every model-wide materializeAll call, wherever it happens
+  // (2026-07-22) — see Viewport3D's own materializeVersion prop header for
+  // the full "Select All leaves the whole model stuck fully visible" story.
+  // Owned here, not inside Viewport3D, because materializeAll has call
+  // sites outside that component too (the section box multi-select bounds
+  // and Select Linked (material) handlers just below) that need the exact
+  // same TimelinePlayback re-derive trigger.
+  const [materializeVersion, setMaterializeVersion] = useState(0)
   // Multi-select *within* the IFC hierarchy (2026-07-08, per Maro: "i meant
   // multi selector in the hierarchy not the overall file format which has no
   // breakdown anyway") — the object-level selectedObjectIds further below is
@@ -3178,6 +3190,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!handle || !activeObjectId || selectedExpressId === null) return
     const matches = findLinkedExpressIds(handle, activeObjectId, slot, selectedExpressId, customTextures)
     setSelectedExpressIds(new Set(matches))
+    // findLinkedExpressIds calls materializeAll internally (see its own
+    // header in linkedMaterials.ts) — same TimelinePlayback re-derive
+    // trigger as every other materializeAll call site.
+    setMaterializeVersion(v => v + 1)
   }
   const handleApplyToLinkedMaterial = (slot: TextureSlot) => {
     if (!activeTextureKey || !activeObjectId) return
@@ -4153,6 +4169,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       selectedObjectIds={selectedObjectIds}
       onSelectObject={handleSelectObject}
       onSelectAll={handleSelectAll}
+      materializeVersion={materializeVersion}
+      onMaterializeAll={() => setMaterializeVersion(v => v + 1)}
       onBoxSelect={handleBoxSelect}
       linkedObjectIds={linkedMeshObjectIds}
       linkedElementKeys={linkedIfcElementKeys}

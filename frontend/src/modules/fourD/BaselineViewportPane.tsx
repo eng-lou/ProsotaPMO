@@ -127,6 +127,10 @@ export function BaselineViewportPane({
             // migration this prop exists to catch (see TimelinePlayback's
             // own selectedExpressId header).
             selectedExpressId={null}
+            // Constant (2026-07-22) — same reasoning as selectedExpressId
+            // just above: this pane has no Select All button of its own, so
+            // there's never a bulk materializeAll to react to.
+            materializeVersion={0}
           />
           <group rotation={axisCorrectionRotation('y', upAxis)}>
             <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />

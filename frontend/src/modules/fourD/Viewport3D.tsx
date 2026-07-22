@@ -182,6 +182,16 @@ interface Props {
   // resolves the same way box-select's own IFC branch does: every visible
   // element of every visible ifc-kind import, not just the model as a whole.
   onSelectAll: (objectIds: string[], expressIdsByObject: Map<string, number[]>) => void
+  // Owned by FourD.tsx, not locally (2026-07-22) — see TimelinePlayback's
+  // own materializeVersion prop header for the full "Select All leaves the
+  // whole model stuck fully visible" story. FourD.tsx also has its own
+  // model-wide materializeAll call sites entirely outside this component
+  // (section box multi-select bounds, Select Linked (material)) that need
+  // the exact same re-derive trigger — a single counter owned one level up
+  // is simpler than three independent ones, and correctly covers every
+  // caller of materializeAll, not just this file's own Select All button.
+  materializeVersion: number
+  onMaterializeAll: () => void
   // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
   // been 4d linked to an activity yet") — linkedObjectIds is which whole
   // mesh-kind objects already have a ModelElementLink; linkedElementKeys is
@@ -773,7 +783,24 @@ function ModelObjects({
         // showFaces/isolate/hidden formula itself or fighting this effect
         // over `.visible` outright.
         child.userData.baseVisible = baseVisible
-        child.visible = baseVisible
+        // Direct write skipped for a mesh TimelinePlayback has already
+        // taken over (2026-07-22 fix, per Maro: a footing stayed visible
+        // forever after being clicked, confirmed live to persist for as
+        // long as it stayed *selected* — not just materialized). While
+        // anything is selected, TimelinePlayback's own onTick fires every
+        // frame, which bumps FourD.tsx's transform tick, which hands this
+        // effect a fresh `objects` array reference every frame too — so
+        // this heavy pass was re-running and unconditionally overwriting
+        // `.visible` back to baseVisible (schedule-blind) on every single
+        // frame, racing against and consistently beating TimelinePlayback's
+        // own correct per-frame write (mesh.visible = baseVisible &&
+        // opacity > epsilon) further down this file. baseVisible is still
+        // written to userData unconditionally just above — that's the exact
+        // signal TimelinePlayback's own write already combines with the
+        // animation state, so a schedule-linked mesh keeps responding to
+        // Isolate/Hide/showFaces correctly, just never via this direct
+        // write once it's under animation control.
+        if (!child.userData.timelineControlled) child.visible = baseVisible
         child.castShadow = settings.shadows
         child.receiveShadow = settings.shadows
         // Materials aren't necessarily unique per mesh — GLTF/OBJ/FBX
@@ -1139,6 +1166,14 @@ function ModelObjects({
         const baseVisibleByInstanceId = (
           batch.mesh.userData.batchBaseVisibleByInstanceId ??= new Map<number, boolean>()
         ) as Map<number, boolean>
+        // See TimelinePlayback's own timelineControlledInstanceIds comment
+        // (Mode A's batch fast path) for why this direct setVisibleAt is
+        // now guarded — a second, separate instance of the exact same race
+        // the individual-mesh path below already fixed, hit specifically by
+        // a panel-driven Select by Storey/Type selection (never
+        // materializes anything, so it never reaches the individual-mesh
+        // path at all).
+        const timelineControlledInstanceIds = batch.mesh.userData.timelineControlledInstanceIds as Set<number> | undefined
         for (const [expressID, infos] of batch.byExpressId) {
           const isolatedOut = isolateMode && (
             isolatingSubElements ? !isolatedExpressIds.has(expressID) : !isObjectIsolated
@@ -1147,8 +1182,8 @@ function ModelObjects({
           const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
           const visible = settings.showFaces && !isolatedOut && !isChildHidden
           for (const info of infos) {
-            batch.mesh.setVisibleAt(info.instanceId, visible)
             baseVisibleByInstanceId.set(info.instanceId, visible)
+            if (!timelineControlledInstanceIds?.has(info.instanceId)) batch.mesh.setVisibleAt(info.instanceId, visible)
           }
         }
         // Colour highlight (2026-07-21) — deliberately walks the *entire*
@@ -1521,6 +1556,31 @@ interface ResolvedBatchVisibilityTarget {
   // last-written cache is safe here and avoids a getColorAt readback +
   // THREE.Color allocation every frame for every instance.
   lastColorHex: string | null
+  // The live reverse map elementBatching.ts's own ensureMaterialized
+  // deletes an instance from synchronously, the instant that instance gets
+  // pulled out of the shared batch (2026-07-22 fix, per Maro — reproduced
+  // live with a stack trace: click a batched element, and this file's own
+  // per-frame batch loop below can call setVisibleAt(instanceId, true) on
+  // it moments *after* ensureMaterialized already called
+  // setVisibleAt(instanceId, false) — a genuine race, not the
+  // already-fixed "stays selected" one. handleClick's own ensureMaterialized
+  // call is synchronous, right inside the click handler; the migration
+  // effect that removes this bvTarget from batchVisibilityTargetsRef is a
+  // useEffect, which only runs after React commits — one or more
+  // requestAnimationFrame ticks later. R3F's own frame loop keeps calling
+  // this file's per-frame batch loop on every one of those intervening
+  // ticks regardless, still finding the stale bvTarget (with its own
+  // pre-click cachedState, e.g. "fully visible" if the click happened on a
+  // date where this element genuinely was), and reasserting *that* onto
+  // the instance ensureMaterialized had just correctly hidden — a stray
+  // write that then sticks forever, since neither system ever revisits an
+  // orphaned instance once resolve() and the migration effect have both
+  // stopped tracking it. Checking this map catches the race in the exact
+  // frame it would otherwise happen: ensureMaterialized's own delete is
+  // synchronous, so by the very next tick of this loop (still well before
+  // the migration effect runs), the instance already reads as materialized
+  // here and is correctly skipped.
+  expressIdByInstanceId: Map<number, number>
 }
 
 const DEG_TO_RAD = Math.PI / 180
@@ -1686,6 +1746,7 @@ function applyPathFollow(target: ResolvedPathTarget, now: Date) {
 export function TimelinePlayback({
   dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles, activeObjectId, onTick, paths, pathFollowers,
   selectedExpressId,
+  materializeVersion,
   dateField = 'live',
 }: {
   dateRef: React.MutableRefObject<Date | null>
@@ -1732,6 +1793,23 @@ export function TimelinePlayback({
   // so it's safe to run on every single click with no risk of reintroducing
   // that regression.
   selectedExpressId: number | null
+  // Bumped by Viewport3D's own handleSelectAllClick after a bulk
+  // materializeAll (2026-07-22, per Maro — same live repro as
+  // selectedExpressId's own header above, but for Select All specifically:
+  // "select all" on the Hospital file left the *entire* model stuck fully
+  // visible at day one of the schedule, confirmed via a clean fresh-load
+  // A/B test — empty before Select All, wrongly fully-built after). Select
+  // All's materializeAll() call pulls every still-batched element out of the
+  // shared BatchedMesh at once, same as a single click's ensureMaterialized,
+  // but there is no single expressID for migrateSelectedExpressId's own
+  // surgical per-element fix to key off — potentially thousands of fresh
+  // individual meshes appear in one synchronous call, none of them wired
+  // into targetsRef. Unlike selectedExpressId (rejected as a resolve()
+  // dependency above for firing on every click), Select All is already a
+  // deliberate, expensive, occasional bulk action — triggering one real
+  // resolve() re-derive in response is proportionate, not a hot-path
+  // regression risk.
+  materializeVersion: number
   // 'baseline' (2026-07-12) — Mode A (the only animation source that reads
   // Activity dates at all) resolves each link's window from
   // activity.bl_start/bl_finish instead of activity.start/finish. Mode B
@@ -1944,6 +2022,7 @@ export function TimelinePlayback({
                   bvTarget = {
                     mesh: batchInfo.mesh, instances: batchInfo.instances, links: [],
                     cachedActiveLink: null, cachedState: null, lastColorHex: null,
+                    expressIdByInstanceId: (handle.object.userData.batch as BatchState).expressIdByInstanceId,
                   }
                   batchVisibilityByKey.set(key, bvTarget)
                   // One expressID per bvTarget, always (2026-07-22) — this
@@ -1952,6 +2031,23 @@ export function TimelinePlayback({
                   // of which link put it there; feeds
                   // migrateSelectedExpressId's own O(1) lookup below.
                   expressIdToBatchTargetRef.current.set(expressId, { handle, target: bvTarget })
+                  // Same ModelObjects hand-off as the individual-mesh path's
+                  // own timelineControlled marker (2026-07-22 fix, per Maro
+                  // — see that one's own comment for the full story, and
+                  // ModelObjects' own batch heavy-pass for why this is a
+                  // second, separate instance of the identical race: a
+                  // panel-driven Select by Storey/Type selection never
+                  // materializes anything, so it hits this batch path, not
+                  // the individual-mesh one — confirmed live, a still-
+                  // selected batched element stayed stuck fully visible at
+                  // day one exactly like the individual-mesh case did before
+                  // its own fix). Marked per-instance, not per-expressID,
+                  // since that's what ModelObjects' own setVisibleAt call
+                  // below is keyed on.
+                  const timelineControlledInstanceIds = (
+                    batchInfo.mesh.userData.timelineControlledInstanceIds ??= new Set<number>()
+                  ) as Set<number>
+                  for (const { instanceId } of batchInfo.instances) timelineControlledInstanceIds.add(instanceId)
                 }
                 bvTarget.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
                 objects = []
@@ -1981,6 +2077,14 @@ export function TimelinePlayback({
         for (const object of objects) {
           const target = getOrCreate(object)
           target.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
+          // Tells ModelObjects' own per-mesh effect to back off `.visible`
+          // for this mesh (2026-07-22 fix, per Maro — see that effect's own
+          // `timelineControlled` check for the full story: while an element
+          // stays selected, ModelObjects' heavy pass reruns every single
+          // frame and was unconditionally winning the race against this
+          // file's own correct per-frame write).
+          object.userData.timelineControlled = true
+          object.traverse(child => { child.userData.timelineControlled = true })
         }
       }
 
@@ -2059,16 +2163,70 @@ export function TimelinePlayback({
         const now = dateRef.current
         if (now) {
           for (const target of targetsRef.current) {
-            if (Object.keys(target.keyframeTracks).length > 0) applyKeyframedTransform(target, now, upAxis)
+            if (Object.keys(target.keyframeTracks).length > 0) {
+              applyKeyframedTransform(target, now, upAxis)
+            } else {
+              // Schedule-driven (non-keyframe) targets get the same one-off
+              // treatment as keyframed ones just above (2026-07-22 fix, per
+              // Maro: a wall linked to an activity starting over a month
+              // later was showing fully visible right after being selected
+              // via Select All — reproduced live and confirmed the *actual*
+              // trigger isn't limited to a single direct click: any path
+              // that materializes an element out of the shared batch
+              // *without* going through this file's own selectedExpressId-
+              // keyed migration effect below (Select All is exactly that —
+              // ModelObjects' own selection-tint pass has to individually
+              // materialize every element it selects to tint each one, but
+              // selectedExpressId itself stays null for a genuine multi-
+              // select, so that migration effect's own guard skips every
+              // one of them) leaves a fresh getOrCreate() target — built by
+              // this same resolve() pass, a few dozen lines up, once
+              // getMaterializedMeshes finds it already individual — sitting
+              // at cachedState: null exactly like a freshly-materialized
+              // batch target used to. Computed here immediately, the same
+              // way the migration effect and the batch loop just below both
+              // already do, rather than waiting for the next real date
+              // change that may never come in the same session.
+              target.cachedActiveLink = pickActiveLink(target.links, now)
+              target.cachedState = target.cachedActiveLink
+                ? computeAppliedAnimationStateAt(target.cachedActiveLink, now)
+                : null
+            }
           }
           for (const target of nextPathTargets) applyPathFollow(target, now)
+          // Batch-visibility targets get the same one-off treatment
+          // (2026-07-22 fix, per Maro: a wall linked to an activity starting
+          // over a month later was showing fully visible right after
+          // Generate Schedule, with no click and no scrub — confirmed via
+          // the real schedule data, not assumed). This block already knew
+          // to immediately reflect fresh keyframe/path data instead of
+          // waiting for the useFrame loop's own dateChanged gate below — it
+          // just never knew batchVisibilityTargetsRef existed yet (added
+          // 2026-07-21, after this block was written) and left every fresh
+          // batch target's cachedActiveLink/cachedState at the null they're
+          // built with. useFrame's own dateChanged gate (`lastAppliedDateMs
+          // !== nowMs`) only catches this once per genuine date change —
+          // true on the very first frame ever, after which it's already
+          // been "consumed" by whatever was in targetsRef/batchVisibility
+          // *before* this resolve() pass, so a later resolve() (activities/
+          // links changing — Generate Schedule, a project reload, ...)
+          // rebuilding fresh batch targets on an unmoved date left every one
+          // of them stuck with a null cachedState, and therefore
+          // `scheduleVisible = false ? ...` never overrides their default
+          // fully-visible import state, for the rest of the session unless
+          // someone happens to scrub. Computed here the same way the
+          // migration effect below now does for its own fresh targets.
+          for (const bv of batchVisibilityTargetsRef.current) {
+            bv.cachedActiveLink = pickActiveLink(bv.links, now)
+            bv.cachedState = bv.cachedActiveLink ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now) : null
+          }
         }
       }
     }
 
     resolve()
     return () => { cancelled = true }
-  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField])
+  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion])
 
   // Surgical migration for one just-materialized element (2026-07-22) — see
   // this component's own selectedExpressId prop header for the full story
@@ -2104,16 +2262,73 @@ export function TimelinePlayback({
     // element with — reused verbatim, not re-derived, since nothing about
     // which activities/profiles link to this element changed, only how
     // it's rendered (individual mesh vs. batch instance) did.
-    const migrated: ResolvedTimelineTarget[] = meshes.map(object => ({
-      object, links: [...bvTarget.links],
-      basePosition: object.position.clone(),
-      baseRotation: object.rotation.clone(),
-      baseScale: object.scale.clone(),
-      materials: collectStandardMaterials(object),
-      keyframeTracks: {},
-      cachedActiveLink: null,
-      cachedState: null,
-    }))
+    //
+    // cachedActiveLink/cachedState computed right here, not left null
+    // (2026-07-22 fix, per Maro: a wall linked to an activity starting over
+    // a month later was showing fully visible the instant it was clicked,
+    // with no scrub in between — confirmed via the real schedule data, not
+    // assumed). The main useFrame loop below only ever *recomputes* a
+    // target's cache when the timeline's date has actually changed since
+    // last frame (`dateChanged`) — correct for every target that already
+    // existed on the previous frame, but this target didn't: it's being
+    // created fresh, mid-session, on a frame where the date usually hasn't
+    // moved at all (a plain click, not a scrub). Left null, it fell through
+    // `else if (state && activeLink)` every single frame — no visibility,
+    // opacity, or position write at all — leaving the freshly-materialized
+    // mesh stuck at whatever default-visible state ensureMaterialized gave
+    // it until the *next* real date change happened to come along, which
+    // could be never in the same session. Computed once, immediately, from
+    // the current date the same way resolve()'s own initial pass already
+    // does for every other fresh target (a few dozen lines up) — the
+    // unconditional write block below then applies it on the very next
+    // frame regardless of dateChanged, exactly like every other target.
+    const now = dateRef.current
+    const migrated: ResolvedTimelineTarget[] = meshes.map(object => {
+      const cachedActiveLink = now ? pickActiveLink(bvTarget.links, now) : null
+      const cachedState = cachedActiveLink && now ? computeAppliedAnimationStateAt(cachedActiveLink, now) : null
+      // baseColor corrected against getOriginalMaterialSlots, not trusted
+      // as collectStandardMaterials captured it (2026-07-22 fix, per Maro:
+      // a deselected element's highlight tint was sticking permanently on
+      // exactly this class of element — reproduced live and confirmed:
+      // ModelObjects' own selection-tint effect and this migration effect
+      // both fire off the same selectedExpressId change, in the same React
+      // commit, and ModelObjects mounts first in this file's own JSX (see
+      // its call site above TimelinePlayback's) — so by the time this runs,
+      // the mesh ensureMaterialized just created has *already* been tinted
+      // toward SELECTED_EMISSIVE (it's normally the active selection,
+      // that's what triggered materialization to begin with).
+      // collectStandardMaterials's own baseColor is just `material.color`
+      // read at call time, with no idea any of that happened, so it
+      // captured the tint itself as "the real colour" — permanently, since
+      // nothing ever recomputes it afterward. Every later frame this target
+      // has an active link but no colour profile (state.color null, the
+      // common case — see the material-diff block below), the loop
+      // reasserts *that* frozen-in tint back onto the mesh, undoing
+      // ModelObjects' own correct restore-to-original on every deselect
+      // from then on. getOriginalMaterialSlots reads
+      // finalizeIndividualMesh's own captureOriginalMaterial snapshot
+      // instead — taken synchronously inside ensureMaterialized itself,
+      // before this mesh is even added to the scene and so well before
+      // either effect above can touch it — the one source in this whole
+      // path actually guaranteed untinted.
+      const originalSlots = getOriginalMaterialSlots(object)
+      const materials = collectStandardMaterials(object).map((entry, i) => (
+        originalSlots[i] ? { ...entry, baseColor: originalSlots[i].color.clone() } : entry
+      ))
+      // Same ModelObjects hand-off as resolve()'s own Mode A loop above —
+      // see its own timelineControlled comment for the full story.
+      object.userData.timelineControlled = true
+      return {
+        object, links: [...bvTarget.links],
+        basePosition: object.position.clone(),
+        baseRotation: object.rotation.clone(),
+        baseScale: object.scale.clone(),
+        materials,
+        keyframeTracks: {},
+        cachedActiveLink,
+        cachedState,
+      }
+    })
     targetsRef.current = [...targetsRef.current, ...migrated]
   }, [selectedExpressId])
 
@@ -2343,6 +2558,17 @@ export function TimelinePlayback({
       // already does for the individual-mesh path a few dozen lines above.
       const baseVisibleByInstanceId = bv.mesh.userData.batchBaseVisibleByInstanceId as Map<number, boolean> | undefined
       for (const { instanceId } of bv.instances) {
+        // Skips an instance ensureMaterialized has already pulled out of
+        // the shared batch (2026-07-22 fix) — see ResolvedBatchVisibilityTarget's
+        // own expressIdByInstanceId header for the exact race this catches:
+        // this bvTarget can still be sitting in batchVisibilityTargetsRef
+        // for one or more frames after a click already materialized this
+        // one instance (the migration effect that removes it is async), and
+        // writing here during that window reasserts this bvTarget's own
+        // stale pre-click visibility right on top of ensureMaterialized's
+        // already-correct hide, permanently — nothing else ever revisits an
+        // orphaned instance once both systems have stopped tracking it.
+        if (!bv.expressIdByInstanceId.has(instanceId)) continue
         const baseVisible = baseVisibleByInstanceId?.get(instanceId) ?? true
         const nextVisible = baseVisible && scheduleVisible
         if (bv.mesh.getVisibleAt(instanceId) !== nextVisible) bv.mesh.setVisibleAt(instanceId, nextVisible)
@@ -2473,7 +2699,7 @@ function ClippingSetup() {
 // re-renders both.
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
+  onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
   gizmoMode, onTransformChange,
   environmentUrl, onEnvironmentError, customTextures,
@@ -3109,6 +3335,11 @@ export function Viewport3D({
       matchedObjectIds.push(id)
     }
     onSelectAll(matchedObjectIds, expressIdsByObject)
+    // Forces TimelinePlayback's own resolve() to re-derive targetsRef for
+    // every element materializeAll just pulled out of the shared batch —
+    // see materializeVersion's own prop header for why this is otherwise
+    // permanently skipped.
+    onMaterializeAll()
   }
 
   return (
@@ -3422,6 +3653,7 @@ export function Viewport3D({
             paths={paths}
             pathFollowers={pathFollowers}
             selectedExpressId={selectedExpressId}
+            materializeVersion={materializeVersion}
           />
           {!hidePathHelpers && (
             <PathGizmos

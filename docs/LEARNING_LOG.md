@@ -2237,3 +2237,244 @@ testing, live diagnostics before believing a hypothesis). Caught it fast
 because Maro was testing live and said so immediately — but the fix
 process that actually worked, every single time tonight, was: reproduce
 for real, instrument for real, read the real evidence, *then* fix.
+
+## 2026-07-22 (continued) — Two "still broken" reports that turned out to
+be the dev server, not the code
+
+Maro came back after the commit above with two fresh reports against the
+same shipped fix: the click-detaches-from-animation bug "still" happening
+("we never had this problem before"), and a separate one — Deselect All
+leaving the blue selection tint stuck on elements. Both looked real on
+first look: a screenshot of the detach bug, and a live repro (select an
+element, nudge the timeline's date, Deselect All, tint still there).
+
+Neither survived a genuinely clean test. The tell was in the browser
+console: `[MIGRATE DIAG]`/`[FRAME DIAG]`/`[VIS DIAG]` log lines were still
+firing — the exact diagnostic instrumentation confirmed removed from disk
+before the last commit (`grep -n DIAG` on the real file: no matches). The
+running Vite dev server had been up the entire session and was still
+serving an old in-memory build from *before* that removal — a hard browser
+reload doesn't help here, since Vite's own dev-server process, not just
+the browser, was the thing holding stale state. Killed and restarted the
+Vite process itself, hard-reloaded the tab, and confirmed via fresh
+console output that the served code now matched disk exactly (no DIAG
+lines, clean load).
+
+Against that genuinely clean server, neither bug reproduced — not once,
+across every shape tried: select-and-scrub-back while still selected,
+select-then-Deselect-All-then-scrub, select-then-replace-selection,
+select-all/deselect-all with a date change in between, and a full Play
+run through several schedule transitions before jumping back. Used
+Generate Schedule's "Scan Model" option against the Snowdon file to get a
+real 1,370-element linked schedule for this, since the project had no
+animated actors at all going in.
+
+**The actual lesson, sharpened rather than new**: this session already
+had one "stale HMR state looked like a bug" moment (the entry above) and
+still got fooled by the same failure mode from one layer further down —
+a long-lived dev *server* process, not just a long-lived browser tab, can
+serve code that no longer matches disk. `grep`-ing the real file for the
+suspect instrumentation, and seeing it still firing in the console, is
+what actually exposed it — not the screenshot, not the repro that
+"worked" once. Restarting the dev server (not just reloading the page)
+needs to be step one whenever a fix that was shipped and verified earlier
+in a long session starts "still" failing later in that same session.
+
+**Correction, later the same day**: the entry above was wrong to close the
+book on this as "neither bug reproduced." Maro came back with a much
+sharper, angrier repro against the real "2018_Hospital_Structural.ifc"
+project (not the Snowdon test file): select any schedule-linked element,
+deselect it, scrub the timeline back to before its activity starts — it
+stays fully visible forever. Live testing (after also fixing an
+unrelated self-inflicted bug: temporary diagnostic code that shadowed the
+global `window` inside Mode A's per-link loop, which has its own local
+`const window = ...`, throwing `ReferenceError` on every call and
+silently aborting `resolve()` — renamed to `globalThis` in the
+instrumentation, not the app code) isolated the real, still-live root
+cause: `ensureMaterialized`/`materializeAll` (`elementBatching.ts`) pull an
+element out of the shared `THREE.BatchedMesh` into a plain
+`THREE.Mesh`, which defaults to `.visible = true` — nothing about that
+call path ever applies the element's actual schedule state. A single
+click was already covered by an earlier fix (`selectedExpressId`'s own
+surgical migration effect in `TimelinePlayback`), but **Select All**
+(`handleSelectAllClick`'s own `materializeAll()` call, Viewport3D.tsx) had
+no equivalent: it doesn't change any of `resolve()`'s own dependencies, so
+none of the freshly-materialized meshes ever got a `ResolvedTimelineTarget`
+at all, individually or in bulk — they simply stayed stuck at
+`visible = true` for the rest of the session, immune to further date
+scrubs. Confirmed via a clean fresh-load A/B test (empty, correct, before
+Select All; the entire building fully visible, wrong, immediately after)
+on the real Hospital file.
+
+**The fix**: a new `materializeVersion` counter, bumped by
+`handleSelectAllClick` after its `materializeAll()` call and added to
+`resolve()`'s own dependency array — deliberately *not* the same shape as
+the earlier `selectedExpressId` fix (that one was rejected as a `resolve()`
+dependency because it fired, and re-derived the *entire* model, on every
+single click). Select All is already a deliberate, expensive, occasional
+bulk action, so triggering one full re-derive in response to it is
+proportionate rather than a hot-path regression. Verified live, twice, on
+the real Hospital project: Select-All-then-deselect-then-scrub-to-day-one
+and single-click-then-deselect-then-scrub-to-day-one both now correctly
+hide everything, and scrubbing forward again still correctly rebuilds.
+
+**The actual lesson**: a live, angry, specific repro against real data
+outranks an earlier "couldn't reproduce it" — the dev-server staleness
+above was real and worth fixing, but it wasn't the *only* thing wrong, and
+declaring the investigation closed after fixing just that one layer left
+the real bug live for the rest of the day. Also: don't let temporary
+debug instrumentation use bare `window` inside code that might have its
+own local `const window` a few lines later in the same block scope — it
+silently shadows and throws on every call, which can itself look
+exactly like "the feature is completely broken" and burn significant time
+chasing a phantom.
+
+**Second correction, same day**: the `materializeVersion` fix above was
+*also* incomplete — Maro came straight back with a screenshot proving it:
+select an element, don't deselect, scrub back before its activity starts —
+still stuck fully visible. The distinguishing detail this time was
+"still selected," not "already deselected" (every earlier verification
+pass, mine included, had deselected before scrubbing back, which happened
+to dodge the actual bug). Root cause, finally confirmed live: while
+anything stays selected, `TimelinePlayback`'s own `onTick` fires every
+single animation frame (`if (activeObjectId) onTick()`), which calls
+`FourD.tsx`'s `handleTransformChange` → `setTransformTick`, which gives
+`ModelObjects` a fresh `objects` array reference on every frame too. That
+makes its `heavyChanged` check true every frame, so its "full pass" — which
+unconditionally writes `child.visible = baseVisible` (a schedule-blind
+showFaces/isolate/hidden computation) — reruns every frame as well,
+racing against `TimelinePlayback`'s own correct per-frame write
+(`mesh.visible = baseVisible && opacity > epsilon`) a few hundred lines
+below. Whichever one commits last before the browser paints wins, and in
+practice `ModelObjects`' write consistently won for as long as the element
+stayed selected — not a flicker, a persistently wrong static frame, which
+is exactly what both screenshots showed.
+
+This was the exact "competing writer" theory floated *very* early in this
+whole investigation (before the dev-server detour, before the diagnostic-
+`window`-shadowing detour, before the `materializeVersion` fix) and never
+actually acted on — worth remembering next time a strong lead gets
+shelved mid-session for a more immediately reproducible symptom: it can
+still be the real answer once the decoy is cleared away.
+
+**The fix**: `ModelObjects` now only owns the direct `.visible` write for
+a mesh nothing else controls. `TimelinePlayback` marks
+`object.userData.timelineControlled = true` on every mesh it wires into a
+`ResolvedTimelineTarget` with a real Mode A link — both in `resolve()`'s
+own per-link loop and in the click-triggered migration effect — and
+`ModelObjects`' per-mesh pass now does
+`if (!child.userData.timelineControlled) child.visible = baseVisible`
+instead of writing it unconditionally. `child.userData.baseVisible` is
+still written every time regardless (that's the exact signal
+`TimelinePlayback` already reads and combines with the animation state),
+so Isolate/Hide/showFaces still correctly affect a schedule-linked element
+— just via the one writer that's supposed to own `.visible` for it, not a
+second one racing it every frame. Verified live on the real Hospital
+project against the *exact* repro from the screenshots: select a footing,
+leave it selected, scrub back before its 28 Jul 2026 start — now correctly
+disappears while still selected, and scrubbing forward again correctly
+brings it back, still selected throughout.
+
+**Third correction, same day**: reported "still bugged" a third time —
+Maro's own suspicion ("maybe it's because you're clicking from the
+viewport, I'm clicking the IFC panel") was exactly right, and pointed at
+a *second, independent* instance of the identical race, in code the
+second-correction fix never touched. IfcDataPanel.tsx's own storey/type
+selection (`handleSelectExpressIds`, the plural bulk sibling of
+`handleSelectExpressId`) never materializes anything — by design, per its
+own header — so it never reaches the individual-mesh path the previous fix
+covers. It hits `ModelObjects`' *batch* heavy-pass instead, which had the
+exact same unconditional-write bug: `batch.mesh.setVisibleAt(instanceId,
+visible)` (schedule-blind, same `showFaces && !isolatedOut && !isChildHidden`
+shape as the individual-mesh `baseVisible`), reran every frame for the same
+onTick/transformTick reason, and won the same race against
+`TimelinePlayback`'s own batch fast path — which a comment already sitting
+in that exact code block had *predicted was impossible* ("TimelinePlayback's
+runs unconditionally every single animation frame... always wins moments
+later"), the same wrong assumption that made the individual-mesh version
+of this bug ship in the first place. Fixed the same way:
+`getBatchedInstanceInfo`'s own instances get marked into a
+`timelineControlledInstanceIds` Set on the shared BatchedMesh's userData
+when Mode A resolves a link for them, and `ModelObjects`' batch pass skips
+the direct `setVisibleAt` for any instance in that set (still updates
+`batchBaseVisibleByInstanceId`, the composable signal
+`TimelinePlayback`'s own batch loop already reads). Verified live via all
+three known selection entry points on the real Hospital project — direct
+viewport click, spatial-tree "Select All on This Storey", and Class > Type
+> Occurrence row — scrubbing back to day one while still selected now
+correctly hides everything through every one of them, not just the one
+that happened to get tested first.
+
+**The lesson, a third time**: when a user says "you're not seeing what
+I'm seeing," take the specific mechanism they propose seriously and test
+*that exact path*, not just "the bug" in the abstract — two fixes in a row
+looked complete because verification kept reusing the same one entry
+point (a direct viewport click) instead of covering every UI surface that
+can trigger the same underlying state change. A race condition between two
+unconditional writers doesn't necessarily live in one place — if the
+pattern exists once from a design assumption ("the other write always
+happens after mine"), grep for the same assumption elsewhere before
+declaring the bug class closed.
+
+**Fourth correction, same day — the real one**: Maro pushed back hard on
+the third fix's own explanation ("then why is it still unfixed") with a
+fresh screenshot of the *exact same* metal-deck slab still showing at day
+one, still selected. This one didn't fit either of the first two race
+theories — the element had been genuinely clicked (not panel-selected),
+and deselecting was never the difference (confirmed: the "stays selected"
+race was already fixed). Live instrumentation (`useFrame`'s own `state`
+param exposed to `globalThis` for one-off scene inspection, since nothing
+else in this codebase already exposes the live THREE.js scene to the
+console) proved, conclusively, that both the schedule math *and* every
+writer fixed so far were correct: the one individually-materialized mesh
+for this element read `visible: false` the whole time, and the shared
+batch had zero remaining instances for its expressID at all. The
+checkered pattern on screen was neither of those — it was one *orphaned*
+batch instance, still holding the geometry, that nothing was tracking
+anymore by name but that a monkey-patched `BatchedMesh.prototype.setVisibleAt`
+(logging every call plus a stack trace) caught red-handed: `false` from
+`ensureMaterialized` (elementBatching.ts) at click time, immediately
+followed by `true` from this file's own per-frame batch loop — still
+running, on the *very next* `requestAnimationFrame` tick, because the
+`useEffect` that removes a migrated element's `bvTarget` from
+`batchVisibilityTargetsRef` hadn't committed yet. `ensureMaterialized`'s
+own hide is synchronous, inside the click handler; React's effect that's
+supposed to stop the batch loop from re-touching that instance is not —
+it can lag by one or more animation frames, and R3F's own frame loop does
+not wait for it. In that gap, the batch loop still finds the *old*
+`bvTarget`, computes visibility off whatever date the click happened on
+(here, a date the element was legitimately built by), and writes it
+straight over `ensureMaterialized`'s already-correct hide. Because nothing
+ever revisits an orphaned instance once resolve() and the migration effect
+have both stopped tracking it, that one wrong write stuck forever, on a
+schedule-correct, fully-fixed-per-every-earlier-theory element.
+
+**The actual fix**: `ResolvedBatchVisibilityTarget` now carries a direct
+reference to the batch's own `expressIdByInstanceId` reverse map —
+`elementBatching.ts`'s `ensureMaterialized` already deletes an instance
+from that map synchronously, in the exact same tick as the correct
+`setVisibleAt(id, false)` call, with no async gap of its own. The batch
+loop now checks `bv.expressIdByInstanceId.has(instanceId)` before writing
+anything — an instance missing from that map has already been claimed by
+an individual mesh, no matter how many stale frames this bvTarget survives
+before the migration effect gets around to removing it. This closes the
+race at its true source rather than patching around one more symptom of
+it, and — unlike the `materializeVersion`/`timelineControlled` marker
+fixes earlier the same day — needs no per-call-site cooperation: it
+protects every current and future path that calls `ensureMaterialized`/
+`materializeAll`, not just the ones already known about. Verified live,
+repeatedly, on the real Hospital project against the *exact* screenshot
+that broke the third fix: click the metal-deck slab, scrub back to before
+its 24 Feb 2028 start while it stays selected — correctly disappears every
+time now, and scrubbing forward correctly rebuilds it.
+
+**The lesson, a fourth time**: "the math is right and I fixed the known
+writer" is not the same as "I found the bug" — when a fix's own live
+instrumentation proves the *application* state was correct the whole time
+(opacity 0, `.visible = false`, on the one mesh being tracked) yet the
+screen still disagrees, stop trusting reasoning about the code and go
+straight to the actual render target: monkey-patch the suspect API,
+capture a stack trace on the wrong call, and read who actually made it.
+Three plausible-sounding theories, independently confirmed by clean
+targeted tests, still weren't the real bug — a raw call-site trace found
+it in one shot where source-reading had failed three times in a row.
