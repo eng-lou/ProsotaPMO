@@ -109,6 +109,12 @@ export interface Activity {
   constraint_date: string | null
   // Null = inherit the project's default calendar — see Calendar below.
   calendar_id: string | null
+  // Null = every element linked to this activity animates with the default
+  // opacity-only profile (2026-07-22) — see fourD/animationProfiles.ts's own
+  // AnimationProfile. Set once here to bulk-drive every linked element's
+  // behaviour instead of assigning a profile per element; a link's own
+  // animation_profile_id (ModelElementLink) still wins if it's set.
+  animation_profile_id: string | null
   created_at: string
   updated_at: string
   // "Duration % Complete" (0-100) — how far along its own current start/finish

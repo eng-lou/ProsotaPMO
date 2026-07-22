@@ -1961,7 +1961,17 @@ export function TimelinePlayback({
         // at real-schedule scale.
         const windowStartMs = new Date(window.start).getTime()
         const windowFinishMs = new Date(window.finish).getTime()
-        const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
+        // Link's own override wins if set; otherwise falls back to whatever
+        // profile is assigned on the activity itself (2026-07-22, per Maro:
+        // "allow me set animation profile per activity not just per
+        // element... this will influence the behaviour of all elements
+        // assigned to it") — a bulk-assignment convenience on top of the
+        // existing per-link override, not a replacement for it: an element
+        // that's been individually customised via ElementLinkFields.tsx
+        // keeps behaving exactly as before even if the activity's own
+        // profile later changes.
+        const profileId = link.animation_profile_id ?? activity.animation_profile_id
+        const profile = profileId ? profileById.get(profileId)?.config : DEFAULT_ANIMATION_CONFIG
         if (!profile) continue
 
         // One link can resolve to *several* mesh pieces (see

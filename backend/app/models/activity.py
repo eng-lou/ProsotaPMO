@@ -136,6 +136,20 @@ class Activity(Base, TimestampMixin):
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calendars.id", ondelete="SET NULL"), index=True
     )
+    # 4D animation profile for this activity (2026-07-22, per Maro: "allow me
+    # set animation profile per activity not just per element, this will
+    # allow for bulk profile setting"). Null = every element linked to this
+    # activity animates with the default opacity-only profile, same as
+    # ModelElementLink.animation_profile_id's own null case — Viewport3D.tsx's
+    # own resolve() reads this as the fallback whenever a specific link has
+    # no override of its own, so setting this once here is what "influences
+    # the behaviour of all elements assigned to it" without needing to touch
+    # every individual link row. SET NULL on delete: removing a custom
+    # profile reverts every activity using it back to the default, same
+    # "never a hard block" convention calendar_id already has just above.
+    animation_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("animation_profiles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # Matches Risk/ICD/Cost's field of the same name — manually settable, and
     # auto-bumped whenever a reassessment is logged against this activity
     # (app/services/reassessment.py). Stays a plain Date — "last reviewed" only ever

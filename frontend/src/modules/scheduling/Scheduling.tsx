@@ -13,6 +13,7 @@ import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
+import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
 import { buildResourceRecipe } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
@@ -70,7 +71,7 @@ export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical' | 'pct_complete' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
-  | 'element_count' | 'elements'
+  | 'element_count' | 'elements' | 'animation_profile'
 
 export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
   { key: 'code', label: 'Code', width: 'w-24' },
@@ -91,6 +92,7 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
+  { key: 'animation_profile', label: '3D Profile', width: 'w-28', title: 'Animation profile every 3D element linked to this activity uses in the 4D timeline, unless one has its own override — set once here to bulk-drive all of them. "Default" = the plain opacity-only fade every schedule-generated link starts with.' },
   { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
   { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Uses this activity\'s own live dates, not the assigned baseline.' },
   { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
@@ -155,7 +157,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
   pct_complete: 70, resources: 130,
   bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
-  element_count: 70, elements: 130,
+  element_count: 70, elements: 130, animation_profile: 110,
 }
 export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
 
@@ -174,6 +176,7 @@ type SortKey = ResizableColumnKey
 function sortValue(
   a: Activity, key: SortKey, resourceAssignments: Map<string, ResourceAssignment[]>,
   elementLinksByActivityId: Map<string, ModelElementLink[]>,
+  profileNameById: Map<string, string>,
 ): string | number | null {
   switch (key) {
     case 'code': return a.code
@@ -214,6 +217,10 @@ function sortValue(
       const links = elementLinksByActivityId.get(a.id) ?? []
       return links.length ? links[0].element_label : null
     }
+    // "Default" (no override) sorts as null — same "unset sorts last" rule
+    // every other blank/n-a value already gets, rather than clumping every
+    // un-customised activity under a literal "Default" string sort.
+    case 'animation_profile': return a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? null) : null
     default: return null
   }
 }
@@ -222,10 +229,10 @@ function sortValue(
 // "smaller" than a real value, it's unknown/not-yet-applicable).
 function compareBySortKey(
   a: Activity, b: Activity, key: SortKey, direction: 'asc' | 'desc', resourceAssignments: Map<string, ResourceAssignment[]>,
-  elementLinksByActivityId: Map<string, ModelElementLink[]>,
+  elementLinksByActivityId: Map<string, ModelElementLink[]>, profileNameById: Map<string, string>,
 ): number {
-  const av = sortValue(a, key, resourceAssignments, elementLinksByActivityId)
-  const bv = sortValue(b, key, resourceAssignments, elementLinksByActivityId)
+  const av = sortValue(a, key, resourceAssignments, elementLinksByActivityId, profileNameById)
+  const bv = sortValue(b, key, resourceAssignments, elementLinksByActivityId, profileNameById)
   if (av === null && bv === null) return 0
   if (av === null) return 1
   if (bv === null) return -1
@@ -286,7 +293,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   pct_complete: 80,
   resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
-  element_count: 80, elements: 130,
+  element_count: 80, elements: 130, animation_profile: 110,
 }
 
 const COLUMN_WIDTHS_STORAGE_KEY = 'prosota_scheduling_column_widths'
@@ -383,7 +390,7 @@ export function formatDuration(value: number | string | null): string {
 // can still push it later, it just can't start earlier); editing Finish is
 // translated server-side into the duration that produces it, Start unchanged — see
 // commitEdit below and backend app/services/scheduling_cpm.py:compute_duration_for_finish.
-type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish'
+type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish' | 'animation_profile_id'
 
 // Mirrors the backend's own lockdown (app/services/activity.py:update_activity —
 // Duration/Finish/% Complete/Constraint/Type/Calendar are rejected outright,
@@ -575,6 +582,14 @@ export function Scheduling() {
     }
     return map
   }, [modelElementLinks])
+  // Animation Profile column (2026-07-22, per Maro: "allow me set animation
+  // profile per activity not just per element, this will allow for bulk
+  // profile setting") — same project-scoped list ElementLinkFields.tsx (4D
+  // module) already uses for the per-element picker; this just gives the
+  // activity itself the same choice, one bulk assignment instead of clicking
+  // through every linked element individually.
+  const { profiles: animationProfiles } = useAnimationProfiles(selectedProject?.id)
+  const profileNameById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p.name])), [animationProfiles])
 
   // True if any ancestor (parent, grandparent, ...) is currently collapsed —
   // walks parent_id against the *full* activity list (not visibleActivities),
@@ -1519,7 +1534,7 @@ export function Scheduling() {
     const result: Activity[] = []
     const visit = (parentId: string | null) => {
       const siblings = [...(byParent.get(parentId) ?? [])]
-        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId))
+        .sort((a, b) => compareBySortKey(a, b, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId, profileNameById))
       for (const a of siblings) {
         result.push(a)
         visit(a.id)
@@ -1533,7 +1548,7 @@ export function Scheduling() {
       for (const a of activities) if (!seen.has(a.id)) result.push(a)
     }
     return result
-  }, [activities, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId])
+  }, [activities, sortColumn, sortDirection, assignmentsByActivityId, elementLinksByActivityId, profileNameById])
 
   const visibleActivities = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -2012,29 +2027,42 @@ export function Scheduling() {
       : field === 'pct_complete' ? String(a.pct_complete ?? '')
       : field === 'start' ? toDatetimeLocalValue(a.start)
       : field === 'finish' ? toDatetimeLocalValue(a.finish)
+      : field === 'animation_profile_id' ? (a.animation_profile_id ?? '')
       : a.activity_type
     )
   }
 
   const cancelEdit = () => setEditingCell(null)
 
-  const commitEdit = async () => {
+  // overrideValue (2026-07-22, for the animation_profile_id <select> below)
+  // — a plain <select>'s onChange and the blur that follows selecting an
+  // option can both fire within the same native event-processing pass,
+  // before React has re-rendered with the new editingValue; onBlur's own
+  // commitEdit() call was then still closing over the *previous* render's
+  // editingValue, silently PATCHing back whatever was already saved (a real
+  // bug, confirmed live: three separate PATCH 200s in a row, each one a
+  // no-op, because editingValue read '' every time no matter which profile
+  // was actually clicked). Reading the value directly from the change event
+  // instead of waiting for it to round-trip through state sidesteps the
+  // timing gap entirely — see the select's own onChange below.
+  const commitEdit = async (overrideValue?: string) => {
     if (!editingCell) return
     const { id, field } = editingCell
+    const value = overrideValue ?? editingValue
 
     let payload: Record<string, unknown>
     if (field === 'duration_hours') {
-      const days = editingValue.trim() === '' ? null : Number(editingValue)
+      const days = value.trim() === '' ? null : Number(value)
       if (days !== null && Number.isNaN(days)) { setEditingCell(null); return }
       const activity = activities.find(a => a.id === id)
       const hoursPerDay = activity ? resolveHoursPerDay(activity, calendarLookup) : 8
       payload = { duration_hours: days !== null ? days * hoursPerDay : null }
     } else if (field === 'pct_complete') {
-      const num = editingValue.trim() === '' ? null : Number(editingValue)
+      const num = value.trim() === '' ? null : Number(value)
       if (num !== null && Number.isNaN(num)) { setEditingCell(null); return }
       payload = { pct_complete: num }
     } else if (field === 'start') {
-      if (!editingValue) { setEditingCell(null); return }
+      if (!value) { setEditingCell(null); return }
       // Soft constraint (P6/MS Project "Start On or After") — the activity's normal
       // logic can still push it later than this; it just can't start earlier.
       if (!(await confirmWithDontAsk(
@@ -2042,14 +2070,20 @@ export function Scheduling() {
         'Setting a start date applies a "Start On or After" constraint — this activity ' +
         'will never start earlier than it, though its normal logic/dependencies can still push it later. Continue?'
       ))) { setEditingCell(null); return }
-      payload = { constraint_type: 'snet', constraint_date: editingValue }
+      payload = { constraint_type: 'snet', constraint_date: value }
     } else if (field === 'finish') {
-      if (!editingValue) { setEditingCell(null); return }
+      if (!value) { setEditingCell(null); return }
       // Backend translates this into a new duration_hours (Start stays put) — see
       // app/services/scheduling_cpm.py:compute_duration_for_finish.
-      payload = { finish: editingValue }
+      payload = { finish: value }
+    } else if (field === 'animation_profile_id') {
+      // '' from the "Default" option means no override, not the literal
+      // string '' (which would fail the backend's UUID validation) — same
+      // null-means-inherit convention ElementLinkFields.tsx's own per-link
+      // picker already uses.
+      payload = { animation_profile_id: value || null }
     } else {
-      payload = { [field]: editingValue }
+      payload = { [field]: value }
     }
 
     try {
@@ -3209,6 +3243,7 @@ export function Scheduling() {
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
               {isColumnVisible('element_count') && <col style={{ width: columnWidths.element_count }} />}
               {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
+              {isColumnVisible('animation_profile') && <col style={{ width: columnWidths.animation_profile }} />}
               {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
               {isColumnVisible('pv') && <col style={{ width: columnWidths.pv }} />}
               {isColumnVisible('ev') && <col style={{ width: columnWidths.ev }} />}
@@ -3261,6 +3296,7 @@ export function Scheduling() {
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
+                {isColumnVisible('animation_profile') && <ResizableTh width={columnWidths.animation_profile} onResizeStart={startColumnResize('animation_profile')} {...sortHeader('animation_profile')} title="Animation profile every 3D element linked to this activity uses, unless one has its own override">3D Profile</ResizableTh>}
                 {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} {...sortHeader('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
                 {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} {...sortHeader('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
                 {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} {...sortHeader('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
@@ -3313,7 +3349,7 @@ export function Scheduling() {
                           autoFocus
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
@@ -3327,7 +3363,7 @@ export function Scheduling() {
                         autoFocus
                         value={editingValue}
                         onChange={e => setEditingValue(e.target.value)}
-                        onBlur={commitEdit}
+                        onBlur={() => commitEdit()}
                         onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                         className="w-full border border-blue-400 rounded px-1 py-0.5 text-sm"
                       />
@@ -3374,7 +3410,7 @@ export function Scheduling() {
                           autoFocus
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         >
@@ -3399,7 +3435,7 @@ export function Scheduling() {
                           step={0.5}
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
                         />
@@ -3422,7 +3458,7 @@ export function Scheduling() {
                           type="datetime-local"
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
@@ -3446,7 +3482,7 @@ export function Scheduling() {
                           type="datetime-local"
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="border border-blue-400 rounded px-1 py-0.5 text-xs"
                         />
@@ -3498,7 +3534,7 @@ export function Scheduling() {
                           max={100}
                           value={editingValue}
                           onChange={e => setEditingValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
                           className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
                         />
@@ -3547,6 +3583,46 @@ export function Scheduling() {
                       </td>
                     )
                   })()}
+                  {isColumnVisible('animation_profile') && (
+                    <td
+                      className="px-3 py-1 text-gray-600 whitespace-nowrap overflow-hidden text-ellipsis"
+                      onDoubleClick={() => startEdit(a, 'animation_profile_id')}
+                      title="Double-click to change which animation profile every 3D element linked to this activity uses"
+                    >
+                      {editingField === 'animation_profile_id' ? (
+                        <select
+                          autoFocus
+                          value={editingValue}
+                          // Commits straight from the change event's own
+                          // value, not editingValue state — see commitEdit's
+                          // own overrideValue header for why. Deliberately no
+                          // onBlur commit here (unlike every text/date field
+                          // above): selecting an option in a native <select>
+                          // can fire change and blur back-to-back in the same
+                          // pass, and a second onBlur-triggered commitEdit()
+                          // reading the not-yet-re-rendered editingValue was
+                          // racing this one — sometimes landing *after* it
+                          // and silently reverting the correct save back to
+                          // null (confirmed live: two PATCH 200s per
+                          // selection, final state always the stale one).
+                          // onChange alone is already the complete "user
+                          // finished" signal for a dropdown; there's nothing
+                          // further for a blur to commit.
+                          onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
+                          onBlur={cancelEdit}
+                          onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
+                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                        >
+                          <option value="">Default</option>
+                          {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      ) : (
+                        a.animation_profile_id
+                          ? (profileNameById.get(a.animation_profile_id) ?? 'Default')
+                          : <span className="text-gray-400">Default</span>
+                      )}
+                    </td>
+                  )}
                   {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.bac)}</td>}
                   {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.pv)}</td>}
                   {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ev)}</td>}

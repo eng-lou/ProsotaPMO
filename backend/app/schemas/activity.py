@@ -120,6 +120,9 @@ class ActivityBase(BaseModel):
     # Null = inherit the project's default calendar — see app/services/calendar.py.
     calendar_id: uuid.UUID | None = None
     last_reviewed_date: date | None = None
+    # Null = every element linked to this activity animates with the default
+    # opacity-only profile — see app/models/activity.py's own docstring.
+    animation_profile_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def milestones_have_zero_duration(self) -> "ActivityBase":
@@ -176,6 +179,7 @@ class ActivityUpdate(BaseModel):
     constraint_date: datetime | None = None
     calendar_id: uuid.UUID | None = None
     last_reviewed_date: date | None = None
+    animation_profile_id: uuid.UUID | None = None
     # Not a column — a one-shot confirmation flag (2026-07-07, per Maro).
     # Changing activity_type to/from a milestone kind can leave existing
     # incoming relationships invalid (see valid_relationship_types_for_successor

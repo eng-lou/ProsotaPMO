@@ -116,7 +116,11 @@ export function AnnotationMarker({
       if (link.source_kind !== 'annotation' || link.element_ref !== annotation.id) continue
       const activity = activityById.get(link.activity_id)
       if (!activity || !activity.start || !activity.finish) continue
-      const profile = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.config : DEFAULT_ANIMATION_CONFIG
+      // Link's own override wins, else the activity's own profile, else the
+      // default — same cascade Viewport3D.tsx's own Mode A resolution uses,
+      // see its header for the full story.
+      const profileId = link.animation_profile_id ?? activity.animation_profile_id
+      const profile = profileId ? profileById.get(profileId)?.config : DEFAULT_ANIMATION_CONFIG
       if (!profile) continue
       // Parsed once here, not per frame — see timelinePlayback.ts's own
       // pickActiveLink header for why (2026-07-21 perf fix).

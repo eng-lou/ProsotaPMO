@@ -41,6 +41,15 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
     <div className="space-y-1.5">
       {links.map(link => {
         const activity = activities.find(a => a.id === link.activity_id)
+        // Whenever this link has no override of its own, it inherits
+        // whatever profile is set on the activity itself (2026-07-22, per
+        // Maro's own bulk-assignment feature — see Viewport3D.tsx's own
+        // resolve() header for the full cascade) — named here so leaving
+        // this dropdown on "Default" doesn't misleadingly read as "no
+        // animation" when the activity has actually bulk-assigned one.
+        const inheritedProfileName = activity?.animation_profile_id
+          ? animationProfiles.find(p => p.id === activity.animation_profile_id)?.name
+          : undefined
         return (
           <div key={link.id} className="space-y-0.5">
             <div className="flex items-center gap-1.5 text-xs">
@@ -53,8 +62,9 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
               value={link.animation_profile_id ?? ''}
               onChange={e => onAssignProfile(link.id, e.target.value || null)}
               className="w-full text-[11px] border border-gray-200 rounded px-1.5 py-0.5 text-gray-500"
+              title={inheritedProfileName ? `Inherits "${inheritedProfileName}" from this activity unless overridden here` : undefined}
             >
-              <option value="">No animation profile</option>
+              <option value="">{inheritedProfileName ? `Default (activity: ${inheritedProfileName})` : 'Default (no animation profile)'}</option>
               {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>

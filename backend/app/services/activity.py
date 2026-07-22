@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
+from app.models.animation_profile import AnimationProfile
 from app.models.calendar import Calendar
 from app.models.cost_element import CostElement
 from app.models.schedule_baseline import ScheduleBaselineActivity
@@ -156,6 +157,14 @@ async def _validate_calendar_in_project(db: AsyncSession, calendar_id: uuid.UUID
     calendar = await db.get(Calendar, calendar_id)
     if calendar is None or calendar.project_id != project_id:
         raise HTTPException(status_code=404, detail="Calendar not found in this project")
+
+
+async def _validate_animation_profile_in_project(
+    db: AsyncSession, animation_profile_id: uuid.UUID, project_id: uuid.UUID
+) -> None:
+    profile = await db.get(AnimationProfile, animation_profile_id)
+    if profile is None or profile.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Animation profile not found in this project")
 
 
 def _activity_role(activity_type: str, parent_id: uuid.UUID | None, is_subproject_root: bool = False) -> str:
@@ -593,6 +602,9 @@ async def create_activity(db: AsyncSession, data: ActivityCreate) -> Activity:
     if data.calendar_id is not None:
         await _validate_calendar_in_project(db, data.calendar_id, data.project_id)
 
+    if data.animation_profile_id is not None:
+        await _validate_animation_profile_in_project(db, data.animation_profile_id, data.project_id)
+
     if data.insert_after_id is not None:
         after = await db.get(Activity, data.insert_after_id)
         if after is None or after.schedule_period_id != data.schedule_period_id or after.parent_id != data.parent_id:
@@ -751,6 +763,9 @@ async def update_activity(
 
     if updates.get("calendar_id") is not None:
         await _validate_calendar_in_project(db, updates["calendar_id"], activity.project_id)
+
+    if updates.get("animation_profile_id") is not None:
+        await _validate_animation_profile_in_project(db, updates["animation_profile_id"], activity.project_id)
 
     parent_changed = "parent_id" in updates and updates["parent_id"] != activity.parent_id
     for field, value in updates.items():

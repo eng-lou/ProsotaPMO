@@ -165,7 +165,11 @@ function PresetTrack({
         const f = new Date(activity.finish!).getTime()
         const left = totalMs > 0 ? ((s - scheduleStart.getTime()) / totalMs) * 100 : 0
         const width = totalMs > 0 ? Math.max(0.5, ((f - s) / totalMs) * 100) : 0
-        const profileName = link.animation_profile_id ? profileById.get(link.animation_profile_id)?.name : null
+        // Link's own override wins, else the activity's own profile — same
+        // cascade Viewport3D.tsx's own Mode A resolution uses, so this
+        // tooltip's "(default)" fallback only shows when neither is set.
+        const profileId = link.animation_profile_id ?? activity.animation_profile_id
+        const profileName = profileId ? profileById.get(profileId)?.name : null
         return (
           <div
             key={link.id}

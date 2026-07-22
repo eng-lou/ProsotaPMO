@@ -2478,3 +2478,60 @@ capture a stack trace on the wrong call, and read who actually made it.
 Three plausible-sounding theories, independently confirmed by clean
 targeted tests, still weren't the real bug — a raw call-site trace found
 it in one shot where source-reading had failed three times in a row.
+
+## 2026-07-22 — Animation profiles move up to the Activity level, and a second bug hiding behind the first
+
+Maro's ask: assign an Animation Profile to an *Activity*, not just to
+individual model-element links, so setting one profile bulk-drives every
+3D element linked to that activity — plus a "3D Profile" column in
+Scheduling.tsx showing "Default" until it's overridden. The data model
+side was mechanical (new nullable `animation_profile_id` FK on
+`activities`, mirrored schema fields, a validation helper, a migration)
+and the cascade was a one-line change in three places that already read a
+link's own profile: `link.animation_profile_id ?? activity.animation_profile_id`,
+falling through to the global default only if neither is set.
+
+**Bug one, in the new dropdown itself**: the "3D Profile" cell's
+`<select>` followed the same `onChange`-sets-state / `onBlur`-commits
+pattern every other editable cell in that grid already used. For a native
+`<select>`, picking an option can fire `change` then `blur` back-to-back
+in the same event pass — and `onBlur`'s `commitEdit()` was closing over
+the *previous* render's `editingValue` (still `''`), so it PATCHed a
+null-reverting no-op that landed after the correct save. Confirmed with
+`read_network_requests` (two PATCH 200s per click, final DB state always
+null) and reproduced identically by dispatching `change`+`focusout` via
+raw DOM events through `javascript_tool`, ruling out an automation
+artifact. Fixed by committing straight from the change event's own
+`e.target.value` and dropping the onBlur commit for this one field —
+`onChange` is already the complete "user is done" signal for a dropdown.
+
+**Bug two, invisible behind bug one**: after that fix, the save *still*
+didn't stick on the very next live re-test. Instrumenting `fetch`/XHR
+directly (see [[feedback_stale_dev_server]]) showed the PATCH request
+body was correct and got a real `200`, but the JSON response body's key
+list — 53 keys, `calendar_id` present, `animation_profile_id` absent —
+proved the *backend* didn't know the field existed, despite the model,
+schema, and migration all being right there on disk and a fresh
+`python -c "from app.schemas.activity import ActivityResponse; ..."` in
+the same venv confirming the field was in `model_fields`. The running
+`uvicorn`/`run.py` process was a genuine Windows zombie: `netstat`/
+`Get-NetTCPConnection` showed *two* processes both `LISTEN`ing on 8000,
+and the stale one's PID was unkillable by `Stop-Process -Force` or
+`taskkill /F` ("not found") and unqueryable by `Get-Process`/CIM, yet it
+kept answering real HTTP requests with the old schema. Found by
+enumerating processes by *command line* (`Get-CimInstance Win32_Process |
+Where CommandLine -match 'run.py'`) instead of trusting a remembered PID,
+which turned up the true duplicate; killing every match and re-verifying
+`Get-NetTCPConnection -LocalPort 8000` was empty before the next restart
+finally fixed it. Full data path re-verified after that: PATCH persists
+→ survives a fresh reload → the 4D module's own `/activities` fetch for
+that activity carries the right `animation_profile_id` — confirmed via
+the same fetch/XHR instrumentation trick, not just eyeballing the grid.
+
+**The lesson**: a "confirmed bug, confirmed fix, still doesn't work on
+re-test" loop is a signal to stop re-reading the frontend diff and check
+whether the *server* actually restarted — a fresh restart log message is
+not proof; `curl .../openapi.json` and grep for the new field name is.
+And when a process refuses to die via the normal tools, that's not a
+reason to keep retrying the same kill — it's a sign there are two of them
+and you're only killing one.

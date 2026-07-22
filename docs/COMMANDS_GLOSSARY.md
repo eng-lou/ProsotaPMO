@@ -74,6 +74,8 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 |---|---|
 | `Get-NetTCPConnection -LocalPort 8000 -State Listen` | Finds which running process currently has port 8000 (the backend's address) open and listening. Useful when a server needs restarting but you don't know its process ID. |
 | `Stop-Process -Id <id> -Force` | Forcibly shuts down a specific running program by its process ID — used here to kill an old backend server process before starting a fixed version in its place. |
+| `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -match 'run.py' }` | Lists every running process whose full startup command contains "run.py" — including ones a plain process list hides. Use this when a normal restart "didn't take": it's how a genuine second, leftover backend process (silently answering requests with old code, alongside the new one) got found and identified by what it was actually running, not by a process ID that turned out to be unkillable/untraceable through the usual tools. |
+| `tasklist /FI "IMAGENAME eq python.exe"` (run from PowerShell, not Git Bash — Git Bash mangles the `/FI` flag) | The most trustworthy plain inventory of "what's actually running" on Windows — useful as a sanity check when other tools disagree about whether a stuck process still exists. |
 
 ## pdftotext (pulling plain text out of a PDF file)
 
