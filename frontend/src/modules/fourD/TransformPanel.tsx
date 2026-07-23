@@ -75,6 +75,16 @@ interface Props {
   // the whole point of being able to set a custom pivot rotation at all.
   space: GizmoSpace
   onSpaceChange: (space: GizmoSpace) => void
+  // "Snap to Surface" (2026-07-23, per Maro: "position an element e.g the
+  // car easily on the surface of a second mesh e.g plane e.g road") —
+  // while dragging in Move mode, casts a ray straight down from the
+  // object and rests it on whatever other visible geometry is directly
+  // underneath, so only X/Z (or X/Y) need to be dragged by hand — see
+  // Viewport3D.tsx's own snapObjectToSurface for the actual raycast.
+  // Translate-only (Rotate/Scale have no sensible "surface" meaning), so
+  // this toggle only renders alongside Global/Local, never replacing it.
+  snapToSurface: boolean
+  onSnapToSurfaceChange: (snap: boolean) => void
   upAxis: UpAxis
   // Non-null once this object is bound to a Path (paths.ts/pathFollowers.ts)
   // — its position is then *derived* from path_progress each frame
@@ -209,7 +219,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
+export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, snapToSurface, onSnapToSurfaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -260,6 +270,23 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
               {s === 'world' ? 'Global' : 'Local'}
             </button>
           ))}
+        </div>
+      )}
+      {/* "Snap to Surface" (2026-07-23) — see this file's own Props header.
+          Translate-only, same reasoning as Global/Local's own Scale
+          exclusion just above: "rest on whatever's underneath" has no
+          meaning for Rotate or Scale. */}
+      {mode === 'translate' && (
+        <div className="flex items-center gap-1.5 px-3 pb-1.5">
+          <button
+            onClick={() => onSnapToSurfaceChange(!snapToSurface)}
+            title="While dragging, rest this object on whatever other geometry is directly underneath it"
+            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+              snapToSurface ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            {snapToSurface ? '✓ Snap to Surface' : 'Snap to Surface'}
+          </button>
         </div>
       )}
 

@@ -258,6 +258,10 @@ interface Props {
   // just left unwired in this app's own props until Pivot Rotation gave
   // it a reason to matter).
   gizmoSpace: GizmoSpace
+  // "Snap to Surface" (2026-07-23) — see TransformPanel.tsx's own Props
+  // header; consumed here, at the actual TransformControls onChange, via
+  // this component's own snapObjectToSurface.
+  snapToSurface: boolean
   onTransformChange: () => void
   // Playback's own per-frame "the Properties panel needs to re-render"
   // signal — deliberately a distinct prop from onTransformChange above
@@ -2690,6 +2694,113 @@ function CameraCapture({ cameraRef, rendererRef }: {
   return null
 }
 
+// "Snap to Surface" (2026-07-23, per Maro: "position an element e.g the
+// car easily on the surface of a second mesh e.g plane e.g road") — casts
+// a ray straight down (along whichever axis upAxis says is up) from well
+// above `object`'s current position and, if it hits any other visible
+// imported geometry, snaps just the *vertical* component of its position
+// onto that surface — X/Z (or X/Y) keep following the drag exactly as
+// normal, only the "resting height" follows whatever's underneath. Plain
+// THREE.js math, no react-three-fiber hooks needed (unlike PathAddPointCatcher's
+// click-based raycast, this needs no camera/mouse coordinates at all — it's
+// always straight down from the object itself), so it can be called directly
+// from TransformControls' own onChange handler below rather than needing
+// its own Canvas-nested helper component.
+//
+// Deliberately excludes `object`'s own subtree from the raycast (walking
+// each hit's own parent chain, same isPathGizmo-style filter
+// PathAddPointCatcher already uses) — a car and the road it's snapping onto
+// can be sibling sub-elements of the very same imported IFC file, and
+// excluding only the whole *file* (as filtering by top-level import id
+// would) would make the car unable to snap onto its own file's road. No
+// hit (nothing underneath) leaves the drag's own position untouched
+// rather than snapping into empty space.
+//
+// modelRadius (Viewport3D's own scale-aware light-distance number, see its
+// header) sets the ray's starting height — comfortably above anything in
+// the scene regardless of how large or small the loaded model actually is,
+// rather than a fixed guess that could sit *inside* a very tall building.
+//
+// Batched (repeated-geometry) IFC elements need one more step first
+// (2026-07-23 fix, per Maro: "its not snapping" against a real road —
+// confirmed live, not guessed: THREE.BatchedMesh.raycast (verified
+// directly in node_modules/three/src/objects/BatchedMesh.js) skips any
+// instance whose own per-instance `visible` flag is false, the exact same
+// check this app's Isolate/Hide/schedule-visibility machinery
+// (elementBatching.ts, TimelinePlayback's own batched-visibility fast
+// path) already drives independently of whatever's actually drawn on
+// screen — an element can render completely normally while still being
+// invisible *to a raycast* if nothing's set that flag true yet (e.g. a
+// schedule-linked element with no live timeline date resolved). Rather
+// than trying to read this app's own timeline-visibility state (a much
+// larger, riskier change touching code this feature has no other reason
+// to depend on), withBatchedMeshesRaycastable below temporarily forces
+// every instance's flag true for just the duration of this one raycast —
+// same "reveal for hit-testing, indistinguishable to the user" idea as
+// MeasurementCatcher's own materialize-then-raycast handling of a batched
+// hit, just without needing to know which instance to target in advance
+// (nothing here has a batchId yet — that's what the raycast itself is
+// for) — then restores every flag to exactly what it was, synchronously,
+// before this function returns, so nothing else in the app (a currently-
+// playing timeline, an isolated view) ever observes the change.
+function withBatchedMeshesRaycastable<T>(targets: THREE.Object3D[], fn: () => T): T {
+  const restore: Array<() => void> = []
+  for (const root of targets) {
+    root.traverse(node => {
+      const batch = node.userData.batch as BatchState | undefined
+      if (!batch) return
+      for (const instanceId of batch.expressIdByInstanceId.keys()) {
+        const wasVisible = batch.mesh.getVisibleAt(instanceId)
+        if (!wasVisible) {
+          batch.mesh.setVisibleAt(instanceId, true)
+          restore.push(() => batch.mesh.setVisibleAt(instanceId, false))
+        }
+      }
+    })
+  }
+  try {
+    return fn()
+  } finally {
+    for (const undo of restore) undo()
+  }
+}
+
+function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], upAxis: UpAxis, modelRadius: number) {
+  const up = upAxis === 'z' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)
+  const worldPosition = object.getWorldPosition(new THREE.Vector3())
+  const origin = worldPosition.clone().addScaledVector(up, modelRadius * 2)
+  const raycaster = new THREE.Raycaster(origin, up.clone().negate())
+  const raycastTargets = targets.filter(t => t.visible).map(t => t.object)
+  const hit = withBatchedMeshesRaycastable(raycastTargets, () => raycaster.intersectObjects(raycastTargets, true)).find(candidate => {
+    let node: THREE.Object3D | null = candidate.object
+    while (node) {
+      if (node === object) return false
+      node = node.parent
+    }
+    return true
+  })
+  if (!hit) return
+  // Replaces only the *world*-space vertical component, then converts the
+  // whole point back to local space in one shot (2026-07-23 fix, per a
+  // real incident: writing straight to object.position.z/.y — matching
+  // upAxis's own convention — silently assumed the object's own local Z/Y
+  // axis IS world-vertical, true only for an object with no axis-
+  // correction wrapper of its own. Every imported object sits inside one
+  // of those (see toLocalPoint's own header, same file) whenever its
+  // sourceUpAxis doesn't already match the scene's upAxis — car.fbx here
+  // is Y-up under this Z-up scene, wrapped in a 90°-about-X correction
+  // group, under which local Y (not Z) is the one that's actually
+  // world-vertical. Confirmed live: the raycast was finding real hits the
+  // whole time: object.position.z was just the wrong field to write.
+  // Doing the axis swap here in world space instead sidesteps needing to
+  // know which local axis is "up" for any particular object's own wrapper
+  // — worldToLocal handles that correctly regardless.
+  const nextWorldPosition = worldPosition.clone()
+  if (upAxis === 'z') nextWorldPosition.z = hit.point.z
+  else nextWorldPosition.y = hit.point.y
+  object.position.copy(object.parent ? object.parent.worldToLocal(nextWorldPosition) : nextWorldPosition)
+}
+
 // Section Box support (2026-07-09, per Maro's Blender reference) — three.js
 // ignores every material's own `clippingPlanes` array unless this renderer-
 // level flag is on (default false); set once, unconditionally, same as
@@ -2733,7 +2844,7 @@ export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
-  gizmoMode, gizmoSpace, onTransformChange, onTimelineTick,
+  gizmoMode, gizmoSpace, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
@@ -2793,6 +2904,21 @@ export function Viewport3D({
     return Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importedObjects])
+
+  // TransformControls' own onChange, wrapped to run "Snap to Surface"
+  // (2026-07-23) before the real onTransformChange — snapObjectToSurface
+  // mutates object.position directly, same as the drag itself just did, so
+  // by the time onTransformChange reads/persists the final position it
+  // already reflects the snap. Translate-only, matching TransformPanel's
+  // own "only show this toggle for Move" — Rotate/Scale drags call this
+  // too, but snapToSurface is never true unless Move is also the active
+  // mode (see FourD.tsx's own snapToSurface state, gated in the panel).
+  const handleGizmoChange = () => {
+    if (snapToSurface && gizmoMode === 'translate' && activeObject) {
+      snapObjectToSurface(activeObject.object, importedObjects, settings.upAxis, modelRadius)
+    }
+    onTransformChange()
+  }
 
   // Sun azimuth/elevation -> a real directional-light position (2026-07-19,
   // per Maro: "make [shadows] more distinct, able to control shadow/light
@@ -3777,7 +3903,7 @@ export function Viewport3D({
             object={activeObject.object}
             mode={gizmoMode}
             space={gizmoMode === 'scale' ? 'local' : gizmoSpace}
-            onChange={onTransformChange}
+            onChange={handleGizmoChange}
             // Tagged isPathGizmo (2026-07-12 fix, per Maro: "pick in
             // viewport is very bad" — picking a wrong point) — the gizmo's
             // own arrow/ring handle meshes are real, raycastable Object3Ds

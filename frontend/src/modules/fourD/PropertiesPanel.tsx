@@ -52,6 +52,8 @@ interface Props {
   onGizmoModeChange: (mode: GizmoMode) => void
   gizmoSpace: GizmoSpace
   onGizmoSpaceChange: (space: GizmoSpace) => void
+  snapToSurface: boolean
+  onSnapToSurfaceChange: (snap: boolean) => void
   activeObjectTextures: CustomTextureSet | undefined
   onUploadTexture: (slot: TextureSlot, file: File) => void
   onClearTexture: (slot: TextureSlot) => void
@@ -112,7 +114,7 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
+  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
@@ -350,7 +352,8 @@ export function PropertiesPanel({
           </div>
           <TransformPanel
             object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange}
-            space={gizmoSpace} onSpaceChange={onGizmoSpaceChange} upAxis={settings.upAxis}
+            space={gizmoSpace} onSpaceChange={onGizmoSpaceChange}
+            snapToSurface={snapToSurface} onSnapToSurfaceChange={onSnapToSurfaceChange} upAxis={settings.upAxis}
             lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
             keyframes={keyframeSupport} pathProgress={pathProgress} pivot={pivot} pivotRotation={pivotRotation} onFieldChange={onTransformChange}
           />

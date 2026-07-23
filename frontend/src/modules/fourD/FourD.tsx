@@ -2270,6 +2270,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // own TransformControls default, unchanged for every object until
   // someone actually sets a Pivot Rotation and switches this deliberately.
   const [gizmoSpace, setGizmoSpace] = useState<GizmoSpace>('world')
+  // "Snap to Surface" (2026-07-23) — see TransformPanel.tsx's own Props
+  // header. A plain interaction toggle, not object data — deliberately
+  // not persisted anywhere (same as gizmoMode/gizmoSpace above), since
+  // it describes how *dragging* behaves right now, not a fact about
+  // whatever's currently selected.
+  const [snapToSurface, setSnapToSurface] = useState(false)
   // "Pick in Viewport" for Set Pivot (2026-07-12) — arms the same
   // PathAddPointCatcher raycast-then-ground-plane-fallback Paths/
   // Annotations already reuse verbatim (Viewport3D.tsx), just for a third
@@ -4253,6 +4259,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
       gizmoMode={gizmoMode}
       gizmoSpace={gizmoSpace}
+      snapToSurface={snapToSurface}
       onTransformChange={handleTransformChange}
       onTimelineTick={handleTransformTick}
       environmentUrl={customEnvironment?.url ?? null}
@@ -4490,6 +4497,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onGizmoModeChange={setGizmoMode}
           gizmoSpace={gizmoSpace}
           onGizmoSpaceChange={setGizmoSpace}
+          snapToSurface={snapToSurface}
+          onSnapToSurfaceChange={setSnapToSurface}
           activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
           onUploadTexture={handleUploadActiveTexture}
           onTextureFieldChange={handleTextureFieldChange}

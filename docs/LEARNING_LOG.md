@@ -2617,3 +2617,111 @@ just edited is not obviously broken in normal use — it took deliberately
 keeping an object selected while checking the network tab, which is
 precisely what testing (and not `console.log`-first debugging) does
 differently from a user's own workflow.
+
+## 2026-07-23 — "Snap to Surface," and a raycast that quietly can't see schedule-linked IFC elements
+
+Maro's ask: drag an element (a car) and have it rest on whatever other
+geometry (a road) is directly underneath it, so only the horizontal drag
+needs doing by hand. Built as a small, self-contained addition: a ray cast
+straight down from the dragged object's current position, first hit (other
+than the object's own subtree) wins, only the vertical position component
+gets overwritten — deliberately *not* persisted anywhere (unlike Pivot
+Rotation), since it describes how dragging behaves right now, not a fact
+about the object. A Global/Local-style toggle, translate-mode only.
+
+**Verification took a very different shape than usual** — no visual "did it
+move correctly" screenshot comparison this time, because getting two real
+objects into the same neighborhood in world space (a plain mesh import
+centered near its own local origin; this project's sample IFC file, whose
+geometry carries real large-scale site-survey coordinates) turned out to be
+its own small ordeal, on top of an unrelated WebGL-context exhaustion
+symptom (the viewport rendering nothing but the gizmo after a long run of
+same-tab reloads — fixed by opening a *fresh* tab, not by anything in the
+app). Ended up temporarily exposing the raycast helper and a couple of
+scene references on `window` to test it directly from the console with
+real objects rather than fighting camera framing — same one-off-debug-hook
+pattern this project's memory already has on file for scene inspection,
+removed again before commit.
+
+**What that testing actually found**: `THREE.Raycaster.intersectObjects`
+against a plain mesh (`car.fbx`) works exactly as expected — a raycast
+straight through its own known world-space bounding box hit it immediately.
+The *same* raycast against the sample IFC building's batched geometry
+returned zero hits, every time, from dozens of different positions
+including dead center of its own bounding box. Traced to
+`THREE.BatchedMesh.getVisibleAt()` — sampled 126 instances spread evenly
+across all 17,254 in the batch, every single one `false`, despite the
+building rendering completely normally on screen. Confirmed this batch's
+elements are genuinely linked to real schedule activities (Isolate's own
+"Linked Activities (40)" popup listed real T-00xx codes) — meaning their
+visibility is governed by this app's own timeline/schedule-driven pass
+(Viewport3D.tsx's own `timelineControlledInstanceIds` carve-out, which
+deliberately skips the plain settings-driven base-visibility pass for
+exactly these elements), not the simpler always-on default every other
+instance gets. In a session where the Animation Timeline was never opened
+— true of a plain fresh page load — nothing ever resolves a "current date"
+to drive that schedule-visibility pass, and the instances stay at whatever
+`visible` state that leaves them in for raycast purposes, even though
+*rendering* clearly isn't gated the same way (the building draws fine
+regardless).
+
+**First reported "still not working," and a genuinely wrong assumption**:
+initially flagged this to Maro as a maybe-working-as-designed timeline
+dependency rather than fixed outright. He pushed back with a directly
+relevant counter-example: the Measure tool's own Area (face) mode *can*
+detect and measure a selected IFC element's surface. That was the right
+challenge — Measure's own `MeasurementCatcher` raycasts the exact same way
+(`raycaster.intersectObjects(scene.children, true)`), so if it "just
+works," the BatchedMesh-visibility theory needed to explain that too, not
+wave it away. Re-reading `MeasurementGizmo.tsx` closely enough answered it
+without more guessing: it only *resolves a face* against an already-
+`ensureMaterialized`'d element — real per-element meshes, not the raw
+batch — and *every* UI path that selects an element (viewport click, IFC
+Data tree) already calls `ensureMaterialized` on it first. Measure "working
+on a selected element" and "BatchedMesh.raycast returning zero hits" were
+never in conflict; Measure was just never actually raycasting the still-
+batched geometry to begin with.
+
+**The real fix, once that was untangled**: `THREE.BatchedMesh.raycast`
+(`node_modules/three/src/objects/BatchedMesh.js:926`) skips any instance
+whose own `drawInfo[i].visible` is `false` — confirmed by reading the
+library source directly, not inferred. Rather than touching this app's own
+timeline-visibility machinery (out of scope, and a much larger blast
+radius), `snapObjectToSurface` now temporarily forces every instance's
+flag `true` — via the exact instance ids `BatchState.expressIdByInstanceId`
+already tracks, no guessing at a valid index range — runs the raycast, then
+restores every flag synchronously before returning, so nothing else in the
+app (an isolated view, a live timeline) ever observes the change. Verified
+live: `allHitsCount` went from `0` to `8` the moment the object's own
+horizontal drag position passed over real roof geometry.
+
+**A second, independent bug turned up right behind the first one**: fixing
+the raycast, the car still didn't visibly move — `hit` was real, but
+`object.position.z` (matching `upAxis`'s own 'z' convention) silently
+assumed the object's own local Z axis IS world-vertical. True only for an
+object with no axis-correction wrapper of its own; `car.fbx` here is Y-up
+under this Z-up scene, sitting inside a 90°-about-X correction `<group>`
+(see `toLocalPoint`'s own header, same file) under which local *Y*, not Z,
+is the one that's actually world-vertical. The raycast had been finding
+real hits the whole time in some earlier attempts too — the fix just kept
+writing to the wrong field. Corrected by working entirely in *world* space:
+take the object's current world position, replace only its world-vertical
+component with the hit's, convert the whole point back to local via
+`worldToLocal` in one shot, and `.copy()` it onto `object.position` wholly
+— sidesteps ever needing to know which local axis is "up" for any
+particular object's own wrapper, since `worldToLocal` already accounts for
+it correctly. Verified live, repeatedly: Z dropped from a deliberately-set
+50 down to 8.126 (the real roof height) the instant the fix landed, and
+kept tracking correctly (6.614 at a different horizontal position) across
+further drags.
+
+**The lesson**: a first hypothesis that fits the evidence isn't the same as
+a *ruled-out* one — Maro's counter-example (Measure "just works") was the
+signal that the timeline-visibility theory, while plausible, hadn't
+actually been checked against the one piece of contrary evidence sitting
+in the same codebase. And a fixed root cause doesn't guarantee a fixed
+symptom: the visibility gate and the wrong-axis-write were two fully
+independent bugs stacked on the same feature, each capable of producing
+the *identical* "nothing happens" symptom on its own — fixing the first
+one and re-testing was what surfaced the second, not further reasoning
+about the first.
