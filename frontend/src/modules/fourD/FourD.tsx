@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Euler, Mesh, Vector3, type Object3D } from 'three'
+import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
@@ -3614,6 +3614,47 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     handleSetPivotPoint(local)
   }
 
+  // "Pivot to Center"/"Pivot to Base" (2026-07-23, per Maro: Snap to
+  // Surface resting the *pivot* on a surface isn't useful if the pivot
+  // sits at the object's own geometric middle, the default for most
+  // imported meshes — the object visibly sinks in halfway instead of
+  // resting on its base) — see PivotSupport's own header
+  // (TransformPanel.tsx). Computed in world space: Box3().setFromObject
+  // already walks every descendant's real geometry with its current
+  // transform applied (correct for a multi-mesh Group, not just a single
+  // Mesh), and "vertical" is unambiguous in world space (world Z or Y,
+  // whichever upAxis says) — unlike guessing which of the object's own
+  // *local* axes is "up," which is exactly the reasoning that produced a
+  // real bug elsewhere in this same feature (see snapObjectToSurface's own
+  // header, Viewport3D.tsx). activeTransformObject.worldToLocal (not its
+  // parent's) matches handlePickPivotPoint's own established conversion
+  // just above — the space setPivot's own geometry.translate/child-
+  // position math expects.
+  const handleSetPivotPreset = (mode: 'center' | 'base') => {
+    if (!activeTransformObject) return
+    // Clears any pivot *position* already set, first (2026-07-23 fix, per
+    // a real incident: Box3().setFromObject/worldToLocal below read the
+    // object's CURRENT position — if a pivot was already active, that's
+    // its pivot-compensated position, not its true pre-pivot one, and
+    // worldToLocal silently bakes in whatever offset the existing pivot
+    // already introduced. Confirmed live: clicking Center then Base back
+    // to back landed Base nowhere near the object at all. setPivot's own
+    // null case restores the true pre-pivot position/geometry exactly —
+    // same effect as the user clicking Reset first, just automatic here.
+    // Synchronous, so there's no visible flash before the real target
+    // pivot lands a few lines down.
+    setPivot(activeTransformObject, null)
+    activeTransformObject.updateWorldMatrix(true, true)
+    const box = new Box3().setFromObject(activeTransformObject)
+    if (box.isEmpty()) return
+    const point = box.getCenter(new Vector3())
+    if (mode === 'base') {
+      if (settings.upAxis === 'z') point.z = box.min.z
+      else point.y = box.min.y
+    }
+    handleSetPivotPoint(activeTransformObject.worldToLocal(point))
+  }
+
   // Flushes a still-pending debounced transform save immediately if the
   // active selection changes before the 700ms debounce would otherwise
   // fire on its own (2026-07-11) — without this, editing object A then
@@ -3831,6 +3872,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     onTogglePicking: () => setPivotPicking(prev => !prev),
     onChange: handleSetPivotPoint,
     onReset: () => handleSetPivotPoint(null),
+    onSetToCenter: () => handleSetPivotPreset('center'),
+    onSetToBase: () => handleSetPivotPreset('base'),
   }
 
   // "Pivot Rotation" support (2026-07-22) — mirrors pivotSupport exactly.

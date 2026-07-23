@@ -2725,3 +2725,65 @@ independent bugs stacked on the same feature, each capable of producing
 the *identical* "nothing happens" symptom on its own — fixing the first
 one and re-testing was what surfaced the second, not further reasoning
 about the first.
+
+## 2026-07-23 (later same day) — "Pivot to Center"/"Pivot to Base," and a
+stale transform hiding behind a working feature
+
+**What Maro actually hit**: Snap to Surface (just built, above) rests an
+object's *pivot* on whatever's underneath it, not its visible geometry.
+For most imports the pivot starts at the object's own geometric middle, so
+snapping the car onto the road buried it up to the waist instead of
+resting its wheels down — technically working exactly as built, but not
+useful the way Maro needed it. His own diagnosis was exactly right: "snap
+to surface wont work if the pivot is the middle of the car."
+
+**The fix**: two new one-click presets next to the existing "Pick in
+Viewport"/"Reset" pivot controls — "Center" sets the pivot to the object's
+own bounding-box center, "Base" does the same but pulls the vertical
+component down to the box's own bottom. Both computed the same way Snap to
+Surface itself was fixed to work (its own header, above): entirely in
+*world* space via `Box3().setFromObject` and `worldToLocal`, never
+guessing which of the object's own local axes is "up" — `car.fbx`'s own
+axis-correction wrapper is exactly the case that makes guessing wrong.
+
+**A second bug, and it only showed up on the second click**: "Center"
+alone worked fine. Clicking "Center" then "Base" right after did not —
+"Base" landed nowhere near the car. Root cause: `setPivot()` (existing
+code, from the earlier Pivot Rotation work) doesn't just record a pivot
+point, it shifts the object's own `position` to keep the mesh looking
+visually unchanged. `Box3().setFromObject` and `worldToLocal` both read
+the object's *current* `matrixWorld` — after "Center" had already run
+once, that matrix reflected the pivot-compensated position, not the
+object's true original one, so the "Base" calculation was silently built
+on top of an already-shifted frame of reference. Confirmed by logging both
+calls' intermediate values: the world-space center points differed only in
+the expected way (same X/Y, different Z), but the local points fed into
+`setPivot` were wildly different — proof the `worldToLocal` conversion
+itself, not the box math, was the thing being corrupted.
+
+**Fix**: call `setPivot(object, null)` — the same reset `setPivot` already
+does for its own "Reset" button, restoring the object's true pre-pivot
+position and geometry from its lazily-captured snapshot — as the first
+step inside the preset handler, before computing anything. Same effect as
+Maro clicking "Reset" first, just automatic and synchronous so there's no
+visible flash before the real target pivot lands.
+
+**Verified end-to-end, not just in isolation**: clicking "Center" then
+"Base" back to back now lands correctly (X/Y unchanged, only the vertical
+component moves, matching the geometric relationship they should have).
+Then, combined with Snap to Surface in the actual "Site and car" test
+project: with "Base" active, dragging the car from a deliberately-high
+test position (world Z = 150, well above the road) down through the
+gizmo's vertical axis landed it at world Z = -1.83 — a real point on the
+road surface, not a fallback or leftover value — with the wheels, not the
+car's body-center, visibly resting on the surface.
+
+**The lesson**: the same "read the object's current transform" trap that
+broke Snap to Surface's axis handling showed up again one layer up, in
+code that was itself built to fix that first bug — computing correctly in
+world space doesn't help if the world-space matrix being read is already
+stale from an earlier mutation on the same object. Any code that reads
+`matrixWorld`/`worldToLocal` after a prior transform-mutating call on the
+same object needs to ask whether that prior call left the object in a
+"visually unchanged but numerically offset" state, the way `setPivot` does
+by design.

@@ -2919,7 +2919,6 @@ export function Viewport3D({
     }
     onTransformChange()
   }
-
   // Sun azimuth/elevation -> a real directional-light position (2026-07-19,
   // per Maro: "make [shadows] more distinct, able to control shadow/light
   // angle" — see viewerSettings.ts's own sunAzimuth/sunElevation header for

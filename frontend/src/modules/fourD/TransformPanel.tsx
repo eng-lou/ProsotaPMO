@@ -48,6 +48,18 @@ export interface PivotSupport {
   onTogglePicking: () => void
   onChange: (point: THREE.Vector3) => void
   onReset: () => void
+  // "Pivot to Center"/"Pivot to Base" (2026-07-23, per Maro: Snap to
+  // Surface resting the object's *pivot* on the surface — not visibly
+  // useful if that pivot sits at the object's geometric middle, which is
+  // the default for most imported meshes) — Center sets the pivot to the
+  // object's own bounding-box center, Base to the same center but with
+  // the vertical component pulled down to the box's own bottom, so
+  // dragging with Snap to Surface on rests the object's actual base on
+  // whatever's underneath instead of sinking it in halfway. Both computed
+  // in world space then converted back (elementPivot.ts's own header),
+  // so they're correct regardless of any axis-correction wrapper.
+  onSetToCenter: () => void
+  onSetToBase: () => void
 }
 
 // "Pivot Rotation" (2026-07-22, per Maro: dragging an element with the
@@ -354,6 +366,22 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           className="text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
         >
           Reset
+        </button>
+      </div>
+      <div className="flex items-center gap-1.5 px-3 pb-1">
+        <button
+          onClick={pivot.onSetToCenter}
+          title="Move the pivot to this object's own bounding-box center"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+        >
+          Center
+        </button>
+        <button
+          onClick={pivot.onSetToBase}
+          title="Move the pivot to the bottom-center of this object's own bounding box — e.g. so Snap to Surface rests it on its base instead of sinking it in halfway"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+        >
+          Base
         </button>
       </div>
 
