@@ -62,8 +62,14 @@ const PATH_FIELDS = ['path_progress'] as const
 // given actor+field-group resolves to, instead of always the current
 // viewport selection. Each instance owns its own local drag state — rows
 // are fully independent, no shared state needed across sub-tracks.
+// selectedIds (2026-07-23, per Maro: "allow me to drag and select all
+// keyframe and delete or copy and paste") — ActorRow's own box-select
+// drag (below) is what actually populates this; a day-group here just
+// needs to know whether any of its own keyframes are in it, to render the
+// amber diamond as selected instead of reaching into selection logic
+// itself.
 function KeyframeTrack({
-  dayGroups, scheduleStart, totalMs, format, onJumpTo, onMoveKeyframes, onDeleteKeyframes,
+  dayGroups, scheduleStart, totalMs, format, onJumpTo, onMoveKeyframes, onDeleteKeyframes, selectedIds,
 }: {
   dayGroups: DayGroup[]
   scheduleStart: Date
@@ -73,6 +79,7 @@ function KeyframeTrack({
   onJumpTo: (date: Date) => void
   onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
   onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
+  selectedIds: Set<string>
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [dragState, setDragState] = useState<{ dayKey: string; previewDate: Date; moved: boolean } | null>(null)
@@ -123,13 +130,16 @@ function KeyframeTrack({
         // instead of pinning it to the start where it visually belongs.
         const rawLeft = totalMs > 0 ? ((shownDate.getTime() - scheduleStart.getTime()) / totalMs) * 100 : 0
         const left = Math.max(0, Math.min(100, rawLeft))
+        const selected = group.keyframes.some(k => selectedIds.has(k.id))
         return (
           <div
             key={dayKey}
             title={`${formatTimelineValue(shownDate, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps)} — drag to move, right-click to delete`}
             onPointerDown={handlePointerDown(group)}
             onContextMenu={e => { e.preventDefault(); onDeleteKeyframes(group.keyframes) }}
-            className={`absolute top-0.5 w-2 h-2 bg-amber-500 border border-amber-600 rotate-45 -translate-x-1/2 cursor-grab active:cursor-grabbing ${dragging ? 'ring-2 ring-amber-300' : ''}`}
+            className={`absolute top-0.5 w-2 h-2 border rotate-45 -translate-x-1/2 cursor-grab active:cursor-grabbing ${
+              selected ? 'bg-sky-500 border-sky-600 ring-2 ring-sky-300' : 'bg-amber-500 border-amber-600'
+            } ${dragging ? 'ring-2 ring-amber-300' : ''}`}
             style={{ left: `${left}%` }}
           />
         )
@@ -189,9 +199,74 @@ interface SubTrackDef {
   content: React.ReactNode
 }
 
+// Box-select (2026-07-23, per Maro: "allow me to drag and select all
+// keyframe" — confirmed scoping answer: one drag spans every sub-track for
+// this actor at once, Location+Rotation+Scale+3D Path together, not one
+// row at a time). Deliberately horizontal-only — the highlight rectangle
+// always spans the full height of the sub-track stack regardless of the
+// drag's own Y — since "which time range" is the only thing that
+// distinguishes one keyframe from another here; there's no vertical
+// channel-picking concept the way a real 2D box-select would need. Reads
+// `keyframes` (every field, every sub-track, ungrouped) directly rather
+// than re-deriving from the day-grouped sub-tracks — a flat date-range
+// filter over that same list ActorRow already has is exactly the set a
+// human dragging across those diamonds would expect to grab.
+function useBoxSelect(keyframes: ElementKeyframe[], scheduleStart: Date, totalMs: number, onSelect: (ids: string[]) => void) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<{ startX: number; currentX: number } | null>(null)
+
+  const dateFromClientX = (clientX: number): Date => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0) return scheduleStart
+    const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    return new Date(scheduleStart.getTime() + pct * totalMs)
+  }
+
+  // Only ever reached for a pointerdown that lands on empty track
+  // background — every diamond's own onPointerDown (KeyframeTrack, above)
+  // already calls stopPropagation, so this never fires for a click that's
+  // actually meant to drag/jump a single keyframe.
+  const onBackgroundPointerDown = (e: React.PointerEvent) => {
+    const startX = e.clientX
+    setDrag({ startX, currentX: startX })
+    const handleMove = (ev: PointerEvent) => setDrag({ startX, currentX: ev.clientX })
+    const handleUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      const lo = Math.min(startX, ev.clientX)
+      const hi = Math.max(startX, ev.clientX)
+      if (hi - lo > 3) {
+        const loMs = dateFromClientX(lo).getTime()
+        const hiMs = dateFromClientX(hi).getTime()
+        onSelect(keyframes.filter(k => {
+          const t = new Date(k.date).getTime()
+          return t >= loMs && t <= hiMs
+        }).map(k => k.id))
+      } else {
+        onSelect([])
+      }
+      setDrag(null)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+  }
+
+  const overlay = drag && Math.abs(drag.currentX - drag.startX) > 3 && containerRef.current ? (
+    <div
+      className="absolute top-0 bottom-0 bg-sky-400/20 border border-sky-400 pointer-events-none"
+      style={{
+        left: Math.min(drag.startX, drag.currentX) - containerRef.current.getBoundingClientRect().left,
+        width: Math.abs(drag.currentX - drag.startX),
+      }}
+    />
+  ) : null
+
+  return { containerRef, onBackgroundPointerDown, overlay }
+}
+
 function ActorRow({
   actor, links, keyframes, isPathBound, activityById, profileById, scheduleStart, scheduleEnd, totalMs, format,
-  onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelect,
+  onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelect, selectedIds, onBoxSelect,
 }: {
   actor: Actor
   links: ModelElementLink[]
@@ -207,8 +282,11 @@ function ActorRow({
   onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
   onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
   onSelect: (() => void) | null
+  selectedIds: Set<string>
+  onBoxSelect: (ids: string[]) => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
+  const boxSelect = useBoxSelect(keyframes, scheduleStart, totalMs, onBoxSelect)
 
   const pathGroups = useMemo(() => groupByDay(keyframes, PATH_FIELDS), [keyframes])
   const locationGroups = useMemo(() => groupByDay(keyframes, LOCATION_FIELDS), [keyframes])
@@ -226,7 +304,7 @@ function ActorRow({
   // very much an animated actor.
   const hasPath = isPathBound || pathGroups.length > 0
 
-  const trackProps = { scheduleStart, scheduleEnd, totalMs, format, onJumpTo, onMoveKeyframes, onDeleteKeyframes }
+  const trackProps = { scheduleStart, scheduleEnd, totalMs, format, onJumpTo, onMoveKeyframes, onDeleteKeyframes, selectedIds }
 
   const subTracks: SubTrackDef[] = []
   if (links.length > 0) {
@@ -260,13 +338,26 @@ function ActorRow({
         </span>
       </div>
       {!collapsed && (
-        <div className="pl-4 pr-2 py-1 space-y-1">
-          {subTracks.map(t => (
-            <div key={t.label} className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-400 w-14 shrink-0">{t.label}</span>
-              <div className="flex-1 min-w-0">{t.content}</div>
-            </div>
-          ))}
+        <div className="flex gap-2 pl-4 pr-2 py-1">
+          <div className="w-14 shrink-0 space-y-1">
+            {subTracks.map(t => (
+              <div key={t.label} className="h-3 flex items-center text-[10px] text-gray-400">{t.label}</div>
+            ))}
+          </div>
+          {/* Box-select's own container (2026-07-23) — spans just the
+              track *content* column, not the label column beside it, so
+              its bounding rect matches exactly what each KeyframeTrack row
+              inside it already uses for its own clientX -> date math
+              (useBoxSelect's own header). A drag started here covers every
+              sub-track stacked inside at once. */}
+          <div
+            className="relative flex-1 min-w-0 space-y-1"
+            ref={boxSelect.containerRef}
+            onPointerDown={boxSelect.onBackgroundPointerDown}
+          >
+            {subTracks.map(t => <div key={t.label}>{t.content}</div>)}
+            {boxSelect.overlay}
+          </div>
         </div>
       )}
     </div>
@@ -305,12 +396,15 @@ function ActorRow({
 // list, occasionally unblocking just long enough to paint whichever date
 // the (still-advancing, wall-clock-driven) playhead had reached by then.
 export const AnimationActorsList = memo(function AnimationActorsList({
-  scheduleStart, scheduleEnd, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles,
+  scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles,
   timeDisplayMode, speedDaysPerSecond, fps,
-  onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelectActor,
+  onJumpTo, onMoveKeyframes, onDeleteKeyframes, onCreateKeyframes, onReverseKeyframes, onSelectActor,
 }: {
   scheduleStart: Date
   scheduleEnd: Date
+  // Paste's own anchor (2026-07-23) — "at the current playhead date," per
+  // Maro's own confirmed choice, not the schedule's start/end.
+  currentDate: Date
   activities: Activity[]
   modelElementLinks: ModelElementLink[]
   elementKeyframes: ElementKeyframe[]
@@ -323,10 +417,74 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   onJumpTo: (date: Date) => void
   onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
   onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
+  onCreateKeyframes: (rows: { sourceKind: ElementKeyframe['source_kind']; elementRef: string; field: KeyframeField; date: Date; value: number }[]) => void
+  onReverseKeyframes: (keyframes: ElementKeyframe[]) => void
   onSelectActor: (sourceKind: ActorSourceKind, elementRef: string) => void
 }) {
   const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
   const format: DisplayFormat = { scheduleStart, timeDisplayMode, speedDaysPerSecond, fps }
+
+  // Box-select/Delete/Copy/Paste/Reverse (2026-07-23, per Maro: "allow me
+  // to drag and select all keyframe and delete or copy and paste"/"reverse
+  // too"). Selection is scoped to one actor at a time — ActorRow's own
+  // box-select drag (useBoxSelect, above) only ever grabs keyframes
+  // belonging to the actor it was dragged inside, so selectedActorKey just
+  // tracks *which* row's selectedIds is actually live; every other row
+  // gets the shared EMPTY_IDS constant below rather than an empty set of
+  // its own each render (same stable-reference reasoning as EMPTY_LINKS/
+  // EMPTY_KEYFRAMES further down). The clipboard remembers which actor it
+  // was copied from (clipboardActorKey) so Paste always re-targets that
+  // same object — copying one object's animation shape onto a *different*
+  // object was never asked for, only "paste it again," so there's no
+  // target-picker to build.
+  const [selectedActorKey, setSelectedActorKey] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [clipboard, setClipboard] = useState<{ field: KeyframeField; offsetMs: number; value: number }[] | null>(null)
+  const [clipboardActorKey, setClipboardActorKey] = useState<string | null>(null)
+
+  const handleBoxSelect = (actorKey: string, ids: string[]) => {
+    setSelectedActorKey(ids.length > 0 ? actorKey : null)
+    setSelectedIds(new Set(ids))
+  }
+
+  const selectedKeyframes = useMemo(
+    () => elementKeyframes.filter(k => selectedIds.has(k.id)),
+    [elementKeyframes, selectedIds],
+  )
+
+  const clearSelection = () => { setSelectedActorKey(null); setSelectedIds(new Set()) }
+
+  const handleDeleteSelected = () => {
+    if (selectedKeyframes.length === 0) return
+    onDeleteKeyframes(selectedKeyframes)
+    clearSelection()
+  }
+
+  const handleCopySelected = () => {
+    if (selectedKeyframes.length === 0 || !selectedActorKey) return
+    const earliestMs = Math.min(...selectedKeyframes.map(k => new Date(k.date).getTime()))
+    setClipboard(selectedKeyframes.map(k => ({ field: k.field, offsetMs: new Date(k.date).getTime() - earliestMs, value: k.value })))
+    setClipboardActorKey(selectedActorKey)
+  }
+
+  const handleReverseSelected = () => {
+    if (selectedKeyframes.length === 0) return
+    onReverseKeyframes(selectedKeyframes)
+  }
+
+  // References `actors` (defined further down via useMemo) — safe despite
+  // the declaration order: this closure only ever runs later, from the
+  // Paste button's own onClick, by which point the component function has
+  // already finished running top to bottom and `actors` is fully set.
+  const handlePaste = () => {
+    if (!clipboard || !clipboardActorKey) return
+    const actor = actors.find(a => `${a.sourceKind}:${a.elementRef}` === clipboardActorKey)
+    if (!actor) return
+    const anchorMs = currentDate.getTime()
+    onCreateKeyframes(clipboard.map(c => ({
+      sourceKind: actor.sourceKind, elementRef: actor.elementRef, field: c.field, date: new Date(anchorMs + c.offsetMs), value: c.value,
+    })))
+  }
 
   // One O(n) grouping pass, not an O(links)/O(keyframes) filter *per actor*
   // (2026-07-21 perf fix — see this component's own header). At real
@@ -412,29 +570,67 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto border-t border-gray-100">
-      {actors.map(actor => {
-        const key = `${actor.sourceKind}:${actor.elementRef}`
-        return (
-          <ActorRow
-            key={key}
-            actor={actor}
-            links={linksByActor.get(key) ?? EMPTY_LINKS}
-            keyframes={keyframesByActor.get(key) ?? EMPTY_KEYFRAMES}
-            isPathBound={pathBoundActors.has(key)}
-            activityById={activityById}
-            profileById={profileById}
-            scheduleStart={scheduleStart}
-            scheduleEnd={scheduleEnd}
-            totalMs={totalMs}
-            format={format}
-            onJumpTo={onJumpTo}
-            onMoveKeyframes={onMoveKeyframes}
-            onDeleteKeyframes={onDeleteKeyframes}
-            onSelect={actor.sourceKind === 'ifc' ? null : () => onSelectActor(actor.sourceKind, actor.elementRef)}
-          />
-        )
-      })}
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-t border-gray-100">
+      {/* selectedKeyframes.length, not selectedIds.size (2026-07-23 fix,
+          found while cleaning up test data during this same feature's own
+          verification) — a selection made before its object gets unloaded
+          (or its keyframes otherwise deleted some other way) left
+          selectedIds pointing at ids that no longer exist in
+          elementKeyframes; selectedIds.size stayed "9" forever, showing a
+          toolbar whose own Copy/Reverse/Delete buttons all silently
+          no-op against an actually-empty selectedKeyframes. Deriving both
+          the visibility check and the displayed count from
+          selectedKeyframes instead means the bar honestly reflects what
+          Delete/Copy/Reverse would actually act on, and disappears on its
+          own the moment that's empty — no separate cleanup effect needed. */}
+      {selectedKeyframes.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1 bg-sky-50 border-b border-sky-100 text-xs shrink-0">
+          <span className="text-gray-600">{selectedKeyframes.length} keyframe{selectedKeyframes.length === 1 ? '' : 's'} selected</span>
+          <button onClick={handleCopySelected} className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">Copy</button>
+          <button onClick={handleReverseSelected} className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">Reverse</button>
+          <button onClick={handleDeleteSelected} className="px-1.5 py-0.5 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50">Delete</button>
+          <button onClick={clearSelection} className="ml-auto text-gray-400 hover:text-gray-600">Clear</button>
+        </div>
+      )}
+      {clipboard && (
+        <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 border-b border-amber-100 text-xs shrink-0">
+          <span className="text-gray-600">{clipboard.length} keyframe{clipboard.length === 1 ? '' : 's'} copied</span>
+          <button
+            onClick={handlePaste}
+            title="Pastes at the current playhead date, keeping every copied keyframe's own offset from the earliest one"
+            className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          >
+            Paste at playhead
+          </button>
+          <button onClick={() => { setClipboard(null); setClipboardActorKey(null) }} className="ml-auto text-gray-400 hover:text-gray-600">Clear</button>
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {actors.map(actor => {
+          const key = `${actor.sourceKind}:${actor.elementRef}`
+          return (
+            <ActorRow
+              key={key}
+              actor={actor}
+              links={linksByActor.get(key) ?? EMPTY_LINKS}
+              keyframes={keyframesByActor.get(key) ?? EMPTY_KEYFRAMES}
+              isPathBound={pathBoundActors.has(key)}
+              activityById={activityById}
+              profileById={profileById}
+              scheduleStart={scheduleStart}
+              scheduleEnd={scheduleEnd}
+              totalMs={totalMs}
+              format={format}
+              onJumpTo={onJumpTo}
+              onMoveKeyframes={onMoveKeyframes}
+              onDeleteKeyframes={onDeleteKeyframes}
+              onSelect={actor.sourceKind === 'ifc' ? null : () => onSelectActor(actor.sourceKind, actor.elementRef)}
+              selectedIds={selectedActorKey === key ? selectedIds : EMPTY_IDS}
+              onBoxSelect={ids => handleBoxSelect(key, ids)}
+            />
+          )
+        })}
+      </div>
     </div>
   )
 })
@@ -447,3 +643,8 @@ export const AnimationActorsList = memo(function AnimationActorsList({
 // reference every time and recomputing anyway.
 const EMPTY_LINKS: ModelElementLink[] = []
 const EMPTY_KEYFRAMES: ElementKeyframe[] = []
+// Same reasoning, for every actor row that isn't the one currently holding
+// a box-select (2026-07-23) — a fresh `new Set()` per non-selected actor
+// per render would defeat KeyframeTrack's own diamond-selected check for
+// no benefit, since it's never non-empty anyway.
+const EMPTY_IDS: Set<string> = new Set()

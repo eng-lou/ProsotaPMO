@@ -3,7 +3,7 @@ import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
 import { AnimationActorsList } from './AnimationActorsList'
 import type { AnimationProfile } from './animationProfiles'
-import type { ElementKeyframe } from './elementKeyframes'
+import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
 import type { PathFollower } from './pathFollowers'
 import { dateFromTimelineValue, formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
@@ -34,6 +34,13 @@ interface Props {
   keyframesByDay: { date: Date; keyframes: ElementKeyframe[] }[]
   onMoveKeyframes: (dayKeyframes: ElementKeyframe[], newDate: Date) => void
   onDeleteKeyframes: (dayKeyframes: ElementKeyframe[]) => void
+  // Box-select/copy/paste/reverse (2026-07-23, per Maro: "allow me to drag
+  // and select all keyframe and delete or copy and paste"/"reverse too")
+  // — see AnimationActorsList.tsx's own header for the full interaction;
+  // onDeleteKeyframes above is reused as-is for a multi-select delete (it
+  // already just loops whatever list it's given), these two are new.
+  onCreateKeyframes: (rows: { sourceKind: ElementKeyframe['source_kind']; elementRef: string; field: KeyframeField; date: Date; value: number }[]) => void
+  onReverseKeyframes: (keyframes: ElementKeyframe[]) => void
   // Project-wide "dope sheet" (2026-07-12, per Maro: "underneath, the
   // animation timeline... actors with a sub line with keyframes on
   // those") — see AnimationActorsList.tsx's own header for the full
@@ -80,6 +87,7 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // playing rather than pre-baking discrete keyframes onto each object.
 export function TimelineWindow({
   scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
+  onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, onSelectActor,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -130,6 +138,20 @@ export function TimelineWindow({
   // the click-to-jump path.
   const [dragState, setDragState] = useState<{ dayKey: string; previewDate: Date; moved: boolean } | null>(null)
 
+  // Manual upper-limit override (2026-07-23, per Maro: "unable to set the
+  // upper limit of animation") — scheduleEnd is otherwise entirely computed
+  // (latest activity finish / keyframe date, see timelinePlayback.ts), so
+  // there was no way to scrub or play past the last real keyframe, e.g. to
+  // let a moving object sit at rest for a while after its last move. Extends
+  // only, never shrinks below the real computed scheduleEnd (Maro's explicit
+  // choice) — re-derived from the live `scheduleEnd` prop every render
+  // rather than reset by an effect, so it also transparently stops applying
+  // the moment real activity/keyframe data grows past it on its own.
+  const [endOverrideMs, setEndOverrideMs] = useState<number | null>(null)
+  const effectiveScheduleEnd = scheduleEnd && endOverrideMs !== null && endOverrideMs > scheduleEnd.getTime()
+    ? new Date(endOverrideMs)
+    : scheduleEnd
+
   // Seeds the shared date once a schedule range becomes available, if
   // nothing's set it yet (e.g. the very first time this window opens).
   useEffect(() => {
@@ -141,7 +163,7 @@ export function TimelineWindow({
   }, [scheduleStart])
 
   useEffect(() => {
-    if (!isPlaying || !scheduleStart || !scheduleEnd) return
+    if (!isPlaying || !scheduleStart || !effectiveScheduleEnd) return
     lastTimeRef.current = null
     const tick = (t: number) => {
       const dtSeconds = lastTimeRef.current === null ? 0 : (t - lastTimeRef.current) / 1000
@@ -149,9 +171,9 @@ export function TimelineWindow({
       const current = dateRef.current ?? scheduleStart
       let next = new Date(current.getTime() + dtSeconds * speedDaysPerSecond * DAY_MS)
       let stop = false
-      if (next.getTime() >= scheduleEnd.getTime()) {
+      if (next.getTime() >= effectiveScheduleEnd.getTime()) {
         if (loop) { next = scheduleStart; lastTimeRef.current = t }
-        else { next = scheduleEnd; stop = true }
+        else { next = effectiveScheduleEnd; stop = true }
       }
       dateRef.current = next
       setDisplayDate(next)
@@ -160,7 +182,7 @@ export function TimelineWindow({
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current) }
-  }, [isPlaying, scheduleStart, scheduleEnd, speedDaysPerSecond, loop, dateRef])
+  }, [isPlaying, scheduleStart, effectiveScheduleEnd, speedDaysPerSecond, loop, dateRef])
 
   // Task-bar strip data — only activities actually linked to something in
   // the viewport, deduped, so this stays focused on what the timeline can
@@ -181,11 +203,11 @@ export function TimelineWindow({
   // jumpToToday, ...) is a direct user click/drag, not a per-frame update,
   // so reusing this same stable function costs them nothing.
   const setCurrent = useCallback((next: Date) => {
-    if (!scheduleStart || !scheduleEnd) return
-    const clamped = clampToRange(next, scheduleStart, scheduleEnd)
+    if (!scheduleStart || !effectiveScheduleEnd) return
+    const clamped = clampToRange(next, scheduleStart, effectiveScheduleEnd)
     dateRef.current = clamped
     setDisplayDate(clamped)
-  }, [scheduleStart, scheduleEnd, dateRef])
+  }, [scheduleStart, effectiveScheduleEnd, dateRef])
 
   // Passed to AnimationActorsList as onJumpTo — has to be its own stable
   // reference too (not just an inline `date => {...}` at the JSX call
@@ -207,7 +229,11 @@ export function TimelineWindow({
     )
   }
 
-  const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
+  // Non-null past the guard above (effectiveScheduleEnd is only ever null
+  // when the real scheduleEnd prop is), used everywhere below in place of
+  // the raw prop so the manual override actually extends what's scrubbable.
+  const effectiveEnd = effectiveScheduleEnd ?? scheduleEnd
+  const totalMs = effectiveEnd.getTime() - scheduleStart.getTime()
   const current = displayDate ?? scheduleStart
   const sliderValue = totalMs > 0 ? Math.round(((current.getTime() - scheduleStart.getTime()) / totalMs) * SLIDER_MAX) : 0
   // Elapsed seconds at the current Play speed, from scheduleStart to
@@ -216,6 +242,22 @@ export function TimelineWindow({
   // as one plain number here rather than parsed back out of the formatted
   // display string (fragile the moment that format ever changes).
   const elapsedSeconds = speedDaysPerSecond > 0 ? (current.getTime() - scheduleStart.getTime()) / DAY_MS / speedDaysPerSecond : 0
+  // Same maths for the End field's own displayed value (2026-07-23) — the
+  // manual-override input shows/edits effectiveEnd's elapsed value, exactly
+  // like the existing current-position input does for `current`.
+  const endElapsedSeconds = speedDaysPerSecond > 0 ? (effectiveEnd.getTime() - scheduleStart.getTime()) / DAY_MS / speedDaysPerSecond : 0
+  // Extends the manual override, never shrinks it below the real computed
+  // scheduleEnd (Maro's explicit choice) — see endOverrideMs's own header
+  // above for why that floor check is against the live prop, not the
+  // previous override.
+  const handleEndOverride = (next: Date) => {
+    setEndOverrideMs(next.getTime() > scheduleEnd.getTime() ? next.getTime() : null)
+  }
+  const handleEndDateInput = (value: string) => {
+    if (!value) return
+    const [y, m, d] = value.split('-').map(Number)
+    handleEndOverride(new Date(y, m - 1, d))
+  }
 
   const handleScrub = (value: number) => {
     setIsPlaying(false)
@@ -237,7 +279,7 @@ export function TimelineWindow({
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return current
     const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return clampToRange(new Date(scheduleStart.getTime() + pct * totalMs), scheduleStart, scheduleEnd)
+    return clampToRange(new Date(scheduleStart.getTime() + pct * totalMs), scheduleStart, effectiveEnd)
   }
 
   const handleMarkerPointerDown = (group: { date: Date; keyframes: ElementKeyframe[] }) => (e: React.PointerEvent) => {
@@ -314,27 +356,55 @@ export function TimelineWindow({
             {FPS_OPTIONS.map(f => <option key={f} value={f}>{f} fps</option>)}
           </select>
         )}
-        {timeDisplayMode === 'date' ? (
-          <input
-            type="date"
-            value={toDateInputValue(current)}
-            onChange={e => handleDateInput(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-1.5 py-1 ml-auto"
-          />
-        ) : (
-          <input
-            type="number"
-            step={timeDisplayMode === 'seconds' ? 0.1 : 1}
-            value={timeDisplayMode === 'seconds' ? Number(elapsedSeconds.toFixed(1)) : Math.round(elapsedSeconds * fps)}
-            onChange={e => {
-              if (e.target.value === '') return
-              setIsPlaying(false)
-              setCurrent(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
-            }}
-            title={timeDisplayMode === 'seconds' ? 'Elapsed seconds from schedule start, at the current speed' : 'Frame number, at the current speed and fps'}
-            className="text-xs border border-gray-300 rounded px-1.5 py-1 ml-auto w-24"
-          />
-        )}
+        <div className="flex items-center gap-1 ml-auto">
+          <label
+            className="text-[10px] text-gray-500"
+            title="Manually extend the timeline's upper limit past the last activity/keyframe (e.g. to hold on the last pose for a while) — can't go below that real end"
+          >
+            End
+          </label>
+          {timeDisplayMode === 'date' ? (
+            <input
+              type="date"
+              value={toDateInputValue(effectiveEnd)}
+              onChange={e => handleEndDateInput(e.target.value)}
+              className="text-xs border border-gray-300 rounded px-1.5 py-1"
+            />
+          ) : (
+            <input
+              type="number"
+              step={timeDisplayMode === 'seconds' ? 0.1 : 1}
+              value={timeDisplayMode === 'seconds' ? Number(endElapsedSeconds.toFixed(1)) : Math.round(endElapsedSeconds * fps)}
+              onChange={e => {
+                if (e.target.value === '') return
+                handleEndOverride(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
+              }}
+              title="Manually extend the timeline's upper limit — can't go below the real computed end"
+              className="text-xs border border-gray-300 rounded px-1.5 py-1 w-20"
+            />
+          )}
+          {timeDisplayMode === 'date' ? (
+            <input
+              type="date"
+              value={toDateInputValue(current)}
+              onChange={e => handleDateInput(e.target.value)}
+              className="text-xs border border-gray-300 rounded px-1.5 py-1"
+            />
+          ) : (
+            <input
+              type="number"
+              step={timeDisplayMode === 'seconds' ? 0.1 : 1}
+              value={timeDisplayMode === 'seconds' ? Number(elapsedSeconds.toFixed(1)) : Math.round(elapsedSeconds * fps)}
+              onChange={e => {
+                if (e.target.value === '') return
+                setIsPlaying(false)
+                setCurrent(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
+              }}
+              title={timeDisplayMode === 'seconds' ? 'Elapsed seconds from schedule start, at the current speed' : 'Frame number, at the current speed and fps'}
+              className="text-xs border border-gray-300 rounded px-1.5 py-1 w-24"
+            />
+          )}
+        </div>
       </div>
 
       <div className="relative" ref={trackRef}>
@@ -394,11 +464,12 @@ export function TimelineWindow({
       <div className="flex items-center justify-between text-[10px] text-gray-400">
         <span>{formatTimelineValue(scheduleStart, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span className="text-xs text-gray-700 font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
-        <span>{formatTimelineValue(scheduleEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
+        <span>{formatTimelineValue(effectiveEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
       </div>
       <AnimationActorsList
         scheduleStart={scheduleStart}
-        scheduleEnd={scheduleEnd}
+        scheduleEnd={effectiveEnd}
+        currentDate={current}
         activities={activities}
         modelElementLinks={links}
         elementKeyframes={elementKeyframes}
@@ -411,6 +482,8 @@ export function TimelineWindow({
         onJumpTo={onActorJumpTo}
         onMoveKeyframes={onMoveKeyframes}
         onDeleteKeyframes={onDeleteKeyframes}
+        onCreateKeyframes={onCreateKeyframes}
+        onReverseKeyframes={onReverseKeyframes}
         onSelectActor={onSelectActor}
       />
     </div>

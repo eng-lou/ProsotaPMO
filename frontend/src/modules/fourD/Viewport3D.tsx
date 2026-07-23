@@ -21,6 +21,7 @@ import type { GizmoMode, GizmoSpace } from './TransformPanel'
 import type { CustomTextureSet } from './customTextures'
 import { axisCorrectionRotation, resolveDisplayAxis, type UpAxis } from './upAxis'
 import { getOriginalGeometry, getOriginalMaterialSlots } from './elementBaseline'
+import { applyGizmoDragAsPivotEdit } from './elementPivot'
 // Real (non-type-only) import, unlike ifcModel.ts above — elementBatching.ts
 // has zero web-ifc dependency of its own (see its own header), so importing
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
@@ -258,6 +259,10 @@ interface Props {
   // just left unwired in this app's own props until Pivot Rotation gave
   // it a reason to matter).
   gizmoSpace: GizmoSpace
+  // "Edit Pivot" (2026-07-23) — see TransformPanel.tsx's own Props header;
+  // consumed here, at the same TransformControls onChange snapToSurface
+  // already hooks into, via elementPivot.ts's own applyGizmoDragAsPivotEdit.
+  editPivot: boolean
   // "Snap to Surface" (2026-07-23) — see TransformPanel.tsx's own Props
   // header; consumed here, at the actual TransformControls onChange, via
   // this component's own snapObjectToSurface.
@@ -2844,7 +2849,7 @@ export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
-  gizmoMode, gizmoSpace, snapToSurface, onTransformChange, onTimelineTick,
+  gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
@@ -2905,16 +2910,21 @@ export function Viewport3D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importedObjects])
 
-  // TransformControls' own onChange, wrapped to run "Snap to Surface"
-  // (2026-07-23) before the real onTransformChange — snapObjectToSurface
-  // mutates object.position directly, same as the drag itself just did, so
-  // by the time onTransformChange reads/persists the final position it
-  // already reflects the snap. Translate-only, matching TransformPanel's
-  // own "only show this toggle for Move" — Rotate/Scale drags call this
-  // too, but snapToSurface is never true unless Move is also the active
-  // mode (see FourD.tsx's own snapToSurface state, gated in the panel).
+  // TransformControls' own onChange, wrapped to run either "Edit Pivot" or
+  // "Snap to Surface" (2026-07-23) before the real onTransformChange —
+  // both mutate object.position/quaternion directly, same as the drag
+  // itself just did, so by the time onTransformChange reads/persists the
+  // final transform it already reflects whichever one ran. Edit Pivot
+  // takes priority and excludes Snap to Surface outright (elementPivot.ts's
+  // own applyGizmoDragAsPivotEdit header) — moving the *pivot* has no
+  // "surface" to rest on, and TransformPanel.tsx already disables that
+  // toggle whenever Edit Pivot is on, so this mirrors what the UI shows.
+  // Edit Pivot itself has no Scale case (see TransformPanel.tsx's own
+  // exclusion) — falls through to a plain scale drag on the object.
   const handleGizmoChange = () => {
-    if (snapToSurface && gizmoMode === 'translate' && activeObject) {
+    if (editPivot && activeObject && gizmoMode !== 'scale') {
+      applyGizmoDragAsPivotEdit(activeObject.object, gizmoMode)
+    } else if (snapToSurface && gizmoMode === 'translate' && activeObject) {
       snapObjectToSurface(activeObject.object, importedObjects, settings.upAxis, modelRadius)
     }
     onTransformChange()

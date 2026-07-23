@@ -175,3 +175,106 @@ export function setPivotRotation(object: THREE.Object3D, euler: THREE.Euler | nu
 export function clearPivotRotation(object: THREE.Object3D) {
   setPivotRotation(object, null)
 }
+
+// Apply Transform (applyTransform.ts, 2026-07-23) — bakes object.position/
+// quaternion/scale into geometry and resets them to 0/identity/1, same
+// "whatever it now shows genuinely IS the original" principle
+// elementBaseline.ts's own captureBaseline already applies. Pivot Point/
+// Pivot Rotation are a DIFFERENT kind of value, though (2026-07-23 fix, per
+// Maro pointing out a first version of this that zeroed them: "can't you
+// see the pivot position/rotation has changed" — a real regression, not
+// the fix it looked like) — they're this object's own sticky "where's the
+// hinge/custom origin" definition (the crane-rigging case elementPivot.ts's
+// own top header describes), a property of the object itself, not a one-
+// off transform Apply Transform is meant to flatten away. Blender's own
+// Ctrl+A never moves an object's Origin either, for exactly this reason.
+// So this must call *through* applyPivot again after the bake,
+// not just clear the override — the plain-old original version of this
+// function that just deleted pivotPoint/pivotRotation reset Pivot to 0
+// and, since Location/Rotation always mirror wherever the pivot currently
+// sits, snapped the object to a *different* world position/orientation
+// than it was showing a moment before Apply Transform ran (the actual bug
+// Maro's before/after screenshots caught).
+//
+// What genuinely was stale — prePivotPosition/prePivotQuaternion/
+// prePivotGeometry(/prePivotChild*) — still needs to move forward to the
+// just-baked state (Apply Transform's own reset already put object.
+// position/quaternion at identity and object.geometry/children at their
+// baked values by the time this runs); left alone, the *next* pivot edit
+// would recompute against geometry/a transform Apply Transform just threw
+// away. Deleting them and calling ensureSnapshot immediately recaptures
+// that fresh baseline (its own guard fires again since the keys are gone);
+// applyPivot right after reapplies the *unchanged* pivotPoint/pivotRotation
+// on top of it — reproducing the exact same geometry/position/quaternion
+// (and the exact same Pivot/Pivot Rotation field values) the object had a
+// moment before the bake, now backed by non-stale bookkeeping instead of a
+// numeric coincidence.
+export function resetPivotForBake(object: THREE.Object3D) {
+  delete object.userData.prePivotPosition
+  delete object.userData.prePivotQuaternion
+  delete object.userData.prePivotGeometry
+  delete object.userData.prePivotChildPositions
+  delete object.userData.prePivotChildQuaternions
+  ensureSnapshot(object)
+  applyPivot(object)
+}
+
+// "Edit Pivot" gizmo (2026-07-23, per Maro: "i want a gizmo for the pivot
+// manipulations not just for the mesh") — Pivot/Pivot Rotation above were
+// typed-fields-only (plus a one-shot viewport click for the point). This is
+// the drag equivalent: while the toggle's on, the ordinary Move/Rotate
+// gizmo — still attached to the real object, nothing new to render — is
+// reinterpreted as editing the pivot instead of the object.
+//
+// ensurePivotSnapshot must run *before* a drag starts mutating
+// object.position/quaternion (FourD.tsx calls it the moment the toggle
+// arms, and again on every selection change while it's armed) — it's
+// exactly ensureSnapshot above, just exposed under a name that makes sense
+// from outside this file. getPrePivotTransform reads that same snapshot,
+// captured fresh (position/quaternion identity-ish, whatever they were at
+// the true pre-pivot moment) the first time either ever ran for this
+// object, same guard as setPivot/setPivotRotation's own first call always
+// used.
+export function ensurePivotSnapshot(object: THREE.Object3D) {
+  ensureSnapshot(object)
+}
+
+function getPrePivotTransform(object: THREE.Object3D): { position: THREE.Vector3; quaternion: THREE.Quaternion } {
+  ensureSnapshot(object)
+  return {
+    position: (object.userData.prePivotPosition as THREE.Vector3).clone(),
+    quaternion: (object.userData.prePivotQuaternion as THREE.Quaternion).clone(),
+  }
+}
+
+// Solves applyPivot's own position/quaternion formula above in reverse.
+// There's no separate "pivot transform" to track apart from object.position/
+// quaternion — the pivot *is* the object's own local origin, by definition,
+// always, regardless of any manual Move/Rotate drags done since the
+// snapshot — so a normal TransformControls drag (left attached to the real
+// object exactly as it always is) has, by the time this runs, already
+// mutated object.position/quaternion into exactly the world transform the
+// *pivot* should end up at. This just solves for the pivotPoint/
+// pivotRotation override that reproduces that same position/quaternion via
+// applyPivot's own formula, then reapplies it through setPivot/
+// setPivotRotation exactly like a typed pivot edit would — which
+// recenters the geometry so the *visible mesh* stays exactly where it was
+// before this drag tick, and only the invisible origin (and the gizmo
+// riding on it) actually moves. Called every drag tick (Viewport3D.tsx's
+// handleGizmoChange), same as Snap to Surface's own per-tick compensation
+// — for a very high-poly mesh this clones/retransforms its whole
+// BufferGeometry every tick (applyPivot's own cost), a real but so-far
+// untested performance ceiling worth knowing about if pivot-editing ever
+// feels laggy on something bigger than the rigged parts/vehicles this was
+// built for.
+export function applyGizmoDragAsPivotEdit(object: THREE.Object3D, mode: 'translate' | 'rotate') {
+  const { position: prePivotPosition, quaternion: prePivotQuaternion } = getPrePivotTransform(object)
+  const inversePrePivotQuaternion = prePivotQuaternion.clone().invert()
+  if (mode === 'translate') {
+    const pivotPoint = object.position.clone().sub(prePivotPosition).applyQuaternion(inversePrePivotQuaternion)
+    setPivot(object, pivotPoint)
+  } else {
+    const rotationOffset = inversePrePivotQuaternion.multiply(object.quaternion.clone())
+    setPivotRotation(object, new THREE.Euler().setFromQuaternion(rotationOffset, 'XYZ'))
+  }
+}

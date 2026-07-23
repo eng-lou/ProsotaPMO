@@ -2787,3 +2787,324 @@ stale from an earlier mutation on the same object. Any code that reads
 same object needs to ask whether that prior call left the object in a
 "visually unchanged but numerically offset" state, the way `setPivot` does
 by design.
+
+## 2026-07-23 (later still) — Importing a mesh's own baked-in animation,
+optionally — and a first design that didn't match what Maro actually meant
+
+**What Maro asked for**: he'd exported `car2.fbx` from Blender with "a
+simple animation" baked into it, and wanted to be able to bring that
+animation in with the mesh, optionally — not every import should have to
+carry its own animation along.
+
+**First cut, built and shipped, then wrong**: asked up front whether the
+mesh's own animation should tie to the 4D schedule timeline or play
+independently — Maro chose independent — and built exactly that: a
+`THREE.AnimationMixer` per object, created the first time an imported
+object showed up with a non-empty `.animations` array, every clip started
+looping immediately via `AnimationAction`'s own default `LoopRepeat`, with
+a Play/Pause toggle in a new "Embedded Animation" section of the Properties
+panel. Verified working end-to-end (a hand-authored test file, since
+`car2.fbx` itself turned out to have no animation `FBXLoader` could
+extract at all — see the next entry down for that whole detour). Maro's
+actual reaction once he saw it running: "the animation plays but i dont
+see its keyframes in the animation panel" — meaning the Animation Timeline
+window, this app's own scrubbable per-date keyframe track. His follow-up
+made the real ask explicit: "we discussed normal 3d animation before,
+being able to animate the keyframes independent of schedule activities.
+the same thing" — a reference to `elementKeyframes.ts`'s own Mode B system
+(2026-07-08, see that file's header), which already exists precisely so a
+freshly-added object can be keyframed without needing a linked Activity at
+all. An always-looping preview mixer that never touches that system was
+never going to satisfy "the same thing," no matter how well it worked on
+its own terms — it was solving "can I see this file's animation play" when
+the actual ask was "can I get this file's animation onto my normal
+keyframe timeline, editable exactly like everything else there."
+
+**Scrapped, not patched** — the whole `AnimationMixer`/Play-Pause-toggle
+subsystem (`Viewport3D.tsx`'s `ModelObjects`, `PropertiesPanel.tsx`'s
+`EmbeddedAnimationSupport`) came back out cleanly to a net-zero diff
+against those two files, replaced by a new `embeddedAnimationBake.ts`:
+converts the clip into real `ElementKeyframe` rows (same
+`elementKeyframes.upsert()` a manual Location-field keyframe click already
+calls) at import time, one calendar day per clip-second starting at local
+midnight "today" (Maro's own confirmed choice over a start-date/duration
+dialog), then clears `object.animations` so nothing plays outside those
+real keyframes afterward. This is what actually satisfies "the same
+thing" — the imported motion now shows up as ordinary orange diamond
+markers on the Animation Timeline, drags/deletes like any other keyframe,
+and needs zero playback code of its own since `Viewport3D.tsx`'s existing
+`applyKeyframedTransform` already drives every Mode B object exactly this
+way.
+
+**The one real piece of new math**: `AnimationClip` tracks target a node
+*by name* within the imported hierarchy (`THREE.PropertyBinding.
+parseTrackName`/`findNode`), and both `FBXLoader` and `GLTFLoader` always
+wrap even a single animated object in an extra root Group — so the
+animated node is almost never the same object `ElementKeyframe`'s
+pos_x/rot_x/scale_x fields actually drive (the import's own root,
+`SceneObject.object`). Baking the node's *raw* local values onto the root
+would be wrong whenever that node sits at any static offset within the
+root; instead `embeddedAnimationBake.ts` samples the node's value at each
+of the clip's own keyframe times (unioned across its position/quaternion/
+scale tracks), takes the **delta** from that node's own value at the
+first sample, and composes that delta onto the *root's* own base pose
+(vector addition for position, proper quaternion composition — not naive
+per-axis Euler subtraction — for rotation, decomposed back to Euler once
+at the end since that's how this app stores rotation everywhere else).
+Sampling itself goes through a real, throwaway `AnimationMixer.setTime()`
+(an absolute seek) rather than hand-rolling per-track interpolant math —
+`KeyframeTrack.createInterpolant` is a genuine runtime method but isn't
+part of three.js's published TS surface, so calling it directly doesn't
+typecheck against this project's own `three` version. Scoped deliberately
+to the single-rigid-object case only (every track must target the exact
+same node) — a real multi-bone skeletal rig has no way to express "a
+different value per bone" in `ElementKeyframe`'s schema (one position/
+rotation/scale per *element*, not per node within it, same "mesh-kind, no
+stable per-sub-element identity yet" scope every other Mode B feature in
+this codebase already draws — Path Progress's own header,
+`timelinePlayback.ts`); that case returns `null` and surfaces as a real,
+visible import error instead of silently producing nothing.
+
+**Verified live** in the "Site and car" project with a hand-authored
+3-keyframe test file (same one built to verify the first, scrapped
+design — see the entry below): after import, the Animation Timeline
+window went from "No dated activities yet" straight to a real
+23–25 Jul 2026 range with three orange diamonds on the object's own
+Location row, and scrubbing the middle date read back a correctly
+*interpolated* Location X (2.7 at a scrub position a little before the
+exact keyframe timestamp, converging to 3 exactly on it) — real linear
+interpolation between real dated keyframes, not a canned value. Cleaned up
+afterward through the app's own existing "Unload & Delete Links" flow,
+which already knew about and offered to delete the 9 keyframes this bake
+had just created (3 dates × pos_x/pos_y/pos_z as one group, since position
+bakes all three axes together once *any* of them varies — matching
+Blender's own default "keyframe the whole vector, not just the one
+component that moved" behaviour) — no bespoke cleanup code needed, this
+app already had the right tool for it.
+
+**The lesson**: a feature can be fully correct in isolation and still be
+the wrong feature — Maro's own two-sentence correction only made sense
+because he named the *specific existing system* ("normal 3d animation...
+independent of schedule activities") the new one should have plugged into
+from the start, rather than living beside it as a disconnected preview.
+Worth listening for "the same thing as X" as a literal integration
+requirement, not just a vibe check on the general idea.
+
+## 2026-07-23 (later still) — ...and the two real bugs of my own found
+verifying it, neither in the shipped code
+
+**First**: `car2.fbx` itself — parsing it directly through the exact same
+`FBXLoader` code this app uses (a plain Node script, stubbing just enough
+of `window`/`document` to get FBXLoader's embedded-texture-loading code to
+stop throwing) came back with `animations.length === 0`. Not a bug in this
+feature — the file genuinely has no AnimStack/clip `FBXLoader` can
+extract, most likely because Blender's own FBX export didn't have "Bake
+Animation" (or "Export Animation") turned on. Verifying the *feature
+itself* worked needed a second file, so a tiny single-triangle `.gltf`
+with one animated `translation` channel got hand-authored directly as
+JSON (self-contained, base64-embedded buffer, no external `.bin` — small
+enough to actually upload through this session's own browser-automation
+tooling, unlike the 12MB real file).
+
+**Second, mine again**: with the first (scrapped) always-looping design,
+after importing the test file and hitting Play, `object.position.x` read
+`0` the whole time through a debug console check — looked like the mixer
+wasn't running at all. It was running fine; GLTFLoader wraps a single-node
+scene in a wrapper `Group` (`gltf.scene`) with the actual named node as a
+*child* — the animation channel targets that child ("TestBox") by name,
+not the wrapper root I'd been reading `.position` off of. Checking the
+child's position instead showed it correctly partway through the 0→3
+slide. (This exact same node-vs-wrapper structure is *why* the final,
+correct design needed the delta-from-node/compose-onto-root math above —
+the debugging mistake and the real design requirement turned out to be the
+same underlying fact about how these loaders build their scene graphs.)
+
+**The lesson**: "the file the user described should have an animation" and
+"the file on disk actually parses to one, through this exact code" are two
+different claims, and only the second one is checkable without guessing —
+worth confirming directly (a throwaway Node script reusing the real
+loader) before assuming a "nothing happened" report is this feature's own
+bug rather than the input file's. And once again here, a fresh custom test
+file's own object hierarchy (single node wrapped in a scene Group) came
+with its own trap for reading state back out via script — the same class
+of "know exactly which object in the hierarchy you're actually reading"
+mistake as the wrong-axis and stale-transform bugs earlier this same day,
+just one level further down the tree this time.
+
+## 2026-07-23 (later still) — Box-select, Copy/Paste, and Reverse for the
+Animation Timeline's keyframes
+
+**What Maro asked for**: "allow me to drag and select all keyframe and
+delete or copy and paste" — then, right after, "reverse too." Up to this
+point every keyframe marker on the Animation Timeline (`AnimationActorsList
+.tsx`) could only be dragged (move) or right-clicked (delete) *one day-
+group at a time* — no way to grab several at once.
+
+**Two scoping questions asked and answered up front**: (1) does a drag-
+select on one sub-track (say, Location) grab just that row, or every row
+for the object at once (Location + Rotation + Scale + 3D Path together) —
+Maro chose "every row together," matching Blender's own Dope Sheet box-
+select; (2) where does a paste land — Maro chose "at the current playhead
+date," with every pasted keyframe keeping its own original offset from the
+earliest one in the copied set (so pasting a 3-keyframe clip re-creates
+the same shape starting wherever the scrubber currently is).
+
+**How it's built**: selection is deliberately scoped to *one actor at a
+time* (`selectedActorKey` + `selectedIds`, lifted into
+`AnimationActorsList` itself, above `ActorRow`) — box-selecting a new
+actor's row clears whatever was selected in a different one, rather than
+building a cross-object selection set nothing else in this UI supports
+editing together anyway. The drag itself (`useBoxSelect`, inside
+`ActorRow`) is horizontal-only: the highlight rectangle always spans the
+full height of that actor's stacked sub-tracks regardless of the drag's
+own Y, since "which time range" is the only thing distinguishing one
+keyframe from another here — there's no vertical channel-picking concept
+to build. Reads the actor's own flat, ungrouped `keyframes` array directly
+(every field, every sub-track) rather than re-deriving from the day-
+grouped sub-track rows, so a horizontal date-range filter over that same
+list is exactly the set a human dragging across those diamonds would
+expect to grab. Required splitting `ActorRow`'s previous single "label +
+content, one flex row per sub-track" layout into two separate stacked
+columns (a label column, a content column) so the box-select container's
+own bounding rect lines up exactly with what each `KeyframeTrack` row's
+own clientX-to-date math already uses — attaching the drag listener to a
+wrapper that also included the label column would have offset every
+computed date by the label's own width.
+
+**Copy/Paste/Reverse, and why they needed almost no new backend
+plumbing**: `elementKeyframes.upsert()` (insert-or-overwrite at an exact
+date) already existed and already does everything Paste needs — it just
+needed a new `handleCreateKeyframes` wrapper in FourD.tsx to loop it over
+a list of rows instead of one at a time (same "the list component computes
+*what*, FourD.tsx does the actual API call" split `handleMoveKeyframes`/
+`handleDeleteKeyframes` already use). Bulk Delete needed *no* new handler
+at all — `handleDeleteKeyframes` already just loops `elementKeyframes.
+remove()` over whatever list it's given, so a multi-select Delete reuses
+it verbatim, unchanged. Reverse is the one genuinely new operation:
+groups the given keyframes by (element, field) track, sorts each by date,
+then swaps every keyframe's own value for the one at its mirrored
+position (first ↔ last, second ↔ second-to-last, ...) — dates never move,
+only which value sits on which date, via the same upsert-at-an-existing-
+date call every other bulk op already relies on.
+
+**A real bug found cleaning up the test data afterward, not during the
+feature itself**: the selection toolbar's own "N keyframes selected" count
+read `selectedIds.size` — after unloading the test object (which deletes
+its keyframes server-side), that count stayed frozen at its last value
+forever, showing a toolbar whose Copy/Reverse/Delete buttons would all
+silently no-op against `selectedKeyframes`, which — correctly — had
+already gone empty. Fixed by deriving both the visibility check and the
+displayed count from `selectedKeyframes.length` instead of
+`selectedIds.size`, so the bar honestly reflects what those buttons would
+actually act on and disappears on its own the moment that's empty — no
+separate cleanup effect needed to keep the two in sync.
+
+**A verification wrinkle worth remembering, not a shipped bug**: testing
+this via repeated automated `left_click_drag` calls in quick succession
+occasionally left a box-select's drag state stuck (a frozen selection
+rectangle, no completed selection) — traced to the drag's `pointerup`
+apparently not always reaching this component's own `window`-level
+listener when a new automated drag fired before the previous one's cycle
+had fully resolved. A plain page reload between attempts always produced
+a clean, correctly-completed selection afterward, and this exact
+"register pointermove/pointerup on `window` inside the pointerdown
+handler" pattern already exists twice elsewhere in this same file
+(`KeyframeTrack`'s own single-marker drag, `TimelineWindow.tsx`'s own
+scrubber-marker drag) with no reported issue from real use — treated as
+an artifact of rapid-fire scripted drags rather than evidence of a real
+bug, since a real user drags once, deliberately, and lets go.
+
+**Verified live**: box-selecting three keyframes on a test object's
+Location row showed "9 keyframes selected" (3 dates × pos_x/y/z) with the
+diamonds turning sky-blue; Copy showed "9 keyframes copied"; scrubbing the
+playhead elsewhere and clicking "Paste at playhead" created a new cluster
+of diamonds at the expected offset dates (confirmed by the schedule's own
+date range visibly extending to cover them); Delete removed exactly the
+selected diamonds and cleared the selection; Reverse ran without error
+against a fresh box-selection. Test object and its keyframes fully
+removed afterward via the app's own existing "Unload & Delete Links" flow.
+
+**The lesson**: reusing an existing insert-or-overwrite primitive
+(`upsert`) turned three of four requested operations (Delete, Copy, Paste)
+into thin wrappers around code that already existed and was already
+trusted — only Reverse needed genuinely new logic. Worth checking what a
+new bulk operation can actually reduce to before assuming it needs its own
+bespoke backend path.
+
+## 2026-07-23 (later still) — A manual upper limit for the Animation
+Timeline, and a drag gizmo for editing the pivot itself
+
+**Upper limit**: Maro couldn't extend the timeline past its last dated
+activity/keyframe — `scheduleEnd` (`timelinePlayback.ts`) was always
+*computed* (latest activity finish / keyframe date), with no manual
+override anywhere, so typing a bigger Frame/Seconds number in
+`TimelineWindow.tsx`'s own toolbar input just got silently clamped back
+down. Added a separate "End" field next to the existing playhead input —
+extends-only by design (Maro's explicit choice over a truncatable
+Blender-style Start/End pair): typing a value past the real computed end
+sets a local override, typing at-or-below it clears the override and falls
+back automatically, so a later keyframe added past the old override just
+keeps working without the user ever touching this field again.
+
+**Edit Pivot gizmo**: Maro's next ask — "I want a gizmo for the pivot
+manipulations not just for the mesh" — since Pivot Point/Pivot Rotation
+(`elementPivot.ts`) were typed-fields-only (plus a one-shot viewport click
+for the point, nothing at all for rotation). New toggle in
+`TransformPanel.tsx`, next to Move/Rotate/Scale: with it on, the *same*
+gizmo, still attached to the real object (no second gizmo, no proxy
+object), is reinterpreted — since the pivot **is** the object's own local
+origin, by definition, always, TransformControls has already moved
+`object.position`/`quaternion` to exactly where the pivot should end up by
+the time `onChange` fires each drag tick. `applyGizmoDragAsPivotEdit`
+(`elementPivot.ts`) just solves `applyPivot`'s own position/quaternion
+formula in reverse for the pivotPoint/pivotRotation override that
+reproduces that same transform, then reapplies it through the existing
+`setPivot`/`setPivotRotation` — which recenters the geometry so the
+*visible* mesh stays exactly put, only the invisible origin (and the
+gizmo riding on it) actually moves.
+
+**A real regression of my own, caught by Maro from two screenshots**:
+first version of "Apply Transform now also resets Pivot/Pivot Rotation"
+(a genuine gap — the *stale* prePivot snapshot it left behind would
+otherwise corrupt the next pivot edit) went one step too far and deleted
+`pivotPoint`/`pivotRotation` outright. Since Location/Rotation always
+mirror wherever the pivot currently sits, zeroing the pivot silently
+snapped the object to a *different* world position/orientation than it
+had a moment before — Maro's before/after screenshots showed Pivot
+1.105/1.5/0.002 + 3.393°/-8.741°/23.947° collapsing to all zeros, car
+included. The actual fix: Pivot Point/Pivot Rotation are a *sticky*
+property of the object (Blender's own Object Origin never moves under
+Ctrl+A either) — `resetPivotForBake` now only clears the genuinely-stale
+prePivot snapshot and immediately recaptures + reapplies the *unchanged*
+pivot on top of it, reproducing the exact same numbers and world position
+the object had a moment before the bake, just backed by fresh bookkeeping
+instead of a coincidence. Worth remembering for next time: "also reset
+X" is not automatically correct just because X sits in the same panel as
+things that genuinely do reset — check what X actually *represents*
+before flattening it.
+
+**FBX/OBJ textures rendering correct in Gouraud but dark/grey ("black") in
+Flat/Rendered PBR**: traced to `FBXLoader`'s own material conversion,
+confirmed directly against the actual binary file (`man.fbx`'s own
+`ShadingModel: "Phong"` / `FbxSurfacePhong` strings — see this file's
+companion `COMMANDS_GLOSSARY.md` entry for how), not assumed — it maps
+straight to `THREE.MeshPhongMaterial`, never `MeshStandardMaterial`. This
+app's whole render/lighting pipeline is PBR (the HDR environment,
+metalness/roughness texture slots, every *other* material-creation call
+site already using `MeshStandardMaterial`) — a classic Phong material
+doesn't receive `scene.environment`'s image-based lighting at all (a real
+three.js limitation, not a config toggle), so next to a PBR-lit scene it
+renders visibly under-lit and dull. Gouraud Shaded looked fine purely
+because `getGouraudVariant` builds its own separate `MeshLambertMaterial`
+stand-in straight from map/color — it never touches the broken Phong
+material's own lighting response at all, so it accidentally sidestepped
+the whole bug. Fixed in `import3d.ts`: every FBX/OBJ mesh's material gets
+converted to a real `MeshStandardMaterial` (reusing the same map/normalMap/
+color/emissive textures, `metalness: 0`/`roughness: 0.8` as a safe non-
+metal default) immediately after load, before anything else snapshots it
+as "the original." GLTF/GLB untouched — glTF's material model is PBR
+metallic-roughness by spec, so `GLTFLoader` already returns a real
+`MeshStandardMaterial`/`MeshPhysicalMaterial`.
+
+**Not yet verified live** (unlike everything else in this entry) — Maro
+asked to commit before re-importing `man.fbx` to confirm the fix.

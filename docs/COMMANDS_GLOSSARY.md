@@ -83,6 +83,12 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 |---|---|
 | `pdftotext -layout <file.pdf> <output.txt>` | Converts a PDF into a plain text file, trying to preserve the original page layout/columns. Used to properly read the PMBOK/PMP reference books directly (page-by-page image rendering wasn't available on this machine, so this was the practical way to search and read the actual chapter text). |
 
+## Reading text out of a binary file (Windows has no `strings` command)
+
+| Command | What it does |
+|---|---|
+| `[System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("file.fbx"))` piped through `[regex]::Matches($text, "[\x20-\x7e]{5,}")` (PowerShell) | Linux/Mac have a built-in `strings` command that pulls out every readable chunk of text buried in a binary file; Windows doesn't. This is the PowerShell equivalent — read the whole file as raw bytes, decode it as plain ASCII text (garbled everywhere except the readable parts), then use a regex to pull out every run of 5+ normal keyboard characters in a row. Used to confirm a `.fbx` character model's own embedded material settings (its "ShadingModel" was literally the text `Phong`) without needing to actually load the file in a 3D program — the fastest way to check what a binary file *actually* contains instead of guessing from its file extension. |
+
 ## Docker (not currently in active use on this machine)
 
 | Command | What it does |

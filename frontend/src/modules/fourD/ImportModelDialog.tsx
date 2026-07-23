@@ -10,7 +10,7 @@ interface Props {
   // one-at-a-time dialog, FourD.tsx's own pendingImports queue) — just a
   // "N more to go" hint so it's clear confirming this one won't be the end.
   queuePosition?: { remaining: number }
-  onConfirm: (sourceUpAxis: UpAxis, name: string) => void
+  onConfirm: (sourceUpAxis: UpAxis, name: string, includeAnimation: boolean) => void
   onCancel: () => void
 }
 
@@ -36,6 +36,28 @@ export function ImportModelDialog({ file, kind, queuePosition, onConfirm, onCanc
   // see element_parent.py/collection_member.py/path_follower.py's own
   // docstrings on why mesh-kind element_ref is a plain filename.
   const [name, setName] = useState(file.name)
+  // "Include animation" (2026-07-23, per Maro: "allow me to import a 3d
+  // mesh with its animation optionally" — car2.fbx, exported from Blender
+  // with a simple baked animation — then, once he'd seen it play but not
+  // show up anywhere editable: "we discussed normal 3d animation before,
+  // being able to animate the keyframes independent of schedule
+  // activities. the same thing") — checked, this converts the file's own
+  // clip into real ElementKeyframe rows on the Animation Timeline at
+  // import time (FourD.tsx's own handleImport3D, see
+  // embeddedAnimationBake.ts's header for the actual conversion), same as
+  // hand-keying Location/Rotation/Scale would; unchecked, the clip is
+  // simply discarded and the mesh imports with no animation at all. Only
+  // offered for the loader kinds that can ever actually carry a clip
+  // (import3d.ts's own parse: FBX always attaches `.animations`, GLTF/GLB
+  // now does too; OBJLoader has no concept of animation at all).
+  // Deliberately doesn't parse the file here to check whether it
+  // *actually* has a clip before showing this — that would mean parsing
+  // every mesh file twice (once to peek, once for the real import) for
+  // what's a harmless no-op checkbox on a file that turns out to have
+  // none. Defaults to checked: opting out is the exception.
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  const supportsAnimation = kind === 'mesh' && (ext === 'fbx' || ext === 'glb' || ext === 'gltf')
+  const [includeAnimation, setIncludeAnimation] = useState(true)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
@@ -76,13 +98,19 @@ export function ImportModelDialog({ file, kind, queuePosition, onConfirm, onCanc
               ))}
             </div>
           </div>
+          {supportsAnimation && (
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={includeAnimation} onChange={e => setIncludeAnimation(e.target.checked)} />
+              Convert this file's animation into keyframes, if it has any
+            </label>
+          )}
         </div>
         <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
           <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
             Cancel
           </button>
           <button
-            onClick={() => onConfirm(upAxis, name.trim() || file.name)}
+            onClick={() => onConfirm(upAxis, name.trim() || file.name, includeAnimation)}
             className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800"
           >
             Import

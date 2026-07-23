@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { captureBaseline, captureOriginalGeometry } from './elementBaseline'
+import { resetPivotForBake } from './elementPivot'
 
 // "Apply Transform" (2026-07-09, per Maro: "allow me to apply transforms to
 // the selected object. in essence zeroing out all transform parameters
@@ -103,6 +104,13 @@ export function applyTransformKeepPosition(object: THREE.Object3D): number {
   // to be expressed here, so a later reset should snap back to *this*,
   // not the value that existed before Apply Transform ran.
   captureBaseline(object)
+  // Refreshes the pre-pivot snapshot elementPivot.ts's own Pivot Point/
+  // Pivot Rotation rely on, now-stale after the reset just above — but
+  // deliberately does NOT clear pivotPoint/pivotRotation themselves; see
+  // resetPivotForBake's own header for why an object's pivot is a sticky
+  // property of the object (like Blender's Origin), not a transform this
+  // function is meant to flatten away.
+  resetPivotForBake(object)
 
   return affected
 }

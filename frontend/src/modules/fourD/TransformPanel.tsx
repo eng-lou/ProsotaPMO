@@ -87,6 +87,16 @@ interface Props {
   // the whole point of being able to set a custom pivot rotation at all.
   space: GizmoSpace
   onSpaceChange: (space: GizmoSpace) => void
+  // "Edit Pivot" gizmo toggle (2026-07-23, per Maro: "i want a gizmo for
+  // the pivot manipulations not just for the mesh") — Pivot/Pivot Rotation
+  // below were typed-fields-only; with this on, the exact same Move/Rotate
+  // gizmo redefines the pivot instead of the object (elementPivot.ts's own
+  // applyGizmoDragAsPivotEdit header has the full mechanism) — the mesh
+  // stays visually put, only the origin/gizmo moves. Scale has no "pivot
+  // scale" concept, same exclusion as Global/Local and Snap to Surface
+  // just below.
+  editPivot: boolean
+  onEditPivotChange: (editPivot: boolean) => void
   // "Snap to Surface" (2026-07-23, per Maro: "position an element e.g the
   // car easily on the surface of a second mesh e.g plane e.g road") —
   // while dragging in Move mode, casts a ray straight down from the
@@ -231,7 +241,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, snapToSurface, onSnapToSurfaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
+export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -263,6 +273,22 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           </button>
         ))}
       </div>
+      {/* "Edit Pivot" (2026-07-23) — see this file's own Props header. Same
+          Scale exclusion as Global/Local just below: there's no "pivot
+          scale" concept. */}
+      {mode !== 'scale' && (
+        <div className="flex items-center gap-1.5 px-3 pb-1.5">
+          <button
+            onClick={() => onEditPivotChange(!editPivot)}
+            title="Drag Move/Rotate to redefine the pivot itself instead of moving the object — the object stays put, only its origin (and this gizmo) moves"
+            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+              editPivot ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            {editPivot ? '✓ Edit Pivot' : 'Edit Pivot'}
+          </button>
+        </div>
+      )}
       {/* Local/Global (2026-07-22) — see this file's own Props header for
           space's doc comment. Not shown for Scale, which three.js's
           TransformControls always applies in local space regardless of
@@ -287,13 +313,18 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
       {/* "Snap to Surface" (2026-07-23) — see this file's own Props header.
           Translate-only, same reasoning as Global/Local's own Scale
           exclusion just above: "rest on whatever's underneath" has no
-          meaning for Rotate or Scale. */}
+          meaning for Rotate or Scale. Disabled (not hidden) while Edit
+          Pivot is on — Viewport3D.tsx's handleGizmoChange already skips the
+          actual snap in that case (moving the pivot has no "surface" to
+          rest on either), disabling here just keeps the toggle from
+          reading as active when it can't do anything right now. */}
       {mode === 'translate' && (
         <div className="flex items-center gap-1.5 px-3 pb-1.5">
           <button
             onClick={() => onSnapToSurfaceChange(!snapToSurface)}
-            title="While dragging, rest this object on whatever other geometry is directly underneath it"
-            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+            disabled={editPivot}
+            title={editPivot ? 'Not available while Edit Pivot is on' : 'While dragging, rest this object on whatever other geometry is directly underneath it'}
+            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium disabled:opacity-40 disabled:hover:bg-white ${
               snapToSurface ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
             }`}
           >

@@ -12,6 +12,7 @@ import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsagePr
 import { useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile } from './import3d'
+import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
 import { loadCustomEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
@@ -65,7 +66,7 @@ import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
 import { computeKeyframeRange, computeScheduleRange, padDegenerateRange, unionRanges } from './timelinePlayback'
 import type { GizmoMode, GizmoSpace, KeyframeSupport, PathProgressSupport, PivotRotationSupport, PivotSupport } from './TransformPanel'
-import { getPivot, getPivotRotation, setPivot, setPivotRotation } from './elementPivot'
+import { ensurePivotSnapshot, getPivot, getPivotRotation, setPivot, setPivotRotation } from './elementPivot'
 import { deleteElementParent, listElementParents, upsertElementParent, type ElementParent as ElementParentType } from './elementParents'
 import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
@@ -2270,6 +2271,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // own TransformControls default, unchanged for every object until
   // someone actually sets a Pivot Rotation and switches this deliberately.
   const [gizmoSpace, setGizmoSpace] = useState<GizmoSpace>('world')
+  // "Edit Pivot" (2026-07-23, per Maro: "i want a gizmo for the pivot
+  // manipulations not just for the mesh") — see TransformPanel.tsx's own
+  // Props header. Same plain-interaction-toggle convention as gizmoSpace/
+  // snapToSurface just above/below.
+  const [editPivot, setEditPivot] = useState(false)
   // "Snap to Surface" (2026-07-23) — see TransformPanel.tsx's own Props
   // header. A plain interaction toggle, not object data — deliberately
   // not persisted anywhere (same as gizmoMode/gizmoSpace above), since
@@ -2393,7 +2399,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string) => {
+  const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string, includeAnimation: boolean = true) => {
     setImporting(true)
     setImportError(null)
     try {
@@ -2401,6 +2407,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const id = crypto.randomUUID()
       object.name = name
       object.userData.sceneObjectId = id
+      // "Include this file's animation" (ImportModelDialog.tsx) — bakes
+      // whatever clip(s) import3d.ts's own parse attached into real, dated
+      // ElementKeyframe rows (2026-07-23, per Maro: "we discussed normal 3d
+      // animation before, being able to animate the keyframes independent
+      // of schedule activities. the same thing" — see
+      // embeddedAnimationBake.ts's own header for the full story, including
+      // why an earlier always-looping AnimationMixer preview was scrapped
+      // in favour of this). Starts "today" at local midnight, one calendar
+      // day per clip-second — Maro's own confirmed choice over an explicit
+      // start-date/duration dialog. object.animations is cleared
+      // afterward either way (baked or not, unchecked or not) so nothing
+      // ever double-drives this object outside whatever real keyframes just
+      // landed on the Timeline.
+      if (includeAnimation && object.animations.length > 0) {
+        const startDate = new Date()
+        startDate.setHours(0, 0, 0, 0)
+        const baked = bakeEmbeddedAnimationToKeyframes(object, settings.upAxis, startDate)
+        if (baked === null) {
+          setImportError(`"${name}" imported, but its animation couldn't be converted to keyframes — it animates more than one part independently (e.g. a rig/skeleton), and this app can only key a mesh import as one rigid whole. The mesh itself imported fine.`)
+        } else {
+          for (const kf of baked) await elementKeyframes.upsert('mesh', name, kf.field, kf.date, kf.value)
+        }
+      }
+      object.animations = []
       setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setDataTab('3d')
       persistModelFile(id, file, 'mesh', sourceUpAxis, name)
@@ -2451,12 +2481,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Mesh-only now (2026-07-17) — IFC files bypass this dialog entirely,
   // see handleFileSelected's own header.
-  const handleConfirmImport = (sourceUpAxis: UpAxis, name: string) => {
+  const handleConfirmImport = (sourceUpAxis: UpAxis, name: string, includeAnimation: boolean) => {
     const next = pendingImports[0]
     if (!next) return
     const { file } = next
     setPendingImports(prev => prev.slice(1))
-    importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, name))
+    importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, name, includeAnimation))
   }
 
   // Restores every persisted model on load (2026-07-09, per Maro: "if i hard
@@ -2666,6 +2696,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const object = await loadModel3DFile(restoredFile)
             if (stale()) return
             applyTransform(object, wholeFileTransform)
+            // Any embedded clip was already baked into real ElementKeyframe
+            // rows once, at original import time (handleImport3D's own
+            // header) — those persisted rows come back on their own via
+            // useElementKeyframes' own fetch, so re-parsing the raw file
+            // here must not re-bake (would duplicate keyframes dated from
+            // today instead of the original import day) or leave a stray
+            // live clip sitting unused on the restored object.
+            object.animations = []
             const id = crypto.randomUUID()
             object.name = file.name
             object.userData.sceneObjectId = id
@@ -3582,6 +3620,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // persisted as a manual transform.
   const handleTransformTick = () => setTransformTick(t => t + 1)
 
+  // "Edit Pivot" (2026-07-23) — ensures elementPivot.ts's own pre-pivot
+  // snapshot (prePivotPosition/prePivotQuaternion) exists *before* a drag
+  // can start mutating position/quaternion, both the moment the toggle
+  // arms and again on every selection change while it's already armed
+  // (activeTransformObject is a plain per-render value, not memoized, but
+  // its identity is still stable across unrelated re-renders of the same
+  // selection — same convention the activeIfcHandle effect just above
+  // already relies on). ensurePivotSnapshot is idempotent (elementPivot.ts's
+  // own ensureSnapshot guard), so re-arming on an object that already has
+  // one is a no-op, same as setPivot/setPivotRotation's own first call
+  // always was.
+  useEffect(() => {
+    if (editPivot && activeTransformObject) ensurePivotSnapshot(activeTransformObject)
+  }, [editPivot, activeTransformObject])
+
   // "Set Pivot" (2026-07-12) — see elementPivot.ts's own header. Shared by
   // both the typed X/Y/Z fields (already-local-space point) and the
   // viewport-click catcher (handlePickPivotPoint below, which does the
@@ -3823,6 +3876,46 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     for (const k of dayKeyframes) await elementKeyframes.remove(k.id)
   }
 
+  // Paste (2026-07-23, per Maro: "allow me to drag and select all keyframe
+  // and delete or copy and paste") — AnimationActorsList.tsx's own
+  // clipboard already worked out each pasted row's target date (the
+  // playhead plus that keyframe's own offset from the earliest copied one)
+  // and value; this just does the actual upsert() calls, same "the list
+  // component computes what, FourD.tsx does the actual API call" split
+  // handleMoveKeyframes/handleDeleteKeyframes just above already use.
+  const handleCreateKeyframes = async (
+    rows: { sourceKind: ElementKeyframe['source_kind']; elementRef: string; field: KeyframeField; date: Date; value: number }[],
+  ) => {
+    for (const r of rows) await elementKeyframes.upsert(r.sourceKind, r.elementRef, r.field, r.date, r.value)
+  }
+
+  // Reverse (2026-07-23, per Maro: "reverse too") — mirrors the given set
+  // in time: groups by (element, field) track, sorts each by date, then
+  // swaps every keyframe's own value for the one at its mirrored position
+  // (first <-> last, second <-> second-to-last, ...) — dates never move,
+  // only which value sits on which date. Same upsert-at-an-existing-date
+  // semantics as every other bulk op here; skips a track entirely once it's
+  // already symmetric (a 2-keyframe reverse is its own inverse — a second
+  // click would otherwise just write back the exact same values it read).
+  const handleReverseKeyframes = async (keyframes: ElementKeyframe[]) => {
+    const byTrack = new Map<string, ElementKeyframe[]>()
+    for (const k of keyframes) {
+      const key = `${k.source_kind}:${k.element_ref}:${k.field}`
+      const arr = byTrack.get(key)
+      if (arr) arr.push(k); else byTrack.set(key, [k])
+    }
+    for (const track of byTrack.values()) {
+      const sorted = [...track].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      const values = sorted.map(k => k.value)
+      for (let i = 0; i < sorted.length; i++) {
+        const mirrored = values[values.length - 1 - i]
+        if (mirrored !== sorted[i].value) {
+          await elementKeyframes.upsert(sorted[i].source_kind, sorted[i].element_ref, sorted[i].field, new Date(sorted[i].date), mirrored)
+        }
+      }
+    }
+  }
+
   // Paths panel's "Bind selected" target (2026-07-11) — mesh-kind only
   // this pass, same v1 scope as keyframeSupport just above (a mesh scene
   // object's own filename is a stable identity; an IFC selection has no
@@ -3979,6 +4072,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             keyframesByDay={activeObjectKeyframesByDay}
             onMoveKeyframes={handleMoveKeyframes}
             onDeleteKeyframes={handleDeleteKeyframes}
+            onCreateKeyframes={handleCreateKeyframes}
+            onReverseKeyframes={handleReverseKeyframes}
             elementKeyframes={elementKeyframes.keyframes}
             pathFollowers={pathFollowers}
             annotations={resolvedAnnotations}
@@ -4302,6 +4397,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
       gizmoMode={gizmoMode}
       gizmoSpace={gizmoSpace}
+      editPivot={editPivot}
       snapToSurface={snapToSurface}
       onTransformChange={handleTransformChange}
       onTimelineTick={handleTransformTick}
@@ -4540,6 +4636,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onGizmoModeChange={setGizmoMode}
           gizmoSpace={gizmoSpace}
           onGizmoSpaceChange={setGizmoSpace}
+          editPivot={editPivot}
+          onEditPivotChange={setEditPivot}
           snapToSurface={snapToSurface}
           onSnapToSurfaceChange={setSnapToSurface}
           activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
