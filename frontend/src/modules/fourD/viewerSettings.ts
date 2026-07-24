@@ -52,13 +52,6 @@ export interface ViewerSettings {
   // current look.
   sunAzimuth: number
   sunElevation: number
-  // Ambient occlusion (2026-07-09, per Maro — N8AO via
-  // @react-three/postprocessing, chosen over hand-rolling SSAO: mature,
-  // actively maintained, same pmndrs family as drei, already a dependency
-  // here). Off by default, same caution as shadows above — a real GPU
-  // cost worth opting into deliberately rather than surprising someone on
-  // a large BIM model.
-  ambientOcclusion: boolean
   // Blender's "Scene World" checkbox equivalent (2026-07-11, per Maro: "see
   // the sky as well from the added HDR"). Defaults on — Viewport3D.tsx's
   // DEFAULT_ENVIRONMENT_URL is an actual outdoor sky (a self-hosted HDR,
@@ -110,7 +103,6 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   shadows: false,
   sunAzimuth: 45,
   sunElevation: 45,
-  ambientOcclusion: false,
   environmentBackground: true,
   whiteBackground: false,
   upAxis: 'z',

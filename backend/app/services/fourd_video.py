@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fourd_video import FourDVideo
 from app.schemas.fourd_video import FourDVideoResponse
-from app.services.fourd_video_storage import delete_stored_file, generate_storage_filename, storage_path
+from app.services.fourd_video_storage import (
+    delete_stored_file, generate_storage_filename, media_type_for_storage_filename, storage_path,
+)
 
 # Same defensive cap/chunk size as model3d_file.py — no CDN/chunked-upload
 # infrastructure yet, so a single request streams straight to local disk.
@@ -34,7 +36,7 @@ async def create_video(
     # a prior row — each capture (e.g. "before" and "after" of the same
     # sequence) is independently worth keeping, not a re-import of "the same
     # model," so every upload is just a new row.
-    storage_filename = generate_storage_filename(name)
+    storage_filename = generate_storage_filename(upload.content_type)
     dest = storage_path(storage_filename)
     size = 0
     try:
@@ -68,10 +70,14 @@ async def get_download(db: AsyncSession, video_id: uuid.UUID) -> FileResponse:
     path = storage_path(row.storage_filename)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored video is missing on disk")
-    # media_type="video/webm" (not octet-stream, unlike Model3DFile's
-    # download) so a dashboard <video> tag can play it directly; FileResponse
-    # supports HTTP range requests out of the box, needed for scrubbing.
-    return FileResponse(path, filename=row.name, media_type="video/webm")
+    # media_type derived from the stored file's own extension (2026-07-25
+    # fix, per Maro's mp4 option — this used to hardcode "video/webm"
+    # unconditionally, which would have served a real .mp4 upload back with
+    # the wrong Content-Type and broken the dashboard <video> tag's
+    # playback), not octet-stream (unlike Model3DFile's download) so that
+    # tag can play it directly; FileResponse supports HTTP range requests
+    # out of the box, needed for scrubbing.
+    return FileResponse(path, filename=row.name, media_type=media_type_for_storage_filename(row.storage_filename))
 
 
 async def delete_video(db: AsyncSession, video_id: uuid.UUID) -> None:

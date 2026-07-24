@@ -36,13 +36,15 @@ export interface ExportLayout {
   tableRect: Rect | null
   mainViewRect: Rect
   baselineViewRect: Rect | null
+  costRect: Rect | null
+  titleBlockRect: Rect | null
 }
 
-// Base sizes at scale=1 — multiplied by `scale` (the same effective
-// devicePixelRatio × resolutionMultiplier already used to boost the 3D
-// canvases themselves) everywhere below, so overlay text/line weights stay
-// proportionate to the 3D content at 2x/4x output instead of becoming
-// illegibly tiny.
+// Base sizes at scale=1 (a 1080p-tall output) — multiplied by `scale`
+// (resolutionHeight / 1080, computed by Viewport3D.tsx's own
+// handleCaptureImage/handleExportVideo) everywhere below, so overlay
+// text/line weights stay proportionate to the requested output resolution
+// instead of becoming illegibly tiny at 4K or oversized at 720p.
 const GANTT_BAND_HEIGHT = 130
 // Time-interval ruler along the top of the Gantt strip (2026-07-25, per
 // Maro: "time interval at the top would be useful") — a separate reserved
@@ -51,6 +53,26 @@ const GANTT_BAND_HEIGHT = 130
 // chosen.
 const TIME_AXIS_HEIGHT = 22
 const TABLE_COLUMN_WIDTH = 420
+// Full-width footer band (2026-07-25, per Maro: "include... the cost
+// profile over time at the bottom") — see drawCostProfileChart's own
+// header for where the values themselves come from (P6-style Resource
+// Usage Profile, reused verbatim rather than a bespoke EVM calculation).
+// Tall enough to comfortably fit the Active Resources box (title + up to
+// 4 rows + a "+N more" tail) inside the same vertical space as the bars,
+// without it spilling down into the month-label row below (2026-07-25 fix
+// — the original 150 was sized only for the bars/labels, before the
+// resources box existed).
+const COST_BAND_HEIGHT = 180
+// Reserved strip for the Active Resources box, to the right of the bars
+// (2026-07-25 fix, per Maro: "good touch with the active resources, but
+// its overlapping with the bars a bit" — anchoring the box to a fixed
+// corner of the whole chart meant a tall bar landing under that corner
+// (which one, varies bucket to bucket as `now` advances through the
+// video) could grow right up into it). Always reserved, whether or not a
+// box actually has anything to draw this frame, so the bars themselves
+// never shift width as resources come and go through the video — only
+// the box's own contents change, never the chart's layout.
+const RESOURCE_BOX_WIDTH = 200
 const OVERLAY_PADDING = 10
 const ROW_HEIGHT = 20
 // Breathing room between adjacent text columns (2026-07-25 fix, per Maro:
@@ -108,28 +130,28 @@ export function selectExportActivities(activities: Activity[], now: Date | null,
 }
 
 export function computeExportLayout(
-  mainWidth: number, mainHeight: number,
-  baselineWidth: number, baselineHeight: number,
+  resolutionWidth: number, resolutionHeight: number,
   scale: number,
-  opts: { includeGanttChart: boolean; includeActivityTable: boolean; includeBaseline: boolean },
+  opts: { includeGanttChart: boolean; includeActivityTable: boolean; includeBaseline: boolean; includeCostProfile: boolean },
 ): ExportLayout {
   const ganttHeight = opts.includeGanttChart ? Math.round((GANTT_BAND_HEIGHT + TIME_AXIS_HEIGHT) * scale) : 0
   const tableWidth = opts.includeActivityTable ? Math.round(TABLE_COLUMN_WIDTH * scale) : 0
+  const costHeight = opts.includeCostProfile ? Math.round(COST_BAND_HEIGHT * scale) : 0
 
-  // Viewport area sized off the source canvas(es)' own combined width —
-  // whatever main (+ baseline, side by side) would naturally occupy —
-  // rather than an arbitrary constant, so the 3D content never gets
-  // stretched/squashed relative to what's actually on screen. Each source
-  // canvas keeps its own native width/height in its own rect (top-aligned
-  // within the shared viewport row) rather than being forced to a shared
-  // height — same "never stretch, just top-align" behaviour
-  // compositeCanvasesSideBySide already had for the baseline-only case,
-  // now generalised to also leave room for the Gantt/Table bands.
-  const viewportWidth = opts.includeBaseline ? mainWidth + baselineWidth : mainWidth
-  const viewportHeight = opts.includeBaseline ? Math.max(mainHeight, baselineHeight) : mainHeight
+  // Explicit target output size (2026-07-25 rework, per Maro: "the
+  // resolution options we have are very simplistic and insufficient
+  // compared to blender") — resolutionWidth/Height (RenderCaptureSettings)
+  // are now the literal output pixel dimensions, independent of either
+  // source canvas's own on-screen size. Each 3D view's own rect is
+  // cover-fit (drawCoverFit in composeExportFrame below) rather than
+  // stretched to match — the "never distort the 3D content" principle
+  // this function always had, just achieved by cropping now instead of by
+  // sizing the frame around the source canvases.
+  const totalWidth = resolutionWidth
+  const totalHeight = resolutionHeight
 
-  const totalWidth = tableWidth + viewportWidth
-  const totalHeight = ganttHeight + viewportHeight
+  const viewportWidth = totalWidth - tableWidth
+  const viewportHeight = totalHeight - ganttHeight - costHeight
 
   const ganttRect: Rect | null = opts.includeGanttChart
     ? { x: tableWidth, y: 0, width: viewportWidth, height: ganttHeight }
@@ -138,12 +160,36 @@ export function computeExportLayout(
     ? { x: 0, y: ganttHeight, width: tableWidth, height: viewportHeight }
     : null
 
-  const mainViewRect: Rect = { x: tableWidth, y: ganttHeight, width: mainWidth, height: mainHeight }
+  // Split evenly between main/baseline when shown side by side — each
+  // gets cover-fit into its own half independently, so neither the 50/50
+  // split nor either source canvas's own native aspect ratio distorts the
+  // other.
+  const mainWidth = opts.includeBaseline ? Math.round(viewportWidth / 2) : viewportWidth
+  const baselineWidth = viewportWidth - mainWidth
+
+  const mainViewRect: Rect = { x: tableWidth, y: ganttHeight, width: mainWidth, height: viewportHeight }
   const baselineViewRect: Rect | null = opts.includeBaseline
-    ? { x: tableWidth + mainWidth, y: ganttHeight, width: baselineWidth, height: baselineHeight }
+    ? { x: tableWidth + mainWidth, y: ganttHeight, width: baselineWidth, height: viewportHeight }
+    : null
+  // Full-width footer, below the table+viewport row entirely (not scoped
+  // to just the viewport's own width the way ganttRect is) — a status-bar
+  // style band makes more sense spanning everything underneath it, since
+  // cost data isn't specifically tied to the table column beside it.
+  const costRect: Rect | null = opts.includeCostProfile
+    ? { x: 0, y: ganttHeight + viewportHeight, width: totalWidth, height: costHeight }
+    : null
+  // The empty corner above the table/left of the Gantt strip (2026-07-25,
+  // per Maro: "there's a corner at left which is empty. Allow me to add a
+  // title... and a description or narrative") — only ever exists when both
+  // bands are on, since it's exactly their intersection (ganttRect stops
+  // at x: tableWidth, tableRect starts at y: ganttHeight — the rectangle
+  // neither one claims). No dedicated space to draw into otherwise, so
+  // this stays null rather than inventing a new band just for it.
+  const titleBlockRect: Rect | null = opts.includeGanttChart && opts.includeActivityTable
+    ? { x: 0, y: 0, width: tableWidth, height: ganttHeight }
     : null
 
-  return { totalWidth, totalHeight, ganttRect, tableRect, mainViewRect, baselineViewRect }
+  return { totalWidth, totalHeight, ganttRect, tableRect, mainViewRect, baselineViewRect, costRect, titleBlockRect }
 }
 
 function formatShortDate(d: Date): string {
@@ -281,13 +327,14 @@ export function drawActivityTableStrip(
   // actual ruled line, the same convention a real data table would use,
   // makes the column boundary unambiguous regardless of how close any one
   // row's text happens to sit next to it. Code/date shares kept small
-  // (2026-07-25, per Maro: "activity name text is cut off") — "T-0044"
-  // and a short date never need much room, so most of the column now goes
-  // to the name, which still truncates on a genuinely long activity name
-  // but far less eagerly than before.
+  // (2026-07-25, per Maro: "activity name text is cut off", then "the
+  // column and date... has too much space, give the extra to the activity
+  // name column") — "T-0044" and a short date never need much room, so
+  // most of the column now goes to the name, which still truncates on a
+  // genuinely long activity name but far less eagerly than before.
   const gap = COLUMN_GAP * scale
-  const codeWidth = rect.width * 0.16
-  const dateWidth = rect.width * 0.22
+  const codeWidth = rect.width * 0.13
+  const dateWidth = rect.width * 0.16
   const nameX = rect.x + padding + codeWidth + gap
   const nameWidth = rect.width - padding * 2 - codeWidth - dateWidth - gap * 2
   const dateX = rect.x + rect.width - padding - dateWidth
@@ -317,6 +364,283 @@ export function drawActivityTableStrip(
     ctx.moveTo(dividerX, dividerTop)
     ctx.lineTo(dividerX, dividerBottom)
     ctx.stroke()
+  }
+  ctx.restore()
+}
+
+// Which bucket `now` currently falls in — shared by the "dim the future,
+// highlight the present" bar treatment and the active-resources box below,
+// so both agree on exactly the same period. Falls back to -1 (nothing
+// current) once `now` is past every bucket or there's no date at all.
+function findCurrentBucketIndex(buckets: { start: Date; end: Date }[], now: Date | null): number {
+  if (!now) return -1
+  const nowMs = now.getTime()
+  return buckets.findIndex(b => nowMs >= b.start.getTime() && nowMs < b.end.getTime())
+}
+
+// Monthly cost bar chart along the bottom (2026-07-25, per Maro: "the
+// resource usage profile but showing cost across the time period... it's
+// in the Resource-Scheduling tab"). Deliberately NOT a bespoke EVM/cash-
+// flow calculation invented for this chart — Maro pointed at
+// ResourceUsageProfileWidget.tsx's own already-shipped "cost" unit
+// (P6-style Resource Usage Profile, computeUsageProfileBars in
+// useResourcesTabData.ts), so FourD.tsx calls that exact same function
+// with unit: 'cost' and month-zoom buckets and passes the result straight
+// through here — this file only ever draws whatever numbers it's handed,
+// the same "not this module's job to invent PM math" discipline
+// exportOverlays.ts already applies to the Gantt/Table content above.
+//
+// `now`-aware (2026-07-25, second pass, per Maro: "i want to see the cost
+// profile bars be dynamic right now its just static, showing the bars for
+// the whole period") — the *data* is still the whole schedule's profile
+// (that's genuinely correct context, same reasoning drawGanttStrip already
+// shows the whole timeline rather than just "so far"), but the chart now
+// visibly reacts to playback the same way the Gantt strip's own "now" line
+// and the Activity Table's own active-row highlight already do: a matching
+// dashed "now" line, the current month's bar outlined, and every month
+// still in the future rendered at low opacity rather than full colour —
+// so scrubbing/playing the video visibly moves this chart instead of it
+// sitting static throughout the whole export.
+export function drawCostProfileChart(
+  ctx: CanvasRenderingContext2D, rect: Rect,
+  buckets: { start: Date; end: Date; label: string }[], values: number[], now: Date | null,
+  resourceBreakdown: { name: string; values: number[] }[], scale: number,
+): void {
+  ctx.save()
+  ctx.fillStyle = '#f9fafb'
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+  ctx.strokeStyle = '#d1d5db'
+  ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
+
+  if (buckets.length === 0) { ctx.restore(); return }
+
+  const padding = OVERLAY_PADDING * scale
+  const axisWidth = 56 * scale
+  // S-Curve (2026-07-25, per Maro: "add an s curve to the cost profile")
+  // — the classic PMBOK cumulative-cost overlay (Rita Mulcahy PMP Exam
+  // Prep, Ch.7 "the S-curve": cumulative planned cost plotted against
+  // time, named for the shape a normal project's slow-start/ramp-up/
+  // wind-down spend produces). Its own right-hand axis, since a running
+  // total is on a completely different scale to any single period's own
+  // bar — sharing the left axis would either flatten every bar to nothing
+  // or send the line off the top of the chart.
+  const rightAxisWidth = 46 * scale
+  const legendHeight = 16 * scale
+  const labelHeight = 16 * scale
+  const resourceBoxWidth = RESOURCE_BOX_WIDTH * scale
+  const chartX = rect.x + axisWidth
+  const chartWidth = Math.max(0, rect.width - axisWidth - rightAxisWidth - padding - resourceBoxWidth - padding)
+  const chartTop = rect.y + padding + legendHeight
+  const chartHeight = Math.max(0, rect.height - padding * 2 - legendHeight - labelHeight)
+  const maxValue = Math.max(...values, 1) * 1.1
+  const bucketWidth = chartWidth / buckets.length
+  const currentBucketIndex = findCurrentBucketIndex(buckets, now)
+
+  const cumulative: number[] = []
+  let running = 0
+  for (const v of values) { running += v ?? 0; cumulative.push(running) }
+  const maxCumulative = Math.max(running, 1) * 1.05
+
+  const formatAbbreviated = (value: number): string => {
+    const rounded = Math.round(value)
+    const abs = Math.abs(rounded)
+    const short = abs >= 1_000_000 ? `${(rounded / 1_000_000).toFixed(1)}M` : abs >= 1_000 ? `${(rounded / 1_000).toFixed(1)}k` : String(rounded)
+    return `£${short}`
+  }
+
+  // Legend — distinguishes the bars from the S-Curve line, since both
+  // now share the chart and only differ by colour/axis.
+  ctx.font = `${Math.round(9 * scale)}px system-ui, sans-serif`
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#eab308'
+  ctx.fillRect(chartX, rect.y + padding + legendHeight / 2 - 4 * scale, 8 * scale, 8 * scale)
+  ctx.fillStyle = '#6b7280'
+  ctx.fillText('Period Cost', chartX + 11 * scale, rect.y + padding + legendHeight / 2)
+  const sCurveLegendX = chartX + 90 * scale
+  ctx.strokeStyle = '#2563eb'
+  ctx.lineWidth = Math.max(1, 2 * scale)
+  ctx.beginPath()
+  ctx.moveTo(sCurveLegendX, rect.y + padding + legendHeight / 2)
+  ctx.lineTo(sCurveLegendX + 14 * scale, rect.y + padding + legendHeight / 2)
+  ctx.stroke()
+  ctx.fillStyle = '#6b7280'
+  ctx.fillText('S-Curve (cumulative)', sCurveLegendX + 18 * scale, rect.y + padding + legendHeight / 2)
+
+  // Gridlines + dual £ axis labels — left is per-period (same abbreviate-
+  // to-k/M convention as ResourceUsageProfileWidget's own formatAxisValue,
+  // so a value here reads the same way it would in the live Resource
+  // Usage tab), right is the S-Curve's own cumulative scale. Both share
+  // the same horizontal gridlines (an even fraction of chartHeight),
+  // reading off whichever axis's own max applies at that same fraction —
+  // the standard dual-axis-chart trick, rather than drawing two
+  // independent sets of lines on top of each other.
+  const gridlineCount = 4
+  for (let i = 0; i <= gridlineCount; i++) {
+    const frac = i / gridlineCount
+    const y = chartTop + chartHeight - frac * chartHeight
+    ctx.strokeStyle = i === gridlineCount ? '#111827' : '#e5e7eb'
+    ctx.lineWidth = Math.max(1, scale)
+    ctx.beginPath()
+    ctx.moveTo(chartX, y)
+    ctx.lineTo(chartX + chartWidth, y)
+    ctx.stroke()
+    ctx.fillStyle = '#9ca3af'
+    drawTruncatedText(ctx, formatAbbreviated(maxValue * frac), rect.x + padding * 0.3, y, axisWidth - padding * 0.6)
+    ctx.fillStyle = '#2563eb'
+    drawTruncatedText(ctx, formatAbbreviated(maxCumulative * frac), chartX + chartWidth + padding * 0.4, y, rightAxisWidth - padding * 0.4)
+  }
+
+  // Bars, one per bucket — same yellow "Budgeted" tint
+  // RESOURCE_USAGE_COLORS.budgeted uses live, so a viewer already familiar
+  // with that tab recognises this as the same figure. Already-passed/
+  // current months stay full colour; anything still ahead of `now` fades
+  // to a faint tint instead — the whole profile is still visible (useful
+  // context for what's coming), just visually deferred.
+  const barGap = Math.max(2, 4 * scale)
+  const barWidth = Math.max(scale, bucketWidth - barGap)
+  const nowMs = now?.getTime()
+  buckets.forEach((bucket, i) => {
+    const value = values[i] ?? 0
+    if (value <= 0) return
+    const barHeight = (value / maxValue) * chartHeight
+    const x = chartX + i * bucketWidth + barGap / 2
+    const y = chartTop + chartHeight - barHeight
+    const isFuture = nowMs !== undefined && bucket.start.getTime() > nowMs
+    ctx.fillStyle = isFuture ? 'rgba(234,179,8,0.3)' : '#eab308'
+    ctx.fillRect(x, y, barWidth, barHeight)
+    if (i === currentBucketIndex) {
+      ctx.strokeStyle = '#92400e'
+      ctx.lineWidth = Math.max(1, 2 * scale)
+      ctx.strokeRect(x, y, barWidth, barHeight)
+    }
+  })
+
+  // S-Curve line — cumulative cost, one point per bucket centre, plotted
+  // against its own right-hand scale (maxCumulative) computed above.
+  ctx.strokeStyle = '#2563eb'
+  ctx.lineWidth = Math.max(1, 2 * scale)
+  ctx.beginPath()
+  buckets.forEach((_bucket, i) => {
+    const x = chartX + i * bucketWidth + bucketWidth / 2
+    const y = chartTop + chartHeight - (cumulative[i] / maxCumulative) * chartHeight
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+  })
+  ctx.stroke()
+  ctx.fillStyle = '#2563eb'
+  buckets.forEach((_bucket, i) => {
+    const x = chartX + i * bucketWidth + bucketWidth / 2
+    const y = chartTop + chartHeight - (cumulative[i] / maxCumulative) * chartHeight
+    ctx.beginPath()
+    ctx.arc(x, y, Math.max(1.5, 2 * scale), 0, Math.PI * 2)
+    ctx.fill()
+  })
+
+  // "Now" line — same dashed-amber convention as drawGanttStrip's own,
+  // positioned across the *whole* bucket range (not just up to the last
+  // bucket boundary) so it still reads correctly for a date past the very
+  // last bucket's end.
+  if (now && buckets.length > 0) {
+    const rangeStart = buckets[0].start.getTime()
+    const rangeEnd = buckets[buckets.length - 1].end.getTime()
+    const rangeMs = rangeEnd - rangeStart
+    if (rangeMs > 0) {
+      const nowX = chartX + Math.min(1, Math.max(0, (now.getTime() - rangeStart) / rangeMs)) * chartWidth
+      ctx.strokeStyle = '#f59e0b'
+      ctx.lineWidth = Math.max(1, 1.5 * scale)
+      ctx.setLineDash([4 * scale, 3 * scale])
+      ctx.beginPath()
+      ctx.moveTo(nowX, chartTop)
+      ctx.lineTo(nowX, chartTop + chartHeight)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+  }
+
+  // X-axis month labels, thinned out so they never overlap regardless of
+  // how many months the schedule spans — same "skip every Nth" idea
+  // drawGanttStrip's own time axis uses, just driven by available pixel
+  // width instead of a fixed calendar interval since these buckets are
+  // always exactly one month apart already.
+  ctx.fillStyle = '#6b7280'
+  ctx.font = `${Math.round(8 * scale)}px system-ui, sans-serif`
+  // Wide enough for the longest real label ("Sept 2027") at this font size
+  // (2026-07-25 fix — a narrower box here was truncating month labels with
+  // an ellipsis, e.g. "Sept 2..."/"Oct 20...", even though there was
+  // plenty of room between bars for the full text).
+  const labelDrawWidth = 50 * scale
+  const labelStride = Math.max(1, Math.ceil(labelDrawWidth / bucketWidth))
+  buckets.forEach((bucket, i) => {
+    if (i % labelStride !== 0) return
+    const x = chartX + i * bucketWidth + bucketWidth / 2 - labelDrawWidth / 2
+    drawTruncatedText(ctx, bucket.label, x, chartTop + chartHeight + labelHeight / 2 + padding * 0.2, labelDrawWidth)
+  })
+
+  // Active Resources box (2026-07-25, per Maro: "an indication of the
+  // resources driving the cost profile not just the bars") — whichever
+  // resources actually have cost in the *current* bucket, sorted by
+  // contribution. Drawn in its own reserved strip to the right of the
+  // bars (see RESOURCE_BOX_WIDTH's own header for why it's no longer just
+  // anchored to a corner that a tall bar could grow into) — genuinely
+  // dynamic: this list changes bucket to bucket as `now` advances, same as
+  // the bars above and the Gantt/Table's own live highlights.
+  if (currentBucketIndex >= 0) {
+    const contributing = resourceBreakdown
+      .map(r => ({ name: r.name, value: r.values[currentBucketIndex] ?? 0 }))
+      .filter(r => r.value > 0)
+      .sort((a, b) => b.value - a.value)
+    if (contributing.length > 0) {
+      drawActiveResourcesBox(ctx, chartX + chartWidth + rightAxisWidth + padding, chartTop, resourceBoxWidth, contributing, scale)
+    }
+  }
+  ctx.restore()
+}
+
+// Small boxed list — resource name + its own £ contribution — for
+// whichever resources are actually driving the currently-active bucket's
+// cost, capped to a handful of rows with a "+N more" tail so a real
+// project's full resource list can't blow out the box's height. Same
+// white/bordered convention drawAppearanceLegend/drawDateOverlay already
+// use, for visual consistency across every overlay box in this file.
+function drawActiveResourcesBox(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, resources: { name: string; value: number }[], scale: number): void {
+  const padding = OVERLAY_PADDING * scale
+  const rowHeight = ROW_HEIGHT * 0.85 * scale
+  const titleHeight = rowHeight * 1.1
+  const maxRows = 4
+  const shown = resources.slice(0, maxRows)
+  const overflow = resources.length - shown.length
+  const rowCount = shown.length + (overflow > 0 ? 1 : 0)
+  const height = titleHeight + rowCount * rowHeight + padding * 2
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.fillRect(x, y, width, height)
+  ctx.strokeStyle = '#d1d5db'
+  ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(x, y, width, height)
+
+  ctx.fillStyle = '#111827'
+  ctx.font = `bold ${Math.round(11 * scale)}px system-ui, sans-serif`
+  ctx.textBaseline = 'middle'
+  drawTruncatedText(ctx, 'Active Resources', x + padding, y + padding + titleHeight / 2, width - padding * 2)
+
+  ctx.font = `${Math.round(9 * scale)}px system-ui, sans-serif`
+  shown.forEach((resource, i) => {
+    const rowY = y + padding + titleHeight + i * rowHeight
+    const rounded = Math.round(resource.value)
+    const abs = Math.abs(rounded)
+    const short = abs >= 1_000_000 ? `${(rounded / 1_000_000).toFixed(1)}M` : abs >= 1_000 ? `${(rounded / 1_000).toFixed(1)}k` : String(rounded)
+    const valueLabel = `£${short}`
+    const valueWidth = ctx.measureText(valueLabel).width
+    ctx.fillStyle = '#374151'
+    drawTruncatedText(ctx, resource.name, x + padding, rowY + rowHeight / 2, width - padding * 2 - valueWidth - padding * 0.5)
+    ctx.fillStyle = '#6b7280'
+    ctx.fillText(valueLabel, x + width - padding - valueWidth, rowY + rowHeight / 2)
+  })
+  if (overflow > 0) {
+    const rowY = y + padding + titleHeight + shown.length * rowHeight
+    ctx.fillStyle = '#9ca3af'
+    drawTruncatedText(ctx, `+${overflow} more`, x + padding, rowY + rowHeight / 2, width - padding * 2)
   }
   ctx.restore()
 }
@@ -389,6 +713,111 @@ export function drawDateOverlay(ctx: CanvasRenderingContext2D, x: number, y: num
   ctx.restore()
 }
 
+// Greedy word-wrap — breaks `text` into lines no wider than `maxWidth` at
+// this ctx's own current font, same measure-first approach
+// drawTruncatedText uses rather than trusting fillText's own maxWidth
+// (which squishes instead of wrapping — see that function's own header
+// for why that's never what's wanted here).
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word
+    if (current && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(current)
+      current = word
+    } else {
+      current = candidate
+    }
+  }
+  if (current) lines.push(current)
+  return lines
+}
+
+// Project title + narrative for the empty top-left corner (2026-07-25,
+// per Maro: "there's a corner at left which is empty. Allow me to add a
+// title (e.g project title) and a description or narrative so i can
+// utilise the space properly") — only ever called when
+// ExportLayout.titleBlockRect exists (see computeExportLayout's own
+// header on when that corner is actually available). Draws nothing if
+// both fields are blank, same "empty text = off" convention
+// RenderCaptureSettings.mainViewTitle/baselineViewTitle already established.
+function drawTitleBlock(ctx: CanvasRenderingContext2D, rect: Rect, title: string, narrative: string, scale: number): void {
+  const trimmedTitle = title.trim()
+  const trimmedNarrative = narrative.trim()
+  if (!trimmedTitle && !trimmedNarrative) return
+
+  ctx.save()
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+  ctx.strokeStyle = '#d1d5db'
+  ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
+
+  const padding = OVERLAY_PADDING * scale
+  const maxWidth = Math.max(0, rect.width - padding * 2)
+  ctx.textBaseline = 'middle'
+  let cursorY = rect.y + padding
+
+  if (trimmedTitle) {
+    ctx.font = `bold ${Math.round(15 * scale)}px system-ui, sans-serif`
+    ctx.fillStyle = '#111827'
+    const titleLineHeight = 19 * scale
+    const titleLines = wrapText(ctx, trimmedTitle, maxWidth).slice(0, 2)
+    titleLines.forEach((line, i) => {
+      drawTruncatedText(ctx, line, rect.x + padding, cursorY + i * titleLineHeight + titleLineHeight / 2, maxWidth)
+    })
+    cursorY += titleLines.length * titleLineHeight + padding * 0.5
+  }
+
+  if (trimmedNarrative) {
+    ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
+    ctx.fillStyle = '#4b5563'
+    const lineHeight = 14 * scale
+    const narrativeLines = wrapText(ctx, trimmedNarrative, maxWidth)
+    const availableHeight = Math.max(0, rect.y + rect.height - padding - cursorY)
+    const maxLines = Math.max(0, Math.floor(availableHeight / lineHeight))
+    narrativeLines.slice(0, maxLines).forEach((line, i) => {
+      const isTruncated = i === maxLines - 1 && narrativeLines.length > maxLines
+      drawTruncatedText(ctx, isTruncated ? `${line}…` : line, rect.x + padding, cursorY + i * lineHeight + lineHeight / 2, maxWidth)
+    })
+  }
+  ctx.restore()
+}
+
+// Small centred label badge along the top of a 3D view rect — "Current"/
+// "Baseline" by default (2026-07-25, per Maro: "add a title for both 3d
+// views... allow me to name the titles"), but whatever text
+// RenderCaptureSettings.mainViewTitle/baselineViewTitle actually holds.
+// Always drawn when non-blank rather than behind its own separate
+// checkbox — see RenderCaptureSettings' own header on that call — and
+// deliberately top-*centre*, not top-left, so it never collides with the
+// date overlay already claiming the main view's own top-left corner.
+export function drawViewTitle(ctx: CanvasRenderingContext2D, rect: Rect, title: string, scale: number): void {
+  const trimmed = title.trim()
+  if (!trimmed) return
+  const padding = OVERLAY_PADDING * scale
+  ctx.save()
+  ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`
+  ctx.textBaseline = 'middle'
+  const maxTextWidth = Math.max(0, rect.width - padding * 4)
+  const textWidth = Math.min(ctx.measureText(trimmed).width, maxTextWidth)
+  const boxWidth = textWidth + padding * 2
+  const boxHeight = 13 * scale + padding
+  const boxX = rect.x + (rect.width - boxWidth) / 2
+  const boxY = rect.y + padding * 0.6
+
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.fillRect(boxX, boxY, boxWidth, boxHeight)
+  ctx.strokeStyle = '#d1d5db'
+  ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(boxX, boxY, boxWidth, boxHeight)
+  ctx.fillStyle = '#111827'
+  drawTruncatedText(ctx, trimmed, boxX + padding, boxY + boxHeight / 2, textWidth)
+  ctx.restore()
+}
+
 export interface ComposeExportFrameOptions {
   mainCanvas: HTMLCanvasElement
   baselineCanvas: HTMLCanvasElement | null
@@ -402,12 +831,37 @@ export interface ComposeExportFrameOptions {
   includeActivityTable: boolean
   includeAppearanceLegend: boolean
   includeDateOverlay: boolean
+  mainViewTitle: string
+  baselineViewTitle: string
+  includeCostProfile: boolean
+  costProfileBuckets: { start: Date; end: Date; label: string }[]
+  costProfileValues: number[]
+  costProfileResourceBreakdown: { name: string; values: number[] }[]
+  exportTitle: string
+  exportNarrative: string
+}
+
+// Cover-fit (2026-07-25, for the explicit-output-resolution rework above) —
+// scales the source canvas uniformly to fill the destination rect
+// completely, centre-cropping whichever axis overflows, rather than
+// stretching non-uniformly to match (same convention as CSS
+// object-fit: cover). This is what actually delivers computeExportLayout's
+// own "never distort the 3D content" principle now that the output
+// resolution's aspect ratio generally won't match either source canvas's
+// own on-screen aspect ratio.
+function drawCoverFit(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, dest: Rect): void {
+  const scale = Math.max(dest.width / source.width, dest.height / source.height)
+  const sw = dest.width / scale
+  const sh = dest.height / scale
+  const sx = (source.width - sw) / 2
+  const sy = (source.height - sh) / 2
+  ctx.drawImage(source, sx, sy, sw, sh, dest.x, dest.y, dest.width, dest.height)
 }
 
 // Orchestrator — white background, whichever bands/overlays are enabled,
-// then the real 3D canvas(es) drawImage'd (scaled to fit) into their own
-// viewport rect(s). Called once for a still capture and every step() tick
-// for a video recording — see Viewport3D.tsx's own handleCaptureImage/
+// then the real 3D canvas(es) cover-fit into their own viewport rect(s).
+// Called once for a still capture and every step() tick for a video
+// recording — see Viewport3D.tsx's own handleCaptureImage/
 // handleExportVideo.
 export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: ExportLayout, opts: ComposeExportFrameOptions): void {
   ctx.fillStyle = '#ffffff'
@@ -419,12 +873,20 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   if (layout.tableRect && opts.includeActivityTable) {
     drawActivityTableStrip(ctx, layout.tableRect, opts.activities, opts.now, opts.scale)
   }
+  if (layout.costRect && opts.includeCostProfile) {
+    drawCostProfileChart(ctx, layout.costRect, opts.costProfileBuckets, opts.costProfileValues, opts.now, opts.costProfileResourceBreakdown, opts.scale)
+  }
+  if (layout.titleBlockRect) {
+    drawTitleBlock(ctx, layout.titleBlockRect, opts.exportTitle, opts.exportNarrative, opts.scale)
+  }
 
   const mv = layout.mainViewRect
-  ctx.drawImage(opts.mainCanvas, mv.x, mv.y, mv.width, mv.height)
+  drawCoverFit(ctx, opts.mainCanvas, mv)
+  drawViewTitle(ctx, mv, opts.mainViewTitle, opts.scale)
   if (layout.baselineViewRect && opts.baselineCanvas) {
     const bv = layout.baselineViewRect
-    ctx.drawImage(opts.baselineCanvas, bv.x, bv.y, bv.width, bv.height)
+    drawCoverFit(ctx, opts.baselineCanvas, bv)
+    drawViewTitle(ctx, bv, opts.baselineViewTitle, opts.scale)
   }
 
   const padding = OVERLAY_PADDING * opts.scale

@@ -8,8 +8,8 @@ import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
 
 // Lazy (2026-07-20, FourD; extended 2026-07-21 to every other routed
-// module) — FourD pulls in Three.js, react-three-fiber/drei/
-// postprocessing, recharts, and ~50 sibling files; statically importing it
+// module) — FourD pulls in Three.js, react-three-fiber/drei,
+// recharts, and ~50 sibling files; statically importing it
 // put all of that (confirmed via a real `npm run build`: ~3.8MB raw / ~1MB
 // gzipped) in the main bundle for every user, even one who only ever opens
 // /dashboard. That fix was scoped to FourD alone at the time, but

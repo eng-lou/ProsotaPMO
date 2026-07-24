@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
@@ -117,48 +117,6 @@ export interface ResolvedSectionBox {
   rotation: SectionBoxRotation
 }
 
-// Ambient occlusion (2026-07-09, per Maro — N8AO via
-// @react-three/postprocessing, chosen per this session's own research:
-// mature, actively maintained, same pmndrs family as drei already a
-// dependency here). Lazy-loaded, same "keep it out of the main bundle"
-// discipline this file already applies to web-ifc — `postprocessing` +
-// `n8ao` together added ~100kb gzipped to the main chunk, for a toggle
-// that's off by default (see viewerSettings.ts's own ambientOcclusion
-// default) and may never be turned on in a given session.
-// aoSamples/denoiseSamples (2026-07-11) — real, verified quality knobs on
-// N8AO's own underlying pass (checked directly in
-// node_modules/@react-three/postprocessing's N8AOPostPass source, not
-// assumed): defaults are 16/8, boosted to 64/32 while genuinely idle — see
-// this file's own boostQuality state/comment for the "real-time path
-// tracer, scoped down" reasoning this serves.
-// intensity dropped 2 -> 0.8 (2026-07-21, per Maro: "the dark ring is
-// unrealistic" — confirmed live: at 2, N8AO's contact occlusion around a
-// small object sitting on a larger face reads as a hard omnidirectional
-// dark halo, not a soft, physically-plausible occlusion, regardless of the
-// sun's own direction). Also confirmed live: this ring only shows for
-// Flat Shaded/Rendered — it's absent for Gouraud/Hidden Line, where a
-// still-batched element's material is swapped to a Lambert/Basic variant
-// (see the "Render mode" fix a few hundred lines down in this same file);
-// root cause not yet pinned down (N8AO derives its AO from the depth
-// buffer, not per-object material, so the correlation is real but not
-// yet explained). Left as a known, deliberately unchased gap per Maro —
-// AO/Shadows are both off by default and not something this project
-// currently relies on; worth a real diagnostic pass (same evidence-first
-// approach as the isolate/dope-sheet fixes elsewhere in this file) only if
-// that changes.
-const AmbientOcclusionEffect = lazy(() =>
-  import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
-    default: ({ boostQuality }: { boostQuality: boolean }) => (
-      <EffectComposer enableNormalPass>
-        <N8AO
-          aoRadius={1} intensity={0.8} distanceFalloff={1}
-          aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
-        />
-      </EffectComposer>
-    ),
-  })),
-)
-
 // Self-hosted default environment (2026-07-11, per Maro — replaces the
 // earlier RoomEnvironment/drei-CDN-preset fallback: "copy and save it in
 // our files for default load out"). Served straight from Vite's public/
@@ -167,6 +125,33 @@ const AmbientOcclusionEffect = lazy(() =>
 // so — unlike the old "apartment" preset — it's actually a sensible
 // backdrop too (see DEFAULT_VIEWER_SETTINGS.environmentBackground).
 export const DEFAULT_ENVIRONMENT_URL = '/hdr/kloofendal_48d_partly_cloudy_puresky_4k.hdr'
+
+// Extracted + exported (2026-07-25, per Maro: "baseline 3d doesnt share
+// the same render shader settings etc") — BaselineViewportPane.tsx calls
+// these same two functions now instead of using a fixed light position of
+// its own, so its own sun direction/shadow scale actually matches the main
+// viewport's for the same settings, rather than an independent guess. Pure
+// functions, no change to the maths itself — see modelRadius/sunPosition's
+// own original inline comments (still below, where Viewport3D calls these)
+// for the full "why" on both.
+export function computeModelRadius(importedObjects: ImportedObject[]): number {
+  const box = new THREE.Box3()
+  let any = false
+  for (const { object } of importedObjects) { box.expandByObject(object); any = true }
+  if (!any || box.isEmpty()) return 20
+  return Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
+}
+
+export function computeSunPosition(sunAzimuth: number, sunElevation: number, modelRadius: number, zUp: boolean): [number, number, number] {
+  const sunAzimuthRad = (sunAzimuth * Math.PI) / 180
+  const sunElevationRad = (sunElevation * Math.PI) / 180
+  const sunRadius = modelRadius * 3
+  const sunHorizontal = Math.cos(sunElevationRad) * sunRadius
+  const sunHeight = Math.sin(sunElevationRad) * sunRadius
+  return zUp
+    ? [Math.cos(sunAzimuthRad) * sunHorizontal, Math.sin(sunAzimuthRad) * sunHorizontal, sunHeight]
+    : [Math.cos(sunAzimuthRad) * sunHorizontal, sunHeight, Math.sin(sunAzimuthRad) * sunHorizontal]
+}
 
 interface Props {
   settings: ViewerSettings
@@ -431,6 +416,22 @@ interface Props {
   compareBaselineOpen: boolean
   baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
   onCaptureQualityChange?: (dprMultiplier: number | null) => void
+  // Mirrors this component's own captureBackgroundOverride out to
+  // FourD.tsx (2026-07-25, per Maro: "baseline 3d doesnt share the same
+  // render shader settings etc") — same "boost both panes together"
+  // reasoning as onCaptureQualityChange just above, just for the HDR/white
+  // background override during a capture instead of resolution.
+  onCaptureBackgroundChange?: (background: boolean | null) => void
+  // Cost Profile (2026-07-25, per Maro: "the resource usage profile but
+  // showing cost across the time period") — computed once in FourD.tsx
+  // (the only place with access to Resources/Cost data at all) via the
+  // exact same computeUsageProfileBars ResourceUsageProfileWidget itself
+  // calls, unit: 'cost', bucketed to a fixed month zoom independent of
+  // whatever the live Resource Usage window's own zoom is currently set
+  // to. Viewport3D never recomputes this, only draws whatever it's handed.
+  costProfileBuckets: { start: Date; end: Date; label: string }[]
+  costProfileValues: number[]
+  costProfileResourceBreakdown: { name: string; values: number[] }[]
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
@@ -604,7 +605,7 @@ function ModelObjects({
   // `${id}::${expressID}` for a specifically-linked IFC sub-element).
   // Toggled via settings.showVarianceColors (ViewerSettings), not a
   // separate prop — one more render-affecting viewer setting, same as
-  // showEdges/shadows/ambientOcclusion above it.
+  // showEdges/shadows above it.
   varianceByElementKey: Map<string, VarianceEntry>
   // Clash Detective (2026-07-12) — same elementKey convention, toggled via
   // settings.showClashColors alongside showVarianceColors above it.
@@ -3227,7 +3228,7 @@ export function Viewport3D({
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
   measurementHoverPoint, onMeasurementHoverPoint,
-  compareBaselineOpen, baselineCanvasRef, onCaptureQualityChange,
+  compareBaselineOpen, baselineCanvasRef, onCaptureQualityChange, onCaptureBackgroundChange, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -3269,14 +3270,7 @@ export function Viewport3D({
   // demo-scale number. Memoized since expandByObject does a real geometry
   // traversal, not free to redo on every unrelated render. Falls back to
   // 20 (the old fixed default) when nothing's loaded yet.
-  const modelRadius = useMemo(() => {
-    const box = new THREE.Box3()
-    let any = false
-    for (const { object } of importedObjects) { box.expandByObject(object); any = true }
-    if (!any || box.isEmpty()) return 20
-    return Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [importedObjects])
+  const modelRadius = useMemo(() => computeModelRadius(importedObjects), [importedObjects])
 
   // TransformControls' own onChange, wrapped to run either "Edit Pivot" or
   // "Snap to Surface" (2026-07-23) before the real onTransformChange —
@@ -3307,14 +3301,11 @@ export function Viewport3D({
   // angle in the ground plane, elevation the angle up from it, with the
   // ground plane's own two axes swapped between up-axis conventions the
   // same way every other zUp-conditional in this file already is.
-  const sunAzimuthRad = (settings.sunAzimuth * Math.PI) / 180
-  const sunElevationRad = (settings.sunElevation * Math.PI) / 180
+  const sunPosition = computeSunPosition(settings.sunAzimuth, settings.sunElevation, modelRadius, zUp)
+  // Mirrors computeSunPosition's own internal sunRadius (modelRadius * 3) —
+  // needed again here for the shadow-camera-far calc below, which sizes the
+  // frustum's far plane relative to how far away the light itself sits.
   const sunRadius = modelRadius * 3
-  const sunHorizontal = Math.cos(sunElevationRad) * sunRadius
-  const sunHeight = Math.sin(sunElevationRad) * sunRadius
-  const sunPosition: [number, number, number] = zUp
-    ? [Math.cos(sunAzimuthRad) * sunHorizontal, Math.sin(sunAzimuthRad) * sunHorizontal, sunHeight]
-    : [Math.cos(sunAzimuthRad) * sunHorizontal, sunHeight, Math.sin(sunAzimuthRad) * sunHorizontal]
 
   // Box-select (2026-07-08, per Maro: "select box in viewport", modelled on
   // Blender's B-key marquee) — a toggleable mode rather than always-on,
@@ -3342,8 +3333,8 @@ export function Viewport3D({
   // lower-risk alternative instead. Delivers the same underlying want — a
   // noticeably better-looking preview once the camera settles — by boosting
   // the *existing* raster pipeline's own quality knobs (supersampling via
-  // Canvas's dpr, N8AO's aoSamples/denoiseSamples, shadow-map resolution)
-  // only while genuinely idle, since none of those are affordable to run at
+  // Canvas's dpr, shadow-map resolution) only while genuinely idle, since
+  // none of those are affordable to run at
   // full strength during live orbiting. True path tracing (accurate global
   // illumination, reflections, soft shadows from real light transport) is
   // still not what this is — it's the existing look, just cleaner/sharper —
@@ -3371,31 +3362,30 @@ export function Viewport3D({
   // "exploded on refresh" report — both traced to real, repeated
   // GL_INVALID_OPERATION: glBlitFramebuffer errors in the browser console
   // (hundreds of them, not assumed), a known @react-three/postprocessing
-  // failure mode: EffectComposer's `enableNormalPass` (needed by the N8AO
-  // ambient-occlusion effect below) keeps its own depth-stencil render
-  // target, and resizing the renderer's own pixel ratio — which boostQuality
-  // used to do here, toggling dpr between 1x and 1.5x on every orbit
-  // start/end — races that target's own resize, corrupting the shared
-  // depth-stencil buffer for a few frames (the "shake") or, if the same
-  // race hits during OrbitControls' own initial setup (which can fire a
-  // spurious 'end'-like event on mount), corrupting it before the WebGL
-  // context ever stabilizes (the "sometimes broken on refresh," which
-  // doesn't self-repair since the context is left in a bad state). Fixed by
-  // never varying dpr for the idle-vs-interactive boost at all — only the
-  // explicit, one-shot Capture/Export Video path (captureDprMultiplier)
-  // still resizes it, a deliberate user action rather than a per-orbit
-  // toggle. boostQuality's own AO-sample-count and shadow-map-resolution
-  // bumps below are unaffected and still work exactly as before — neither
-  // needs a render-target resize, just a pass-parameter change, so neither
-  // was ever part of this bug.
+  // failure mode from when this file still had an Ambient Occlusion effect
+  // (N8AO, removed 2026-07-25 per Maro: "just remove AO completely" — see
+  // git history for the full feature if it's ever wanted back): its
+  // EffectComposer kept its own depth-stencil render target, and resizing
+  // the renderer's own pixel ratio — which boostQuality used to do here,
+  // toggling dpr between 1x and 1.5x on every orbit start/end — raced that
+  // target's own resize, corrupting the shared depth-stencil buffer for a
+  // few frames (the "shake") or, if the same race hit during OrbitControls'
+  // own initial setup (which can fire a spurious 'end'-like event on
+  // mount), corrupting it before the WebGL context ever stabilizes (the
+  // "sometimes broken on refresh," which doesn't self-repair since the
+  // context is left in a bad state). Fixed by never varying dpr for the
+  // idle-vs-interactive boost at all — only the explicit, one-shot
+  // Capture/Export Video path (captureDprMultiplier) still resizes it, a
+  // deliberate user action rather than a per-orbit toggle. Kept as-is even
+  // after AO's removal — a fixed dpr during orbit is simply the right
+  // behaviour regardless of what originally motivated it.
   const [captureDprMultiplier, setCaptureDprMultiplier] = useState<number | null>(null)
   const dprMultiplier = captureDprMultiplier ?? 1
   const dpr = Math.min(window.devicePixelRatio * dprMultiplier, 4)
-  // Drives N8AO's aoSamples/denoiseSamples and shadow-map resolution — true
-  // either while merely idle (boostQuality) or while a capture/export is
-  // actively forcing captureDprMultiplier, so a forced capture always gets
-  // the full quality treatment (AO/shadows included), not just the extra
-  // resolution.
+  // Drives shadow-map resolution — true either while merely idle
+  // (boostQuality) or while a capture/export is actively forcing
+  // captureDprMultiplier, so a forced capture always gets the full quality
+  // treatment (shadows included), not just the extra resolution.
   const highQuality = boostQuality || captureDprMultiplier !== null
   // HDR Background override for a capture/export (2026-07-11, per Maro:
   // "give me the option to show hdr background when rendering/capturing")
@@ -3564,6 +3554,23 @@ export function Viewport3D({
   // capturing immediately would screenshot the pre-boost frame), then
   // reverts both overrides back to null (idle-detection/live settings
   // resume driving them normally).
+  // How much bigger than its own on-screen CSS size the live 3D canvas
+  // needs to render internally so drawCoverFit (exportOverlays.ts) always
+  // has enough real source pixels to crop-to-fill the requested output
+  // resolution without visible upscaling blur (2026-07-25, part of the
+  // explicit-resolution rework — see renderCaptureSettings.ts's own header
+  // on resolutionWidth/Height). Takes the larger of the two axis ratios
+  // since cover-fit's crop is driven by whichever axis is the tighter fit;
+  // Math.max(..., 1) guards against *downscaling* the live canvas when the
+  // requested output is smaller than the on-screen pane — supersampling
+  // should only ever add resolution, never remove it. Capped at 4 (same
+  // GPU/memory ceiling the old resolutionMultiplier already had).
+  const computeSupersampleMultiplier = (canvas: HTMLCanvasElement, resolutionWidth: number, resolutionHeight: number): number => {
+    const cssWidth = canvas.clientWidth || 1
+    const cssHeight = canvas.clientHeight || 1
+    return Math.min(4, Math.max(resolutionWidth / cssWidth, resolutionHeight / cssHeight, 1))
+  }
+
   const handleCaptureImage = () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
@@ -3572,35 +3579,42 @@ export function Viewport3D({
     // canvas (baselineCanvasRef.current, populated by
     // BaselineViewportPane's own CaptureCamera-like helper).
     const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
-    // Export Content overlays (2026-07-25) — see exportOverlays.ts's own
-    // header. Only builds the composite canvas when at least one of these
-    // (or Include Baseline above) is actually on; the plain single-canvas
-    // path below is untouched otherwise, exactly as before this feature.
-    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay } = renderCaptureSettings
-    const hasOverlay = includeBaseline || includeGanttChart || includeActivityTable || includeAppearanceLegend || includeDateOverlay
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, resolutionWidth, resolutionHeight } = renderCaptureSettings
     const doCapture = () => {
-      let source: HTMLCanvasElement = canvas
-      if (hasOverlay) {
-        const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
-        const layout = computeExportLayout(
-          canvas.width, canvas.height, baselineCanvas?.width ?? 0, baselineCanvas?.height ?? 0,
-          dpr, { includeGanttChart, includeActivityTable, includeBaseline },
-        )
-        const composite = document.createElement('canvas')
-        composite.width = layout.totalWidth
-        composite.height = layout.totalHeight
-        const ctx = composite.getContext('2d')
-        if (ctx) {
-          composeExportFrame(ctx, layout, {
-            mainCanvas: canvas, baselineCanvas,
-            activities: timelineActivities, profiles: timelineProfiles,
-            now: timelineDateRef.current, scheduleStart, scheduleEnd,
-            scale: dpr, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
-          })
-        }
-        source = composite
+      // Computed fresh here, not from any outer const (2026-07-25 fix, per
+      // Maro: "at 4x resolution it needs scale adjustments" — the same
+      // stale-closure trap as before: doCapture only actually runs after 3
+      // real rAFs, so any outer const computed from *this render*'s
+      // captureDprMultiplier state would still reflect the pre-boost value.
+      // resolutionWidth/Height (renderCaptureSettings, not React state
+      // this capture itself changes) and canvas.clientWidth/Height (a live
+      // DOM read) are both safe to read fresh right here.
+      // overlayScale anchors the Gantt/Table/Cost band constants (tuned
+      // against a 1080p reference) to the actual requested output
+      // resolution — independent of supersampling, which now only exists
+      // to keep the source canvas sharp enough for drawCoverFit's crop,
+      // not to size the overlays.
+      const overlayScale = resolutionHeight / 1080
+      const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
+      const layout = computeExportLayout(
+        resolutionWidth, resolutionHeight,
+        overlayScale, { includeGanttChart, includeActivityTable, includeBaseline, includeCostProfile },
+      )
+      const composite = document.createElement('canvas')
+      composite.width = layout.totalWidth
+      composite.height = layout.totalHeight
+      const ctx = composite.getContext('2d')
+      if (ctx) {
+        composeExportFrame(ctx, layout, {
+          mainCanvas: canvas, baselineCanvas,
+          activities: timelineActivities, profiles: timelineProfiles,
+          now: timelineDateRef.current, scheduleStart, scheduleEnd,
+          scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+          mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
+          includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+        })
       }
-      source.toBlob(blob => {
+      composite.toBlob(blob => {
         if (!blob) return
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -3611,12 +3625,15 @@ export function Viewport3D({
         setCaptureDprMultiplier(null)
         onCaptureQualityChange?.(null)
         setCaptureBackgroundOverride(null)
+        onCaptureBackgroundChange?.(null)
         setHidePathHelpers(false)
       }, 'image/png')
     }
-    setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
-    onCaptureQualityChange?.(renderCaptureSettings.resolutionMultiplier)
+    const supersample = computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight)
+    setCaptureDprMultiplier(supersample)
+    onCaptureQualityChange?.(supersample)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
+    onCaptureBackgroundChange?.(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
     requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(doCapture)))
   }
@@ -3693,15 +3710,13 @@ export function Viewport3D({
     const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
     if (totalMs <= 0) return
     const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
-    // Export Content overlays (2026-07-25) — see exportOverlays.ts's own
-    // header and handleCaptureImage's identical hasOverlay gate just above.
-    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay } = renderCaptureSettings
-    const hasOverlay = includeBaseline || includeGanttChart || includeActivityTable || includeAppearanceLegend || includeDateOverlay
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, resolutionWidth, resolutionHeight } = renderCaptureSettings
 
     setIsExportingVideo(true)
-    setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
-    onCaptureQualityChange?.(renderCaptureSettings.resolutionMultiplier)
+    setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
+    onCaptureQualityChange?.(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
+    onCaptureBackgroundChange?.(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
     try {
       // Same "wait a few real drawn frames" reasoning as handleCaptureImage
@@ -3714,36 +3729,53 @@ export function Viewport3D({
 
       const fps = renderCaptureSettings.videoFps
       const durationMs = renderCaptureSettings.videoDurationSec * 1000
-      // Include Baseline / Export Content overlays (2026-07-24/25) —
-      // captureStream() only ever samples one real canvas at a time, so
-      // side-by-side/overlaid video needs a third, off-DOM canvas that
-      // gets manually redrawn (composeExportFrame) every animation frame
-      // for the whole recording (the step() loop below), with
-      // captureStream reading *that* composite instead of either 3D
-      // canvas directly. Sized/allocated only once the boosted-resolution
-      // wait above has already landed, so both source canvases are
-      // already at their final capture-quality dimensions. The layout
-      // itself (band positions/sizes) is computed once here too —
-      // activities/profiles/canvas sizes don't change mid-recording, only
-      // `now` does, so there's no need to recompute it every tick.
-      let recordCanvas: HTMLCanvasElement = canvas
-      let compositeCtx: CanvasRenderingContext2D | null = null
+      // The recording canvas is always the composite now, sized to the
+      // explicit requested output resolution (2026-07-25 rework — see
+      // renderCaptureSettings.ts's own header on resolutionWidth/Height and
+      // exportOverlays.ts's drawCoverFit) rather than either 3D canvas
+      // directly — captureStream() only ever samples one real canvas at a
+      // time, so this off-DOM canvas gets manually redrawn
+      // (composeExportFrame) every animation frame for the whole recording
+      // (the step() loop below). The layout itself (band positions/sizes)
+      // is computed once here too — activities/profiles/resolution don't
+      // change mid-recording, only `now` does, so there's no need to
+      // recompute it every tick. overlayScale/resolutionWidth/Height read
+      // straight from renderCaptureSettings, not from any outer
+      // dpr-derived const — same stale-closure discipline as
+      // handleCaptureImage's own doCapture (see its header): handleExportVideo
+      // is one continuous async call from the moment the button was
+      // clicked, so an outer const computed before the boost took effect
+      // would still be stale here.
+      const overlayScale = resolutionHeight / 1080
       const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
-      const layout = hasOverlay
-        ? computeExportLayout(
-            canvas.width, canvas.height, baselineCanvas?.width ?? 0, baselineCanvas?.height ?? 0,
-            dpr, { includeGanttChart, includeActivityTable, includeBaseline },
-          )
-        : null
-      if (layout) {
-        const composite = document.createElement('canvas')
-        composite.width = layout.totalWidth
-        composite.height = layout.totalHeight
-        compositeCtx = composite.getContext('2d')
-        recordCanvas = composite
-      }
+      const layout = computeExportLayout(
+        resolutionWidth, resolutionHeight,
+        overlayScale, { includeGanttChart, includeActivityTable, includeBaseline, includeCostProfile },
+      )
+      const composite = document.createElement('canvas')
+      composite.width = layout.totalWidth
+      composite.height = layout.totalHeight
+      const compositeCtx = composite.getContext('2d')
+      const recordCanvas = composite
       const stream = (recordCanvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' })
+      // MP4 export (2026-07-25, per Maro: "can we get an mp4 rendering
+      // option") — Chrome can record straight to H.264/mp4 via
+      // MediaRecorder with zero new dependencies, confirmed live via
+      // MediaRecorder.isTypeSupported; avc1.42E01E is H.264 Baseline
+      // Profile, the most broadly compatible encode (PowerPoint, phones,
+      // most social platforms) rather than whatever profile a bare
+      // "video/mp4" would pick. Falls back to webm if the running
+      // browser's MediaRecorder can't do mp4 at all (Firefox, as of this
+      // writing) rather than throwing — same defensive pattern as picking
+      // vp9 vs vp8 below for webm itself.
+      const wantsMp4 = renderCaptureSettings.videoFormat === 'mp4'
+      const mp4MimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t))
+      const useMp4 = wantsMp4 && !!mp4MimeType
+      const mimeType = useMp4
+        ? mp4MimeType!
+        : ['video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) ?? 'video/webm'
+      const fileExtension = useMp4 ? 'mp4' : 'webm'
+      const recorder = new MediaRecorder(stream, { mimeType })
       const chunks: Blob[] = []
       recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
       const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
@@ -3755,12 +3787,14 @@ export function Viewport3D({
           const t = Math.min((performance.now() - startTime) / durationMs, 1)
           const now = new Date(scheduleStart.getTime() + totalMs * t)
           timelineDateRef.current = now
-          if (compositeCtx && layout) {
+          if (compositeCtx) {
             composeExportFrame(compositeCtx, layout, {
               mainCanvas: canvas, baselineCanvas,
               activities: timelineActivities, profiles: timelineProfiles,
               now, scheduleStart, scheduleEnd,
-              scale: dpr, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+              scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+              mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
+              includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
             })
           }
           if (t >= 1) { resolve(); return }
@@ -3773,11 +3807,11 @@ export function Viewport3D({
       recorder.stop()
       await stopped
 
-      const blob = new Blob(chunks, { type: 'video/webm' })
+      const blob = new Blob(chunks, { type: useMp4 ? 'video/mp4' : 'video/webm' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
+      a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.${fileExtension}`
       a.click()
       URL.revokeObjectURL(url)
       onExportVideo?.(blob, renderCaptureSettings.videoDurationSec)
@@ -3786,6 +3820,7 @@ export function Viewport3D({
       setCaptureDprMultiplier(null)
       onCaptureQualityChange?.(null)
       setCaptureBackgroundOverride(null)
+      onCaptureBackgroundChange?.(null)
       setHidePathHelpers(false)
     }
   }
@@ -4033,7 +4068,7 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleCaptureImage}
-          title="Capture Image — download exactly what's currently on screen as a PNG"
+          title={`Capture Image — downloads a ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight} PNG of the current view (see ⚙ Render/Capture Settings)`}
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
         >
           Capture
@@ -4051,7 +4086,7 @@ export function Viewport3D({
           title={
             !scheduleStart || !scheduleEnd
               ? 'Export Video — needs at least one scheduled/linked activity to know what date range to play'
-              : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .webm at ${renderCaptureSettings.videoFps}fps of the timeline playing from schedule start to finish (see ⚙ Render/Capture Settings)`
+              : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .${renderCaptureSettings.videoFormat} at ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight}, ${renderCaptureSettings.videoFps}fps, of the timeline playing from schedule start to finish (see ⚙ Render/Capture Settings)`
           }
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -4118,10 +4153,7 @@ export function Viewport3D({
         // orbit, reading as a flicker/shake that stops the instant the
         // camera (and therefore the projection matrix) stops changing.
         // three.js's own logarithmic depth buffer is the standard fix for
-        // exactly this — large near:far ratios by design — at the cost of
-        // needing verification against N8AO/EffectComposer's own depth
-        // read (enableNormalPass above), since not every postprocessing
-        // effect is written to expect log-encoded depth.
+        // exactly this — large near:far ratios by design.
         gl={{ stencil: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!boxSelectMode) { onSelect(null); onSelectObject(null) } }}
       >
@@ -4402,11 +4434,6 @@ export function Viewport3D({
           <GizmoHelper alignment="bottom-left" margin={[80, 80]}>
             <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
           </GizmoHelper>
-        )}
-        {settings.ambientOcclusion && (
-          <Suspense fallback={null}>
-            <AmbientOcclusionEffect boostQuality={highQuality} />
-          </Suspense>
         )}
       </Canvas>
       {importedObjects.length === 0 && (

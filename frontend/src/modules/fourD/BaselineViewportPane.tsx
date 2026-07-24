@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { Canvas, useThree } from '@react-three/fiber'
-import { Grid, OrbitControls } from '@react-three/drei'
+import { Environment, Grid, OrbitControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
@@ -12,7 +12,10 @@ import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
-import { CameraSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject } from './Viewport3D'
+import {
+  CameraSync, computeModelRadius, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
+  TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
+} from './Viewport3D'
 
 interface Props {
   importedObjects: ImportedObject[]
@@ -45,6 +48,31 @@ interface Props {
   // same as the primary viewport's own default.
   baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
   dprMultiplier?: number | null
+  // Render/shader settings, mirrored from the main viewport's own
+  // ViewerSettings (2026-07-25, per Maro: "baseline 3d doesnt share the
+  // same render shader settings etc" — this pane used to have its own
+  // fixed ambient+directional lights and no <Environment> at all,
+  // regardless of what the live viewport was actually showing). Passed as
+  // individual fields rather than the whole ViewerSettings object, same
+  // convention this component's own upAxis/fieldOfView/clipStart/clipEnd
+  // props already use. Render *mode* (Wireframe/Hidden Line/Flat/Gouraud/
+  // Rendered) is deliberately not included here — that's driven by
+  // ModelObjects' own per-mesh material-swap effect, which is entangled
+  // with selection/isolate/hide logic this read-only pane doesn't have;
+  // this pane always renders in the plain PBR look regardless of the main
+  // viewport's own render mode, a known, narrower gap than the
+  // environment/lighting one this fixes.
+  environmentUrl: string | null
+  environmentBackground: boolean
+  whiteBackground: boolean
+  shadows: boolean
+  sunAzimuth: number
+  sunElevation: number
+  // Mirrors Viewport3D.tsx's own captureBackgroundOverride out to this
+  // pane (relayed through FourD.tsx, see its own onCaptureBackgroundChange
+  // prop) — same "boost both panes together" reasoning as dprMultiplier
+  // above, just for the HDR/white background override during a capture.
+  captureBackgroundOverride: boolean | null
 }
 
 // Mirrors Viewport3D.tsx's own private CameraCapture — this pane's camera
@@ -85,11 +113,20 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 export function BaselineViewportPane({
   importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, baselineCanvasRef, dprMultiplier,
+  environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
 }: Props) {
   const zUp = upAxis === 'z'
   const cameraRef = useRef<THREE.Camera | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const dpr = Math.min(window.devicePixelRatio * (dprMultiplier ?? 1), 4)
+  const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
+  // Same "background=false during a capture override, else live setting"
+  // logic as Viewport3D.tsx's own showWhiteBackground/Environment
+  // background — see that file's own comments for the full reasoning.
+  const showWhiteBackground = captureBackgroundOverride === null && whiteBackground
+  const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
+  const modelRadius = useMemo(() => computeModelRadius(importedObjects), [importedObjects])
+  const sunPosition = computeSunPosition(sunAzimuth, sunElevation, modelRadius, zUp)
 
   // Cloned once per source-object identity change (2026-07-12) — a plain
   // Map keyed by the *original* Object3D, rebuilt whenever the set of
@@ -129,6 +166,26 @@ export function BaselineViewportPane({
   const clonedSceneObjects = timelineSceneObjects.map(o => ({ ...o, object: clonesByOriginal.get(o.object) ?? o.object }))
   const clonedIfcHandles = ifcHandles.map(h => ({ ...h, object: (clonesByOriginal.get(h.object) as THREE.Group | undefined) ?? h.object }))
 
+  // cloneSceneHierarchy (sceneClone.ts) never copies castShadow/receiveShadow
+  // from the source meshes — those two flags live on the mesh itself, not
+  // something the light's own castShadow prop can substitute for — so
+  // without this, toggling "shadows" on would light a shadow-casting sun but
+  // every cloned mesh would still be flagged as not casting/receiving one.
+  // Keyed on the actual clone instances (stable across re-renders via
+  // clonesByOriginal's own cloneKey memo above), not the fresh-every-render
+  // clonedImportedObjects array, so this only re-traverses when the model
+  // set or the shadows setting itself actually changes.
+  useEffect(() => {
+    for (const clone of clonesByOriginal.values()) {
+      clone.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = shadows
+          child.receiveShadow = shadows
+        }
+      })
+    }
+  }, [clonesByOriginal, shadows])
+
   return (
     <div className="relative flex-1 min-h-0">
       <div className="absolute top-2 left-2 z-10 text-xs font-medium bg-white/90 border border-gray-300 rounded px-2 py-1 text-gray-600 pointer-events-none">
@@ -143,8 +200,30 @@ export function BaselineViewportPane({
         <CaptureCanvas canvasRef={baselineCanvasRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
         <ambientLight intensity={0.6} />
-        <directionalLight position={zUp ? [10, 10, 15] : [10, 15, 10]} intensity={1} />
+        {/* Settings-driven sun light (2026-07-25), replacing this pane's old
+            fixed directionalLight — mirrors Viewport3D.tsx's own
+            sunPosition/shadow-frustum setup (see computeSunPosition/
+            computeModelRadius, shared from that file) so shadows in this
+            pane actually match the live viewport's sun angle instead of a
+            constant corner light. Frustum sizing simplified relative to the
+            primary viewport's own (no highQuality/normalBias tuning) since
+            this is a read-only comparison pane, not the primary editing
+            surface. */}
+        <directionalLight
+          position={sunPosition} intensity={1} castShadow={shadows}
+          shadow-mapSize={[2048, 2048]}
+          shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
+          shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}
+          shadow-camera-near={0.5} shadow-camera-far={modelRadius * 5}
+        />
         <Suspense fallback={null}>
+          <Environment
+            files={activeEnvironmentUrl}
+            background={showEnvironmentBackground}
+            backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+            environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+          />
+          {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
           {clonedImportedObjects.map(({ id, sourceUpAxis, object, visible }) => (
             <group key={id} rotation={axisCorrectionRotation(sourceUpAxis, upAxis)}>
               <primitive object={object} visible={visible} />

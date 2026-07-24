@@ -230,9 +230,6 @@ export function PropertiesPanel({
           </Row>
         </>
       )}
-      <Row label="Ambient Occlusion">
-        <input type="checkbox" checked={settings.ambientOcclusion} onChange={e => set('ambientOcclusion', e.target.checked)} />
-      </Row>
       <Row label="Variance Colours">
         <input
           type="checkbox"

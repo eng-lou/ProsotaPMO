@@ -68,6 +68,27 @@ async def test_download_unknown_video_404s(client: AsyncClient, project: Project
     assert resp.status_code == 404
 
 
+async def test_upload_mp4_stores_correct_extension_and_media_type(client: AsyncClient, project: Project):
+    # 2026-07-25, per Maro: "can we get an mp4 rendering option" —
+    # generate_storage_filename/media_type_for_storage_filename
+    # (fourd_video_storage.py) now derive the real extension from the
+    # upload's own Content-Type instead of always assuming webm; this
+    # exercises the mp4 branch specifically since every other test in this
+    # file uploads webm.
+    data = {"project_id": str(project.id), "name": "sequence.mp4", "duration_sec": "8.0"}
+    files = {"file": ("sequence.mp4", b"fake-mp4-bytes", "video/mp4")}
+    created = (await client.post("/api/v1/fourd-videos/", data=data, files=files)).json()
+
+    from app.services.fourd_video_storage import storage_dir
+    matches = list(storage_dir().glob("*.mp4"))
+    assert any(p.read_bytes() == b"fake-mp4-bytes" for p in matches)
+
+    download_resp = await client.get(f"/api/v1/fourd-videos/{created['id']}/download")
+    assert download_resp.status_code == 200
+    assert download_resp.content == b"fake-mp4-bytes"
+    assert download_resp.headers["content-type"] == "video/mp4"
+
+
 async def test_reuploading_same_name_does_not_replace(client: AsyncClient, project: Project):
     # Unlike Model3DFile, a second export under the same name is a
     # genuinely different capture (e.g. re-recording after fixing the

@@ -5,11 +5,11 @@ import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { GanttChart } from '@/modules/scheduling/GanttChart'
-import { loadGanttZoom, saveGanttZoom, type GanttZoom } from '@/modules/scheduling/ganttZoom'
+import { computePeriodBuckets, loadGanttZoom, saveGanttZoom, type GanttZoom } from '@/modules/scheduling/ganttZoom'
 import { loadResourcesLayout } from '@/modules/scheduling/resourcesLayout'
 import { ResourceTrackingWidget } from '@/modules/scheduling/ResourceTrackingWidget'
 import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsageProfileWidget'
-import { useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
+import { computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile } from './import3d'
 import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
@@ -1198,6 +1198,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // so both panes render at the same boosted resolution during a capture.
   const baselineCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [baselineDprMultiplier, setBaselineDprMultiplier] = useState<number | null>(null)
+  // Mirrors Viewport3D.tsx's own captureBackgroundOverride the same way
+  // baselineDprMultiplier just above mirrors captureDprMultiplier
+  // (2026-07-25, per Maro: "baseline 3d doesnt share the same render
+  // shader settings etc") — so a capture/export's HDR-background override
+  // (Render/Capture Settings' own "Show HDR Background") applies to both
+  // panes identically instead of only the main one.
+  const [baselineBackgroundOverride, setBaselineBackgroundOverride] = useState<boolean | null>(null)
   // The 4D timeline's "current date" (2026-07-11) — a ref, not state; see
   // Viewport3D.tsx's own Props comment for why. timelineRange is real
   // state-derived (not a ref) since it only needs to update when the
@@ -3400,6 +3407,48 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null,
   )
 
+  // Cost Profile (2026-07-25, per Maro: "the resource usage profile but
+  // showing cost across the time period... it's in the Resource-Scheduling
+  // tab" — pointed at this exact widget's own "cost" unit as the
+  // reference, not a bespoke EVM calculation). Reuses resourcesTabData's
+  // own already-fetched spreadByResource (the one network call this whole
+  // hook makes) with a fixed month-zoom bucket set of its own — independent
+  // of whatever zoom the live Resource Usage window happens to be showing,
+  // so the 4D export always gets a stable monthly chart regardless — and
+  // computeUsageProfileBars, the exact function ResourceUsageProfileWidget
+  // itself calls for its own bars, so this can never drift from what that
+  // tab would show for the same data with Cost selected.
+  const costProfileBuckets = useMemo(
+    () => computePeriodBuckets(resourcesTabData.rangeStart, resourcesTabData.rangeEnd, 'month'),
+    [resourcesTabData.rangeStart, resourcesTabData.rangeEnd],
+  )
+  const costProfileValues = useMemo(
+    () => computeUsageProfileBars(
+      resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource,
+      costProfileBuckets, resourcesTabData.spreadByResource, new Set(), 'cost',
+    ).barValues,
+    [resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
+  )
+  // Per-resource breakdown (2026-07-25, second pass, per Maro: "an
+  // indication of the resources driving the cost profile not just the
+  // bars") — same computeUsageProfileBars call as costProfileValues just
+  // above, just scoped to a single resource at a time so exportOverlays.ts
+  // can show which resources actually have cost in whichever bucket the
+  // export's own playhead currently sits in. One call per tracked
+  // resource, same cost as computing the combined total once per resource
+  // — cheap at the handful-of-resources scale a real project's Resources
+  // tab tracks.
+  const costProfileResourceBreakdown = useMemo(
+    () => resourcesTabData.trackedResources.map(resource => ({
+      name: resource.name,
+      values: computeUsageProfileBars(
+        [resource], resourcesTabData.assignmentsByResource,
+        costProfileBuckets, resourcesTabData.spreadByResource, new Set(), 'cost',
+      ).barValues,
+    })),
+    [resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
+  )
+
   // Memoized (2026-07-20, optimization pass — a confirmed regression, not a
   // new suggestion): Viewport3D.tsx's own "heavyDeps" reference-equality
   // check (built specifically because a real 5k+-element IFC model was
@@ -4444,6 +4493,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       compareBaselineOpen={compareBaselineOpen}
       baselineCanvasRef={baselineCanvasRef}
       onCaptureQualityChange={setBaselineDprMultiplier}
+      onCaptureBackgroundChange={setBaselineBackgroundOverride}
+      costProfileBuckets={costProfileBuckets}
+      costProfileValues={costProfileValues}
+      costProfileResourceBreakdown={costProfileResourceBreakdown}
       timelineDateRef={timelineDateRef}
       timelineSceneObjects={sceneObjects}
       timelineActivities={activities}
@@ -4726,6 +4779,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                   fieldOfView={settings.fieldOfView}
                   clipStart={settings.clipStart}
                   clipEnd={settings.clipEnd}
+                  environmentUrl={customEnvironment?.url ?? null}
+                  environmentBackground={settings.environmentBackground}
+                  whiteBackground={settings.whiteBackground}
+                  shadows={settings.shadows}
+                  sunAzimuth={settings.sunAzimuth}
+                  sunElevation={settings.sunElevation}
+                  captureBackgroundOverride={baselineBackgroundOverride}
                   timelineDateRef={timelineDateRef}
                   cameraSyncRef={cameraSyncRef}
                   baselineCanvasRef={baselineCanvasRef}

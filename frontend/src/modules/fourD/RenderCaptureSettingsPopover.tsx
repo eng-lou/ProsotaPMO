@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { RenderCaptureSettings } from './renderCaptureSettings'
+import { RESOLUTION_PRESETS, type ResolutionPreset, type RenderCaptureSettings } from './renderCaptureSettings'
 
 interface Props {
   settings: RenderCaptureSettings
@@ -59,17 +59,45 @@ export function RenderCaptureSettingsPopover({ settings, onChange, compareBaseli
               Show HDR Background
             </label>
 
-            <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
-              <span title="Renders at a higher internal resolution before downsampling — a sharper still/video at some extra GPU cost">Resolution</span>
-              <select
-                value={settings.resolutionMultiplier}
-                onChange={e => set('resolutionMultiplier', Number(e.target.value) as RenderCaptureSettings['resolutionMultiplier'])}
-                className="text-xs border border-gray-300 rounded px-1 py-0.5"
-              >
-                <option value={1}>1×</option>
-                <option value={2}>2×</option>
-                <option value={4}>4×</option>
-              </select>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                <span title="The exact output pixel dimensions for Capture/Export Video — independent of how big this browser window happens to be. If the on-screen 3D pane's own aspect ratio doesn't match, the content is cropped to fill, never stretched.">Resolution</span>
+                <select
+                  value={settings.resolutionPreset}
+                  onChange={e => {
+                    const preset = e.target.value as ResolutionPreset
+                    onChange(
+                      preset === 'custom'
+                        ? { ...settings, resolutionPreset: preset }
+                        : { ...settings, resolutionPreset: preset, resolutionWidth: RESOLUTION_PRESETS[preset].width, resolutionHeight: RESOLUTION_PRESETS[preset].height },
+                    )
+                  }}
+                  className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                >
+                  {Object.entries(RESOLUTION_PRESETS).map(([key, preset]) => (
+                    <option key={key} value={key}>{preset.label}</option>
+                  ))}
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-gray-600">
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.resolutionWidth}
+                  onChange={e => onChange({ ...settings, resolutionWidth: Math.max(1, Math.round(Number(e.target.value)) || 1), resolutionPreset: 'custom' })}
+                  className="w-16 text-xs border border-gray-300 rounded px-1 py-0.5 text-right"
+                />
+                <span>×</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.resolutionHeight}
+                  onChange={e => onChange({ ...settings, resolutionHeight: Math.max(1, Math.round(Number(e.target.value)) || 1), resolutionPreset: 'custom' })}
+                  className="w-16 text-xs border border-gray-300 rounded px-1 py-0.5 text-right"
+                />
+                <span>px</span>
+              </div>
             </div>
 
             <label
@@ -121,6 +149,76 @@ export function RenderCaptureSettingsPopover({ settings, onChange, compareBaseli
                 />
                 Date Overlay
               </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds a monthly cost bar chart along the bottom — the same figures as the Resource Usage tab's own 'Cost' unit">
+                <input
+                  type="checkbox"
+                  checked={settings.includeCostProfile}
+                  onChange={e => set('includeCostProfile', e.target.checked)}
+                />
+                Cost Profile (bottom)
+              </label>
+            </div>
+
+            <div className="border-t border-gray-100 pt-2.5 space-y-2.5">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">View Titles</div>
+              <label className="flex items-center justify-between gap-2 text-xs text-gray-600" title="Label shown over the main viewport — clear it to hide the label entirely">
+                <span>Left (main)</span>
+                <input
+                  type="text"
+                  value={settings.mainViewTitle}
+                  onChange={e => set('mainViewTitle', e.target.value)}
+                  className="w-24 text-xs border border-gray-300 rounded px-1.5 py-0.5"
+                />
+              </label>
+              <label
+                className={`flex items-center justify-between gap-2 text-xs ${compareBaselineOpen ? 'text-gray-600' : 'text-gray-300'}`}
+                title={compareBaselineOpen
+                  ? 'Label shown over the Baseline pane — clear it to hide the label entirely'
+                  : 'Only shows once Compare Baseline is open and Include Baseline is on'}
+              >
+                <span>Right (baseline)</span>
+                <input
+                  type="text"
+                  value={settings.baselineViewTitle}
+                  disabled={!compareBaselineOpen}
+                  onChange={e => set('baselineViewTitle', e.target.value)}
+                  className="w-24 text-xs border border-gray-300 rounded px-1.5 py-0.5 disabled:bg-gray-50"
+                />
+              </label>
+            </div>
+
+            <div className="border-t border-gray-100 pt-2.5 space-y-2.5">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Title &amp; Narrative</div>
+              {(() => {
+                const cornerAvailable = settings.includeGanttChart && settings.includeActivityTable
+                const cornerTitle = cornerAvailable
+                  ? undefined
+                  : 'Needs both Gantt Chart and Activity Table on — together they leave the top-left corner this fills'
+                return (
+                  <>
+                    <label className={`flex flex-col gap-1 text-xs ${cornerAvailable ? 'text-gray-600' : 'text-gray-300'}`} title={cornerTitle}>
+                      <span>Project Title</span>
+                      <input
+                        type="text"
+                        value={settings.exportTitle}
+                        disabled={!cornerAvailable}
+                        onChange={e => set('exportTitle', e.target.value)}
+                        className="text-xs border border-gray-300 rounded px-1.5 py-0.5 disabled:bg-gray-50"
+                      />
+                    </label>
+                    <label className={`flex flex-col gap-1 text-xs ${cornerAvailable ? 'text-gray-600' : 'text-gray-300'}`} title={cornerTitle}>
+                      <span>Narrative</span>
+                      <textarea
+                        value={settings.exportNarrative}
+                        disabled={!cornerAvailable}
+                        onChange={e => set('exportNarrative', e.target.value)}
+                        rows={3}
+                        className="text-xs border border-gray-300 rounded px-1.5 py-0.5 resize-none disabled:bg-gray-50"
+                      />
+                    </label>
+                  </>
+                )
+              })()}
             </div>
 
             <div className="border-t border-gray-100 pt-2.5 space-y-2.5">
@@ -147,6 +245,18 @@ export function RenderCaptureSettingsPopover({ settings, onChange, compareBaseli
                   <option value={24}>24 fps</option>
                   <option value={30}>30 fps</option>
                   <option value={60}>60 fps</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                <span>Format</span>
+                <select
+                  value={settings.videoFormat}
+                  onChange={e => set('videoFormat', e.target.value as 'mp4' | 'webm')}
+                  className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                  title="MP4 plays everywhere (PowerPoint, phones, social) — falls back to WebM automatically if this browser can't encode MP4"
+                >
+                  <option value="mp4">MP4</option>
+                  <option value="webm">WebM</option>
                 </select>
               </label>
             </div>
