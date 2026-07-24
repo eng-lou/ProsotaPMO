@@ -40,6 +40,7 @@ import type { SectionBoxTool } from './SectionBoxPanel'
 import { SectionBoxCaps } from './SectionBoxCap'
 import type { CameraViewPose } from './cameraViews'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
+import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
@@ -277,6 +278,10 @@ interface Props {
   environmentUrl: string | null
   onEnvironmentError: (message: string) => void
   customTextures: Record<string, CustomTextureSet>
+  // Orbit camera sync with the Baseline pane (2026-07-24) — see
+  // CameraSync's own header. Shared with BaselineViewportPane.tsx via
+  // FourD.tsx, same ref-not-state idiom as timelineDateRef just below.
+  cameraSyncRef: React.MutableRefObject<CameraSyncState | null>
   // 4D timeline playback (2026-07-11) — see TimelinePlayback below and
   // timelinePlayback.ts's own header. timelineDate is a ref, not React
   // state/props in the usual sense — TimelineWindow.tsx mutates it every
@@ -380,7 +385,7 @@ interface Props {
   // Variance colour-coding (2026-07-12) — precomputed once in FourD.tsx,
   // passed straight through to ModelObjects. See that component's own
   // Props doc comment for the elementKey convention.
-  varianceByElementKey: Map<string, number>
+  varianceByElementKey: Map<string, VarianceEntry>
   // Clash Detective (2026-07-12) — same treatment as varianceByElementKey
   // above, one Map keyed the identical way, precomputed once in FourD.tsx
   // from every open ClashTest's un-approved results.
@@ -408,6 +413,24 @@ interface Props {
   onMeasurementHit: (hit: MeasurementHit) => void
   measurementHoverPoint: MeasurementPoint | null
   onMeasurementHoverPoint: (point: MeasurementPoint | null) => void
+  // Include Baseline (2026-07-24, per Maro: "an option to include the
+  // baseline 3d while capturing still and video. so side by side") —
+  // compareBaselineOpen mirrors FourD.tsx's own state of the same name
+  // (the Baseline pane is only ever mounted, and only ever has a live
+  // canvas to composite, while that's true); baselineCanvasRef is
+  // populated by BaselineViewportPane.tsx's own CaptureCamera-like helper,
+  // the same ref-written-by-a-sibling idiom cameraSyncRef already
+  // established for orbit sync. onCaptureQualityChange mirrors this
+  // component's own captureDprMultiplier out to FourD.tsx (which forwards
+  // it into BaselineViewportPane as a plain dprMultiplier prop) so a
+  // boosted-resolution capture boosts *both* canvases together — both
+  // state updates land in the same React commit (called back-to-back in
+  // the same handler), so the existing "wait a few rAFs" pattern below
+  // still covers the baseline canvas's own resize too, no extra delay
+  // needed.
+  compareBaselineOpen: boolean
+  baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
+  onCaptureQualityChange?: (dprMultiplier: number | null) => void
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
@@ -424,15 +447,36 @@ const _scratchEuler = new THREE.Euler()
 // variance") — reuses the Scheduling module's own already-working
 // baseline feature (Activity.variance_days, set once a baseline is
 // assigned via "Assign Baseline" there) rather than building a second one
-// here. Red = behind (finished later than baselined), green = ahead —
-// magnitude-capped at VARIANCE_MAGNITUDE_CAP_DAYS so one wildly slipped
-// activity doesn't fully flatten its element to a solid colour, and
-// blended at a lighter weight than the real selection tiers above so
-// selecting a variance-tinted element still reads clearly on top of it.
+// here. Red = delay (finished later than baselined), green = time savings
+// (finished earlier) — magnitude-capped at VARIANCE_MAGNITUDE_CAP_DAYS so
+// one wildly slipped activity doesn't fully flatten its element to a
+// solid colour. Cap/lerp both tuned up (2026-07-24, per Maro: "the tint
+// needs to be more pronounced" — the original 30-day cap/0.5 lerp made
+// this real project's own typical 9-21 day variances (its own Scheduling
+// grid's real FIN. VAR values) barely readable, e.g. 0.5*(21/30) = 0.35 —
+// still blended at a lighter weight than the real selection tiers above
+// (0.6/0.55) so selecting a variance-tinted element still reads clearly
+// on top of it, rather than pushed all the way to 1.0, which would fully
+// flatten the element to a solid colour with no material detail left at
+// all.
 const VARIANCE_LATE_COLOR = new THREE.Color(0xef4444)
 const VARIANCE_EARLY_COLOR = new THREE.Color(0x22c55e)
-const VARIANCE_MAGNITUDE_CAP_DAYS = 30
-const VARIANCE_MAX_LERP = 0.5
+// 2026-07-24, second pass, per Maro: "its barely green, come on" — the
+// first pass's linear magnitude (days/cap) meant this project's own
+// dominant 9-11 day variances only reached ~50% of an already-partial
+// 0.75 lerp (9/20*0.75 ≈ 0.34), which reads as a faint grey-green tinge,
+// not a clearly "green" element. Two changes: (1) magnitude now uses
+// sqrt(days/cap) instead of a straight ratio, so it front-loads —
+// small/typical variances jump most of the way to full strength instead
+// of crawling up linearly — and (2) a VARIANCE_MIN_MAGNITUDE floor so
+// even a barely-late/early element (1-2 days) still reads as an obvious
+// colour rather than fading to near-nothing. Cap dropped 20->10 days
+// (11 was this project's single most common non-zero FIN. VAR) and max
+// lerp raised 0.75->0.9 (still short of 1.0 so a selected element's own
+// highlight still shows through on top of it).
+const VARIANCE_MAGNITUDE_CAP_DAYS = 10
+const VARIANCE_MAX_LERP = 0.9
+const VARIANCE_MIN_MAGNITUDE = 0.35
 // Clash Detective (2026-07-12, per Maro's Navisworks reference screenshot)
 // — flat red, not magnitude-scaled like variance above: a clash is binary
 // (an element either has an un-approved clash right now or it doesn't),
@@ -441,6 +485,76 @@ const VARIANCE_MAX_LERP = 0.5
 // an already variance-tinted element.
 const CLASH_COLOR = new THREE.Color(0xdc2626)
 const CLASH_LERP = 0.65
+// Variance colour is time-boxed to the linked activity's own real
+// start/finish (2026-07-24, third pass, per Maro: "i dont want the
+// variance color to be permanently the color. it will be vibrant through
+// the duration of its relevant activity duration then go back to its
+// original color" — the first two tuning passes only ever adjusted how
+// strong the tint was, not that it was showing at every date on the
+// timeline, including long after the activity itself finished). start/
+// finish are epoch ms (Activity.start/finish, the exact same dates Mode A
+// itself scrubs against) so the per-frame tick loop below can compare
+// against `now` with zero Date allocation. `days` is the already-computed
+// Activity.variance_days this entry exists to colour.
+export interface VarianceEntry {
+  days: number
+  start: number
+  finish: number
+}
+// Stable, shared empty-map defaults for TimelinePlayback's own optional
+// variance/clash props (2026-07-24) — a fresh `new Map()` literal as a
+// default parameter value would be a brand-new object identity every
+// render, defeating any dependency array that includes it.
+const EMPTY_VARIANCE_MAP = new Map<string, VarianceEntry>()
+const EMPTY_CLASH_MAP = new Map<string, boolean>()
+
+// Shared by the bake-time initial cache (fresh targets, see getOrCreate/
+// bvTarget-creation/migrate below) AND the per-frame tick loop's own
+// dateChanged branch — both need the exact same "is `nowMs` currently
+// inside this element's own activity window" verdict, just at different
+// moments. Returns a zero magnitude (no tint) whenever showVarianceColors
+// itself is irrelevant to this call (nowMs unknown, no elementKey, no
+// variance entry, or `now` outside [start,finish]) — the caller applies
+// the actual showVarianceColors toggle on top of this, same as the toggle
+// already gates clash tinting at the call site.
+function resolveVarianceTint(
+  elementKey: string | null, nowMs: number | null, varianceByElementKey: Map<string, VarianceEntry>,
+): { magnitude: number; isLate: boolean } {
+  if (!elementKey || nowMs === null) return { magnitude: 0, isLate: false }
+  const entry = varianceByElementKey.get(elementKey)
+  if (!entry || !entry.days || nowMs < entry.start || nowMs > entry.finish) return { magnitude: 0, isLate: false }
+  const magnitude = Math.max(VARIANCE_MIN_MAGNITUDE, Math.min(1, Math.sqrt(Math.abs(entry.days) / VARIANCE_MAGNITUDE_CAP_DAYS))) * VARIANCE_MAX_LERP
+  return { magnitude, isLate: entry.days > 0 }
+}
+
+// ModelObjects' own per-frame-ish tint pass below is the only remaining
+// caller (2026-07-24, third pass) — TimelinePlayback's own resolve()/tick
+// now compose variance tint live via resolveVarianceTint directly (see its
+// own header on why a *baked* tint can't respect the activity's own time
+// window), rather than baking a merged colour through this helper once.
+// ModelObjects has no live "now" of its own (it's a settings/selection-
+// driven effect, not a per-frame loop), so it always passes `nowMs: null`
+// here — meaning it only ever contributes clash tint; every element that
+// also carries a variance entry is, by construction, one of
+// TimelinePlayback's own animated targets too (same modelElementLinks
+// source), and that per-frame loop reasserts the real, time-windowed
+// variance tint on top immediately regardless.
+function computeTintedColor(
+  original: THREE.Color, elementKey: string | null,
+  varianceByElementKey: Map<string, VarianceEntry>, showVarianceColors: boolean,
+  clashByElementKey: Map<string, boolean>, showClashColors: boolean,
+  nowMs: number | null,
+): THREE.Color {
+  const color = original.clone()
+  if (showVarianceColors) {
+    const { magnitude, isLate } = resolveVarianceTint(elementKey, nowMs, varianceByElementKey)
+    if (magnitude > 0) color.lerp(isLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, magnitude)
+  }
+  if (showClashColors && elementKey && clashByElementKey.get(elementKey)) {
+    color.lerp(CLASH_COLOR, CLASH_LERP)
+  }
+  return color
+}
 
 // Applies the render-mode/visibility/shadow settings to every mesh under an
 // imported object, and tints whichever mesh carries the currently-selected
@@ -491,7 +605,7 @@ function ModelObjects({
   // Toggled via settings.showVarianceColors (ViewerSettings), not a
   // separate prop — one more render-affecting viewer setting, same as
   // showEdges/shadows/ambientOcclusion above it.
-  varianceByElementKey: Map<string, number>
+  varianceByElementKey: Map<string, VarianceEntry>
   // Clash Detective (2026-07-12) — same elementKey convention, toggled via
   // settings.showClashColors alongside showVarianceColors above it.
   clashByElementKey: Map<string, boolean>
@@ -975,29 +1089,27 @@ function ModelObjects({
             if (overrides?.map) { mat.map = overrides.map.texture; mat.color.set(0xffffff) }
             else if (original) { mat.map = original.map; mat.color.copy(original.color) }
 
-            // Variance colour-coding (2026-07-12) — applied here,
+            // Variance/clash colour-coding (2026-07-12) — applied here,
             // *underneath* the selection lerps just below, so selecting a
-            // variance-tinted element still reads as a real selection on
-            // top of it rather than the two competing. varianceKey mirrors
-            // customTextures' own ownerKey convention exactly: elementKey
-            // (an IFC sub-element's own `${id}::${expressID}`) when one
-            // applies, else the whole mesh-kind object's id.
-            if (settings.showVarianceColors) {
-              const varianceKey = elementKey ?? id
-              const varianceDays = varianceByElementKey.get(varianceKey)
-              if (varianceDays) {
-                const tint = varianceDays > 0 ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR
-                const magnitude = Math.min(1, Math.abs(varianceDays) / VARIANCE_MAGNITUDE_CAP_DAYS)
-                mat.color.lerp(tint, magnitude * VARIANCE_MAX_LERP)
-              }
-            }
-            // Clash Detective (2026-07-12) — same placement/reasoning as
-            // variance just above (underneath the selection lerps, same
-            // elementKey convention), flat red rather than magnitude-scaled
-            // (see CLASH_COLOR's own header on why).
-            if (settings.showClashColors && clashByElementKey.get(elementKey ?? id)) {
-              mat.color.lerp(CLASH_COLOR, CLASH_LERP)
-            }
+            // tinted element still reads as a real selection on top of it
+            // rather than the two competing. Routed through the same
+            // computeTintedColor helper TimelinePlayback's own target
+            // resolution used to use (see that function's own 2026-07-24
+            // header) so clash tint here can never silently drift from
+            // what TimelinePlayback would compute for the same element —
+            // nowMs is always null here: this effect has no live "now" of
+            // its own (it only reruns on settings/selection changes, never
+            // per frame), so it never applies variance tint directly; any
+            // element eligible for one is, by construction, also one of
+            // TimelinePlayback's own animated targets, which reasserts the
+            // real, time-windowed variance tint on top on the very next
+            // frame regardless. varianceKey mirrors customTextures' own
+            // ownerKey convention exactly: elementKey (an IFC sub-element's
+            // own `${id}::${expressID}`) when one applies, else the whole
+            // mesh-kind object's id.
+            mat.color.copy(computeTintedColor(
+              mat.color, elementKey ?? id, varianceByElementKey, settings.showVarianceColors, clashByElementKey, settings.showClashColors, null,
+            ))
             // Shifts the actual surface colour toward the selection tint,
             // on top of (not instead of) the emissive glow above — see this
             // block's own 2026-07-11 header note for why emissive alone
@@ -1530,7 +1642,26 @@ interface ResolvedTimelineTarget {
   // (userData.standardMaterial.userData.lambertVariant/hiddenLineVariant,
   // renderModeMaterials.ts) and edges overlay (userData.edgesHelper,
   // ModelObjects' own effect above), neither of which is `material` itself.
-  materials: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[]
+  // `originalColor` (2026-07-24, third pass — renamed from `baseColor`) is
+  // the real, untinted material colour, captured once and never touched
+  // again — variance/clash tint is now composed fresh every frame from
+  // this plus cachedVarianceMagnitude/cachedVarianceIsLate below, instead
+  // of being permanently baked in here, so it can turn on and off as `now`
+  // crosses the activity's own start/finish.
+  materials: { material: THREE.MeshStandardMaterial; originalColor: THREE.Color; mesh: THREE.Mesh }[]
+  // elementKey (2026-07-24, third pass) — this target's own variance/clash
+  // lookup key (same `ifc-${modelID}::${expressID}`/whole-object-id
+  // convention as everywhere else in this file), stored once so the tick
+  // loop below can re-resolve variance tint every dateChanged without a
+  // second elementKey derivation.
+  elementKey: string | null
+  // Variance tint, cached like cachedActiveLink/cachedState just below —
+  // recomputed only when `now` actually changes (resolveVarianceTint's own
+  // header), then reused by the unconditional per-frame colour-reassert
+  // loop. magnitude 0 means "not currently in this element's own activity
+  // window" (or no variance entry at all) — no tint applied that frame.
+  cachedVarianceMagnitude: number
+  cachedVarianceIsLate: boolean
   keyframeTracks: Partial<Record<KeyframeField, { date: Date; value: number }[]>>
   // Mode A's own pickActiveLink/computeAppliedAnimationStateAt result,
   // cached across frames (2026-07-17 perf fix, per Maro: "everything
@@ -1568,15 +1699,39 @@ interface ResolvedTimelineTarget {
 // a transform component to apply.
 interface ResolvedBatchVisibilityTarget {
   mesh: THREE.BatchedMesh
-  instances: { instanceId: number; baseColor: THREE.Color }[]
+  // `originalColor` (2026-07-24, third pass — renamed from `baseColor`,
+  // same reasoning as ResolvedTimelineTarget's own materials field above)
+  // is the real, untinted per-instance colour captured once at batch-info
+  // read time. All instances here share one elementKey/variance entry
+  // (getBatchedInstanceInfo's own header — they're the same expressID's
+  // several batched geometry pieces, never several different elements).
+  instances: { instanceId: number; originalColor: THREE.Color }[]
+  elementKey: string | null
+  cachedVarianceMagnitude: number
+  cachedVarianceIsLate: boolean
   links: ResolvedTimelineLink[]
   cachedActiveLink: ResolvedTimelineLink | null
   cachedState: AppliedAnimationState | null
   // Colour, unlike visibility just above, has no other writer racing with
   // it (nothing else calls setColorAt on a linked instance), so a plain
   // last-written cache is safe here and avoids a getColorAt readback +
-  // THREE.Color allocation every frame for every instance.
-  lastColorHex: string | null
+  // THREE.Color allocation every frame for every instance. Now a composite
+  // key (profile colour + variance magnitude/direction + clash flag, see
+  // the per-frame write below), not literally a hex string, since variance
+  // tint alone can change (the activity's own window starting/ending)
+  // while the profile's own colour override stays exactly `null` either
+  // side of that boundary — the write must still fire on that transition.
+  // `undefined` means "never written yet" — 2026-07-24 fix, per Maro:
+  // "still no variance color", found *after* the first tinting fix already
+  // landed the right colour into `instances`: the per-frame write below is
+  // itself gated on this value actually *changing*, a real perf
+  // optimisation for the common case where nothing about an element's
+  // colour changes between frames — but that assumed the BatchedMesh's own
+  // GPU-side colour attribute (set once, to each instance's *raw* imported
+  // colour, at import time in elementBatching.ts) already matched the
+  // composed colour. Starting at `undefined` (never equal to any real key)
+  // guarantees the first frame's write always actually happens.
+  lastColorKey: string | undefined
   // The live reverse map elementBatching.ts's own ensureMaterialized
   // deletes an instance from synchronously, the instant that instance gets
   // pulled out of the shared batch (2026-07-22 fix, per Maro — reproduced
@@ -1634,8 +1789,21 @@ const ANIMATION_VISIBILITY_EPSILON = 0.02
 // single frame, so behaviour there is unaffected.
 const MAX_NEEDS_UPDATE_PER_FRAME = 40
 
-function collectStandardMaterials(object: THREE.Object3D): { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] {
-  const found: { material: THREE.MeshStandardMaterial; baseColor: THREE.Color; mesh: THREE.Mesh }[] = []
+// No longer takes elementKey/variance/clash args (2026-07-24, third pass)
+// — originalColor is a plain, untinted snapshot; TimelinePlayback's own
+// per-frame tick loop composes variance/clash tint fresh every frame
+// instead (see ResolvedTimelineTarget's own header on why a tint baked in
+// here could never turn back off as `now` leaves the activity's window).
+// Still reads getOriginalMaterialSlots, not a naive `mat.color.clone()`
+// (which would've silently captured whatever tint ModelObjects' own effect
+// happened to have already applied, or hadn't yet, depending on mount
+// order — the exact trap migrateSelectedExpressId already found once for
+// selection tint alone) — captureOriginalMaterial's snapshot is taken at
+// materialization time, before any tint could ever touch it.
+function collectStandardMaterials(
+  object: THREE.Object3D,
+): { material: THREE.MeshStandardMaterial; originalColor: THREE.Color; mesh: THREE.Mesh }[] {
+  const found: { material: THREE.MeshStandardMaterial; originalColor: THREE.Color; mesh: THREE.Mesh }[] = []
   object.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
     // Reads child.userData.standardMaterial — the real, stable PBR material
@@ -1653,9 +1821,12 @@ function collectStandardMaterials(object: THREE.Object3D): { material: THREE.Mes
     // anchor for a given mesh yet.
     const source = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
     const materials = Array.isArray(source) ? source : [source]
-    for (const mat of materials) {
-      if (mat instanceof THREE.MeshStandardMaterial) found.push({ material: mat, baseColor: mat.color.clone(), mesh: child })
-    }
+    const originalSlots = getOriginalMaterialSlots(child)
+    materials.forEach((mat, i) => {
+      if (!(mat instanceof THREE.MeshStandardMaterial)) return
+      const originalColor = (originalSlots[i]?.color ?? mat.color).clone()
+      found.push({ material: mat, originalColor, mesh: child })
+    })
   })
   return found
 }
@@ -1779,6 +1950,10 @@ export function TimelinePlayback({
   selectedExpressId,
   materializeVersion,
   dateField = 'live',
+  varianceByElementKey = EMPTY_VARIANCE_MAP,
+  showVarianceColors = false,
+  clashByElementKey = EMPTY_CLASH_MAP,
+  showClashColors = false,
 }: {
   dateRef: React.MutableRefObject<Date | null>
   paths: Path[]
@@ -1849,6 +2024,15 @@ export function TimelinePlayback({
   // "planned" timeline still plays the same hand-keyframed/path-bound
   // motion as the live pane, only the Activity-driven pieces differ.
   dateField?: 'live' | 'baseline'
+  // Variance/clash tinting (2026-07-24 fix, per Maro: "i dont see the
+  // variance color") — see computeTintedColor's own header for the full
+  // root-cause story. Defaulted to "off"/empty so every other
+  // TimelinePlayback caller (BaselineViewportPane.tsx, which has no
+  // selection/variance UI of its own) doesn't need to pass anything.
+  varianceByElementKey?: Map<string, VarianceEntry>
+  showVarianceColors?: boolean
+  clashByElementKey?: Map<string, boolean>
+  showClashColors?: boolean
 }) {
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
   const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
@@ -1922,13 +2106,29 @@ export function TimelinePlayback({
       // Same anti-pattern for mesh-kind links — `sceneObjects.find(...)` per
       // link is O(links * sceneObjects) — fixed the same way, by name.
       const meshByName = new Map(sceneObjects.filter(o => o.kind === 'mesh').map(o => [o.name, o.object]))
+      // Same convention as customTextures'/varianceByElementKey's own
+      // whole-object key for a mesh-kind element (2026-07-24, for
+      // computeTintedColor below) — a plain name->id side map alongside
+      // meshByName, cheap to build alongside it.
+      const meshIdByName = new Map(sceneObjects.filter(o => o.kind === 'mesh').map(o => [o.name, o.id]))
+
+      // "now" at resolve-time, for every fresh target's own initial variance
+      // cache (2026-07-24, third pass) — mirrors migrateSelectedExpressId's
+      // own "compute cachedActiveLink/cachedState immediately, don't wait
+      // for dateChanged" reasoning just below: a target created on a frame
+      // where the date genuinely hasn't moved would otherwise sit with
+      // cachedVarianceMagnitude at its just-constructed 0 until the next
+      // real scrub, showing no tint even for an element whose activity
+      // window `now` is already inside.
+      const nowMsAtResolve = dateRef.current ? dateRef.current.getTime() : null
 
       const byObject = new Map<THREE.Object3D, ResolvedTimelineTarget>()
-      const getOrCreate = (object: THREE.Object3D): ResolvedTimelineTarget => {
+      const getOrCreate = (object: THREE.Object3D, elementKey: string | null): ResolvedTimelineTarget => {
         let target = byObject.get(object)
         if (!target) {
+          const variance = resolveVarianceTint(elementKey, nowMsAtResolve, varianceByElementKey)
           target = {
-            object, links: [],
+            object, elementKey, links: [],
             basePosition: object.position.clone(),
             baseRotation: object.rotation.clone(),
             baseScale: object.scale.clone(),
@@ -1936,6 +2136,8 @@ export function TimelinePlayback({
             keyframeTracks: {},
             cachedActiveLink: null,
             cachedState: null,
+            cachedVarianceMagnitude: variance.magnitude,
+            cachedVarianceIsLate: variance.isLate,
           }
           byObject.set(object, target)
         }
@@ -2014,9 +2216,16 @@ export function TimelinePlayback({
         // whole element's animation instead of just one arbitrary member
         // of it.
         let objects: THREE.Object3D[] = []
+        // Mirrors customTextures'/varianceByElementKey's own key convention
+        // exactly (2026-07-24, for the getOrCreate call below) — set
+        // alongside `objects` in every branch that can actually populate
+        // it, null for anything that can't (ifc_split clones have no real
+        // ModelElementLink-facing identity of their own to key variance
+        // off).
+        let elementKey: string | null = null
         if (link.source_kind === 'mesh') {
           const mesh = meshByName.get(link.element_ref)
-          if (mesh) objects = [mesh]
+          if (mesh) { objects = [mesh]; elementKey = meshIdByName.get(link.element_ref) ?? null }
         } else if (link.source_kind === 'ifc_split') {
           // A level-slice (elementSplitTargets.ts) — its clone mesh(es)
           // already live in the same handle.object tree as everything
@@ -2060,9 +2269,38 @@ export function TimelinePlayback({
                 const key = `${batchInfo.mesh.uuid}:${expressId}`
                 let bvTarget = batchVisibilityByKey.get(key)
                 if (!bvTarget) {
+                  // Variance/clash tinting (2026-07-24, third pass) —
+                  // almost every schedule-generated link uses the default
+                  // profile (transform_kind 'none', confirmed via this
+                  // file's own comment above and a live DB check — every
+                  // Generate Schedule link has animation_profile_id null),
+                  // which routes here — meaning ModelObjects' own per-mesh
+                  // tint effect (Viewport3D.tsx above) never even runs
+                  // against these elements: they're never materialized
+                  // into individual meshes with their own `.material`,
+                  // they stay in the shared THREE.BatchedMesh forever.
+                  // instances keep their raw, untinted colour
+                  // (`originalColor`) here — the per-frame batch loop below
+                  // composes variance/clash tint live from this plus
+                  // cachedVarianceMagnitude/cachedVarianceIsLate, so the
+                  // tint can turn back off once `now` leaves the activity's
+                  // own window, which a colour baked in at this one-time
+                  // resolve pass never could.
+                  const elementKey = `ifc-${handle.modelID}::${expressId}`
+                  const variance = resolveVarianceTint(elementKey, nowMsAtResolve, varianceByElementKey)
+                  const originalInstances = batchInfo.instances.map(inst => ({
+                    instanceId: inst.instanceId,
+                    originalColor: inst.baseColor,
+                  }))
                   bvTarget = {
-                    mesh: batchInfo.mesh, instances: batchInfo.instances, links: [],
-                    cachedActiveLink: null, cachedState: null, lastColorHex: null,
+                    mesh: batchInfo.mesh, instances: originalInstances, links: [],
+                    elementKey,
+                    cachedVarianceMagnitude: variance.magnitude,
+                    cachedVarianceIsLate: variance.isLate,
+                    // undefined, not a real key (2026-07-24) — see
+                    // lastColorKey's own header for why the very first
+                    // frame's write must always actually happen.
+                    cachedActiveLink: null, cachedState: null, lastColorKey: undefined,
                     expressIdByInstanceId: (handle.object.userData.batch as BatchState).expressIdByInstanceId,
                   }
                   batchVisibilityByKey.set(key, bvTarget)
@@ -2110,13 +2348,13 @@ export function TimelinePlayback({
             // transform-driven profile, or an element that wasn't eligible
             // for the fast path.
             const matches = getMaterializedMeshes(handle.object, expressId)
-            if (matches.length > 0) { objects = matches; break }
+            if (matches.length > 0) { objects = matches; elementKey = `ifc-${handle.modelID}::${expressId}`; break }
           }
         }
         if (objects.length === 0) continue
 
         for (const object of objects) {
-          const target = getOrCreate(object)
+          const target = getOrCreate(object, elementKey)
           target.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
           // Tells ModelObjects' own per-mesh effect to back off `.visible`
           // for this mesh (2026-07-22 fix, per Maro — see that effect's own
@@ -2158,7 +2396,7 @@ export function TimelinePlayback({
           points.push({ date: new Date(kf.date), value: kf.value })
         }
         if (Object.keys(tracks).length === 0) continue
-        getOrCreate(so.object).keyframeTracks = tracks
+        getOrCreate(so.object, so.id).keyframeTracks = tracks
       }
 
       // Mode C — Follow Path (2026-07-11) — resolved separately from Mode
@@ -2267,7 +2505,7 @@ export function TimelinePlayback({
 
     resolve()
     return () => { cancelled = true }
-  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion])
+  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion, varianceByElementKey, showVarianceColors, clashByElementKey, showClashColors])
 
   // Surgical migration for one just-materialized element (2026-07-22) — see
   // this component's own selectedExpressId prop header for the full story
@@ -2324,43 +2562,50 @@ export function TimelinePlayback({
     // unconditional write block below then applies it on the very next
     // frame regardless of dateChanged, exactly like every other target.
     const now = dateRef.current
+    const nowMs = now ? now.getTime() : null
     const migrated: ResolvedTimelineTarget[] = meshes.map(object => {
       const cachedActiveLink = now ? pickActiveLink(bvTarget.links, now) : null
       const cachedState = cachedActiveLink && now ? computeAppliedAnimationStateAt(cachedActiveLink, now) : null
-      // baseColor corrected against getOriginalMaterialSlots, not trusted
-      // as collectStandardMaterials captured it (2026-07-22 fix, per Maro:
-      // a deselected element's highlight tint was sticking permanently on
-      // exactly this class of element — reproduced live and confirmed:
-      // ModelObjects' own selection-tint effect and this migration effect
-      // both fire off the same selectedExpressId change, in the same React
-      // commit, and ModelObjects mounts first in this file's own JSX (see
-      // its call site above TimelinePlayback's) — so by the time this runs,
-      // the mesh ensureMaterialized just created has *already* been tinted
-      // toward SELECTED_EMISSIVE (it's normally the active selection,
-      // that's what triggered materialization to begin with).
-      // collectStandardMaterials's own baseColor is just `material.color`
-      // read at call time, with no idea any of that happened, so it
-      // captured the tint itself as "the real colour" — permanently, since
-      // nothing ever recomputes it afterward. Every later frame this target
-      // has an active link but no colour profile (state.color null, the
-      // common case — see the material-diff block below), the loop
-      // reasserts *that* frozen-in tint back onto the mesh, undoing
-      // ModelObjects' own correct restore-to-original on every deselect
-      // from then on. getOriginalMaterialSlots reads
+      // originalColor corrected against getOriginalMaterialSlots, not
+      // trusted as collectStandardMaterials captured it (2026-07-22 fix,
+      // per Maro: a deselected element's highlight tint was sticking
+      // permanently on exactly this class of element — reproduced live
+      // and confirmed: ModelObjects' own selection-tint effect and this
+      // migration effect both fire off the same selectedExpressId change,
+      // in the same React commit, and ModelObjects mounts first in this
+      // file's own JSX (see its call site above TimelinePlayback's) — so
+      // by the time this runs, the mesh ensureMaterialized just created
+      // has *already* been tinted toward SELECTED_EMISSIVE (it's normally
+      // the active selection, that's what triggered materialization to
+      // begin with). collectStandardMaterials's own originalColor is just
+      // `material.color` read at call time, with no idea any of that
+      // happened, so it captured the tint itself as "the real colour" —
+      // permanently, since nothing ever recomputes it afterward. Every
+      // later frame this target has an active link but no colour profile
+      // (state.color null, the common case — see the material-diff block
+      // below), the loop reasserts *that* frozen-in tint back onto the
+      // mesh, undoing ModelObjects' own correct restore-to-original on
+      // every deselect from then on. getOriginalMaterialSlots reads
       // finalizeIndividualMesh's own captureOriginalMaterial snapshot
       // instead — taken synchronously inside ensureMaterialized itself,
       // before this mesh is even added to the scene and so well before
       // either effect above can touch it — the one source in this whole
       // path actually guaranteed untinted.
+      // elementKey (2026-07-24, for variance/clash tinting) — same
+      // `ifc-${modelID}::${expressID}` convention as resolve()'s own Mode
+      // A loop above; handle/selectedExpressId are both already in scope
+      // for exactly this migration, no separate lookup needed.
+      const migratedElementKey = `ifc-${handle.modelID}::${selectedExpressId}`
       const originalSlots = getOriginalMaterialSlots(object)
       const materials = collectStandardMaterials(object).map((entry, i) => (
-        originalSlots[i] ? { ...entry, baseColor: originalSlots[i].color.clone() } : entry
+        originalSlots[i] ? { ...entry, originalColor: originalSlots[i].color.clone() } : entry
       ))
+      const variance = resolveVarianceTint(migratedElementKey, nowMs, varianceByElementKey)
       // Same ModelObjects hand-off as resolve()'s own Mode A loop above —
       // see its own timelineControlled comment for the full story.
       object.userData.timelineControlled = true
       return {
-        object, links: [...bvTarget.links],
+        object, elementKey: migratedElementKey, links: [...bvTarget.links],
         basePosition: object.position.clone(),
         baseRotation: object.rotation.clone(),
         baseScale: object.scale.clone(),
@@ -2368,6 +2613,8 @@ export function TimelinePlayback({
         keyframeTracks: {},
         cachedActiveLink,
         cachedState,
+        cachedVarianceMagnitude: variance.magnitude,
+        cachedVarianceIsLate: variance.isLate,
       }
     })
     targetsRef.current = [...targetsRef.current, ...migrated]
@@ -2416,6 +2663,14 @@ export function TimelinePlayback({
         target.cachedState = target.cachedActiveLink
           ? computeAppliedAnimationStateAt(target.cachedActiveLink, now)
           : null
+        // Re-resolved on every real date change, same gate as
+        // cachedActiveLink/cachedState above (2026-07-24, third pass) — an
+        // element's variance tint must turn on/off exactly when `now`
+        // crosses its own activity's start/finish, not just once at
+        // resolve time.
+        const variance = resolveVarianceTint(target.elementKey, nowMs, varianceByElementKey)
+        target.cachedVarianceMagnitude = variance.magnitude
+        target.cachedVarianceIsLate = variance.isLate
       }
       const activeLink = target.cachedActiveLink
       const state = target.cachedState
@@ -2458,7 +2713,13 @@ export function TimelinePlayback({
       // Opacity/colour always come from the profile alone (if any) — never
       // fought over by keyframeTracks, which only ever cover transform.
       if (state) {
-        for (const { material, baseColor, mesh } of target.materials) {
+        // Shared across every material of this target — variance/clash
+        // membership is a per-*element*, not per-material, fact
+        // (2026-07-24, third pass), so it's cheaper to resolve once here
+        // than inside the materials loop below.
+        const clashActive = showClashColors && target.elementKey ? (clashByElementKey.get(target.elementKey) ?? false) : false
+        const varianceActive = showVarianceColors && target.cachedVarianceMagnitude > 0
+        for (const { material, originalColor, mesh } of target.materials) {
           // Diffed before writing, not applied unconditionally (2026-07-17
           // perf fix, per Maro: "mad laggy" — this loop runs every single
           // frame by design (see mesh.visible's own comment below on why —
@@ -2478,11 +2739,22 @@ export function TimelinePlayback({
           // nothing would change, which is the overwhelming majority of
           // frames whenever the timeline itself isn't actively moving.
           const nextTransparent = state.opacity < 1
-          // state.color is a hex string (profile config), baseColor a real
-          // THREE.Color — normalized through one reused scratch Color
-          // (module-level, below) rather than allocating a fresh one every
-          // material every frame just to compare.
-          if (state.color) _scratchColor.set(state.color); else _scratchColor.copy(baseColor)
+          // state.color is a hex string (profile config), originalColor a
+          // real, untinted THREE.Color — normalized through one reused
+          // scratch Color (module-level, below) rather than allocating a
+          // fresh one every material every frame just to compare. Variance/
+          // clash tint composed fresh right here (2026-07-24, third pass —
+          // no longer a colour baked in once at resolve time), using the
+          // per-target cache the dateChanged branch above just refreshed,
+          // so the tint can turn back off the instant `now` leaves this
+          // element's own activity window.
+          if (state.color) {
+            _scratchColor.set(state.color)
+          } else {
+            _scratchColor.copy(originalColor)
+            if (varianceActive) _scratchColor.lerp(target.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, target.cachedVarianceMagnitude)
+            if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
+          }
           let changed = false
           if (material.transparent !== nextTransparent) { material.transparent = nextTransparent; changed = true }
           if (material.opacity !== state.opacity) { material.opacity = state.opacity; changed = true }
@@ -2577,6 +2849,13 @@ export function TimelinePlayback({
         bv.cachedState = bv.cachedActiveLink
           ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now)
           : null
+        // Same per-real-date-change refresh as the individual-mesh path
+        // above (2026-07-24, third pass) — a batch instance's variance
+        // tint must turn on/off exactly when `now` crosses its own
+        // activity's start/finish too.
+        const variance = resolveVarianceTint(bv.elementKey, nowMs, varianceByElementKey)
+        bv.cachedVarianceMagnitude = variance.magnitude
+        bv.cachedVarianceIsLate = variance.isLate
       }
       const state = bv.cachedState
       const scheduleVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
@@ -2616,17 +2895,31 @@ export function TimelinePlayback({
       }
       // null once the profile's own colour window has passed (see
       // computeAppliedAnimationStateAt's own header) — restores each
-      // instance's real imported colour rather than leaving the last tint
-      // applied stuck on forever.
+      // instance's real imported colour (plus any live variance/clash
+      // tint) rather than leaving the last tint applied stuck on forever.
+      // nextColorKey is a composite (2026-07-24, third pass — see
+      // lastColorKey's own header): profile colour alone used to be the
+      // only thing that could change here, but variance tint can now
+      // switch on/off independently of it (the activity window opening/
+      // closing) while the profile's own colour stays exactly `null`
+      // throughout, so the write-gate has to notice that too.
       const nextColorHex = state?.color ?? null
-      if (bv.lastColorHex !== nextColorHex) {
+      const clashActive = showClashColors && bv.elementKey ? (clashByElementKey.get(bv.elementKey) ?? false) : false
+      const varianceActive = showVarianceColors && bv.cachedVarianceMagnitude > 0
+      const nextColorKey = `${nextColorHex}|${varianceActive ? bv.cachedVarianceMagnitude.toFixed(3) : 0}|${bv.cachedVarianceIsLate}|${clashActive}`
+      if (bv.lastColorKey !== nextColorKey) {
         if (nextColorHex) {
           _scratchColor.set(nextColorHex)
           for (const { instanceId } of bv.instances) bv.mesh.setColorAt(instanceId, _scratchColor)
         } else {
-          for (const { instanceId, baseColor } of bv.instances) bv.mesh.setColorAt(instanceId, baseColor)
+          for (const { instanceId, originalColor } of bv.instances) {
+            _scratchColor.copy(originalColor)
+            if (varianceActive) _scratchColor.lerp(bv.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, bv.cachedVarianceMagnitude)
+            if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
+            bv.mesh.setColorAt(instanceId, _scratchColor)
+          }
         }
-        bv.lastColorHex = nextColorHex
+        bv.lastColorKey = nextColorKey
       }
     }
 
@@ -2696,6 +2989,79 @@ function CameraCapture({ cameraRef, rendererRef }: {
   const { camera, gl } = useThree()
   useEffect(() => { cameraRef.current = camera }, [camera, cameraRef])
   useEffect(() => { rendererRef.current = gl }, [gl, rendererRef])
+  return null
+}
+
+export interface CameraSyncState {
+  position: [number, number, number]
+  target: [number, number, number]
+  version: number
+}
+
+// Synchronises orbit camera position/target across the two independent
+// <Canvas> panes (2026-07-24, per Maro: "i'd like to sync the orbit
+// movement. so i get the same camera angles" — the main Viewport3D and
+// BaselineViewportPane.tsx's own comparison pane each own a completely
+// separate camera/OrbitControls, one per <Canvas>/WebGL context, with no
+// natural way to share state between them otherwise). `syncRef` is a
+// plain mutable ref (not React state) shared by both panes via FourD.tsx —
+// same "read/write outside React's render cycle, a version counter (not
+// object identity) decides what's actually new" idiom dateRef/
+// materializeVersion already use elsewhere in this module, avoiding a
+// forced React re-render on literally every orbit-drag frame in *both*
+// panes at once.
+//
+// `applyingRef` breaks a real re-entrancy loop found while building this:
+// controls.update() below (applying an *incoming* sync) itself dispatches
+// this same controls instance's own 'change' event synchronously, which
+// would otherwise immediately write that value straight back into
+// `syncRef` as if it were a fresh user drag, bouncing an ever-incrementing
+// (but data-identical) version back and forth between the two panes
+// forever. Set for the sole duration of the one synchronous update() call
+// that applies an incoming change; handleChange ignores 'change' events
+// that fire while it's set.
+export function CameraSync({
+  syncRef, cameraRef, controlsRef,
+}: {
+  syncRef: React.MutableRefObject<CameraSyncState | null>
+  cameraRef: React.MutableRefObject<THREE.Camera | null>
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+}) {
+  const lastAppliedVersion = useRef(0)
+  const applyingRef = useRef(false)
+
+  useEffect(() => {
+    const controls = controlsRef.current
+    const camera = cameraRef.current
+    if (!controls || !camera) return
+    const handleChange = () => {
+      if (applyingRef.current) return
+      const nextVersion = (syncRef.current?.version ?? 0) + 1
+      syncRef.current = {
+        position: camera.position.toArray() as [number, number, number],
+        target: controls.target.toArray() as [number, number, number],
+        version: nextVersion,
+      }
+      lastAppliedVersion.current = nextVersion
+    }
+    controls.addEventListener('change', handleChange)
+    return () => controls.removeEventListener('change', handleChange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlsRef.current, cameraRef.current])
+
+  useFrame(() => {
+    const shared = syncRef.current
+    const controls = controlsRef.current
+    const camera = cameraRef.current
+    if (!shared || !controls || !camera || shared.version <= lastAppliedVersion.current) return
+    applyingRef.current = true
+    camera.position.fromArray(shared.position)
+    controls.target.fromArray(shared.target)
+    controls.update()
+    applyingRef.current = false
+    lastAppliedVersion.current = shared.version
+  })
+
   return null
 }
 
@@ -2845,12 +3211,13 @@ function ClippingSetup() {
 // Viewport3D under FourD.tsx rather than a child of it, so a local re-render
 // trigger here wouldn't reach it; FourD.tsx owns the tick state that
 // re-renders both.
+
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
-  environmentUrl, onEnvironmentError, customTextures,
+  environmentUrl, onEnvironmentError, customTextures, cameraSyncRef,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
@@ -2860,6 +3227,7 @@ export function Viewport3D({
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
   measurementHoverPoint, onMeasurementHoverPoint,
+  compareBaselineOpen, baselineCanvasRef, onCaptureQualityChange,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -3039,6 +3407,11 @@ export function Viewport3D({
   // background hidden for a cleaner working view, but wanted in the final
   // output) and clear it back to null afterward.
   const [captureBackgroundOverride, setCaptureBackgroundOverride] = useState<boolean | null>(null)
+  // White Background (2026-07-24) — see viewerSettings.ts's own header;
+  // never applied during a capture/still-export, same reasoning
+  // captureBackgroundOverride's own comment just above already gives for
+  // that feature's independence from the live view's current look.
+  const showWhiteBackground = captureBackgroundOverride === null && settings.whiteBackground
   // Path helpers (curve line + control-point handles, PathGizmo.tsx) are a
   // live-editing aid, not part of the model — forced off for the duration
   // of a capture/still-export the same way captureBackgroundOverride forces
@@ -3194,8 +3567,40 @@ export function Viewport3D({
   const handleCaptureImage = () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
+    // Include Baseline (2026-07-24) — only meaningful while the pane is
+    // actually mounted (compareBaselineOpen) and has produced a real
+    // canvas (baselineCanvasRef.current, populated by
+    // BaselineViewportPane's own CaptureCamera-like helper).
+    const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
+    // Export Content overlays (2026-07-25) — see exportOverlays.ts's own
+    // header. Only builds the composite canvas when at least one of these
+    // (or Include Baseline above) is actually on; the plain single-canvas
+    // path below is untouched otherwise, exactly as before this feature.
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay } = renderCaptureSettings
+    const hasOverlay = includeBaseline || includeGanttChart || includeActivityTable || includeAppearanceLegend || includeDateOverlay
     const doCapture = () => {
-      canvas.toBlob(blob => {
+      let source: HTMLCanvasElement = canvas
+      if (hasOverlay) {
+        const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
+        const layout = computeExportLayout(
+          canvas.width, canvas.height, baselineCanvas?.width ?? 0, baselineCanvas?.height ?? 0,
+          dpr, { includeGanttChart, includeActivityTable, includeBaseline },
+        )
+        const composite = document.createElement('canvas')
+        composite.width = layout.totalWidth
+        composite.height = layout.totalHeight
+        const ctx = composite.getContext('2d')
+        if (ctx) {
+          composeExportFrame(ctx, layout, {
+            mainCanvas: canvas, baselineCanvas,
+            activities: timelineActivities, profiles: timelineProfiles,
+            now: timelineDateRef.current, scheduleStart, scheduleEnd,
+            scale: dpr, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+          })
+        }
+        source = composite
+      }
+      source.toBlob(blob => {
         if (!blob) return
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -3204,11 +3609,13 @@ export function Viewport3D({
         a.click()
         URL.revokeObjectURL(url)
         setCaptureDprMultiplier(null)
+        onCaptureQualityChange?.(null)
         setCaptureBackgroundOverride(null)
         setHidePathHelpers(false)
       }, 'image/png')
     }
     setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
+    onCaptureQualityChange?.(renderCaptureSettings.resolutionMultiplier)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
     requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(doCapture)))
@@ -3285,9 +3692,15 @@ export function Viewport3D({
     if (!canvas) return
     const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
     if (totalMs <= 0) return
+    const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
+    // Export Content overlays (2026-07-25) — see exportOverlays.ts's own
+    // header and handleCaptureImage's identical hasOverlay gate just above.
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay } = renderCaptureSettings
+    const hasOverlay = includeBaseline || includeGanttChart || includeActivityTable || includeAppearanceLegend || includeDateOverlay
 
     setIsExportingVideo(true)
     setCaptureDprMultiplier(renderCaptureSettings.resolutionMultiplier)
+    onCaptureQualityChange?.(renderCaptureSettings.resolutionMultiplier)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
     try {
@@ -3301,7 +3714,35 @@ export function Viewport3D({
 
       const fps = renderCaptureSettings.videoFps
       const durationMs = renderCaptureSettings.videoDurationSec * 1000
-      const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
+      // Include Baseline / Export Content overlays (2026-07-24/25) —
+      // captureStream() only ever samples one real canvas at a time, so
+      // side-by-side/overlaid video needs a third, off-DOM canvas that
+      // gets manually redrawn (composeExportFrame) every animation frame
+      // for the whole recording (the step() loop below), with
+      // captureStream reading *that* composite instead of either 3D
+      // canvas directly. Sized/allocated only once the boosted-resolution
+      // wait above has already landed, so both source canvases are
+      // already at their final capture-quality dimensions. The layout
+      // itself (band positions/sizes) is computed once here too —
+      // activities/profiles/canvas sizes don't change mid-recording, only
+      // `now` does, so there's no need to recompute it every tick.
+      let recordCanvas: HTMLCanvasElement = canvas
+      let compositeCtx: CanvasRenderingContext2D | null = null
+      const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
+      const layout = hasOverlay
+        ? computeExportLayout(
+            canvas.width, canvas.height, baselineCanvas?.width ?? 0, baselineCanvas?.height ?? 0,
+            dpr, { includeGanttChart, includeActivityTable, includeBaseline },
+          )
+        : null
+      if (layout) {
+        const composite = document.createElement('canvas')
+        composite.width = layout.totalWidth
+        composite.height = layout.totalHeight
+        compositeCtx = composite.getContext('2d')
+        recordCanvas = composite
+      }
+      const stream = (recordCanvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
       const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' })
       const chunks: Blob[] = []
       recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
@@ -3312,7 +3753,16 @@ export function Viewport3D({
       await new Promise<void>(resolve => {
         const step = () => {
           const t = Math.min((performance.now() - startTime) / durationMs, 1)
-          timelineDateRef.current = new Date(scheduleStart.getTime() + totalMs * t)
+          const now = new Date(scheduleStart.getTime() + totalMs * t)
+          timelineDateRef.current = now
+          if (compositeCtx && layout) {
+            composeExportFrame(compositeCtx, layout, {
+              mainCanvas: canvas, baselineCanvas,
+              activities: timelineActivities, profiles: timelineProfiles,
+              now, scheduleStart, scheduleEnd,
+              scale: dpr, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+            })
+          }
           if (t >= 1) { resolve(); return }
           requestAnimationFrame(step)
         }
@@ -3334,6 +3784,7 @@ export function Viewport3D({
     } finally {
       setIsExportingVideo(false)
       setCaptureDprMultiplier(null)
+      onCaptureQualityChange?.(null)
       setCaptureBackgroundOverride(null)
       setHidePathHelpers(false)
     }
@@ -3606,7 +4057,7 @@ export function Viewport3D({
         >
           {isExportingVideo ? 'Recording…' : 'Export Video'}
         </button>
-        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} />
+        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} compareBaselineOpen={compareBaselineOpen} />
       </div>
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while
@@ -3675,6 +4126,7 @@ export function Viewport3D({
         onPointerMissed={() => { if (!boxSelectMode) { onSelect(null); onSelectObject(null) } }}
       >
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
+        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
         <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} />
         <ClippingSetup />
         <ambientLight intensity={0.6} />
@@ -3733,11 +4185,22 @@ export function Viewport3D({
                 this — same +90-about-X correction as everything else Y-up. */}
             <Environment
               files={activeEnvironmentUrl}
-              background={captureBackgroundOverride ?? settings.environmentBackground}
+              background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
             />
           </ViewportErrorBoundary>
+          {/* Plain white backdrop (2026-07-24, per Maro, comparing against
+              the Baseline pane's own look: "allow me to switch to it on the
+              main") — Environment above still lights the scene via IBL
+              exactly the same either way (background={false} only stops it
+              being the *visible* backdrop); this just swaps in a flat
+              colour instead of the HDR equirect image. Skipped entirely
+              during a capture/still-export (captureBackgroundOverride !==
+              null) so that feature's own forced-HDR-on behaviour is
+              untouched — the two are independent, deliberately not fighting
+              over which one wins. */}
+          {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
           {/* Grid is Y-up by its own native convention (it's our own
               geometry) — this wrapper corrects it to match upAxis, same as
               ModelObjects does per-object internally using each object's own
@@ -3821,6 +4284,10 @@ export function Viewport3D({
             pathFollowers={pathFollowers}
             selectedExpressId={selectedExpressId}
             materializeVersion={materializeVersion}
+            varianceByElementKey={varianceByElementKey}
+            showVarianceColors={settings.showVarianceColors}
+            clashByElementKey={clashByElementKey}
+            showClashColors={settings.showClashColors}
           />
           {!hidePathHelpers && (
             <PathGizmos

@@ -1,7 +1,8 @@
-import { Suspense, useMemo } from 'react'
+import { Suspense, useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useThree } from '@react-three/fiber'
 import { Grid, OrbitControls } from '@react-three/drei'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { ElementKeyframe } from './elementKeyframes'
@@ -11,7 +12,7 @@ import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
-import { TimelinePlayback, type ImportedObject, type TimelineSceneObject } from './Viewport3D'
+import { CameraSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject } from './Viewport3D'
 
 interface Props {
   importedObjects: ImportedObject[]
@@ -28,6 +29,41 @@ interface Props {
   elementKeyframes: ElementKeyframe[]
   paths: Path[]
   pathFollowers: PathFollower[]
+  // Orbit camera sync with the primary Viewport3D (2026-07-24) — see
+  // Viewport3D.tsx's own CameraSync header for the full mechanism.
+  cameraSyncRef: React.MutableRefObject<CameraSyncState | null>
+  // Include Baseline (2026-07-24, per Maro: "an option to include the
+  // baseline 3d while capturing still and video. so side by side") —
+  // baselineCanvasRef is written by CaptureCanvas just below (same
+  // useThree()-inside-the-Canvas idiom as CaptureCamera) so Viewport3D.tsx's
+  // own handleCaptureImage/handleExportVideo can read this pane's real
+  // rendered canvas and composite it alongside the main one.
+  // dprMultiplier mirrors Viewport3D.tsx's own captureDprMultiplier out to
+  // this pane (relayed through FourD.tsx, see its own onCaptureQualityChange
+  // prop) so a boosted-resolution capture boosts both canvases together,
+  // not just the primary one — null/undefined means "native resolution,"
+  // same as the primary viewport's own default.
+  baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
+  dprMultiplier?: number | null
+}
+
+// Mirrors Viewport3D.tsx's own private CameraCapture — this pane's camera
+// object only exists once React-three-fiber's own Canvas has mounted it,
+// so CameraSync (which needs a live reference, not the Canvas `camera`
+// prop's initial config) reads it out via this same useThree()-inside-the-
+// Canvas trick.
+function CaptureCamera({ cameraRef }: { cameraRef: React.MutableRefObject<THREE.Camera | null> }) {
+  const { camera } = useThree()
+  useEffect(() => { cameraRef.current = camera }, [camera, cameraRef])
+  return null
+}
+
+// Same idiom as CaptureCamera just above, for this pane's own real WebGL
+// canvas element (2026-07-24) — see baselineCanvasRef's own header.
+function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCanvasElement | null> }) {
+  const { gl } = useThree()
+  useEffect(() => { canvasRef.current = gl.domElement }, [gl, canvasRef])
+  return null
 }
 
 // The "planned" half of Maro's baseline-vs-actual compare request
@@ -48,9 +84,12 @@ interface Props {
 // by the one real Viewport3D.
 export function BaselineViewportPane({
   importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
-  activities, links, profiles, elementKeyframes, paths, pathFollowers,
+  activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, baselineCanvasRef, dprMultiplier,
 }: Props) {
   const zUp = upAxis === 'z'
+  const cameraRef = useRef<THREE.Camera | null>(null)
+  const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  const dpr = Math.min(window.devicePixelRatio * (dprMultiplier ?? 1), 4)
 
   // Cloned once per source-object identity change (2026-07-12) — a plain
   // Map keyed by the *original* Object3D, rebuilt whenever the set of
@@ -97,8 +136,12 @@ export function BaselineViewportPane({
       </div>
       <Canvas
         frameloop="always"
+        dpr={dpr}
         camera={{ position: [8, 8, 8], up: [0, zUp ? 0 : 1, zUp ? 1 : 0], fov: fieldOfView, near: clipStart, far: clipEnd }}
       >
+        <CaptureCamera cameraRef={cameraRef} />
+        <CaptureCanvas canvasRef={baselineCanvasRef} />
+        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
         <ambientLight intensity={0.6} />
         <directionalLight position={zUp ? [10, 10, 15] : [10, 15, 10]} intensity={1} />
         <Suspense fallback={null}>
@@ -136,7 +179,7 @@ export function BaselineViewportPane({
             <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />
           </group>
         </Suspense>
-        <OrbitControls makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
+        <OrbitControls ref={controlsRef} makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
       </Canvas>
     </div>
   )

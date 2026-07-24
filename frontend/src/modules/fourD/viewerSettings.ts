@@ -66,6 +66,16 @@ export interface ViewerSettings {
   // showing it as the backdrop is the right out-of-the-box look, unlike
   // the earlier "apartment" CDN preset (an indoor scene) this replaced.
   environmentBackground: boolean
+  // Plain white backdrop, as an alternative to the HDR sky (2026-07-24, per
+  // Maro, comparing against the Baseline pane's own plain white look:
+  // "allow me to switch to it on the main") — independent of
+  // environmentBackground just above: Environment keeps lighting the scene
+  // via IBL exactly the same either way, this only ever swaps what's
+  // *visible* behind the model for a flat white layer instead of the HDR
+  // equirect image (or the plain grey clear colour when environmentBackground
+  // is already off). Off by default so existing projects keep showing
+  // whatever backdrop they already had.
+  whiteBackground: boolean
   // Blender is Z-up; three.js (and every GLTF/OBJ/FBX import) is natively
   // Y-up (2026-07-08, per Maro: "the axis differs from blender... swap y
   // and z... make sure z up is the default"). See upAxis.ts for exactly how
@@ -102,6 +112,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   sunElevation: 45,
   ambientOcclusion: false,
   environmentBackground: true,
+  whiteBackground: false,
   upAxis: 'z',
   showVarianceColors: false,
   showClashColors: false,

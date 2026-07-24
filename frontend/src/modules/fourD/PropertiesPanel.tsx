@@ -282,6 +282,14 @@ export function PropertiesPanel({
       <Row label="Show as background">
         <input type="checkbox" checked={settings.environmentBackground} onChange={e => set('environmentBackground', e.target.checked)} />
       </Row>
+      <Row label="White Background">
+        <input
+          type="checkbox"
+          checked={settings.whiteBackground}
+          onChange={e => set('whiteBackground', e.target.checked)}
+          title="Plain white backdrop instead of the HDR sky — same look as the Baseline pane. Lighting is unaffected either way."
+        />
+      </Row>
 
       <SectionHeader label="Indicators" />
       <Row label="Grid">

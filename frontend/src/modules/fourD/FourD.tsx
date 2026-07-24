@@ -88,7 +88,7 @@ import type { MeasurementHit } from './MeasurementGizmo'
 // bundle-weight benefit to deferring it the way ifcModel.ts itself needs
 // (see resolveToMetresForHit below, which still dynamic-imports that one).
 import { distanceMetres, measureFacePatch } from './measurementGeometry'
-import { Viewport3D, type ImportedObject, type ResolvedSectionBox } from './Viewport3D'
+import { Viewport3D, type CameraSyncState, type ImportedObject, type ResolvedSectionBox, type VarianceEntry } from './Viewport3D'
 import { BaselineViewportPane } from './BaselineViewportPane'
 import { ImportModelDialog } from './ImportModelDialog'
 import { IfcScheduleWizard } from './IfcScheduleWizard'
@@ -1175,6 +1175,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // resolve every keyframed object each frame regardless of selection).
   const elementKeyframes = useElementKeyframes(selectedProject?.id)
   const timelineDateRef = useRef<Date | null>(null)
+  // Orbit camera sync between the main viewport and the Baseline pane
+  // (2026-07-24, per Maro: "i'd like to sync the orbit movement. so i get
+  // the same camera angles") — see Viewport3D.tsx's own CameraSync header
+  // for the full mechanism. A plain ref, not state, same reasoning as
+  // timelineDateRef just above (this changes on literally every orbit-drag
+  // frame; forcing a React re-render for that would be its own
+  // performance problem).
+  const cameraSyncRef = useRef<CameraSyncState | null>(null)
+  // Include Baseline (2026-07-24, per Maro: "an option to include the
+  // baseline 3d while capturing still and video. so side by side") —
+  // baselineCanvasRef is a plain ref (not state — same reasoning as
+  // cameraSyncRef just above: this is a stable DOM node reference, not
+  // something that should trigger a re-render when it's set), written by
+  // BaselineViewportPane.tsx's own CaptureCanvas the moment its Canvas
+  // mounts, and read by Viewport3D.tsx's own handleCaptureImage/
+  // handleExportVideo to composite the two panes together.
+  // baselineDprMultiplier IS state (unlike the ref above) because it needs
+  // to actually change BaselineViewportPane's own Canvas `dpr` prop when a
+  // capture starts/ends — mirrors Viewport3D.tsx's own internal
+  // captureDprMultiplier out via its onCaptureQualityChange callback prop,
+  // so both panes render at the same boosted resolution during a capture.
+  const baselineCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [baselineDprMultiplier, setBaselineDprMultiplier] = useState<number | null>(null)
   // The 4D timeline's "current date" (2026-07-11) — a ref, not state; see
   // Viewport3D.tsx's own Props comment for why. timelineRange is real
   // state-derived (not a ref) since it only needs to update when the
@@ -1968,22 +1991,35 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Keyed exactly like customTextures' own per-element overrides (whole
   // mesh-kind object id, or `${objectId}::${expressID}` for a specific IFC
-  // sub-element) — Viewport3D.tsx's ModelObjects reads this straight
-  // through with zero further resolution needed. Only activities with a
-  // real, non-null variance_days contribute (no baseline assigned yet =
-  // no colour, not a false "on time" green).
-  const varianceByElementKey: Map<string, number> = useMemo(() => {
-    const map = new Map<string, number>()
+  // sub-element) — Viewport3D.tsx's ModelObjects/TimelinePlayback both read
+  // this straight through with zero further resolution needed. Only
+  // activities with a real, non-null variance_days contribute (no baseline
+  // assigned yet = no colour, not a false "on time" green) — and now also
+  // only those with real start/finish dates (2026-07-24, third pass, per
+  // Maro: "i dont want the variance color to be permanently the color...
+  // vibrant through the duration of its relevant activity duration then go
+  // back to its original color" — start/finish are what Viewport3D.tsx's
+  // own resolveVarianceTint compares the current playhead date against
+  // every frame, gating the tint to the activity's own live window instead
+  // of showing it at every date on the timeline).
+  const varianceByElementKey: Map<string, VarianceEntry> = useMemo(() => {
+    const map = new Map<string, VarianceEntry>()
     const activityById = new Map(activities.map(a => [a.id, a]))
     for (const link of modelElementLinks) {
       const activity = activityById.get(link.activity_id)
       if (!activity || activity.variance_days === null || activity.variance_days === undefined) continue
+      if (!activity.start || !activity.finish) continue
+      const entry: VarianceEntry = {
+        days: activity.variance_days,
+        start: new Date(activity.start).getTime(),
+        finish: new Date(activity.finish).getTime(),
+      }
       if (link.source_kind === 'mesh') {
         const sceneObject = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
-        if (sceneObject) map.set(sceneObject.id, activity.variance_days)
+        if (sceneObject) map.set(sceneObject.id, entry)
       } else if (link.source_kind === 'ifc') {
         const key = ifcLinkKeys[link.id]
-        if (key) map.set(key, activity.variance_days)
+        if (key) map.set(key, entry)
       }
     }
     return map
@@ -4404,6 +4440,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       environmentUrl={customEnvironment?.url ?? null}
       onEnvironmentError={handleEnvironmentError}
       customTextures={customTextures}
+      cameraSyncRef={cameraSyncRef}
+      compareBaselineOpen={compareBaselineOpen}
+      baselineCanvasRef={baselineCanvasRef}
+      onCaptureQualityChange={setBaselineDprMultiplier}
       timelineDateRef={timelineDateRef}
       timelineSceneObjects={sceneObjects}
       timelineActivities={activities}
@@ -4687,6 +4727,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                   clipStart={settings.clipStart}
                   clipEnd={settings.clipEnd}
                   timelineDateRef={timelineDateRef}
+                  cameraSyncRef={cameraSyncRef}
+                  baselineCanvasRef={baselineCanvasRef}
+                  dprMultiplier={baselineDprMultiplier}
                   activities={activities}
                   links={modelElementLinks}
                   profiles={animationProfiles.profiles}

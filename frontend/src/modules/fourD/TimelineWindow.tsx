@@ -119,6 +119,11 @@ export function TimelineWindow({
   })
   const changeTimeDisplayMode = (mode: TimeDisplayMode) => {
     setTimeDisplayMode(mode)
+    // Clears any in-progress End field typing buffer (2026-07-24) — its
+    // raw text is unit-specific (seconds vs. frames); left alone across a
+    // mode switch it would show stale digits in the new unit's field
+    // until the user happened to blur it.
+    setEndInputText(null)
     try { localStorage.setItem(DISPLAY_MODE_KEY, mode) } catch { /* ignore */ }
   }
   const changeFps = (value: number) => {
@@ -137,6 +142,21 @@ export function TimelineWindow({
   // without it, even a single-pixel jitter on mousedown would wrongly skip
   // the click-to-jump path.
   const [dragState, setDragState] = useState<{ dayKey: string; previewDate: Date; moved: boolean } | null>(null)
+
+  // Raw text the user is actively typing into the End field (2026-07-24
+  // fix, per Maro: "unable to freely change the end frames or values") —
+  // that field used to be fully controlled straight off effectiveEnd, so
+  // handleEndOverride's own "extends only" floor check ran on *every
+  // keystroke*: typing "30" digit-by-digit, the moment "3" alone parsed to
+  // a value at-or-below the real computed end, the override reset to null
+  // and the field snapped back to showing the real end before the user
+  // could ever type the "0" — same problem editing an existing override
+  // down to a smaller-but-still-valid number. null here means "not
+  // currently being typed into" (show the real derived value); a string
+  // means "show exactly what the user just typed, unvalidated" — the
+  // floor check only actually runs once, on blur/Enter, via
+  // commitEndInput below.
+  const [endInputText, setEndInputText] = useState<string | null>(null)
 
   // Manual upper-limit override (2026-07-23, per Maro: "unable to set the
   // upper limit of animation") — scheduleEnd is otherwise entirely computed
@@ -249,14 +269,29 @@ export function TimelineWindow({
   // Extends the manual override, never shrinks it below the real computed
   // scheduleEnd (Maro's explicit choice) — see endOverrideMs's own header
   // above for why that floor check is against the live prop, not the
-  // previous override.
-  const handleEndOverride = (next: Date) => {
+  // previous override. Only ever called on commit (blur/Enter — see
+  // endInputText's own header for why not on every keystroke).
+  const commitEndOverride = (next: Date) => {
     setEndOverrideMs(next.getTime() > scheduleEnd.getTime() ? next.getTime() : null)
+    setEndInputText(null)
   }
   const handleEndDateInput = (value: string) => {
-    if (!value) return
+    if (!value) { setEndInputText(null); return }
     const [y, m, d] = value.split('-').map(Number)
-    handleEndOverride(new Date(y, m - 1, d))
+    commitEndOverride(new Date(y, m - 1, d))
+  }
+  // Parses whatever's currently in the End field's own typing buffer and
+  // commits it — shared by onBlur and Enter (2026-07-24). Leaves the
+  // override untouched (just clears the buffer, reverting the display back
+  // to the real value) on an empty/unparseable value rather than treating
+  // that as "set the end to right now," same forgiving-on-blur behaviour
+  // every other numeric field in this app already has.
+  const commitEndInputText = () => {
+    if (endInputText === null) return
+    if (endInputText.trim() === '') { setEndInputText(null); return }
+    const parsed = Number(endInputText)
+    if (Number.isNaN(parsed)) { setEndInputText(null); return }
+    commitEndOverride(dateFromTimelineValue(parsed, scheduleStart, timeDisplayMode === 'date' ? 'seconds' : timeDisplayMode, speedDaysPerSecond, fps))
   }
 
   const handleScrub = (value: number) => {
@@ -280,6 +315,30 @@ export function TimelineWindow({
     if (!rect || rect.width === 0) return current
     const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
     return clampToRange(new Date(scheduleStart.getTime() + pct * totalMs), scheduleStart, effectiveEnd)
+  }
+
+  // Lets the linked-activity task-bar strip above the real <input
+  // type=range> also scrub (2026-07-25, per Maro: "when i try to scrub the
+  // animation, i'm restricted and see a stop icon" — that strip visually
+  // sits flush against the slider and reads as part of one combined scrub
+  // control, but it's a plain non-interactive div with only a `title`
+  // tooltip; a click/drag landing on it (very easy given the slider itself
+  // is only ~16px tall) did nothing at all. Worse, it — and the elapsed-
+  // time readout row just below the slider — had default `user-select:
+  // auto`, so a drag starting there could be interpreted as a native
+  // text-selection drag instead, which is exactly what shows Chrome's
+  // "not-allowed"/stop cursor for the rest of the drag and never scrubs).
+  // Reuses dateFromClientX, same as the keyframe-marker drag just below.
+  const handleTrackPointerDown = (e: React.PointerEvent) => {
+    setIsPlaying(false)
+    setCurrent(dateFromClientX(e.clientX))
+    const handleMove = (ev: PointerEvent) => setCurrent(dateFromClientX(ev.clientX))
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
   }
 
   const handleMarkerPointerDown = (group: { date: Date; keyframes: ElementKeyframe[] }) => (e: React.PointerEvent) => {
@@ -318,7 +377,17 @@ export function TimelineWindow({
       <div className="flex items-center gap-1.5 flex-wrap">
         <button onClick={() => step(-STEP_DAYS)} title="Step back 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">◀</button>
         <button
-          onClick={() => setIsPlaying(p => !p)}
+          onClick={() => {
+            // Auto-rewind on Play if already sitting at (or past) the end
+            // (2026-07-24 fix, per Maro: "why isnt it playing now") — the
+            // play loop below stops itself the instant `next >= effectiveEnd`,
+            // which is true on frame 1 if playback starts already there, so
+            // hitting Play looked like it silently did nothing. Only when
+            // not already playing — toggling Pause off mid-scrub shouldn't
+            // ever jump the playhead.
+            if (!isPlaying && current.getTime() >= effectiveEnd.getTime()) setCurrent(scheduleStart)
+            setIsPlaying(p => !p)
+          }}
           className="text-xs px-3 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-medium"
         >
           {isPlaying ? '⏸ Pause' : '▶ Play'}
@@ -374,11 +443,10 @@ export function TimelineWindow({
             <input
               type="number"
               step={timeDisplayMode === 'seconds' ? 0.1 : 1}
-              value={timeDisplayMode === 'seconds' ? Number(endElapsedSeconds.toFixed(1)) : Math.round(endElapsedSeconds * fps)}
-              onChange={e => {
-                if (e.target.value === '') return
-                handleEndOverride(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
-              }}
+              value={endInputText ?? (timeDisplayMode === 'seconds' ? Number(endElapsedSeconds.toFixed(1)) : Math.round(endElapsedSeconds * fps))}
+              onChange={e => setEndInputText(e.target.value)}
+              onBlur={commitEndInputText}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
               title="Manually extend the timeline's upper limit — can't go below the real computed end"
               className="text-xs border border-gray-300 rounded px-1.5 py-1 w-20"
             />
@@ -407,9 +475,9 @@ export function TimelineWindow({
         </div>
       </div>
 
-      <div className="relative" ref={trackRef}>
+      <div className="relative select-none" ref={trackRef}>
         {linkedActivities.length > 0 && (
-          <div className="relative h-3 mb-0.5">
+          <div className="relative h-3 mb-0.5 cursor-pointer touch-none" onPointerDown={handleTrackPointerDown}>
             {linkedActivities.map(a => {
               const s = new Date(a.start!).getTime()
               const f = new Date(a.finish!).getTime()
@@ -461,7 +529,7 @@ export function TimelineWindow({
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between text-[10px] text-gray-400">
+      <div className="flex items-center justify-between text-[10px] text-gray-400 select-none">
         <span>{formatTimelineValue(scheduleStart, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span className="text-xs text-gray-700 font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span>{formatTimelineValue(effectiveEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>

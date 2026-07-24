@@ -22,6 +22,27 @@ export interface RenderCaptureSettings {
   resolutionMultiplier: 1 | 2 | 4
   videoDurationSec: number
   videoFps: number
+  // Include Baseline (2026-07-24, per Maro: "an option to include the
+  // baseline 3d while capturing still and video. so side by side") —
+  // composites the Baseline (planned) pane's own canvas alongside the
+  // main viewport in the captured PNG/webm, matching the two-pane layout
+  // already on screen while Compare Baseline is open. Silently has no
+  // effect if Compare Baseline isn't open (nothing to composite) — see
+  // Viewport3D.tsx's own compareBaselineOpen prop. Off by default, same
+  // "opt in to the extra cost/output size" reasoning as resolutionMultiplier.
+  includeBaseline: boolean
+  // Export Content overlays (2026-07-25, per Maro's Synchro "Export
+  // Animation" reference: "gantt bar on top, activity table on the left...
+  // appearance profile legend if set") — each independently opt-in, off by
+  // default same as includeBaseline above. See exportOverlays.ts's own
+  // header for why these are a purpose-built rendition rather than a
+  // screenshot of the real GanttChart.tsx/ScheduleWindow.tsx windows.
+  includeGanttChart: boolean
+  includeActivityTable: boolean
+  // Silently draws nothing with zero AnimationProfiles in the project
+  // ("if set") — see exportOverlays.ts's own drawAppearanceLegend.
+  includeAppearanceLegend: boolean
+  includeDateOverlay: boolean
 }
 
 export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
@@ -29,6 +50,11 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   resolutionMultiplier: 1,
   videoDurationSec: 8,
   videoFps: 30,
+  includeBaseline: false,
+  includeGanttChart: false,
+  includeActivityTable: false,
+  includeAppearanceLegend: false,
+  includeDateOverlay: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_render_capture_settings'

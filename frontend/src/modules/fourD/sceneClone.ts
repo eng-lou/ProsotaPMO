@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { buildElementMaterial, type BatchState } from './elementBatching'
 
 // A safe, hand-written clone for the Baseline Viewport pane (2026-07-12,
 // per Maro's "advanced 4D" baseline-vs-actual compare request) — a
@@ -27,7 +28,77 @@ import * as THREE from 'three'
 // might currently be swapped onto `.material`. The baseline pane always
 // shows real PBR shading; it doesn't mirror the primary viewport's own
 // render-mode setting.
+//
+// Public entry point — thin wrapper around buildClone's own recursive
+// descent (2026-07-24 restructure, for the BatchedMesh fix below): after
+// the whole tree is built, this does one pass over the *finished clone*
+// to populate its own `userData.expressIdMeshIndex` — the exact same
+// `Map<number, THREE.Mesh[]>` shape elementBatching.ts's own getMeshIndex
+// builds for a real model — so TimelinePlayback's element resolution
+// (getMaterializedMeshes -> ensureMaterialized -> getMeshIndex) finds
+// every clone mesh immediately via that index's own first check, without
+// ever needing this cloned root to also carry a working `userData.batch`
+// (it doesn't, and building a real second BatchState just to satisfy
+// ensureMaterialized's fallback path would be a lot of machinery for
+// something the index already makes unnecessary).
 export function cloneSceneHierarchy(object: THREE.Object3D): THREE.Object3D {
+  const batch = (object.userData.batch as BatchState | null | undefined) ?? null
+  const clone = buildClone(object, batch)
+  const index = new Map<number, THREE.Mesh[]>()
+  clone.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return
+    const expressID = child.userData.expressID as number | undefined
+    if (expressID === undefined) return
+    const existing = index.get(expressID)
+    if (existing) existing.push(child); else index.set(expressID, [child])
+  })
+  clone.userData.expressIdMeshIndex = index
+  return clone
+}
+
+function buildClone(object: THREE.Object3D, batch: BatchState | null): THREE.Object3D {
+  // THREE.BatchedMesh extends THREE.Mesh (2026-07-24 fix, per Maro: the
+  // Baseline pane showed a jumbled mess of disconnected, wrongly-angled
+  // panels instead of the real building) — this used to fall into the
+  // instanceof-Mesh branch below and wrap the *shared batch's own raw
+  // internal geometry buffer* as if it were one plain mesh's shape. That
+  // buffer is every still-batched element's geometry concatenated
+  // together, each still sitting at its own un-transformed instance-local
+  // origin (elementBatching.ts's own BatchState header) — none of it ever
+  // gets positioned by each instance's own placement matrix except through
+  // THREE.BatchedMesh's own per-instance rendering path, which a plain
+  // THREE.Mesh knows nothing about. The result was every still-batched
+  // element rendered piled on top of each other at the batch's own root
+  // transform, instead of its real position in the building — exactly the
+  // "disconnected panels" reported.
+  //
+  // Reconstructed instead as one plain clone Mesh per still-batched
+  // instance, built from the exact same BatchInstanceInfo (geometry/
+  // matrix/colour) ensureMaterialized itself reads to pull an instance out
+  // of the batch for real (elementBatching.ts) — this only *reads* that
+  // data, never calling setVisibleAt or deleting anything, so the live
+  // model's own batching (and the primary viewport's draw-call count) is
+  // completely untouched by opening the Baseline pane. No children to
+  // recurse into afterward — a BatchedMesh is always a leaf.
+  if ((object as THREE.Object3D & { isBatchedMesh?: boolean }).isBatchedMesh) {
+    const group = new THREE.Group()
+    group.name = object.name
+    group.visible = object.visible
+    if (batch) {
+      for (const [expressID, infos] of batch.byExpressId) {
+        for (const info of infos) {
+          const geometry = batch.geometryById.get(info.geometryId)
+          if (!geometry) continue
+          const mesh = new THREE.Mesh(geometry, buildElementMaterial({ x: info.color.r, y: info.color.g, z: info.color.b, w: info.colorAlpha }))
+          mesh.applyMatrix4(info.matrix)
+          mesh.userData.expressID = expressID
+          group.add(mesh)
+        }
+      }
+    }
+    return group
+  }
+
   const clone: THREE.Object3D = object instanceof THREE.Mesh
     ? new THREE.Mesh(object.geometry, (object.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? object.material)
     : new THREE.Group()
@@ -39,6 +110,6 @@ export function cloneSceneHierarchy(object: THREE.Object3D): THREE.Object3D {
   clone.visible = object.visible
   if (object.userData.expressID !== undefined) clone.userData.expressID = object.userData.expressID
 
-  for (const child of object.children) clone.add(cloneSceneHierarchy(child))
+  for (const child of object.children) clone.add(buildClone(child, batch))
   return clone
 }

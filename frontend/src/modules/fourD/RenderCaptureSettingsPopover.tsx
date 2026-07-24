@@ -4,6 +4,11 @@ import type { RenderCaptureSettings } from './renderCaptureSettings'
 interface Props {
   settings: RenderCaptureSettings
   onChange: (settings: RenderCaptureSettings) => void
+  // Include Baseline (2026-07-24) — the checkbox stays visible either way
+  // (so the setting itself still persists/toggles normally) but reads as
+  // disabled while Compare Baseline isn't open, since there's no second
+  // pane to composite in that state.
+  compareBaselineOpen: boolean
 }
 
 // Small gear-triggered popover for Capture/Export Video's own render
@@ -18,7 +23,7 @@ interface Props {
 // full-screen invisible button behind it (lower z-index than the popover,
 // higher than everything else) catches an outside click to close it,
 // rather than a focus-trap library.
-export function RenderCaptureSettingsPopover({ settings, onChange }: Props) {
+export function RenderCaptureSettingsPopover({ settings, onChange, compareBaselineOpen }: Props) {
   const [open, setOpen] = useState(false)
   const set = <K extends keyof RenderCaptureSettings>(key: K, value: RenderCaptureSettings[K]) =>
     onChange({ ...settings, [key]: value })
@@ -65,6 +70,57 @@ export function RenderCaptureSettingsPopover({ settings, onChange }: Props) {
                 <option value={2}>2×</option>
                 <option value={4}>4×</option>
               </select>
+            </div>
+
+            <label
+              className={`flex items-center gap-1.5 text-xs ${compareBaselineOpen ? 'text-gray-600' : 'text-gray-300'}`}
+              title={compareBaselineOpen
+                ? 'Composites the Baseline (planned) pane alongside the main viewport in the captured PNG/webm, side by side'
+                : 'Open Compare Baseline first — no second pane to include yet'}
+            >
+              <input
+                type="checkbox"
+                checked={settings.includeBaseline}
+                disabled={!compareBaselineOpen}
+                onChange={e => set('includeBaseline', e.target.checked)}
+              />
+              Include Baseline (side by side)
+            </label>
+
+            <div className="border-t border-gray-100 pt-2.5 space-y-2.5">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Export Content</div>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds a compact Gantt bar strip across the top of the capture/export, showing the currently-relevant activities and a moving 'now' line">
+                <input
+                  type="checkbox"
+                  checked={settings.includeGanttChart}
+                  onChange={e => set('includeGanttChart', e.target.checked)}
+                />
+                Gantt Chart (top)
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds an Activity Table column down the left of the capture/export — Code/Name/Finish, highlighting whichever activities are currently active">
+                <input
+                  type="checkbox"
+                  checked={settings.includeActivityTable}
+                  onChange={e => set('includeActivityTable', e.target.checked)}
+                />
+                Activity Table (left)
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds an Appearance Profile legend (colour swatch + name) over the 3D view — draws nothing if the project has no animation profiles set up">
+                <input
+                  type="checkbox"
+                  checked={settings.includeAppearanceLegend}
+                  onChange={e => set('includeAppearanceLegend', e.target.checked)}
+                />
+                Appearance Legend
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Burns in the current date and elapsed week count over the 3D view">
+                <input
+                  type="checkbox"
+                  checked={settings.includeDateOverlay}
+                  onChange={e => set('includeDateOverlay', e.target.checked)}
+                />
+                Date Overlay
+              </label>
             </div>
 
             <div className="border-t border-gray-100 pt-2.5 space-y-2.5">
