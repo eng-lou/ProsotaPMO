@@ -4,8 +4,13 @@ import { useAuth0 } from '@auth0/auth0-react'
 import { resetAllDismissedWarnings, useDismissedWarningsCount } from '@/lib/confirmWithDontAsk'
 import { loadHiddenNavPanels, saveHiddenNavPanels } from '@/lib/hiddenNavPanels'
 import { useProject } from '@/lib/ProjectContext'
+import { useTheme } from '@/lib/ThemeContext'
+import { ProsotaLogo } from './ProsotaLogo'
 
-const NAV = [
+// Exported (2026-07-25) — Layout.tsx's own document-title effect reuses
+// this same route->label mapping rather than duplicating it, so the
+// browser tab title and this nav list can never drift out of sync.
+export const NAV = [
   { to: '/dashboard', label: 'Controls Dashboard' },
   { to: '/scheduling', label: 'Scheduling' },
   { to: '/4d', label: '4D' },
@@ -42,22 +47,25 @@ export function Sidebar() {
     navigate('/projects')
   }
 
+  const { theme, toggleTheme } = useTheme()
+
   return (
-    <aside className="no-print flex flex-col w-60 min-h-screen bg-gray-900 text-white shrink-0">
-      <div className="px-6 py-5 border-b border-gray-700">
-        <span className="text-lg font-bold tracking-tight">Prosota</span>
+    <aside className="no-print flex flex-col w-60 min-h-screen bg-white text-gray-900 dark:bg-prosota-ink dark:text-prosota-paper shrink-0 border-r border-gray-200 dark:border-prosota-line">
+      <div className="flex items-center gap-2.5 px-6 py-5 border-b border-gray-200 dark:border-prosota-line">
+        <ProsotaLogo size={24} />
+        <span className="font-display text-lg font-bold tracking-tight">Prosota</span>
       </div>
 
       {selectedProject && (
-        <div className="px-4 py-3 border-b border-gray-700">
-          <p className="text-xs text-gray-400 mb-0.5">Project</p>
-          <p className="text-sm font-medium text-white truncate">{selectedProject.name}</p>
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-prosota-line">
+          <p className="text-xs text-gray-500 dark:text-prosota-muted mb-0.5">Project</p>
+          <p className="text-sm font-medium text-gray-900 dark:text-prosota-paper truncate">{selectedProject.name}</p>
           {selectedProject.client_name && (
-            <p className="text-xs text-gray-400 truncate">{selectedProject.client_name}</p>
+            <p className="text-xs text-gray-500 dark:text-prosota-muted truncate">{selectedProject.client_name}</p>
           )}
           <button
             onClick={handleSwitchProject}
-            className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+            className="text-xs text-blue-600 dark:text-prosota-cyan hover:text-blue-500 mt-1"
           >
             Switch project
           </button>
@@ -72,8 +80,8 @@ export function Sidebar() {
             className={({ isActive }) =>
               `block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                  ? 'bg-blue-600 text-white dark:bg-prosota-azure'
+                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-prosota-muted dark:hover:bg-prosota-panel dark:hover:text-prosota-paper'
               }`
             }
           >
@@ -82,7 +90,14 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="px-4 py-4 border-t border-gray-700">
+      <div className="px-4 py-4 border-t border-gray-200 dark:border-prosota-line">
+        <button
+          onClick={toggleTheme}
+          title="Switch between light and dark mode"
+          className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
+        >
+          {theme === 'dark' ? '☀ Light mode' : '☾ Dark mode'}
+        </button>
         {dismissedCount > 0 && (
           <button
             onClick={() => {
@@ -92,7 +107,7 @@ export function Sidebar() {
               )) resetAllDismissedWarnings()
             }}
             title="Warnings you've dismissed with 'don't show this again' are hidden until reset here"
-            className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors mb-2"
+            className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
           >
             ⚙ Reset {dismissedCount} dismissed warning{dismissedCount === 1 ? '' : 's'}
           </button>
@@ -100,21 +115,21 @@ export function Sidebar() {
         <button
           onClick={() => setHidePanelsOpen(o => !o)}
           title="Choose which panels show up in the list above — hiding one doesn't disable it, its page still works if you go there directly"
-          className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors mb-2"
+          className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
         >
           ⚙ {hidePanelsOpen ? 'Hide panels ▴' : 'Hide panels…'}
         </button>
         {hidePanelsOpen && (
           <div className="mb-2 space-y-1 max-h-48 overflow-y-auto">
             {NAV.map(({ to, label }) => (
-              <label key={to} className="flex items-center gap-1.5 text-xs text-gray-300 px-1">
+              <label key={to} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted px-1">
                 <input type="checkbox" checked={hiddenPanels.has(to)} onChange={() => toggleHiddenPanel(to)} />
                 {label}
               </label>
             ))}
           </div>
         )}
-        <p className="text-xs text-gray-400 truncate mb-2">{user?.email}</p>
+        <p className="text-xs text-gray-500 dark:text-prosota-muted truncate mb-2">{user?.email}</p>
         <button
           onClick={() => {
             // Auth0's logout redirect is a same-tab page navigation, not a
@@ -127,7 +142,7 @@ export function Sidebar() {
             clearProject()
             logout({ logoutParams: { returnTo: window.location.origin } })
           }}
-          className="w-full text-left text-xs text-gray-400 hover:text-white transition-colors"
+          className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
         >
           Sign out
         </button>

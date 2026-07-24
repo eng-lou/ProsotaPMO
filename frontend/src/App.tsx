@@ -2,9 +2,11 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Layout } from './components/Layout'
+import { ProsotaLogo } from './components/ProsotaLogo'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ConfirmHost } from './lib/confirmWithDontAsk'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
+import { ThemeProvider } from './lib/ThemeContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
 
 // Lazy (2026-07-20, FourD; extended 2026-07-21 to every other routed
@@ -39,13 +41,14 @@ const Placeholder = ({ title, subtitle = 'Coming soon.' }: { title: string; subt
 function LoginPage() {
   const { loginWithRedirect } = useAuth0()
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink">
       <div className="text-center">
-        <h1 className="text-3xl font-bold text-gray-900 mb-1">Prosota</h1>
-        <p className="text-gray-500 mb-8">Planning Platform</p>
+        <ProsotaLogo size={40} className="mx-auto mb-3" />
+        <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-prosota-paper mb-1">Prosota</h1>
+        <p className="text-gray-500 dark:text-prosota-muted mb-8">Planning Platform</p>
         <button
           onClick={() => loginWithRedirect()}
-          className="bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          className="bg-blue-600 dark:bg-prosota-azure text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
         >
           Sign in
         </button>
@@ -83,7 +86,7 @@ function PersistentFourD() {
 
   return (
     <div className={active ? 'h-full' : 'hidden'}>
-      <Suspense fallback={<div className="p-8 text-gray-400 text-sm">Loading 4D…</div>}>
+      <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading 4D…</div>}>
         <FourD active={active} />
       </Suspense>
     </div>
@@ -117,7 +120,7 @@ function AuthenticatedApp() {
               a single fallback here is exactly as correct as wrapping each
               <Route> individually and doesn't repeat the same fallback
               markup five times. */}
-          <Suspense fallback={<div className="p-8 text-gray-400 text-sm">Loading…</div>}>
+          <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/projects" element={<ProjectSelector />} />
@@ -137,13 +140,13 @@ function AuthenticatedApp() {
   )
 }
 
-export default function App() {
+function AuthGate() {
   const { isLoading, isAuthenticated } = useAuth0()
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <span className="text-gray-400 text-sm">Loading…</span>
+      <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
+        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
       </div>
     )
   }
@@ -157,5 +160,18 @@ export default function App() {
         <ConfirmHost />
       </ProjectProvider>
     </AuthTokenProvider>
+  )
+}
+
+// ThemeProvider wraps everything, including the pre-auth screens
+// (2026-07-25, per Maro's own light/dark toggle) — the login screen and
+// auth-loading spinner are real, always-visible chrome too, same reasoning
+// as the Sidebar, so the persisted theme choice should already apply to
+// them rather than only kicking in once someone's signed in.
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AuthGate />
+    </ThemeProvider>
   )
 }
