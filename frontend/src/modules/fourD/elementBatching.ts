@@ -209,6 +209,17 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   let firstMesh: THREE.Mesh | null = null
   for (const info of infos) {
     batch.mesh.setVisibleAt(info.instanceId, false)
+    // Also pulls this instance out of the batched-edges overlay, if one is
+    // currently built (2026-07-25 — see buildEdgesBatch's own header) — an
+    // O(1) swap-remove, not a rebuild, so a click-driven materialization (the
+    // common case, per this function's own header) stays cheap even with
+    // Edges on. Left as an orphaned, no-longer-referenced instance otherwise:
+    // the individual mesh created just below gets its own real EdgesGeometry
+    // overlay from Viewport3D.tsx's per-mesh pass, same as any other
+    // never-batched element — leaving this one in the edges batch too would
+    // double-draw its outline at its old (frozen) position forever, visibly
+    // wrong the moment this element is later moved.
+    removeFromEdgesBatch(rootObject, info)
 
     // O(1) via geometryById (2026-07-21 perf fix) — this used to scan every
     // entry of geometryByIfcId.values() looking for a matching geometryId,
@@ -230,6 +241,164 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   }
   batch.byExpressId.delete(expressID)
   return firstMesh
+}
+
+// Batched Edges overlay (2026-07-25, per Maro: edges only ever worked on an
+// individually-clicked/materialized element, never on the ~100%-batched bulk
+// of a real file — "edge seems to not work unless i click an individual
+// element" — plus "ensure to optimise as performance is very important" on
+// the fix itself). THREE.BatchedMesh (the main shared batch above) can't
+// carry this: it extends THREE.Mesh, and WebGLRenderer picks triangles vs.
+// lines from the object's own class flags, not from geometry content — a
+// BatchedMesh is always drawn as triangles, full stop, no matter what
+// topology you feed addGeometry. One THREE.InstancedMesh per UNIQUE shape
+// (not per placement) is the real alternative: each holds that one shape's
+// own THREE.EdgesGeometry, instanced across however many times it repeats.
+// For this app's own real 35k-unique-shape/265k-placement high-rise file,
+// that's ~35k draw calls for the edges overlay specifically — far more than
+// the model's own single BatchedMesh draw call, but a small fraction of the
+// 265k a naive per-placement mesh would cost, and only paid at all while
+// Edges/Hidden-Line is actually switched on (built lazily, disposed the
+// instant it's switched off — see Viewport3D.tsx's own heavy-pass call
+// site). thresholdAngle=15 (vs EdgesGeometry's own 1° default) deliberately
+// keeps only real silhouette/crease edges, not near-planar shading noise —
+// fewer line segments per shape, cheaper for every one of those ~35k draws.
+// MeshBasicMaterial + wireframe:true, not LineBasicMaterial (2026-07-25 fix
+// — caught live: the first real attempt used LineBasicMaterial and rendered
+// as a garbled black mass, not thin edge lines). Confirmed directly in this
+// project's own bundled three.js source (WebGLRenderer.js): the renderer
+// picks gl.LINES vs. gl.TRIANGLES from the object's own class flags, not
+// from the geometry's index topology — `object.isMesh` (true for
+// InstancedMesh, same as BatchedMesh above) always draws gl.TRIANGLES
+// *unless* `material.wireframe === true`, in which case it draws gl.LINES
+// off the exact same index buffer instead. THREE.LineBasicMaterial has no
+// real `wireframe` property at all (irrelevant to line-family objects), so
+// it was always falling through to the TRIANGLES branch — reading
+// EdgesGeometry's own line-index PAIRS three-at-a-time as if they were
+// triangle triples, producing exactly the corrupted, overlapping mass this
+// was caught against. MeshBasicMaterial's wireframe flag is the one
+// documented, intentional way to get gl.LINES out of a Mesh-family object
+// (InstancedMesh/BatchedMesh have no true Line-family equivalent) — the
+// same underlying gl.drawElements(gl.LINES, ...) call a real
+// THREE.LineSegments would make, just reached through the "isMesh" branch
+// instead of the "isLine" one.
+const EDGES_LINE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x1f2937, wireframe: true })
+const EDGES_THRESHOLD_ANGLE = 15
+
+export interface EdgesBatchEntry {
+  mesh: THREE.InstancedMesh
+  // Both directions of the same mapping — which of THIS entry's own local
+  // instance slots (0..mesh.count-1) a given real batch instanceId
+  // currently occupies, and the reverse. Needed for the swap-remove trick
+  // removeFromEdgesBatch uses: THREE.InstancedMesh has no per-instance
+  // hide, only a mutable `.count` saying how many of its instances (always
+  // the first `count`) get drawn — "removing" instance N means swapping
+  // whichever instance currently sits at the last active slot into N's
+  // place, then shrinking count by one, an O(1) removal with no rebuild.
+  localIndexByInstanceId: Map<number, number>
+  instanceIdByLocalIndex: Map<number, number>
+}
+export interface EdgesBatch {
+  entries: Map<number, EdgesBatchEntry>
+}
+
+// Built fresh every time Viewport3D.tsx's heavy pass decides the batch's
+// edges overlay needs rebuilding (isolate/hide/showFaces/showEdges/
+// renderMode actually changed) — see that call site for why a full rebuild
+// there, rather than incremental sync, is the right cost/complexity trade:
+// those are deliberate, relatively rare user actions, unlike the
+// materialize-on-click path above, which genuinely needs to stay O(1).
+// Only ever includes instances THREE.BatchedMesh.getVisibleAt already says
+// are on screen right now (isolate/hide's own real, live verdict — see
+// ModelObjects' own batched-visibility block, Viewport3D.tsx) — an
+// isolated-out or hidden element gets no edges overlay instance at all,
+// rather than one that then has to be hidden by some other means
+// InstancedMesh doesn't cheaply support per-instance anyway.
+export function buildEdgesBatch(rootObject: THREE.Object3D): EdgesBatch {
+  const batch = rootObject.userData.batch as BatchState | undefined
+  const entries = new Map<number, EdgesBatchEntry>()
+  if (!batch) return { entries }
+
+  const instancesByGeometryId = new Map<number, BatchInstanceInfo[]>()
+  for (const infos of batch.byExpressId.values()) {
+    for (const info of infos) {
+      if (!batch.mesh.getVisibleAt(info.instanceId)) continue
+      const arr = instancesByGeometryId.get(info.geometryId)
+      if (arr) arr.push(info); else instancesByGeometryId.set(info.geometryId, [info])
+    }
+  }
+
+  for (const [geometryId, infos] of instancesByGeometryId) {
+    const sourceGeometry = batch.geometryById.get(geometryId)
+    if (!sourceGeometry || infos.length === 0) continue
+    // The shape's own real, standalone geometry (same source
+    // ensureMaterialized/getExpressIdWorldBounds already read) — never the
+    // shared BatchedMesh's own internal concatenated buffer, which is
+    // exactly the mistake the 2026-07-19 "star burst" bug already made and
+    // documented above (ModelObjects' own wantsEdges comment): that buffer
+    // has every distinct shape's geometry concatenated with no per-instance
+    // transform applied, so edges computed from it would overlap at one
+    // shared local origin regardless of this fix.
+    const edgesGeometry = new THREE.EdgesGeometry(sourceGeometry, EDGES_THRESHOLD_ANGLE)
+    const mesh = new THREE.InstancedMesh(edgesGeometry, EDGES_LINE_MATERIAL, infos.length)
+    mesh.userData.isEdgesBatchMesh = true
+    // Purely decorative — never a raycast target (2026-07-25) — a
+    // LineSegments-shaped hit test racing the real shaded mesh underneath
+    // for the same click would be, at best, redundant, and at worst pick the
+    // wrong thing.
+    mesh.raycast = () => {}
+    // No frustum culling (matches the main batch's own known-flicker-prone
+    // per-object test — see loadIfcModel's own perObjectFrustumCulled
+    // header) — an InstancedMesh's default aggregate-bounds test is exactly
+    // as prone to the same continuous-rotation floating-point flicker for a
+    // shape whose instances span a large area; not worth the risk for a
+    // decorative overlay.
+    mesh.frustumCulled = false
+    const localIndexByInstanceId = new Map<number, number>()
+    const instanceIdByLocalIndex = new Map<number, number>()
+    infos.forEach((info, i) => {
+      mesh.setMatrixAt(i, info.matrix)
+      localIndexByInstanceId.set(info.instanceId, i)
+      instanceIdByLocalIndex.set(i, info.instanceId)
+    })
+    mesh.instanceMatrix.needsUpdate = true
+    entries.set(geometryId, { mesh, localIndexByInstanceId, instanceIdByLocalIndex })
+  }
+  return { entries }
+}
+
+// Disposes every entry's own EdgesGeometry (the InstancedMesh's shared
+// EDGES_LINE_MATERIAL is a single module-level singleton, never owned by
+// any one entry, so it's never disposed here) — does NOT remove the meshes
+// from the scene graph; the caller (Viewport3D.tsx) already has the object
+// references it added and is responsible for object.remove(entry.mesh) too.
+export function disposeEdgesBatch(edgesBatch: EdgesBatch): void {
+  for (const entry of edgesBatch.entries.values()) entry.mesh.geometry.dispose()
+}
+
+// The O(1) swap-remove ensureMaterialized calls above for every instance it
+// pulls out of the main batch — a no-op (cheap: one property read, one Map
+// miss) when Edges has never been toggled on this session, since
+// rootObject.userData.edgesBatch simply won't exist yet.
+function removeFromEdgesBatch(rootObject: THREE.Object3D, info: BatchInstanceInfo): void {
+  const edgesBatch = rootObject.userData.edgesBatch as EdgesBatch | undefined
+  const entry = edgesBatch?.entries.get(info.geometryId)
+  if (!entry) return
+  const localIndex = entry.localIndexByInstanceId.get(info.instanceId)
+  if (localIndex === undefined) return
+  const lastIndex = entry.mesh.count - 1
+  if (localIndex !== lastIndex) {
+    const lastInstanceId = entry.instanceIdByLocalIndex.get(lastIndex)!
+    const tempMatrix = new THREE.Matrix4()
+    entry.mesh.getMatrixAt(lastIndex, tempMatrix)
+    entry.mesh.setMatrixAt(localIndex, tempMatrix)
+    entry.localIndexByInstanceId.set(lastInstanceId, localIndex)
+    entry.instanceIdByLocalIndex.set(localIndex, lastInstanceId)
+  }
+  entry.mesh.count = lastIndex
+  entry.mesh.instanceMatrix.needsUpdate = true
+  entry.localIndexByInstanceId.delete(info.instanceId)
+  entry.instanceIdByLocalIndex.delete(lastIndex)
 }
 
 // For TimelinePlayback's batched-visibility fast path (Viewport3D.tsx,

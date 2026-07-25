@@ -5,7 +5,7 @@ import * as THREE from 'three'
 // extractScheduleElements below instead, same idiom FourD.tsx/
 // IfcDataPanel.tsx already use everywhere else to keep web-ifc out of the
 // main bundle.
-import type { IfcModelHandle, IfcTreeNode } from './ifcModel'
+import type { IfcModelHandle } from './ifcModel'
 import { getExpressIdWorldBounds } from './elementBatching'
 
 // IFC Schedule Wizard, step 1 (2026-07-13, per Maro: "generate a resource
@@ -40,12 +40,32 @@ import { getExpressIdWorldBounds } from './elementBatching'
 // classification here works the same way Curtain Walls' own IfcMember/
 // IfcPlate re-bucketing already does: off each element's real, already-read
 // Name (see resolveMepCategory's own header below), not off ifcType alone.
+// The four categories below never come from an IFC scan at all — no
+// IFC_TYPE_CATEGORIES entry, no CATEGORY_ORDER slot, no real ExtractedElement
+// is ever classified into one of them (2026-07-25, per Maro, after pointing
+// at a real 25-storey high-rise schedule + a real Primavera export: "there
+// wasnt mobilisation, excavation or foundation in this model so you didnt
+// account for it... i want a full schedule generation including not 3d
+// data"). Mobilisation, bulk excavation, hardcore fill, DPM/waterproofing,
+// material submittal/procurement chains, and testing & commissioning are all
+// standard, expected line items on every real reference schedule read for
+// this (25-storey Gantt export, a real Primavera Tower 2B schedule, a
+// residential-building schedule, the Guidelines for Planning of Multi-
+// Storeyed High-Rise Buildings) — none of them are ever modeled as literal
+// 3D geometry a scan could find. They still need to be real ScheduleCategory
+// values (not a separate parallel type) so they can flow through the exact
+// same resolvePhases/DEFAULT_CATEGORY_PHASES/CATEGORY_DISCIPLINE machinery
+// every IFC-derived category already uses — scheduleGeneration.ts's own
+// buildStagedSchedule injects their activities directly (see its own
+// "full schedule" block), bypassing groupByStorey entirely since there's no
+// real element to group.
 export type ScheduleCategory =
-  | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls'
-  | 'Structural Members' | 'Stairs' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
+  | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls' | 'Non-Structural Walls'
+  | 'Structural Members' | 'Stairs' | 'Ramps' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
   | 'Ductwork' | 'Air Terminals' | 'Piping' | 'Plumbing Fixtures'
   | 'Electrical Containment' | 'Lighting' | 'Electrical Devices'
   | 'Coverings' | 'Furnishings' | 'Site & Landscaping'
+  | 'Preliminaries' | 'Substructure Earthworks' | 'Procurement' | 'Testing & Commissioning'
 
 export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory }[] = [
   { ifcType: 'IfcFooting', category: 'Foundation' },  // "Foundation" (2026-07-17, per Maro: "Footings is Foundation") — was 'Footings'
@@ -88,6 +108,23 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
   { ifcType: 'IfcBuildingElementProxy', category: 'Structural Members' },
   { ifcType: 'IfcStair', category: 'Stairs' },
   { ifcType: 'IfcStairFlight', category: 'Stairs' },
+  // Ramps + real site/civil elements (2026-07-25, per Maro's own real
+  // examples: an IfcRamp "ENTRANCE RAMP" and an IfcSite-typed
+  // "Engineering-Infrastructure_Water..." element, both showing "Not linked
+  // to any activity" — neither IFC type was in this list at all, so neither
+  // ever became a candidate in the first place, regardless of Name/Category.
+  // IfcSite is normally just the ONE non-visual spatial-structure root a
+  // real IFC file has (no placed geometry of its own — see
+  // extractScheduleElements' own `if (box && globalId)` gate just below,
+  // which already filters out anything with no real placed geometry
+  // regardless of IFC type), but this exact file also has genuinely placed,
+  // schedulable civil/utility elements exported under the IfcSite class —
+  // an unusual but real Revit/Civil3D export choice, confirmed live via the
+  // Object Information panel (Category="Site"). Adding it here is safe
+  // either way: the real spatial root simply produces no candidate (no
+  // box), while a genuinely placed one now does.
+  { ifcType: 'IfcRamp', category: 'Ramps' },
+  { ifcType: 'IfcSite', category: 'Site & Landscaping' },
   { ifcType: 'IfcRoof', category: 'Roofs' },
   { ifcType: 'IfcCurtainWall', category: 'Curtain Walls' },
   { ifcType: 'IfcWindow', category: 'Windows' },
@@ -157,8 +194,8 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
 // first-draft placement, freely reordered per project in the wizard same
 // as every other category here.
 export const CATEGORY_ORDER: ScheduleCategory[] = [
-  'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls',
-  'Structural Members', 'Stairs', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
+  'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls', 'Non-Structural Walls',
+  'Structural Members', 'Stairs', 'Ramps', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
   'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
   'Air Terminals', 'Plumbing Fixtures', 'Lighting', 'Electrical Devices', 'Furnishings', 'Site & Landscaping',
 ]
@@ -234,14 +271,73 @@ function isCurtainWallMember(name: string): boolean {
 // authoritative" contract as isCurtainWallMember above — an unmatched
 // site element quietly stays in 'Slabs', visible and freely re-bucketable
 // by hand, not silently dropped.
-const SITE_FLOOR_NAME_KEYWORDS = [
-  'asphalt', 'road', 'roadway', 'driveway', 'pavement', 'paving', 'footpath', 'sidewalk', 'walkway',
-  'green area', 'grass', 'lawn', 'landscap', 'kerb', 'curb', 'parking',
+// 'paved' added standalone (2026-07-25, per Maro, confirmed live via the
+// Activity Table's own new Browse column, ScheduleWindow.tsx — a real
+// "MY PAVED AREA" site-slab element on this exact high-rise file was still
+// landing under a floor's plain 'Slabs' phase instead of Site &
+// Landscaping) — 'pavement'/'paving' above don't substring-match the
+// adjective "paved" (different suffix), so a Revit modeler naming a site
+// slab e.g. "Paved Area"/"Paved Courtyard" fell through this list entirely
+// and, worse, missed the whole "All Building Work Complete" late-
+// sequencing gate (scheduleGeneration.ts's own LATE_CATEGORIES) meant to
+// keep exactly this kind of site work from finishing mid-project.
+//
+// Renamed from isSiteFloorElement + 'pool'/'flower pot'/'planter' added
+// (2026-07-25, per Maro's own real examples: an IfcWallStandardCase named
+// "Basic Wall:01-POOL WALL" and another named "Basic Wall:01-flower pot" —
+// both Pset_WallCommon.LoadBearing=false, IsExternal=true — landing in
+// structural 'Walls' with a "Strip Formwork" phase, exactly like a real
+// load-bearing concrete wall, instead of Site & Landscaping) — this check
+// used to only ever run for ifcType==='IfcSlab' (see
+// extractScheduleElements below), on the reasoning that a site/landscape
+// feature always exports as a Floor/Slab; a swimming pool's own retaining
+// walls and an ornamental planter box are genuinely modeled as Revit Walls
+// instead, the same "geometrically a wall, functionally a site amenity"
+// gap Slabs already had. No LoadBearing/IsExternal check added here even
+// though both real examples share LoadBearing=false — Pset_WallCommon
+// isn't bulk-read anywhere in this file yet (only Name/PredefinedType and,
+// as of today, Pset_ProductRequirements.Category are), and a name match
+// alone is already enough for these specific, unambiguous keywords; same
+// "broad and heuristic, not authoritative" contract as every other keyword
+// list here.
+const SITE_ELEMENT_NAME_KEYWORDS = [
+  'asphalt', 'road', 'roadway', 'driveway', 'pavement', 'paving', 'paved', 'footpath', 'sidewalk', 'walkway',
+  'green area', 'grass', 'lawn', 'landscap', 'kerb', 'curb', 'parking', 'pool', 'flower pot', 'planter',
 ]
 
-function isSiteFloorElement(name: string): boolean {
+function isSiteElement(name: string): boolean {
   const lower = name.toLowerCase()
-  return SITE_FLOOR_NAME_KEYWORDS.some(k => lower.includes(k))
+  return SITE_ELEMENT_NAME_KEYWORDS.some(k => lower.includes(k))
+}
+
+// Pset_ProductRequirements.Category overrides (2026-07-25, per Maro:
+// "you can see the object information/property set data. e.g name, object
+// type, category... so improve your schedule generation logic") — this
+// property is Revit's own real, authored classification for an element,
+// read in bulk now alongside the quantity-area scan (buildElementPropertyData,
+// ifcModel.ts) rather than guessed at from Name/ifcType alone. Checked
+// FIRST, ahead of every other heuristic below — it's the most authoritative
+// signal available, not a fallback. Kept deliberately small and specific
+// (exact known values actually seen on real files, not a guessed broad
+// mapping) so it can only ever *correct* a classification, never introduce
+// a new, untested one: "Curtain Wall Mullions" was already discovered
+// (isCurtainWallMember's own header above) but only ever used to justify a
+// Name-keyword match, never read directly, until now; "Curtain Panels",
+// "Site", and "Ramps" are new, all confirmed live on this exact high-rise
+// file via the Object Information panel — a "System Panel:01-BROWN PANELS"
+// IfcPlate (Category="Curtain Panels") was landing in 'Structural Members'
+// (isCurtainWallMember's own Name-keyword list has no "system panel" entry)
+// before this existed.
+const CATEGORY_PROPERTY_OVERRIDES: Record<string, ScheduleCategory> = {
+  'curtain panels': 'Curtain Walls',
+  'curtain wall mullions': 'Curtain Walls',
+  'site': 'Site & Landscaping',
+  'ramps': 'Ramps',
+}
+
+function resolveCategoryPropertyOverride(category: string | undefined): ScheduleCategory | null {
+  if (!category) return null
+  return CATEGORY_PROPERTY_OVERRIDES[category.toLowerCase().trim()] ?? null
 }
 
 // MEP re-bucketing (2026-07-17) — same reasoning/precedent as
@@ -362,49 +458,17 @@ export interface ExtractedElement {
   quantityUnit: 'm' | 'm²'
 }
 
-export interface StoreyInfo {
-  name: string
-  elevationMetres: number | null
-}
-
-function collectStoreyNodes(node: IfcTreeNode): IfcTreeNode[] {
-  const own = node.type === 'IfcBuildingStorey' ? [node] : []
-  return [...own, ...node.children.flatMap(collectStoreyNodes)]
-}
-
-function collectLeafExpressIds(node: IfcTreeNode): number[] {
-  if (node.children.length === 0) return [node.expressID]
-  return node.children.flatMap(collectLeafExpressIds)
-}
-
-async function buildStoreyMap(
-  ifcModel: typeof import('./ifcModel'),
-  handle: IfcModelHandle, tree: IfcTreeNode, toMetres: number,
-): Promise<Map<number, StoreyInfo>> {
-  const storeyNodes = collectStoreyNodes(tree)
-  const byExpressId = new Map<number, StoreyInfo>()
-  for (const storeyNode of storeyNodes) {
-    const [name, elevationRaw] = await Promise.all([
-      ifcModel.getElementName(handle, storeyNode.expressID),
-      ifcModel.getElementElevation(handle, storeyNode.expressID),
-    ])
-    const info: StoreyInfo = {
-      name,
-      elevationMetres: elevationRaw === null ? null : Number(elevationRaw) * toMetres,
-    }
-    for (const leafId of collectLeafExpressIds(storeyNode)) byExpressId.set(leafId, info)
-  }
-  return byExpressId
-}
-
-
 // The only categories a real IfcElementQuantity area is worth reading for
 // (2026-07-18) — mirrors scheduleGeneration.ts's own COUNT_BASED set
 // exactly (its inverse, for the 4 continuous/area-priced categories), kept
 // as its own local list rather than imported from there to avoid a
 // circular dependency (scheduleGeneration.ts already imports from this
 // module).
-const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Roofs', 'Coverings'])
+// 'Non-Structural Walls' added (2026-07-25) — a non-load-bearing wall is
+// still a real wall with a real face area, priced the same way its
+// structural 'Walls' sibling is; see this file's own header on why it's a
+// separate category at all (STRUCTURAL_CATEGORIES-exclusion, not pricing).
+const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Non-Structural Walls', 'Roofs', 'Coverings'])
 
 // Length (columns/beams: the box's longest axis) or area (slabs/footings/
 // walls: the product of the two largest axes — a slab/footing's footprint,
@@ -412,8 +476,8 @@ const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Roo
 // smallest of the three for all of these element types) — one formula
 // covers both quantity kinds without needing to know each element's local
 // orientation. Only ever the fallback now (2026-07-18) — see
-// getElementQuantityArea (ifcModel.ts) and AREA_PRICED_CATEGORIES above for
-// why a real Qto value is tried first when the file actually has one.
+// buildElementPropertyData (ifcModel.ts) and AREA_PRICED_CATEGORIES above
+// for why a real Qto value is tried first when the file actually has one.
 function measureElement(
   box: THREE.Box3, category: ScheduleCategory, toMetres: number,
 ): { quantity: number; quantityUnit: 'm' | 'm²' } {
@@ -428,39 +492,68 @@ function measureElement(
 export type ExtractionProgressCallback = (done: number, total: number) => void
 
 // Bulk per-type expressID queries (one per known IFC type, not one per
-// element) + a per-element Name/GlobalId read + a bounding-box
-// measurement, chunked every 25 elements to keep the wizard's progress
-// bar responsive — mirrors sceneClash.ts's own onProgress +
-// setTimeout(resolve, 0) pattern exactly.
+// element) + bulk Name/PredefinedType/quantity-area reads (one WASM round
+// trip total across ALL candidates, not one per element — 2026-07-25 perf
+// fix, per Maro: "optimise that too", after buildElementStoreyMap's own fix
+// above left this loop as the next-biggest cost: ~50 elements/sec on a real
+// 131,222-candidate high-rise, tens of minutes projected. See
+// getElementNamesAndPredefinedTypes/buildElementPropertyData's own
+// headers in ifcModel.ts for the full "why" — both replace what used to be
+// a per-element GetLine/getPropertySets call with one bulk GetLines call
+// up front) + a per-element GlobalId lookup (already O(1) — cheap, lazily-
+// cached — and a bounding-box measurement (already O(1) against the batch's
+// own stored geometry, see getExpressIdWorldBounds's own header). Chunked
+// every 2000 elements — briefly tried tightening this to 200 (2026-07-25),
+// theorising that a real 131k-element scan appearing to hang was this loop
+// itself going quiet between progress updates; measured against the same
+// real file and that was wrong on two counts: this loop was never the slow
+// part (it clears all 131k candidates in a few seconds flat at either chunk
+// size, confirmed via console.time), and going from 2000 to 200 meant 10x
+// more onProgress calls, each one a React state update/re-render of the
+// wizard's own progress bar — real, compounding overhead for zero benefit,
+// and the actual regression Maro reported ("faster before"). Reverted. The
+// real hang was buildElementPropertyData (ifcModel.ts, see its own header)
+// — a single unyielding synchronous call this loop's own chunking was never
+// going to fix, wherever its chunk size was set.
 export async function extractScheduleElements(
   handle: IfcModelHandle,
   onProgress?: ExtractionProgressCallback,
 ): Promise<ExtractedElement[]> {
   const ifcModel = await import('./ifcModel')
-  const tree = await ifcModel.getSpatialTree(handle)
-  const toMetres = ifcModel.getLengthUnitToMetres(handle, tree.expressID)
-  const storeyByExpressId = await buildStoreyMap(ifcModel, handle, tree, toMetres)
-  // One cheap, synchronous, whole-model check (2026-07-18, per Maro: "yes,
-  // then..." on preferring a real IFC quantity over the bounding-box
-  // estimate) — if this file has zero IfcElementQuantity entities anywhere
-  // (confirmed true for all 6 real Snowdon sample files — a common Revit
-  // export gap, "Export base quantities" not enabled), skip the extra
-  // per-element property read entirely rather than paying for a lookup
-  // that can never succeed.
-  const hasQuantitySets = ifcModel.getExpressIdsForType(handle, 'IfcElementQuantity').length > 0
+  // IfcProject's own expressID directly (2026-07-25 fix, replacing
+  // getSpatialTree()'s own tree root — see buildElementStoreyMap's header
+  // in ifcModel.ts for the full "why" this file no longer walks that tree
+  // at all) — IfcProject is always exactly one instance per file, so this
+  // is the identical expressID getSpatialTree's own root node used to
+  // carry, without needing the tree itself.
+  const projectExpressIds = ifcModel.getExpressIdsForType(handle, 'IfcProject')
+  const toMetres = projectExpressIds.length > 0 ? ifcModel.getLengthUnitToMetres(handle, projectExpressIds[0]) : 1
+  const storeyByExpressId = await ifcModel.buildElementStoreyMap(handle)
 
   const candidates: { expressID: number; category: ScheduleCategory; ifcType: string }[] = []
   for (const { ifcType, category } of IFC_TYPE_CATEGORIES) {
     for (const expressID of ifcModel.getExpressIdsForType(handle, ifcType)) candidates.push({ expressID, category, ifcType })
   }
 
+  const nameInfoByExpressId = ifcModel.getElementNamesAndPredefinedTypes(handle, candidates.map(c => c.expressID))
+  // Unconditional now (2026-07-25) — buildElementPropertyData's own header
+  // explains why: it now also carries Pset_ProductRequirements.Category,
+  // needed for every file regardless of whether it has any
+  // IfcElementQuantity at all, so the old hasQuantitySets pre-check (still
+  // fine for the quantity half alone) would have silently skipped
+  // classification-relevant Category data on exactly the common
+  // "Export base quantities" off Revit exports this module's own history
+  // already documents. Awaited (2026-07-25) — see its own header,
+  // ifcModel.ts, for why it's now async (a real 131k-element/95k-IfcMember
+  // high-rise made this specific call a 16.5s+ fully-blocking freeze with
+  // zero progress feedback).
+  const { quantityAreaByExpressId, categoryByExpressId, loadBearingByExpressId } = await ifcModel.buildElementPropertyData(handle)
+
   const elements: ExtractedElement[] = []
   let done = 0
   for (const { expressID, category: rawCategory, ifcType } of candidates) {
-    const [{ name, predefinedType }, globalId] = await Promise.all([
-      ifcModel.getElementNameAndPredefinedType(handle, expressID),
-      Promise.resolve(ifcModel.getGuidFromExpressId(handle, expressID)),
-    ])
+    const { name = '', predefinedType = null } = nameInfoByExpressId.get(expressID) ?? {}
+    const globalId = ifcModel.getGuidFromExpressId(handle, expressID)
     // A Revit-exported IfcSlab with PredefinedType=BASESLAB is a
     // foundation element (pile cap/mat foundation), not a floor slab —
     // verified against the real reference file, where 538 of 612 IfcSlab
@@ -475,12 +568,36 @@ export async function extractScheduleElements(
     // header for why base ifcType alone can't disambiguate a duct from a
     // pipe from a conduit run here; falls back to rawCategory's own raw
     // IFC_TYPE_CATEGORIES default when nothing matches.
+    //
+    // categoryOverride checked first (2026-07-25) — see
+    // CATEGORY_PROPERTY_OVERRIDES' own header: Revit's own authored
+    // Category property is the single most authoritative signal available,
+    // so it wins over every Name-keyword/PredefinedType heuristic below
+    // whenever it's present and recognised, rather than only ever being a
+    // last-resort fallback.
+    const categoryOverride = resolveCategoryPropertyOverride(categoryByExpressId.get(expressID))
+    // Non-load-bearing wall re-bucketing (2026-07-25, per Maro's own real
+    // example: exterior walls "not really part of the structural core"
+    // appearing simultaneously with real structural completion in the
+    // Animation Timeline) — checked AFTER isSiteElement, not before: a real
+    // pool wall/planter is ALSO LoadBearing=false (confirmed live on this
+    // exact file) but belongs in Site & Landscaping specifically, not the
+    // generic 'Non-Structural Walls' bucket — Name-keyword match already
+    // catches those, so this only ever reaches genuinely unremarkable
+    // non-structural walls (partition/backup/balcony walls) that isSiteElement
+    // has no reason to match. 'Non-Structural Walls' is deliberately its own
+    // category, not folded into 'Walls' — see scheduleGeneration.ts's own
+    // STRUCTURAL_CATEGORIES, which this new category is NOT a member of, so
+    // it no longer gates the floor-above's own structural climb the way a
+    // real load-bearing wall correctly still does.
     const category: ScheduleCategory =
-      ifcType === 'IfcSlab' && isSiteFloorElement(name) ? 'Site & Landscaping'
+      categoryOverride
+      ?? ((ifcType === 'IfcSlab' || ifcType === 'IfcWallStandardCase' || ifcType === 'IfcWall') && isSiteElement(name) ? 'Site & Landscaping'
+      : (ifcType === 'IfcWallStandardCase' || ifcType === 'IfcWall') && loadBearingByExpressId.get(expressID) === false ? 'Non-Structural Walls'
       : ifcType === 'IfcSlab' && predefinedType === 'BASESLAB' ? 'Foundation'
       : (ifcType === 'IfcMember' || ifcType === 'IfcPlate') && isCurtainWallMember(name) ? 'Curtain Walls'
       : MEP_FAMILY_TYPES.has(ifcType) ? (resolveMepCategory(name) ?? rawCategory)
-      : rawCategory
+      : rawCategory)
     // getExpressIdWorldBounds, not a materializing mesh lookup (2026-07-21
     // perf fix, per Maro: "generating the 4D link... cripples the
     // platform") — see that function's own header in elementBatching.ts.
@@ -498,9 +615,7 @@ export async function extractScheduleElements(
       // this is the same 4 categories expressed as its own local allow-
       // list instead). Every other category prices by a flat per-element
       // count, so a more accurate area would never be read forward anyway.
-      const realArea = hasQuantitySets && AREA_PRICED_CATEGORIES.has(category)
-        ? await ifcModel.getElementQuantityArea(handle, expressID)
-        : null
+      const realArea = AREA_PRICED_CATEGORIES.has(category) ? quantityAreaByExpressId.get(expressID) ?? null : null
       const { quantity, quantityUnit } = realArea !== null
         ? { quantity: realArea, quantityUnit: 'm²' as const }
         : measureElement(box, category, toMetres)
@@ -514,7 +629,7 @@ export async function extractScheduleElements(
     }
 
     done += 1
-    if (done % 25 === 0) {
+    if (done % 2000 === 0) {
       onProgress?.(done, candidates.length)
       await new Promise(resolve => setTimeout(resolve, 0))
     }

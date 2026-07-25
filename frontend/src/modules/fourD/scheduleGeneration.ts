@@ -150,6 +150,25 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
       crewName: 'Wall Formwork Crew', crewSize: 4, productivityPerCrewDay: 100, unit: 'm²', costPerCrewDay: 1000,
     } },
   ],
+  // 2026-07-25, per Maro's own real example (exterior walls "not really
+  // part of the structural core" appearing simultaneously with real
+  // structural completion in the Animation Timeline) — a non-load-bearing
+  // wall (Pset_WallCommon.LoadBearing=false, see ifcScheduleExtraction.ts's
+  // own reclassification) still needs real formwork/pour/strip the same way
+  // a structural wall does, just lighter/faster (typically a thinner
+  // partition/backup/cladding-support wall, not a core shear wall) — a
+  // single "install" phase instead of Walls' own three-phase concrete
+  // sequence, since these are commonly precast/lightweight/block rather
+  // than genuinely cast-in-place. Deliberately its own category (see
+  // STRUCTURAL_CATEGORIES below, which this is NOT a member of) rather than
+  // folded back into 'Walls' — the whole point is that it must NOT gate the
+  // floor-above's own structural climb the way a real load-bearing wall
+  // correctly still does.
+  'Non-Structural Walls': [
+    { key: 'install', label: 'Install Non-Structural Walls', rate: {
+      crewName: 'Wall Formwork Crew', crewSize: 4, productivityPerCrewDay: 120, unit: 'm²', costPerCrewDay: 1400,
+    } },
+  ],
   // Architectural categories, added 2026-07-14 (per Maro, after pointing
   // the wizard at a real steel+architectural Revit export: "not just
   // structural now, this new model is also architectural"). Same
@@ -173,6 +192,21 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     } },
     { key: 'finish', label: 'Install Treads, Rails & Finishes', rate: {
       crewName: 'Finishing Crew', crewSize: 3, productivityPerCrewDay: 1, unit: 'each', costPerCrewDay: 1200,
+    } },
+  ],
+  // 2026-07-25, per Maro's own real example (an IfcRamp "ENTRANCE RAMP",
+  // Pset_ProductRequirements.Category="Ramps", previously unassigned
+  // entirely — see ifcScheduleExtraction.ts's own IFC_TYPE_CATEGORIES
+  // header) — same two-phase shape as Stairs just above (a ramp is the
+  // same "erect structure, then finish" circulation-element pattern), not
+  // folded into Stairs itself so it gets its own real WBS/BOQ line rather
+  // than being invisibly merged into a stair count.
+  Ramps: [
+    { key: 'erect', label: 'Erect Ramp Structure', rate: {
+      crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 2, unit: 'each', costPerCrewDay: 1400,
+    } },
+    { key: 'finish', label: 'Install Surface & Railings', rate: {
+      crewName: 'Finishing Crew', crewSize: 3, productivityPerCrewDay: 2, unit: 'each', costPerCrewDay: 1200,
     } },
   ],
   Roofs: [
@@ -285,6 +319,118 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   'Site & Landscaping': [
     { key: 'install', label: 'Install Site & Landscaping', rate: {
       crewName: 'Landscaping Crew', crewSize: 3, productivityPerCrewDay: 15, unit: 'each', costPerCrewDay: 1000,
+    } },
+  ],
+  // The four "full schedule" categories below (2026-07-25, per Maro — see
+  // ScheduleCategory's own header, ifcScheduleExtraction.ts) never have a
+  // real IFC-measured quantity behind them — every phase here is a fixed
+  // process duration, not a per-element/per-area rate, so quantity is always
+  // literally 1 and productivityPerCrewDay is set to 1/desired_days (the
+  // same computeDurationHours math every other category already uses,
+  // `ceil(quantity / productivityPerCrewDay)`, just solved for a target day
+  // count instead of derived from a real takeoff). Durations are ballpark
+  // figures cross-checked against the real reference schedules this feature
+  // was built from (a 25-storey Gantt export, a real Primavera Tower 2B
+  // schedule, a residential-building schedule) — same "editable defaults,
+  // not a certified programme" contract as every other category in this
+  // table; buildStagedSchedule's own "full schedule" block is what actually
+  // injects these as real activities, since they never come from
+  // groupByStorey.
+  Preliminaries: [
+    { key: 'approvals', label: 'Statutory Approvals & Permits', rate: {
+      crewName: 'Permitting & Compliance Team', crewSize: 2, productivityPerCrewDay: 1 / 20, unit: 'each', costPerCrewDay: 800,
+    } },
+    { key: 'geotechnical', label: 'Geotechnical Investigation & Soil Testing', rate: {
+      crewName: 'Geotechnical Survey Team', crewSize: 3, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 1500,
+      equipmentName: 'Drilling Rig', equipmentCostPerDay: 900,
+    } },
+    { key: 'mobilisation', label: 'Site Mobilisation & Establishment', rate: {
+      crewName: 'Site Establishment Crew', crewSize: 6, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 1400,
+    } },
+    { key: 'site_clearance', label: 'Site Clearance & Enabling Works', rate: {
+      crewName: 'Site Clearance Crew', crewSize: 5, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1300,
+      equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
+    } },
+  ],
+  // Real line items on every reference schedule read for this (Excavation to
+  // Remove Black Cotton Soil, Excavation for Foundations and Bases, Concrete
+  // Blinding, Hardcore Filling/Compaction/Quarry Dust Blinding, Anti-termite
+  // treatment/DPM, Waterproofing to Tank Walls, Backfilling — 25-storey Gantt
+  // export) — none of it is ever modeled as 3D geometry, but all of it
+  // genuinely happens, in this order, before a real Foundation pour. Reuses
+  // Foundation's own "Excavation Crew"/"Excavator (Mini)" resource names
+  // (same "one crew, several categories" reuse convention this table's own
+  // header already documents) since it's realistically the same crew that
+  // does both the bulk dig here and Foundation's own excavate-and-prep phase.
+  'Substructure Earthworks': [
+    { key: 'excavation', label: 'Bulk Excavation & Earthworks', rate: {
+      crewName: 'Excavation Crew', crewSize: 4, productivityPerCrewDay: 1 / 15, unit: 'each', costPerCrewDay: 1100,
+      equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
+    } },
+    { key: 'hardcore_fill', label: 'Hardcore Filling & Compaction', rate: {
+      crewName: 'Hardcore & Compaction Crew', crewSize: 4, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1000,
+      equipmentName: 'Plate Compactor', equipmentCostPerDay: 300,
+    } },
+    { key: 'anti_termite_dpm', label: 'Anti-Termite Treatment & DPM', rate: {
+      crewName: 'Waterproofing Crew', crewSize: 3, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 900,
+    } },
+    { key: 'blinding', label: 'Blinding to Foundations', rate: {
+      crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 1200,
+      equipmentName: 'Concrete Pump Truck', equipmentCostPerDay: 900,
+    } },
+    { key: 'waterproofing', label: 'Waterproofing to Substructure', rate: {
+      crewName: 'Waterproofing Crew', crewSize: 3, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 900,
+    } },
+    { key: 'backfilling', label: 'Backfilling', rate: {
+      crewName: 'Excavation Crew', crewSize: 4, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1100,
+      equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
+    } },
+  ],
+  // One shared, reusable submittal->approval->PO->delivery chain (2026-07-25,
+  // per Maro's own real example — a real Primavera Tower 2B export's own
+  // "Drawings & Procurement" section: Submittal -> Approval -> Placing
+  // Purchase order -> Procurement -> Delivery on site, repeated per material/
+  // system) — one CategoryRate set here, reused once per real procurable
+  // category actually present in a generation (buildStagedSchedule's own
+  // "full schedule" block loops over them), the same "edit once, applies to
+  // every use" convention as every reused crew name elsewhere in this table.
+  // Costed as office/coordination overhead (a Procurement & Logistics Team's
+  // own day rate), not the value of the goods themselves — this schedule
+  // generator has never priced real material cost, only crew/equipment
+  // day-rate x duration, same as everywhere else in this table.
+  Procurement: [
+    { key: 'submittal', label: 'Submittal', rate: {
+      crewName: 'Procurement & Logistics Team', crewSize: 2, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 700,
+    } },
+    { key: 'approval', label: 'Approval', rate: {
+      crewName: 'Procurement & Logistics Team', crewSize: 2, productivityPerCrewDay: 1 / 7, unit: 'each', costPerCrewDay: 700,
+    } },
+    { key: 'purchase_order', label: 'Place Purchase Order', rate: {
+      crewName: 'Procurement & Logistics Team', crewSize: 1, productivityPerCrewDay: 1 / 2, unit: 'each', costPerCrewDay: 700,
+    } },
+    { key: 'delivery', label: 'Procure & Deliver to Site', rate: {
+      crewName: 'Procurement & Logistics Team', crewSize: 1, productivityPerCrewDay: 1 / 20, unit: 'each', costPerCrewDay: 700,
+    } },
+  ],
+  // A real project stage, not folded into Substantial Completion (2026-07-25
+  // — same real Tower 2B export: "Elevators final finish" -> "Testing &
+  // Commissioning" -> "Project Handing over" as three distinct closing
+  // milestones/stages). Gated behind Substantial Completion in
+  // buildStagedSchedule's own "full schedule" block — none of these systems
+  // can be meaningfully tested until the building they serve is actually
+  // built.
+  'Testing & Commissioning': [
+    { key: 'fire_life_safety', label: 'Fire & Life Safety Systems Testing', rate: {
+      crewName: 'Fire Systems Testing Team', crewSize: 3, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 1400,
+    } },
+    { key: 'elevator', label: 'Elevator Testing & Commissioning', rate: {
+      crewName: 'Elevator Contractor', crewSize: 2, productivityPerCrewDay: 1 / 15, unit: 'each', costPerCrewDay: 1600,
+    } },
+    { key: 'mep_testing', label: 'MEP Systems Testing & Balancing', rate: {
+      crewName: 'MEP Commissioning Team', crewSize: 4, productivityPerCrewDay: 1 / 15, unit: 'each', costPerCrewDay: 1800,
+    } },
+    { key: 'bms', label: 'Building Management System (BMS) Commissioning', rate: {
+      crewName: 'BMS Integration Team', crewSize: 2, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 1500,
     } },
   ],
 }
@@ -431,7 +577,7 @@ export interface StoreyGroup {
 // quantity.
 const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
   'Foundation', 'Reinforcement', 'Columns', 'Beams',
-  'Structural Members', 'Stairs', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
+  'Structural Members', 'Stairs', 'Ramps', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
   // MEP + facade-detailing additions (2026-07-17) — every one of these is a
   // discrete family instance (a duct fitting, a light fixture, a
   // receptacle), not a continuous surface — same "installed per crew-day"
@@ -484,10 +630,35 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
 // rely on the CPM engine to round it at schedule time; the two would
 // otherwise disagree on "how many days is this" whenever the raw quantity/
 // rate math didn't happen to divide evenly).
+// A permanent, absolute backstop against one phase-activity ever running
+// unrealistically long just because a real floor genuinely has a lot of
+// small elements assigned to it (2026-07-25, per Maro: "i dont want to see
+// ridiculous task durations just because multiple elements are assigned to
+// the tasks, curtain wall, mullions, doors, glazed panels etc" — a real
+// curved/complex facade, unlike a plain rectangular one, exports as many
+// more individual small IfcMember/IfcPlate/IfcDoor/IfcWindow instances per
+// floor, and every one of those is a genuinely real, correctly-measured
+// element, not a data bug — so clampOutlierQuantities below (which only
+// catches a storey that's an outlier *relative to its own peers*) doesn't
+// help here: a facade that's uniformly element-dense on EVERY floor is,
+// by definition, never an outlier against itself). This is a DURATION cap,
+// not a quantity cap — category.quantity (and therefore the real element
+// count/area persisted to quantity, StagedActivity's own field, still feeds
+// BOQ generation with the true, uncapped figure) is left completely alone;
+// only the number of days a single phase is allowed to claim is bounded.
+// 20 working days (4 working weeks) is a generous ceiling for one trade's
+// one phase on one floor in real construction — nothing in
+// DEFAULT_CATEGORY_PHASES should legitimately need more than that per
+// floor even on a dense facade — and, same as OUTLIER_MULTIPLE below, is a
+// deliberately reviewable default: a genuinely denser real project can
+// raise crew size/productivity in the wizard's own Rates & Crews step
+// before generating, which computeDurationHours below always reads first.
+const MAX_PHASE_DURATION_DAYS = 20
+
 function computeDurationHours(quantity: number, rate: CategoryRate): number {
   if (rate.productivityPerCrewDay <= 0 || rate.crewSize <= 0) return HOURS_PER_DAY
   const days = Math.max(1, Math.ceil(quantity / rate.productivityPerCrewDay))
-  return days * HOURS_PER_DAY
+  return Math.min(days, MAX_PHASE_DURATION_DAYS) * HOURS_PER_DAY
 }
 
 export interface StagedActivity {
@@ -613,6 +784,27 @@ export function usedPhaseRows(storeys: StoreyGroup[]): PhaseRow[] {
   return rows
 }
 
+// The "full schedule" categories buildStagedSchedule injects directly
+// (Preliminaries/Substructure Earthworks/Testing & Commissioning always,
+// Procurement once per procurable real category present — see
+// PROCURABLE_CATEGORIES' own header) never appear in `storeys` at all, so
+// usedCategoryNames/usedPhaseRows above can't see them. Exported so the
+// wizard's own Review-step summary can add them into its category/phase
+// counts when the "Full Schedule" toggle is on, so what's shown before
+// generating matches what buildStagedSchedule will actually create.
+export function fullScheduleCategoryNames(storeys: StoreyGroup[]): string[] {
+  const hasProcurable = usedCategoryNames(storeys).some(name => PROCURABLE_CATEGORIES.has(name))
+  return ['Preliminaries', 'Substructure Earthworks', ...(hasProcurable ? ['Procurement'] : []), 'Testing & Commissioning']
+}
+
+export function fullSchedulePhaseRows(storeys: StoreyGroup[]): PhaseRow[] {
+  const rows: PhaseRow[] = []
+  for (const category of fullScheduleCategoryNames(storeys)) {
+    for (const phase of resolvePhases(category)) rows.push({ id: phaseRowId(category, phase.key), category, phase })
+  }
+  return rows
+}
+
 // Structural climb categories (2026-07-17, per Maro: "you literally give
 // everything a finish to start sequence from start to end... its not
 // practical in real life... first floor works can start as soon as its
@@ -652,6 +844,29 @@ const STRUCTURAL_CATEGORIES: ReadonlySet<string> = new Set(['Foundation', 'Reinf
 // (Curtain Walls/Windows/Doors/Facade Ornamentation) starts anywhere.
 const FACADE_CATEGORIES: ReadonlySet<string> = new Set(['Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation'])
 
+// Genuinely-last categories (2026-07-25, per Maro: "ensure landscaping
+// environments/trees/benches/parking etc are the last things to get done, i
+// dont want to see them mid way" — a repeat, stronger version of the same
+// "leave to the final phases" ask CATEGORY_ORDER's own header already
+// documents from 2026-07-17). CATEGORY_ORDER already sorts 'Site &
+// Landscaping' dead last *within* one storey, but that alone isn't enough:
+// the site/ground-level storey (isSiteElement's own reclassified
+// asphalt/parking/planting/pool/planter elements — see
+// ifcScheduleExtraction.ts) sits at
+// or near grade, so it sorts near the FRONT of groupByStorey's own
+// elevation-ascending order and, per the structural-climb rule above, can
+// genuinely finish its own local chain (including its own Landscaping
+// phase) while upper floors are still mid-construction — exactly "seeing
+// them mid way." Gated the same way FACADE_CATEGORIES is gated behind
+// "Structure Complete — All Levels" below, one step later: every storey's
+// own Landscaping phase now additionally waits on a new "All Building Work
+// Complete" milestone fed by every OTHER storey's own true last activity
+// (structure, facade, MEP, finishes, furnishings — literally everything
+// except Landscaping itself), so no landscaping/parking/planting work
+// anywhere can start until the whole building is otherwise done, not just
+// its own floor.
+const LATE_CATEGORIES: ReadonlySet<string> = new Set(['Site & Landscaping'])
+
 // Discipline (2026-07-17, per Maro: "create a udf column called
 // Discipline... Earthworks, Architecture, Structures, Electrical, HVAC,
 // Landscape, Plumbing, Misc. etc like that so where necessary") — coarser
@@ -666,15 +881,53 @@ const FACADE_CATEGORIES: ReadonlySet<string> = new Set(['Curtain Walls', 'Window
 // discipline is this category," not a second copy drifting out of sync.
 export const CATEGORY_DISCIPLINE: Record<string, string> = {
   Foundation: 'Structures', Reinforcement: 'Structures', Columns: 'Structures', Beams: 'Structures',
-  Slabs: 'Structures', Walls: 'Structures', 'Structural Members': 'Structures', Stairs: 'Structures',
+  Slabs: 'Structures', Walls: 'Structures', 'Structural Members': 'Structures', Stairs: 'Structures', Ramps: 'Structures',
   Roofs: 'Architecture', 'Curtain Walls': 'Architecture', 'Facade Ornamentation': 'Architecture',
   Windows: 'Architecture', Doors: 'Architecture', Railings: 'Architecture', Coverings: 'Architecture',
+  // Architecture, not Structures (2026-07-25) — the whole point of this
+  // category is that it's explicitly NOT part of the structural core (see
+  // its own DEFAULT_CATEGORY_PHASES header) — a non-load-bearing wall reads
+  // more naturally as an architectural/envelope element for reporting.
+  'Non-Structural Walls': 'Architecture',
   Ductwork: 'HVAC', 'Air Terminals': 'HVAC',
   Piping: 'Plumbing', 'Plumbing Fixtures': 'Plumbing',
   'Electrical Containment': 'Electrical', Lighting: 'Electrical', 'Electrical Devices': 'Electrical',
   Furnishings: 'Misc',
   'Site & Landscaping': 'Landscape',
+  // The four "full schedule" categories (2026-07-25 — see their own
+  // DEFAULT_CATEGORY_PHASES header) each get their own discipline rather than
+  // falling to Misc — 'Earthworks' already exists as a value (Foundation's
+  // own excavate-phase override below already writes it), so Substructure
+  // Earthworks reuses it rather than inventing a near-duplicate; Discipline
+  // is a free-text UDF value (backend has no fixed choice list), so adding
+  // 'Preliminaries'/'Procurement'/'Commissioning' is safe.
+  Preliminaries: 'Preliminaries',
+  'Substructure Earthworks': 'Earthworks',
+  Procurement: 'Procurement',
+  'Testing & Commissioning': 'Commissioning',
 }
+
+// Real, manufactured/selected items a real project genuinely submits,
+// approves, and orders ahead of installation (2026-07-25 — see Procurement's
+// own DEFAULT_CATEGORY_PHASES header) — deliberately excludes bulk
+// cast-in-place/site-fabricated structural categories (Foundation,
+// Reinforcement, Columns, Beams, Slabs, Walls, Structural Members, Stairs,
+// Ramps), matching the real Tower 2B export this was built from: its own
+// "Drawings & Procurement" section only ever covered architectural/MEP
+// finishes and equipment (marbles, wardrobes, kitchen cabinets, paint,
+// doors, windows/louvers, roofing tiles, gypsum boards, railings, electrical
+// fittings, HVAC machinery, plumbing fixtures, fire pumps, generators) —
+// concrete/rebar/formwork were never a distinct submittal chain there
+// either, since nobody "selects" ready-mix concrete the way they select a
+// glazing system or a light fixture. buildStagedSchedule's own "full
+// schedule" block generates one submittal->approval->PO->delivery chain per
+// member of this set that's actually present in a real generation.
+const PROCURABLE_CATEGORIES: ReadonlySet<string> = new Set([
+  'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Facade Ornamentation', 'Roofs', 'Non-Structural Walls',
+  'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
+  'Electrical Containment', 'Lighting', 'Electrical Devices',
+  'Coverings', 'Furnishings',
+])
 
 // Foundation's own "Excavate & Prep" phase specifically (2026-07-17) —
 // bulk excavation is genuinely Earthworks, not Structures, even though it
@@ -795,6 +1048,14 @@ function clampOutlierQuantities(storeys: StoreyGroup[]): StoreyGroup[] {
 export function buildStagedSchedule(
   projectId: string, schedulePeriodId: string, storeys: StoreyGroup[], rates: Record<string, CategoryRate>,
   rootName: string, calendarId: string | null,
+  // "Full schedule generation" (2026-07-25, per Maro — see ScheduleCategory's
+  // own header, ifcScheduleExtraction.ts) — when true, injects Preliminaries,
+  // Substructure Earthworks, Procurement, and Testing & Commissioning
+  // activities that never come from the IFC scan at all, ahead of/around the
+  // real IFC-derived storey work below. When false, output is byte-for-byte
+  // identical to this function's pre-2026-07-25 behaviour — every new code
+  // path below is strictly additive and gated on this flag.
+  includeFullSchedule: boolean,
 ): { staged: StagedSchedule; summary: ProposedScheduleSummary } {
   storeys = clampOutlierQuantities(storeys)
   const activities: StagedActivity[] = []
@@ -847,6 +1108,14 @@ export function buildStagedSchedule(
   // predecessor AND successor — see the storeys.forEach loop) so its
   // temp_id is in scope for that loop.
   const structureCompleteTempId = 'act-structure-complete-all-levels'
+  // "All Building Work Complete" (2026-07-25, per Maro — see
+  // LATE_CATEGORIES' own header) — a fourth real milestone, the same shape
+  // as Structure Complete — All Levels just one step later in the project:
+  // every storey's own true last NON-Landscaping activity feeds it, and it
+  // in turn feeds every storey's own first Site & Landscaping phase, so no
+  // landscaping/parking/planting work anywhere can start until literally
+  // everything else, on every floor, is done.
+  const allWorkCompleteTempId = 'act-all-building-work-complete'
   activities.push({
     temp_id: milestonesWbsTempId, task_name: 'Project Milestones', parent_temp_id: rootTempId,
     duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
@@ -860,6 +1129,113 @@ export function buildStagedSchedule(
     duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
   })
 
+  // Preliminaries + Substructure Earthworks (2026-07-25, per Maro — see
+  // ScheduleCategory's own header) — real work that happens before/around
+  // the IFC-derived storey climb but is never IFC geometry itself. Both WBS
+  // folders and their internal phase chains are built unconditionally when
+  // includeFullSchedule is on, ahead of the storeys.forEach loop below, since
+  // the very first storey's own structural anchor needs to chain off the
+  // end of this instead of straight off Construction Start (see the
+  // `firstOfSchedule` linking further down). earthworksExitTempId stays null
+  // when the flag is off, which that same linking code reads as "fall back
+  // to today's unchanged Construction Start -> first storey edge."
+  let earthworksExitTempId: string | null = null
+  // Each procurable category's own final "Procure & Deliver to Site" temp_id
+  // (2026-07-25), keyed by category name — populated in this same early
+  // block (below, alongside Preliminaries/Earthworks) so the Procurement WBS
+  // folder sorts near the top of the schedule like a real project-level
+  // package, not after every storey (per Maro: "why is procurement wbs all
+  // the way down" — it used to be built entirely after the storeys.forEach
+  // loop below, since it needed each category's first real installation
+  // activity to link against; that installation-linking edge is the only
+  // part that genuinely has to wait — the WBS folder and its own internal
+  // submittal->approval->PO->delivery chains don't). Read after the
+  // storeys.forEach loop, once firstOccurrenceByCategory is known, to add
+  // just the delivery -> first-installation relationship per category.
+  const procurementDeliveryTempIdByCategory = new Map<string, string>()
+  if (includeFullSchedule) {
+    const preliminariesWbsTempId = 'wbs-preliminaries'
+    activities.push({
+      temp_id: preliminariesWbsTempId, task_name: 'Preliminaries', parent_temp_id: rootTempId,
+      duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+    })
+    let previousPrelimTempId: string | null = null
+    for (const phase of resolvePhases('Preliminaries')) {
+      const rate = rates[phaseRowId('Preliminaries', phase.key)] ?? phase.rate
+      const tempId = `act-preliminaries-${phase.key}`
+      activities.push({
+        temp_id: tempId, task_name: phase.label, parent_temp_id: preliminariesWbsTempId,
+        duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+        category: 'Preliminaries', phase_key: phase.key, quantity: 1, activity_type: 'task',
+        discipline: disciplineFor('Preliminaries', phase.key),
+      })
+      if (previousPrelimTempId) relationships.push({ predecessor_temp_id: previousPrelimTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
+      else relationships.push({ predecessor_temp_id: constructionStartTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
+      previousPrelimTempId = tempId
+    }
+
+    const earthworksWbsTempId = 'wbs-substructure-earthworks'
+    activities.push({
+      temp_id: earthworksWbsTempId, task_name: 'Substructure Earthworks', parent_temp_id: rootTempId,
+      duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+    })
+    let previousEarthworksTempId: string | null = null
+    for (const phase of resolvePhases('Substructure Earthworks')) {
+      const rate = rates[phaseRowId('Substructure Earthworks', phase.key)] ?? phase.rate
+      const tempId = `act-earthworks-${phase.key}`
+      activities.push({
+        temp_id: tempId, task_name: phase.label, parent_temp_id: earthworksWbsTempId,
+        duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+        category: 'Substructure Earthworks', phase_key: phase.key, quantity: 1, activity_type: 'task',
+        discipline: disciplineFor('Substructure Earthworks', phase.key),
+      })
+      // First earthworks phase chains off Preliminaries' own last phase
+      // (site clearance must finish before bulk excavation starts) — falls
+      // back to Construction Start directly only in the pathological case
+      // where Preliminaries somehow generated no phases at all.
+      const predecessor = previousEarthworksTempId ?? previousPrelimTempId ?? constructionStartTempId
+      relationships.push({ predecessor_temp_id: predecessor, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
+      previousEarthworksTempId = tempId
+    }
+    earthworksExitTempId = previousEarthworksTempId
+
+    // Procurement — Long-Lead Items (2026-07-25 — see
+    // procurementDeliveryTempIdByCategory's own header just above for why
+    // this moved here). usedCategoryNames(storeys) is a pure read of the
+    // real IFC-derived storeys, safe to call before storeys.forEach runs —
+    // only the final "delivery -> first real installation" edge actually
+    // needs anything the forEach loop itself produces.
+    const procurableCategoriesUsed = usedCategoryNames(storeys).filter(name => PROCURABLE_CATEGORIES.has(name))
+    if (procurableCategoriesUsed.length > 0) {
+      const procurementWbsTempId = 'wbs-procurement'
+      activities.push({
+        temp_id: procurementWbsTempId, task_name: 'Procurement — Long-Lead Items', parent_temp_id: rootTempId,
+        duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+      })
+      const procurementPhases = resolvePhases('Procurement')
+      for (const categoryName of procurableCategoriesUsed) {
+        const slug = categoryName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        let previousTempId: string | null = null
+        for (const phase of procurementPhases) {
+          const rate = rates[phaseRowId('Procurement', phase.key)] ?? phase.rate
+          const tempId = `act-procurement-${slug}-${phase.key}`
+          activities.push({
+            temp_id: tempId, task_name: `${phase.label} — ${categoryName}`, parent_temp_id: procurementWbsTempId,
+            duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+            category: 'Procurement', phase_key: phase.key, quantity: 1, activity_type: 'task',
+            discipline: disciplineFor('Procurement', phase.key),
+          })
+          relationships.push({
+            predecessor_temp_id: previousTempId ?? constructionStartTempId, successor_temp_id: tempId,
+            relationship_type: 'FS', lag_hours: 0,
+          })
+          previousTempId = tempId
+        }
+        if (previousTempId) procurementDeliveryTempIdByCategory.set(categoryName, previousTempId)
+      }
+    }
+  }
+
   // No Resource/StagedAssignment rows generated here (2026-07-17 — see this
   // function's own header) — resources and assignments always come back
   // empty; only computeDurationHours below still reads rate.crewSize/
@@ -871,6 +1247,27 @@ export function buildStagedSchedule(
   // gate below (2026-07-17, per Maro — see FACADE_CATEGORIES' own header).
   const lastWallsTempIds: string[] = []
   const firstFacadeTempIds: string[] = []
+  // Collected across every storey for the "All Building Work Complete" gate
+  // below (2026-07-25 — see LATE_CATEGORIES' own header).
+  const lastNonLateTempIds: string[] = []
+  const firstLateTempIds: string[] = []
+  // One entry per storey, in the same elevation order `storeys` is already
+  // sorted in, unconditionally pushed (2026-07-25, per Maro: "windows are
+  // all generated at the same time... these would follow a careful rhythm
+  // from bottom to top" — see FACADE_CATEGORIES' own bottom-up handoff
+  // chain further down for the fix) — null/null for a storey with no real
+  // facade category at all, filtered out when the chain itself is built so
+  // it doesn't insert a false link across a facade-less floor.
+  const facadeHandoffByStorey: { firstFacadeTempId: string | null; lastFacadeTempId: string | null }[] = []
+  // Every category name's own very first phase activity anywhere across the
+  // whole building, in storey-elevation order (2026-07-25, per Maro — see
+  // PROCUREMENT_CATEGORIES' own header) — storeys are already iterated
+  // bottom-up by elevation, so the first time a category name is seen here
+  // is naturally its lowest, earliest-installed occurrence, exactly what a
+  // real procurement delivery needs to be linked in front of. Populated
+  // unconditionally (cheap, no behaviour change when includeFullSchedule is
+  // off — nothing ever reads this map in that case).
+  const firstOccurrenceByCategory = new Map<string, string>()
 
   storeys.forEach((storey, storeyIndex) => {
     const wbsTempId = `wbs-storey-${storeyIndex}`
@@ -889,12 +1286,16 @@ export function buildStagedSchedule(
     let lastWallsCategoryIndex: number | null = null
     let firstFacadeTempId: string | null = null
     let firstFacadeCategoryIndex: number | null = null
+    let lastFacadeTempId: string | null = null
+    let lastNonLateTempId: string | null = null
+    let firstLateTempId: string | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
       const phases = resolvePhases(category.name)
       const isStructural = STRUCTURAL_CATEGORIES.has(category.name)
       const isWalls = category.name === 'Walls'
       const isFacade = FACADE_CATEGORIES.has(category.name)
+      const isLate = LATE_CATEGORIES.has(category.name)
       phases.forEach((phase, phaseIndex) => {
         const rate = rates[phaseRowId(category.name, phase.key)] ?? phase.rate
         const tempId = `act-${storeyIndex}-${categoryIndex}-${phaseIndex}`
@@ -912,16 +1313,45 @@ export function buildStagedSchedule(
           discipline: disciplineFor(category.name, phase.key),
         })
         firstTempId ??= tempId
+        if (phaseIndex === 0 && !firstOccurrenceByCategory.has(category.name)) firstOccurrenceByCategory.set(category.name, tempId)
         if (isStructural) {
           firstStructuralTempId ??= tempId
           lastStructuralTempId = tempId
         }
-        if (!isFacade) {
+        // Excludes Late (2026-07-25) same as Facade — neither should ever
+        // become a storey's own fallback handoff anchor: a storey made up
+        // of ONLY site/landscaping elements (a dedicated ground/site level)
+        // must be skipped over in the structural climb chain entirely, the
+        // same way a facade-only storey already is — see StoreyHandoff's
+        // own header for why a fallback anchor exists at all, and why it
+        // must never land on a category that's deliberately sequenced
+        // apart from the rest of the building.
+        if (!isFacade && !isLate) {
           firstNonFacadeTempId ??= tempId
           lastNonFacadeTempId = tempId
         }
         if (isWalls) { lastWallsTempId = tempId; lastWallsCategoryIndex = categoryIndex }
         if (isFacade && firstFacadeTempId === null) { firstFacadeTempId = tempId; firstFacadeCategoryIndex = categoryIndex }
+        // Tracks the true last facade-category phase in this storey's own
+        // local order (2026-07-25, per Maro: "windows are all generated at
+        // the same time [after Structure Complete]... these would follow a
+        // careful rhythm from bottom to top" — confirmed live via the
+        // Animation Timeline: once the global gate below fires, every
+        // storey's own firstFacadeTempId becomes eligible simultaneously,
+        // since nothing chains one storey's facade to the next the way
+        // STRUCTURAL_CATEGORIES' own handoff already does for structure).
+        // Feeds the facade-specific handoff chain further down, alongside
+        // (not replacing) the existing Structure Complete gate.
+        if (isFacade) lastFacadeTempId = tempId
+        // Tracks the true last non-Landscaping phase in this storey's own
+        // local order (2026-07-25) — CATEGORY_ORDER always sorts Site &
+        // Landscaping dead last, so this ends up as whatever category
+        // genuinely comes right before it here (Furnishings, MEP trim-out,
+        // Coverings, ...), feeding the "All Building Work Complete" gate
+        // below. firstLateTempId is this storey's own first Landscaping
+        // phase, if it has one.
+        if (!isLate) lastNonLateTempId = tempId
+        else if (firstLateTempId === null) firstLateTempId = tempId
         if (previousTempId) {
           relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
         }
@@ -953,6 +1383,22 @@ export function buildStagedSchedule(
       || lastWallsCategoryIndex < firstFacadeCategoryIndex
     if (lastWallsTempId && noLocalConflict) lastWallsTempIds.push(lastWallsTempId)
     if (firstFacadeTempId && noLocalConflict) firstFacadeTempIds.push(firstFacadeTempId)
+    // No local-conflict guard needed here (2026-07-25) — unlike Facade,
+    // which a hand-arranged Collection could theoretically place before
+    // Walls, CATEGORY_ORDER unconditionally sorts Site & Landscaping dead
+    // last on the automatic scan path this whole generator runs on, so
+    // lastNonLateTempId can never itself be a Landscaping phase feeding
+    // back into firstLateTempId.
+    if (lastNonLateTempId) lastNonLateTempIds.push(lastNonLateTempId)
+    if (firstLateTempId) firstLateTempIds.push(firstLateTempId)
+    // Same noLocalConflict guard as lastWallsTempIds/firstFacadeTempIds just
+    // above — a storey with a local Facade-before-Walls contradiction
+    // shouldn't feed the facade-to-facade handoff chain either, same
+    // reasoning as why it doesn't feed the Structure Complete gate.
+    facadeHandoffByStorey.push({
+      firstFacadeTempId: noLocalConflict ? firstFacadeTempId : null,
+      lastFacadeTempId: noLocalConflict ? lastFacadeTempId : null,
+    })
   })
 
   // Structural handoff, not "this storey's overall last phase" — see
@@ -985,6 +1431,41 @@ export function buildStagedSchedule(
     })
   }
 
+  // Facade handoff — a real bottom-to-top installation wave, not "every
+  // floor's facade starts the instant Structure Complete fires" (2026-07-25,
+  // per Maro, confirmed live via the Animation Timeline: every storey's own
+  // windows appeared simultaneously the moment structure finished, not the
+  // "careful rhythm from bottom to top" a real facade crew actually climbs
+  // in). The "Structure Complete — All Levels" gate below still stands — no
+  // facade work anywhere can start before every level's walls are done — but
+  // once it fires, THIS chain is what actually staggers each storey's own
+  // facade start behind the storey below it finishing its own facade first,
+  // the same elevation-ascending climb handoffAnchors already gives
+  // structure. Same "filter to storeys with a real anchor, chain
+  // consecutively, skip anything with neither" shape as handoffAnchors — a
+  // storey with no facade category at all (all-MEP, all-finishes) is simply
+  // skipped over, exactly as if it weren't part of this particular chain
+  // (it has no facade work to sequence in the first place). Additive to,
+  // never a replacement for, the "Structure Complete -> every storey's own
+  // firstFacadeTempId" fan-out just below: for the very first facade-having
+  // storey this chain is empty-predecessor and that fan-out edge is its only
+  // real gate; every storey after it also keeps that same edge (still
+  // correct — its own facade genuinely can't start before Structure
+  // Complete either — just no longer the *binding* constraint once the
+  // storey below it takes longer to finish, which is exactly the desired
+  // wave). Forward-only across increasing elevation, same direction as
+  // handoffAnchors' own chain and the "All Building Work Complete" gate
+  // below — no new cycle risk for the same reason those don't have one.
+  const facadeAnchors = facadeHandoffByStorey
+    .filter((h): h is { firstFacadeTempId: string; lastFacadeTempId: string } =>
+      h.firstFacadeTempId !== null && h.lastFacadeTempId !== null)
+  for (let i = 0; i < facadeAnchors.length - 1; i++) {
+    relationships.push({
+      predecessor_temp_id: facadeAnchors[i].lastFacadeTempId, successor_temp_id: facadeAnchors[i + 1].firstFacadeTempId,
+      relationship_type: 'FS', lag_hours: 0,
+    })
+  }
+
   // "Structure Complete — All Levels" (2026-07-17, per Maro: "dont touch
   // facade until architecture walls for all levels are complete" — see
   // FACADE_CATEGORIES' own header) — only added when there's genuinely
@@ -1008,6 +1489,26 @@ export function buildStagedSchedule(
     }
   }
 
+  // "All Building Work Complete" (2026-07-25, per Maro — see
+  // LATE_CATEGORIES' own header) — same guarded-milestone pattern as
+  // Structure Complete — All Levels just above, one project stage later:
+  // only added when there's genuinely a Landscaping category somewhere AND
+  // at least one other real activity somewhere to gate it behind (a file
+  // with no Site & Landscaping elements at all generates no such gate,
+  // same as the facade gate above).
+  if (lastNonLateTempIds.length > 0 && firstLateTempIds.length > 0) {
+    activities.push({
+      temp_id: allWorkCompleteTempId, task_name: 'All Building Work Complete', parent_temp_id: milestonesWbsTempId,
+      duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+    })
+    for (const fromId of lastNonLateTempIds) {
+      relationships.push({ predecessor_temp_id: fromId, successor_temp_id: allWorkCompleteTempId, relationship_type: 'FS', lag_hours: 0 })
+    }
+    for (const toId of firstLateTempIds) {
+      relationships.push({ predecessor_temp_id: allWorkCompleteTempId, successor_temp_id: toId, relationship_type: 'FS', lag_hours: 0 })
+    }
+  }
+
   if (handoffByStorey.length > 0) {
     // Construction Start kicks off the very first (structurally-anchored)
     // storey's own first activity (2026-07-17) — the structural-handoff
@@ -1020,9 +1521,18 @@ export function buildStagedSchedule(
     // role to play; even as the very first storey, Construction Start
     // driving straight into a facade activity would be a semantically odd
     // kickoff, not a real methodology.
+    // Chains off the end of Substructure Earthworks instead of straight off
+    // Construction Start when full-schedule mode is on (2026-07-25) — a real
+    // Foundation pour genuinely can't start before excavation/backfill/
+    // blinding are done; earthworksExitTempId is null (falls back to
+    // Construction Start directly) when the flag is off, reproducing the
+    // exact pre-2026-07-25 edge.
     const firstOfSchedule = handoffAnchors[0]?.firstId
     if (firstOfSchedule) {
-      relationships.push({ predecessor_temp_id: constructionStartTempId, successor_temp_id: firstOfSchedule, relationship_type: 'FS', lag_hours: 0 })
+      relationships.push({
+        predecessor_temp_id: earthworksExitTempId ?? constructionStartTempId, successor_temp_id: firstOfSchedule,
+        relationship_type: 'FS', lag_hours: 0,
+      })
     }
 
     // Substantial Completion is every storey's own finishing work's real
@@ -1041,6 +1551,112 @@ export function buildStagedSchedule(
     for (const storey of handoffByStorey) {
       const fromId = storey.lastTempId
       if (fromId) relationships.push({ predecessor_temp_id: fromId, successor_temp_id: substantialCompletionTempId, relationship_type: 'FS', lag_hours: 0 })
+    }
+  }
+
+  // Procurement (2026-07-25, per Maro's own real example — a real Primavera
+  // Tower 2B export's "Drawings & Procurement" section) — one submittal ->
+  // approval -> PO -> delivery chain per real category actually present in
+  // this generation that's genuinely a procured/selected item (see
+  // PROCURABLE_CATEGORIES' own header), starting immediately off
+  // Construction Start (runs in parallel with Preliminaries/Earthworks/the
+  // structural climb, same as a real project orders long-lead materials
+  // while groundworks are still underway) and feeding into that category's
+  // own first real installation activity anywhere in the building — you
+  // can't glaze a curtain wall panel that hasn't been delivered yet.
+  if (includeFullSchedule) {
+    const procurableCategoriesUsed = [...firstOccurrenceByCategory.keys()].filter(name => PROCURABLE_CATEGORIES.has(name))
+    if (procurableCategoriesUsed.length > 0) {
+      const procurementWbsTempId = 'wbs-procurement'
+      activities.push({
+        temp_id: procurementWbsTempId, task_name: 'Procurement — Long-Lead Items', parent_temp_id: rootTempId,
+        duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+      })
+      const procurementPhases = resolvePhases('Procurement')
+      for (const categoryName of procurableCategoriesUsed) {
+        const slug = categoryName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        let previousTempId: string | null = null
+        for (const phase of procurementPhases) {
+          const rate = rates[phaseRowId('Procurement', phase.key)] ?? phase.rate
+          const tempId = `act-procurement-${slug}-${phase.key}`
+          activities.push({
+            temp_id: tempId, task_name: `${phase.label} — ${categoryName}`, parent_temp_id: procurementWbsTempId,
+            duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+            category: 'Procurement', phase_key: phase.key, quantity: 1, activity_type: 'task',
+            discipline: disciplineFor('Procurement', phase.key),
+          })
+          relationships.push({
+            predecessor_temp_id: previousTempId ?? constructionStartTempId, successor_temp_id: tempId,
+            relationship_type: 'FS', lag_hours: 0,
+          })
+          previousTempId = tempId
+        }
+        const installTempId = firstOccurrenceByCategory.get(categoryName)
+        if (previousTempId && installTempId) {
+          relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: installTempId, relationship_type: 'FS', lag_hours: 0 })
+        }
+      }
+    }
+
+    // Testing & Commissioning + Project Handover (2026-07-25, per Maro's own
+    // real example — the same Tower 2B export: "Elevators final finish" ->
+    // "Testing & Commissioning" -> "Project Handing over" as three distinct
+    // closing stages). Gated behind Substantial Completion, which is already
+    // fed by every storey's own true last activity (including its own
+    // Landscaping phase, if any — see Substantial Completion's own header) —
+    // nothing here needs to separately wait on All Building Work Complete.
+    // Fire/Life Safety, Elevator, and MEP testing run in parallel (independent
+    // systems); BMS commissioning — which integrates all of them — runs
+    // after all three converge; Project Handover is the network's true final
+    // node, succeeding BMS commissioning.
+    if (handoffByStorey.length > 0) {
+      // Parented to rootTempId, not milestonesWbsTempId (2026-07-25 fix, per
+      // Maro: "why is testing and commissioning inside Project Milestones" —
+      // it's a real 25-day work package with real testing activities inside
+      // it, not a 0-duration milestone; Project Milestones is reserved for
+      // Construction Start/Substantial Completion/Structure Complete/All
+      // Building Work Complete/Project Handover, every one of which is a
+      // genuine activity_type: 'start_milestone'/'finish_milestone', unlike
+      // this WBS folder itself).
+      const commissioningWbsTempId = 'wbs-testing-commissioning'
+      activities.push({
+        temp_id: commissioningWbsTempId, task_name: 'Testing & Commissioning', parent_temp_id: rootTempId,
+        duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+      })
+      const commissioningPhases = resolvePhases('Testing & Commissioning')
+      const bmsPhase = commissioningPhases.find(p => p.key === 'bms')!
+      const parallelPhases = commissioningPhases.filter(p => p.key !== 'bms')
+      const parallelTempIds: string[] = []
+      for (const phase of parallelPhases) {
+        const rate = rates[phaseRowId('Testing & Commissioning', phase.key)] ?? phase.rate
+        const tempId = `act-commissioning-${phase.key}`
+        activities.push({
+          temp_id: tempId, task_name: phase.label, parent_temp_id: commissioningWbsTempId,
+          duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+          category: 'Testing & Commissioning', phase_key: phase.key, quantity: 1, activity_type: 'task',
+          discipline: disciplineFor('Testing & Commissioning', phase.key),
+        })
+        relationships.push({ predecessor_temp_id: substantialCompletionTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
+        parallelTempIds.push(tempId)
+      }
+      const bmsRate = rates[phaseRowId('Testing & Commissioning', bmsPhase.key)] ?? bmsPhase.rate
+      const bmsTempId = 'act-commissioning-bms'
+      activities.push({
+        temp_id: bmsTempId, task_name: bmsPhase.label, parent_temp_id: commissioningWbsTempId,
+        duration_hours: computeDurationHours(1, bmsRate), element_refs: [], element_labels: [],
+        category: 'Testing & Commissioning', phase_key: bmsPhase.key, quantity: 1, activity_type: 'task',
+        discipline: disciplineFor('Testing & Commissioning', bmsPhase.key),
+      })
+      for (const fromId of parallelTempIds) {
+        relationships.push({ predecessor_temp_id: fromId, successor_temp_id: bmsTempId, relationship_type: 'FS', lag_hours: 0 })
+      }
+
+      const projectHandoverTempId = 'act-project-handover'
+      activities.push({
+        temp_id: projectHandoverTempId, task_name: 'Project Handover', parent_temp_id: milestonesWbsTempId,
+        duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+      })
+      relationships.push({ predecessor_temp_id: bmsTempId, successor_temp_id: projectHandoverTempId, relationship_type: 'FS', lag_hours: 0 })
     }
   }
 

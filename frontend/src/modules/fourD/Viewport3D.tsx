@@ -27,7 +27,10 @@ import { applyGizmoDragAsPivotEdit } from './elementPivot'
 // ensureMaterialized/BatchState here doesn't reintroduce the ~2.95MB->6.6MB
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
-import { ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds, getMaterializedMeshes, materializeAll, type BatchState } from './elementBatching'
+import {
+  buildEdgesBatch, disposeEdgesBatch, ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds,
+  getMaterializedMeshes, type BatchState, type EdgesBatch,
+} from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
@@ -698,6 +701,18 @@ function ModelObjects({
   // failure mode is falling back to a full pass (heavyChanged stays true),
   // never a wrongly-skipped mesh.
   const heavyDepsRef = useRef<unknown[] | null>(null)
+  // Narrower than heavyDeps above (2026-07-25) — only the inputs that can
+  // actually change *which instances should carry an edges overlay*
+  // (visibility/render-mode inputs), deliberately excluding customTextures/
+  // varianceByElementKey/clashByElementKey/shadows, none of which affect
+  // batched-edges at all. heavyChanged already fires (and rebuilds
+  // everything else) for any of those too, so without this separate check
+  // the batched-edges rebuild below — real work, ~35k InstancedMesh objects
+  // for a file this size — would redo itself on every one of those
+  // unrelated heavy passes as well. Read together with heavyChanged at the
+  // build site below: only ever rebuilds when both a heavy pass is
+  // happening AND something edges-relevant specifically moved.
+  const edgesDepsRef = useRef<unknown[] | null>(null)
   const prevSelectionRef = useRef<{ expressId: number | null; expressIds: Set<number>; objectIds: Set<string> }>({
     expressId: null, expressIds: new Set(), objectIds: new Set(),
   })
@@ -712,6 +727,15 @@ function ModelObjects({
       || heavyDeps.length !== heavyDepsRef.current.length
       || heavyDeps.some((v, i) => v !== heavyDepsRef.current![i])
     heavyDepsRef.current = heavyDeps
+
+    const edgesDeps = [
+      settings.showFaces, settings.showEdges, settings.renderMode, isolateMode, isolatedObjectIds,
+      isolatedExpressIds, hiddenExpressIds,
+    ]
+    const edgesChanged = edgesDepsRef.current === null
+      || edgesDeps.length !== edgesDepsRef.current.length
+      || edgesDeps.some((v, i) => v !== edgesDepsRef.current![i])
+    edgesDepsRef.current = edgesDeps
 
     // Symmetric difference against the previous run's selection — every
     // expressID/objectId whose *membership* actually flipped, plus (since
@@ -819,6 +843,15 @@ function ModelObjects({
         // "owns its own lifecycle" reasoning as the isSplitPreview skip
         // just below.
         if (child === batchMeshForSkip?.mesh) return
+        // The batched Edges overlay's own InstancedMesh-per-shape children
+        // (2026-07-25, elementBatching.ts's own buildEdgesBatch) — same
+        // "owns its own lifecycle" reasoning as batchMeshForSkip just above:
+        // these are LineSegments-topology, no expressID, no standard
+        // material, and are added straight into this same rootObject
+        // alongside the shaded batch/individual meshes. Left completely
+        // alone here; the heavy-pass block that builds/disposes them,
+        // further down this same effect, owns them entirely.
+        if (child.userData.isEdgesBatchMesh) return
         // Split-by-level's own live preview planes (SplitByLevelPanel.tsx)
         // are plain MeshBasicMaterial quads added straight into
         // handle.object, not real IFC/split elements — this whole effect's
@@ -1375,6 +1408,30 @@ function ModelObjects({
           batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR)
         } else {
           batch.mesh.material = batchMat
+        }
+
+        // Batched Edges overlay (2026-07-25 — see elementBatching.ts's own
+        // buildEdgesBatch header for the full "why": THREE.BatchedMesh can't
+        // itself carry line geometry, so this is a separate InstancedMesh
+        // per unique shape, added straight into this same `object`). Only
+        // rebuilt when edgesChanged — see edgesDepsRef's own header above
+        // for why this heavy pass alone (customTextures, variance/clash tint,
+        // shadows...) isn't reason enough on its own to redo ~35k
+        // InstancedMesh objects; the click-by-click materialize path stays
+        // O(1) regardless (elementBatching.ts's own removeFromEdgesBatch).
+        if (edgesChanged) {
+          const existingEdgesBatch = object.userData.edgesBatch as EdgesBatch | undefined
+          if (existingEdgesBatch) {
+            disposeEdgesBatch(existingEdgesBatch)
+            for (const entry of existingEdgesBatch.entries.values()) object.remove(entry.mesh)
+            object.userData.edgesBatch = undefined
+          }
+          const wantsEdgesForBatch = settings.showEdges || settings.renderMode === 'hiddenLine'
+          if (wantsEdgesForBatch) {
+            const freshEdgesBatch = buildEdgesBatch(object)
+            for (const entry of freshEdgesBatch.entries.values()) object.add(entry.mesh)
+            object.userData.edgesBatch = freshEdgesBatch
+          }
         }
       } else if (batch && kind === 'ifc' && touchedExpressIds.size > 0) {
         // The cheap sibling of the pass above (2026-07-21 fix, per Maro:
@@ -3215,7 +3272,7 @@ function ClippingSetup() {
 
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, materializeVersion, onMaterializeAll, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
+  onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures, cameraSyncRef,
@@ -3357,6 +3414,32 @@ export function Viewport3D({
       controls.removeEventListener('end', onEnd)
     }
   }, [])
+  // Per-instance frustum culling, only while actively orbiting (2026-07-25,
+  // per Maro: "the navigation/orbit speed... slow just turning around" on a
+  // real high-rise file — 265,943 batched instances, 100% batched, per the
+  // app's own console.info at import). loadIfcModel (ifcModel.ts) sets each
+  // BatchedMesh's own perObjectFrustumCulled permanently false — see that
+  // file's own header for why: a real, previously-reported bug (columns
+  // flickering in/out near the frustum edge from floating-point noise
+  // during continuous rotation). Leaving culling off ALWAYS was the fix, at
+  // the cost of every instance being submitted to the GPU every frame
+  // regardless of whether it's actually on screen — for a building this
+  // size, that's the dominant cost of "just turning around" while zoomed
+  // into any one part of it. Reusing the exact same boostQuality signal
+  // this file already tracks for shadow-map resolution (OrbitControls'
+  // own 'start'/'end' events, not polling) rather than inventing a second
+  // one: culled ON only during the drag itself (boostQuality false — real
+  // GPU savings exactly when responsiveness matters most), OFF the instant
+  // the camera settles (boostQuality true — restores the original
+  // flicker-free guarantee for the static, "look closely" case the bug was
+  // actually reported against). A geometry-side change (a boolean flag on
+  // an already-shared mesh), not a per-frame cost of its own.
+  useEffect(() => {
+    for (const handle of ifcHandles) {
+      const batch = handle.object.userData.batch as BatchState | null | undefined
+      if (batch) batch.mesh.perObjectFrustumCulled = !boostQuality
+    }
+  }, [boostQuality, ifcHandles])
   // 2026-07-19 fix, per Maro: "when i move the axis angles the elements in
   // view visibly shake before settling" plus a separate, intermittent
   // "exploded on refresh" report — both traced to real, repeated
@@ -3965,16 +4048,44 @@ export function Viewport3D({
   // correctly select just the isolated subset when isolate mode is on, since
   // isolate/hide both work by flipping `.visible` off — "all" and "the
   // isolated subset" mean the same thing on screen, per Maro's earlier Select
-  // All fix for the isolate case). materializeAll first — batched elements
-  // (elementBatching.ts) have no individual THREE.Mesh/userData.expressID
-  // until touched, so a plain traverse would silently skip every one of them.
+  // All fix for the isolate case).
+  //
+  // No materializeAll call (2026-07-25 fix, per Maro: "selecting all elements
+  // slows/lags the whole platform indefinitely" — reproduced live against
+  // the real 265,943-instance/100%-batched high-rise file, tab genuinely
+  // hung with Chrome's own "page isn't responding" dialog). materializeAll's
+  // own header is explicit that this is "A real, known cost... not a bug" —
+  // true for the rare, deliberately-scoped features it was written for
+  // (Select Linked/Apply to Linked), but Select All is a routine, expected-
+  // instant action, and materializeAll's cost is *permanent*: it clones
+  // every one of a model's unique geometries and builds one real THREE.Mesh
+  // + one real THREE.MeshStandardMaterial per element (129k+ of each here),
+  // converting the model's single BatchedMesh draw call into 129k+ draw
+  // calls for the rest of the session — nothing ever re-batches it. This is
+  // also almost certainly a compounding cause of "orbit is slow" reported
+  // earlier: any session where Select All was clicked even once left the
+  // whole model permanently de-batched afterward.
+  //
+  // Fixed by enumerating expressIDs from both places a real element can live
+  // — already-materialized individual meshes (plain traverse, as before)
+  // *and* whatever's still sitten in the shared batch (batch.byExpressId,
+  // the same map materializeAll itself used to enumerate, just without
+  // calling ensureMaterialized on any of them) — with zero materialization.
+  // batch.mesh.getVisibleAt(instanceId) is the batched equivalent of an
+  // individual mesh's own `.visible` check just below: it already reflects
+  // the live combined isolate/hide + schedule-timeline verdict (see the
+  // ModelObjects effect above, the one place that ever calls setVisibleAt),
+  // not just the base isolate/hide state. Selection itself needs nothing
+  // more than the resulting expressID list — the existing per-frame
+  // selection-highlight effect (applyBatchSelectionColour, above) already
+  // recolors a still-batched instance directly via batch.mesh.setColorAt,
+  // with zero per-element mesh/material cost.
   const handleSelectAllClick = () => {
     const matchedObjectIds: string[] = []
     const expressIdsByObject = new Map<string, number[]>()
     for (const { id, object, kind, visible } of importedObjects) {
       if (!visible) continue
       if (kind === 'ifc') {
-        materializeAll(object)
         const matchedIds: number[] = []
         object.traverse(child => {
           if (!(child instanceof THREE.Mesh) || !child.visible) return
@@ -3982,17 +4093,18 @@ export function Viewport3D({
           if (expressID === undefined) return
           matchedIds.push(expressID)
         })
+        const batch = object.userData.batch as BatchState | null | undefined
+        if (batch) {
+          for (const [expressID, infos] of batch.byExpressId) {
+            if (infos.some(info => batch.mesh.getVisibleAt(info.instanceId))) matchedIds.push(expressID)
+          }
+        }
         if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
         continue
       }
       matchedObjectIds.push(id)
     }
     onSelectAll(matchedObjectIds, expressIdsByObject)
-    // Forces TimelinePlayback's own resolve() to re-derive targetsRef for
-    // every element materializeAll just pulled out of the shared batch —
-    // see materializeVersion's own prop header for why this is otherwise
-    // permanently skipped.
-    onMaterializeAll()
   }
 
   return (

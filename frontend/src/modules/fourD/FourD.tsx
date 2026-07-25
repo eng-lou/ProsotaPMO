@@ -4078,6 +4078,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onSelectActivity={handleSelectActivity}
             scrollContainerRef={scheduleScrollRef}
             onScroll={handleScheduleScroll}
+            animationProfiles={animationProfiles.profiles}
+            modelElementLinks={modelElementLinks}
           />
         )
       case 'gantt':

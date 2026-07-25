@@ -1,6 +1,10 @@
+import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { formatDateTime } from '@/modules/scheduling/dateTime'
 import { GANTT_ROW_HEIGHT, HEADER_HEIGHT } from '@/modules/scheduling/GanttChart'
 import type { Activity } from '@/modules/scheduling/types'
+import type { AnimationProfile } from './animationProfiles'
+import type { ModelElementLink } from './modelElementLinks'
 
 interface Props {
   // Full raw list — only used here to compute hasChildren (which activity
@@ -33,6 +37,18 @@ interface Props {
   // feedback loops entirely in FourD.tsx (see its own scroll-sync effect).
   scrollContainerRef: React.RefObject<HTMLDivElement>
   onScroll: (scrollTop: number) => void
+  // Profile + Browse columns (2026-07-25, per Maro: "allow me to add the
+  // profile and browse columns for the activity table in 4d") — the same
+  // two columns Scheduling.tsx's own real Activities grid already has
+  // ("3D Profile"/"Browse Elements"), just not previously surfaced in this
+  // window's own deliberately-slimmer read-only table. Both stay read-only
+  // here (view/browse only, no inline editing) — matching this component's
+  // own already-documented "deliberately read-only" contract above; a
+  // profile can still be *changed* from Scheduling.tsx's real grid or
+  // per-link from the Collections/DataPanel assignment UI, this window
+  // just now also shows the result.
+  animationProfiles: AnimationProfile[]
+  modelElementLinks: ModelElementLink[]
 }
 
 function formatDuration(value: number | string | null): string {
@@ -105,10 +121,24 @@ export function computeVisibleActivities(activities: Activity[], collapsedIds: S
 // WindowChrome.tsx owns the header/dock-toggle/close.
 export function ScheduleWindow({
   activities, visibleActivities, collapsedIds, onToggleCollapsed, selectedActivityIds, onSelectActivity,
-  scrollContainerRef, onScroll,
+  scrollContainerRef, onScroll, animationProfiles, modelElementLinks,
 }: Props) {
   const hasChildren = new Set<string>()
   for (const a of activities) if (a.parent_id) hasChildren.add(a.parent_id)
+
+  const profileNameById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p.name])), [animationProfiles])
+  const elementLinksByActivityId = useMemo(() => {
+    const map = new Map<string, ModelElementLink[]>()
+    for (const link of modelElementLinks) {
+      const existing = map.get(link.activity_id)
+      if (existing) existing.push(link); else map.set(link.activity_id, [link])
+    }
+    return map
+  }, [modelElementLinks])
+  // Which row's Browse popup is open, plus where to render it (2026-07-25,
+  // same fixed/portal approach as Scheduling.tsx's own elementsBrowse —
+  // see the popup's own render below for why a portal specifically).
+  const [elementsBrowse, setElementsBrowse] = useState<{ activityId: string; x: number; y: number } | null>(null)
 
   return (
     <div ref={scrollContainerRef} onScroll={e => onScroll(e.currentTarget.scrollTop)} className="overflow-auto h-full">
@@ -131,6 +161,8 @@ export function ScheduleWindow({
               <th className="px-2 border-b border-gray-200 text-right">Dur (d)</th>
               <th className="px-2 border-b border-gray-200">Start</th>
               <th className="px-2 border-b border-gray-200">Finish</th>
+              <th className="px-2 border-b border-gray-200" title="Animation profile every 3D element linked to this activity uses in the 4D timeline, unless one has its own override">Profile</th>
+              <th className="px-2 border-b border-gray-200" title="Click to browse the individual 3D elements linked to this activity">Browse</th>
             </tr>
           </thead>
           <tbody>
@@ -140,6 +172,7 @@ export function ScheduleWindow({
               const critical = a.is_critical || a.sub_is_critical
               const isCollapsed = collapsedIds.has(a.id)
               const isSelected = selectedActivityIds.has(a.id)
+              const links = elementLinksByActivityId.get(a.id) ?? []
               return (
                 <tr
                   key={a.id}
@@ -161,14 +194,61 @@ export function ScheduleWindow({
                   <td className={`px-2 border-b border-gray-100 text-right ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDuration(a.duration_days)}</td>
                   <td className={`px-2 border-b border-gray-100 ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDateTime(a.start, false)}</td>
                   <td className={`px-2 border-b border-gray-100 ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDateTime(a.finish, false)}</td>
+                  <td className="px-2 border-b border-gray-100 text-gray-500 whitespace-nowrap overflow-hidden text-ellipsis">
+                    {a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? 'Default') : <span className="text-gray-300">Default</span>}
+                  </td>
+                  <td className="px-2 border-b border-gray-100">
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        if (elementsBrowse?.activityId === a.id) { setElementsBrowse(null); return }
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        setElementsBrowse({ activityId: a.id, x: rect.left, y: rect.bottom })
+                      }}
+                      disabled={links.length === 0}
+                      className="text-left w-full truncate disabled:text-gray-300 disabled:cursor-default hover:text-blue-600 disabled:hover:text-gray-300"
+                      title={links.length > 0 ? 'Browse linked 3D elements' : 'No 3D elements linked to this activity'}
+                    >
+                      {links.length === 0 ? '—' : `Browse (${links.length}) ▾`}
+                    </button>
+                  </td>
                 </tr>
               )
             })}
             {activities.length === 0 && (
-              <tr><td colSpan={5} className="px-2 py-4 text-center text-gray-400">No activities yet</td></tr>
+              <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-400">No activities yet</td></tr>
             )}
           </tbody>
         </table>
+      {elementsBrowse && (() => {
+        const links = elementLinksByActivityId.get(elementsBrowse.activityId) ?? []
+        if (links.length === 0) return null
+        // Portal straight onto document.body (2026-07-25, same reasoning as
+        // Scheduling.tsx's own elementsBrowse popup) — this window's own
+        // scroll container clips a same-subtree popover no matter how it's
+        // positioned; fixed (viewport-relative) coordinates, already read as
+        // getBoundingClientRect values at click time.
+        return createPortal(
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setElementsBrowse(null)} />
+            <div
+              className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg py-1"
+              style={{ left: elementsBrowse.x, top: elementsBrowse.y + 4 }}
+            >
+              {links.map(link => (
+                <div
+                  key={link.id}
+                  className="px-2.5 py-1 text-xs text-gray-700 truncate border-b border-gray-50 last:border-b-0"
+                  title={`${link.element_label} (${link.element_ref})`}
+                >
+                  {link.element_label}
+                </div>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )
+      })()}
     </div>
   )
 }

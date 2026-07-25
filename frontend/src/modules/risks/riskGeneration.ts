@@ -121,6 +121,40 @@ const DISCIPLINE_RISK_TEMPLATES: Record<string, DisciplineRiskTemplate> = {
       cost_most_likely: budget > 0 ? Math.round(budget * 0.02) : undefined,
     }),
   },
+  // Added 2026-07-25 alongside the "full schedule generation" feature
+  // (scheduleGeneration.ts's own Preliminaries/Procurement/Testing &
+  // Commissioning categories) — keeps this table's own "every discipline
+  // CATEGORY_DISCIPLINE actually produces has one" invariant true for a
+  // full-schedule-generated project, per Maro: "a general improvement is
+  // expected in Prosota automation features not just scheduling generation."
+  Preliminaries: {
+    build: () => ({
+      title: 'Site Handover / Access Delay', category: 'Schedule', area: 'Stakeholders', risk_type: 'threat',
+      cause: 'Site possession, utility disconnections, or access agreements not finalised on the planned mobilisation date',
+      effect: 'Delay to mobilisation and every downstream activity this schedule gates behind it',
+      rationale: 'Construction Start and the entire structural climb are chained behind this project’s own Preliminaries stage',
+      probability: 0.25, impact: 0.35, schedule_most_likely_days: 7,
+    }),
+  },
+  Procurement: {
+    build: budget => ({
+      title: 'Long-Lead Item Procurement Delay', category: 'Schedule', area: 'Vendor', risk_type: 'threat',
+      cause: 'Submittal, approval, or manufacturing lead times for procured materials/systems run longer than planned',
+      effect: 'Delay to the first installation of the affected category, cascading into its own trade sequence',
+      rationale: 'This schedule chains each procured category’s delivery directly in front of its own first installation activity',
+      probability: 0.3, impact: 0.35, schedule_most_likely_days: 10,
+      cost_most_likely: budget > 0 ? Math.round(budget * 0.02) : undefined,
+    }),
+  },
+  Commissioning: {
+    build: () => ({
+      title: 'Testing & Commissioning Programme Compression', category: 'Schedule', area: 'Site', risk_type: 'threat',
+      cause: 'Upstream slippage across the programme erodes the time available for testing & commissioning before handover',
+      effect: 'Rushed or incomplete commissioning, or a delayed handover date',
+      rationale: 'Commissioning is the last stage before handover in this schedule and absorbs any earlier delay by default',
+      probability: 0.35, impact: 0.4, schedule_most_likely_days: 10,
+    }),
+  },
 }
 
 export function buildRiskDraft(activities: Activity[], resourceAssignments: ResourceAssignment[]): DraftRisk[] {

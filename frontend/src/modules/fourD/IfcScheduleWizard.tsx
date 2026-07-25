@@ -5,7 +5,7 @@ import type { Calendar } from '@/modules/scheduling/types'
 import type { IfcModelHandle } from './ifcModel'
 import { extractScheduleElements, type ExtractedElement } from './ifcScheduleExtraction'
 import {
-  buildStagedSchedule, groupByStorey,
+  buildStagedSchedule, fullScheduleCategoryNames, fullSchedulePhaseRows, groupByStorey,
   usedCategoryNames, usedPhaseRows, type CategoryRate, type PhaseRow, type ProposedScheduleSummary, type StoreyGroup,
 } from './scheduleGeneration'
 
@@ -91,6 +91,16 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   const [calendarId, setCalendarId] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  // "Full schedule generation" (2026-07-25, per Maro: a real IFC model
+  // scanned for this feature had no Mobilisation, Excavation, or Foundation-
+  // earthworks elements modeled at all — real construction activities the
+  // model simply never contains 3D geometry for — "i want that or atleast
+  // give me the option when generating to do a full schedule generation
+  // including not 3d data or what you're doing now"). Defaults to on, per
+  // Maro's own stated preference for the fuller schedule; the toggle below
+  // is the "at least give me the option" fallback to today's IFC-scan-only
+  // behaviour.
+  const [includeFullSchedule, setIncludeFullSchedule] = useState(true)
 
   const seedRates = (grouped: StoreyGroup[]) => {
     setRates(Object.fromEntries(usedPhaseRows(grouped).map(row => [row.id, row.phase.rate])))
@@ -138,7 +148,14 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
           perModelProgress[i] = { done, total }
           reportCombined()
         })
-        found.push(...fromThisModel)
+        // Not found.push(...fromThisModel) (2026-07-25 fix) — spreading a
+        // large array as individual push() arguments hits V8's own
+        // argument-count limit (~65,536) and throws exactly "Maximum call
+        // stack size exceeded", the same error this whole perf pass was
+        // fixing elsewhere — caught live against a real 131,222-candidate/
+        // 129,039-element high-rise scan, where every earlier bottleneck's
+        // fix finally let execution reach this line for the first time.
+        for (const el of fromThisModel) found.push(el)
       }
       setElements(found)
       const grouped = groupByStorey(found)
@@ -159,10 +176,20 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   // Electrical + Facades + Architectural + HVAC + Plumbing").
   const rootName = projectName
 
-  const categoryNames = storeys ? usedCategoryNames(storeys) : []
-  const phaseRows: PhaseRow[] = storeys ? usedPhaseRows(storeys) : []
+  // Both include the "full schedule" synthetic categories/phases alongside
+  // the real IFC-derived ones when the toggle is on (2026-07-25) — otherwise
+  // the Review step's own "N categories, M construction phases" count would
+  // silently undercount what buildStagedSchedule is actually about to
+  // generate (see fullScheduleCategoryNames/fullSchedulePhaseRows' own
+  // header, scheduleGeneration.ts).
+  const categoryNames = storeys
+    ? [...usedCategoryNames(storeys), ...(includeFullSchedule ? fullScheduleCategoryNames(storeys) : [])]
+    : []
+  const phaseRows: PhaseRow[] = storeys
+    ? [...usedPhaseRows(storeys), ...(includeFullSchedule ? fullSchedulePhaseRows(storeys) : [])]
+    : []
   const { staged, summary }: { staged: ReturnType<typeof buildStagedSchedule>['staged']; summary: ProposedScheduleSummary } =
-    storeys ? buildStagedSchedule(projectId, schedulePeriodId, storeys, rates, rootName, calendarId) : {
+    storeys ? buildStagedSchedule(projectId, schedulePeriodId, storeys, rates, rootName, calendarId, includeFullSchedule) : {
       staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: null, activities: [], resources: [], assignments: [], relationships: [] },
       summary: { storeyCount: 0, activityCount: 0, relationshipCount: 0, elementCount: 0 },
     }
@@ -298,6 +325,23 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                     now-committed schedule. */}
                 <div className="text-gray-400">Durations use typical industry crew/productivity defaults — the Resource Pool isn't populated by this step; generate resources separately from the Resources tab afterward.</div>
               </div>
+              <label className="flex items-start gap-2 text-xs text-gray-700 border border-gray-200 rounded-md px-2.5 py-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={includeFullSchedule}
+                  onChange={e => setIncludeFullSchedule(e.target.checked)}
+                />
+                <span>
+                  <span className="font-bold text-gray-800">Full schedule generation</span>
+                  <span className="block text-[11px] text-gray-500 mt-0.5">
+                    Adds Preliminaries, Substructure Earthworks, Procurement, and Testing &amp; Commissioning —
+                    real construction activities (mobilisation, excavation, long-lead procurement, commissioning)
+                    that never exist as IFC geometry, so a model that doesn't contain them wouldn't otherwise be
+                    scheduled for them at all. Uncheck to generate only what the IFC scan itself found, as before.
+                  </span>
+                </span>
+              </label>
               <div>
                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Calendar</div>
                 <select

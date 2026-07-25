@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-import { IfcAPI } from 'web-ifc'
+import { IfcAPI, IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES } from 'web-ifc'
 import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
-import { buildElementMaterial, finalizeIndividualMesh, type BatchState } from './elementBatching'
+import { buildElementMaterial, disposeEdgesBatch, finalizeIndividualMesh, type BatchState, type EdgesBatch } from './elementBatching'
 export { ensureMaterialized, type BatchInstanceInfo, type BatchState } from './elementBatching'
 
 // "Import IFC" (2026-07-10, per Maro — linked github.com/ThatOpen/engine_components
@@ -512,6 +512,14 @@ export function disposeIfcModel(handle: IfcModelHandle) {
   // it gets its own dedicated disposal below instead.
   const batchMesh = handle.batch?.mesh
   handle.object.traverse(child => {
+    // Same exclusion, same reason, for the batched Edges overlay's own
+    // InstancedMesh-per-shape children (2026-07-25, elementBatching.ts's
+    // own buildEdgesBatch) — disposeMeshMaterials would otherwise dispose
+    // EDGES_LINE_MATERIAL, a module-level singleton *shared across every
+    // model this session*, breaking edges for every other still-open model
+    // the instant any one of them unloads. Disposed correctly below instead
+    // (geometries only, never the shared material).
+    if (child.userData.isEdgesBatchMesh) return
     if (child instanceof THREE.Mesh && child !== batchMesh) {
       disposeMeshGeometries(child)
       disposeMeshMaterials(child, false)
@@ -522,6 +530,8 @@ export function disposeIfcModel(handle: IfcModelHandle) {
     handle.batch.mesh.dispose()
     for (const entry of handle.batch.geometryByIfcId.values()) entry.geometry.dispose()
   }
+  const edgesBatch = handle.object.userData.edgesBatch as EdgesBatch | undefined
+  if (edgesBatch) disposeEdgesBatch(edgesBatch)
   handle.api.CloseModel(handle.modelID)
 }
 
@@ -556,6 +566,121 @@ export interface IfcTreeNode {
 
 export async function getSpatialTree(handle: IfcModelHandle): Promise<IfcTreeNode> {
   return handle.api.properties.getSpatialStructure(handle.modelID, false) as unknown as Promise<IfcTreeNode>
+}
+
+// Bulk element -> storey resolution (2026-07-25 fix, per Maro: "Maximum
+// call stack size exceeded" scanning a real high-rise — 131,222 schedulable
+// candidates — via Generate Schedule). ifcScheduleExtraction.ts's own
+// buildStoreyMap used to get this from getSpatialTree above
+// (collectStoreyNodes/collectLeafExpressIds walked its result recursively),
+// but that tree has one node per *element*, not just per spatial container
+// — web-ifc's own getSpatialNode/getChildren (web-ifc-api.js) builds it by
+// awaiting one WASM round trip per node, one at a time, and
+// collectLeafExpressIds then walks the finished tree with plain
+// synchronous recursion and no depth guard. Confirmed live against this
+// exact file: building that tree was the dominant cost by far (15+
+// minutes, almost entirely spent before the per-candidate scan loop even
+// started ticking) — and however deep this particular export's own
+// IfcRelAggregates nesting turns out to be is exactly the kind of thing
+// synchronous, unbounded recursion over it is one bad export away from
+// overflowing the call stack on.
+//
+// This reads the same fact a different way, without ever building that
+// tree: every real, placed element in a normal IFC export relates to its
+// containing storey via exactly one IfcRelContainedInSpatialStructure
+// relationship — a flat, one-level fact. Reading that relationship type in
+// bulk (one GetLineIDsWithType call, then one GetLine per relationship
+// *instance* — typically one or a handful per storey, each carrying a
+// RelatedElements array of however many elements that storey contains, not
+// one WASM call per element) costs a small, fixed number of round trips
+// regardless of model size. IfcRelAggregates is read the same way for the
+// one real exception: an assembly's own sub-parts (Curtain Wall mullions/
+// panels under their IfcCurtainWall, Revit "Assembly" instances) relate to
+// their *assembly* via aggregation, not directly to a storey — the assembly
+// itself is what's spatially contained. resolveStoreyId below walks that
+// aggregation parent chain, preferring a direct spatial-containment hit at
+// every step and memoizing as it goes (many real elements share the same
+// storey/assembly ancestor) — bounded by real assembly-nesting depth (a
+// handful of levels in practice), nothing like "one hop per element in the
+// model" the old tree-walk needed, and cycle-guarded regardless.
+export async function buildElementStoreyMap(
+  handle: IfcModelHandle,
+): Promise<Map<number, { name: string; elevationMetres: number | null }>> {
+  const storeyExpressIds = getExpressIdsForType(handle, 'IfcBuildingStorey')
+  const projectExpressIds = getExpressIdsForType(handle, 'IfcProject')
+  const toMetres = projectExpressIds.length > 0 ? getLengthUnitToMetres(handle, projectExpressIds[0]) : 1
+
+  const storeyInfoByExpressId = new Map<number, { name: string; elevationMetres: number | null }>()
+  await Promise.all(storeyExpressIds.map(async storeyId => {
+    const [name, elevationRaw] = await Promise.all([
+      getElementName(handle, storeyId),
+      getElementElevation(handle, storeyId),
+    ])
+    storeyInfoByExpressId.set(storeyId, {
+      name,
+      elevationMetres: elevationRaw === null ? null : Number(elevationRaw) * toMetres,
+    })
+  }))
+
+  // child expressID -> its direct spatial container's expressID (usually a
+  // storey, occasionally an IfcSpace within one — resolveStoreyId's own
+  // parent-chain walk handles that case too, since an IfcSpace is itself
+  // aggregated from its storey).
+  const containedByExpressId = new Map<number, number>()
+  const containsRelIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELCONTAINEDINSPATIALSTRUCTURE)
+  for (let i = 0; i < containsRelIds.size(); i++) {
+    const rel = handle.api.GetLine(handle.modelID, containsRelIds.get(i), false) as
+      { RelatingStructure?: { value: number }; RelatedElements?: { value: number }[] }
+    const containerId = rel.RelatingStructure?.value
+    if (containerId === undefined || !Array.isArray(rel.RelatedElements)) continue
+    for (const ref of rel.RelatedElements) containedByExpressId.set(ref.value, containerId)
+  }
+
+  // child expressID -> its aggregation parent's expressID.
+  const parentOfChild = new Map<number, number>()
+  const aggregatesRelIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELAGGREGATES)
+  for (let i = 0; i < aggregatesRelIds.size(); i++) {
+    const rel = handle.api.GetLine(handle.modelID, aggregatesRelIds.get(i), false) as
+      { RelatingObject?: { value: number }; RelatedObjects?: { value: number }[] }
+    const parentId = rel.RelatingObject?.value
+    if (parentId === undefined || !Array.isArray(rel.RelatedObjects)) continue
+    for (const ref of rel.RelatedObjects) parentOfChild.set(ref.value, parentId)
+  }
+
+  const resolvedStoreyIdByExpressId = new Map<number, number | null>()
+  function resolveStoreyId(expressID: number): number | null {
+    const cached = resolvedStoreyIdByExpressId.get(expressID)
+    if (cached !== undefined) return cached
+    const path: number[] = []
+    const seen = new Set<number>()
+    let current: number | undefined = expressID
+    let result: number | null = null
+    while (current !== undefined && !seen.has(current)) {
+      const alreadyResolved = resolvedStoreyIdByExpressId.get(current)
+      if (alreadyResolved !== undefined) { result = alreadyResolved; break }
+      if (storeyInfoByExpressId.has(current)) { result = current; break }
+      seen.add(current)
+      path.push(current)
+      current = containedByExpressId.get(current) ?? parentOfChild.get(current)
+    }
+    for (const id of path) resolvedStoreyIdByExpressId.set(id, result)
+    return result
+  }
+
+  const elementToStorey = new Map<number, { name: string; elevationMetres: number | null }>()
+  // Every element mentioned by either relationship type is a real candidate
+  // for resolution — bounded by relationship count (how many elements a
+  // storey/assembly actually references), not full model size, so
+  // resolving all of them up front is cheap regardless of how many of them
+  // the caller's own candidate list actually ends up using.
+  const allReferenced = new Set<number>([...containedByExpressId.keys(), ...parentOfChild.keys()])
+  for (const id of allReferenced) {
+    const storeyId = resolveStoreyId(id)
+    const info = storeyId !== null ? storeyInfoByExpressId.get(storeyId) : undefined
+    if (info) elementToStorey.set(id, info)
+  }
+
+  return elementToStorey
 }
 
 // Prefix multipliers for a plain IfcSIUnit (metres, optionally prefixed) —
@@ -634,51 +759,103 @@ export async function getElementName(handle: IfcModelHandle, expressID: number):
   return unwrapIfcValue(props.Name)
 }
 
-// Name + PredefinedType in one getItemProperties call (2026-07-13, for the
-// IFC Schedule Wizard's own classifier — see ifcScheduleExtraction.ts's own
-// header) — verified against the real reference file
-// (2018_Hospital_Structural.ifc) that PredefinedType matters far more than
-// raw IFC type alone for a Revit export: 538 of its 612 IfcSlab elements
-// are 'Pile Cap-9 Pile:...' foundation elements with
-// PredefinedType=.BASESLAB., not floor slabs, and Revit exported them as
-// IfcSlab rather than IfcFooting anyway — only 74 are genuine .FLOOR.
-// slabs. PredefinedType is IFC's own semantic tag for exactly this
-// distinction, not a guess off the element's own free-text Name the way
-// ifcScheduleExtraction.ts's material classifier already has to be for
-// steel/concrete (no equivalent enum exists for that axis). Returns null
-// when the element's own IFC type carries no PredefinedType attribute at
-// all (verified: IfcColumn/IfcBeam/IfcWallStandardCase in IFC2X3 have none)
-// rather than a guessed default.
-export async function getElementNameAndPredefinedType(
-  handle: IfcModelHandle, expressID: number,
-): Promise<{ name: string; predefinedType: string | null }> {
-  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
-  const predefinedType = props.PredefinedType === undefined || props.PredefinedType === null
-    ? null
-    : unwrapIfcValue(props.PredefinedType)
-  return { name: unwrapIfcValue(props.Name), predefinedType }
+// Bulk Name + PredefinedType read across a whole candidate list (2026-07-25
+// perf fix, per Maro: "optimise that too" — the per-candidate scan loop in
+// ifcScheduleExtraction.ts stayed slow (~50 elements/sec on a real
+// 131,222-candidate high-rise, tens of minutes projected) even after
+// buildElementStoreyMap above fixed the storey-resolution stall, because it
+// called this function once per element. That used to go through
+// properties.getItemProperties, which is just `return this.api.GetLine(...)`
+// (web-ifc-api.js) — and GetLine itself is really GetLines(modelID, [id])
+// under the hood, a full native WASM round trip for exactly one element.
+// GetLines happily accepts the WHOLE candidate array and pays that round
+// trip exactly once regardless of array size — the same "one call per
+// element" cost class buildElementStoreyMap already fixed for spatial
+// containment, collapsed here from one call per element to one call total.
+// PredefinedType matters far more than raw IFC type alone for a Revit
+// export — verified against a real reference file
+// (2018_Hospital_Structural.ifc): 538 of its 612 IfcSlab elements are 'Pile
+// Cap-9 Pile:...' foundation elements with PredefinedType=.BASESLAB., not
+// floor slabs, and Revit exported them as IfcSlab rather than IfcFooting
+// anyway — only 74 are genuine .FLOOR. slabs. Missing on an element whose
+// IFC type carries no PredefinedType attribute at all (verified:
+// IfcColumn/IfcBeam/IfcWallStandardCase in IFC2X3 have none), rather than a
+// guessed default.
+// Chunked, not one GetLines(modelID, expressIds) call for the whole array
+// (2026-07-25 fix, caught live against this exact high-rise file: a single
+// call with all 131,222 candidate ids in one array reproduced the exact
+// same "Maximum call stack size exceeded" this whole perf pass was meant to
+// fix — web-ifc's own JS-side marshaling of a very large input array hits
+// some internal recursion limit of its own well before any WASM memory
+// limit, a different mechanism from this app's own now-removed tree-walk
+// but the same failure mode). 5,000 ids per call keeps every real file
+// tested well clear of that limit while still collapsing candidates.length
+// round trips down to a small, fixed handful (27 calls for this exact
+// file, not 131,222) — nearly all of the original bulk win, none of the
+// crash risk.
+const GET_LINES_CHUNK_SIZE = 5000
+
+function getLinesChunked(
+  handle: IfcModelHandle, expressIds: number[], flatten: boolean,
+): Array<Record<string, unknown> & { expressID: number }> {
+  const out: Array<Record<string, unknown> & { expressID: number }> = []
+  for (let i = 0; i < expressIds.length; i += GET_LINES_CHUNK_SIZE) {
+    const chunk = expressIds.slice(i, i + GET_LINES_CHUNK_SIZE)
+    out.push(...(handle.api.GetLines(handle.modelID, chunk, flatten) as Array<Record<string, unknown> & { expressID: number }>))
+  }
+  return out
 }
 
-// This element's own real, authored IfcElementQuantity area (NetArea
-// preferred over GrossArea when both exist — Net excludes openings/voids,
-// the more accurate "actual footprint" figure), instead of
-// ifcScheduleExtraction.ts's own bounding-box approximation (2026-07-18,
-// per Maro's own QA: "how are you deriving the area quantities, i dont see
-// any area reference in the object informations per element" — confirmed
-// the bounding-box method was silently overstating area for anything
-// non-rectangular, since it never checked for a real Qto value in the
-// first place). Returns null when the element carries no quantity set at
-// all — verified against the real Snowdon sample files: none of the 6
-// contain a single IfcElementQuantity entity (a common gap in Revit's
-// default IFC export, "Export base quantities" not enabled at export time)
-// — so this is forward-looking for IFC files from other tools that do
-// populate it, not something that changes anything for those particular
-// files. getPropertySets (not a dedicated "get quantities" call — web-ifc
-// has none; IfcElementQuantity is fetched via the exact same
-// IfcRelDefinesByProperties relationship as a plain IfcPropertySet, see
-// PropsNames.psets in web-ifc's own source) returns a mix of both kinds;
-// only the ones with a `.Quantities` array (not `.HasProperties`) are
-// quantity sets.
+export function getElementNamesAndPredefinedTypes(
+  handle: IfcModelHandle, expressIds: number[],
+): Map<number, { name: string; predefinedType: string | null }> {
+  const result = new Map<number, { name: string; predefinedType: string | null }>()
+  if (expressIds.length === 0) return result
+  const lines = getLinesChunked(handle, expressIds, false)
+  for (const line of lines) {
+    const predefinedType = line.PredefinedType === undefined || line.PredefinedType === null
+      ? null
+      : unwrapIfcValue(line.PredefinedType)
+    result.set(line.expressID, { name: unwrapIfcValue(line.Name), predefinedType })
+  }
+  return result
+}
+
+// Bulk NetArea/GrossArea read across the WHOLE model (2026-07-25 perf fix,
+// same "optimise that too" motivation as getElementNamesAndPredefinedTypes
+// above) — replaces a former per-element getElementQuantityArea, which used
+// properties.getPropertySets to walk IfcRelDefinesByProperties via web-ifc's
+// own inverse-property lookup (getRelatedProperties): the element's own
+// inverse "IsDefinedBy" relations (1 GetLine), each relation's own
+// RelatingPropertyDefinition (1 GetLine), then each referenced pset/
+// quantity-set line itself (1 GetLine) — 2-3 sequential native round trips
+// PER element, worse than getElementNamesAndPredefinedTypes' one-call cost
+// even before its own fix. Reads IfcRelDefinesByProperties in bulk exactly
+// like buildElementStoreyMap reads IfcRelContainedInSpatialStructure/
+// IfcRelAggregates above (one GetLineIDsWithType + one GetLine per relation
+// *instance*, not per element), then bulk-reads every referenced pset/
+// quantity-set line in one GetLines call (flatten=true, so nested
+// Quantities values resolve inline — matching the old function's own
+// getPropertySets(..., true, false) call) instead of one GetLine per pset.
+// Whole-model, not scoped to a candidate list (2026-07-25) — unlike
+// getElementNamesAndPredefinedTypes, the caller doesn't know which elements
+// even have a quantity set until after the relationships are read anyway,
+// and the relationship/pset bulk reads themselves cost the same fixed,
+// small number of round trips regardless of how many elements end up in
+// the result.
+//
+// NetArea preferred over GrossArea when both exist (2026-07-18, per Maro's
+// own QA: "how are you deriving the area quantities, i dont see any area
+// reference in the object informations per element" — confirmed
+// ifcScheduleExtraction.ts's own bounding-box approximation was silently
+// overstating area for anything non-rectangular, since it never checked for
+// a real Qto value in the first place) — Net excludes openings/voids, the
+// more accurate "actual footprint" figure. An element absent from the
+// returned map carries no quantity set at all — verified against the real
+// Snowdon sample files: none of the 6 contain a single IfcElementQuantity
+// entity (a common gap in Revit's default IFC export, "Export base
+// quantities" not enabled at export time) — so this is forward-looking for
+// IFC files from other tools that do populate it.
 //
 // Recommended Revit IFC export settings (2026-07-21, per Maro, going
 // forward for every new export) — confirmed against this app's own actual
@@ -720,23 +897,131 @@ export async function getElementNameAndPredefinedType(
 // behaviour here is to declare AREAUNIT as SQUARE_METRE outright regardless
 // of a millimetre LENGTHUNIT, so AreaValue already needs no conversion.
 // (The real cause of that absurd duration was a *classification* bug, not
-// a units one — see isSiteFloorElement's own header, ifcScheduleExtraction.ts.)
-export async function getElementQuantityArea(handle: IfcModelHandle, expressID: number): Promise<number | null> {
-  const psets = await handle.api.properties.getPropertySets(handle.modelID, expressID, true, false)
-  let grossArea: number | null = null
-  for (const pset of psets as Record<string, unknown>[]) {
-    const quantities = pset.Quantities
-    if (!Array.isArray(quantities)) continue
-    for (const q of quantities as Record<string, unknown>[]) {
-      const name = unwrapIfcValue(q.Name)
-      if (name !== 'NetArea' && name !== 'GrossArea') continue
-      const value = Number(unwrapIfcValue(q.AreaValue))
-      if (Number.isNaN(value)) continue
-      if (name === 'NetArea') return value
-      grossArea = value
+// a units one — see isSiteElement's own header, ifcScheduleExtraction.ts.)
+//
+// Also the source of getElementCategories' own Pset_ProductRequirements.
+// Category read (2026-07-25, per Maro: "you can see the object information/
+// property set data. e.g name, object type, category... so improve your
+// schedule generation logic" — real misclassified examples found via the
+// Object Information panel, e.g. an IfcPlate named "System Panel:01-BROWN
+// PANELS" with Category="Curtain Panels" landing in Structural Members
+// instead of Curtain Walls; see ifcScheduleExtraction.ts's own
+// CATEGORY_PROPERTY_OVERRIDES for how this gets used). Folded into this same
+// function — renamed from buildElementQuantityAreaMap — rather than a
+// second, separate bulk relationship/pset scan: Category is a plain
+// (non-quantity) property set, needed for every file regardless of whether
+// it has any IfcElementQuantity at all, so gating it behind the old
+// hasQuantitySets pre-check (still fine for the *quantity* half) would have
+// silently skipped classification-relevant Category data on exactly the
+// Revit exports ("Export base quantities" off) already documented above as
+// the common case. One bulk relationship+pset read now serves both.
+//
+// Pset_WallCommon.LoadBearing added the same way (2026-07-25, per Maro's own
+// real example: exterior walls appearing simultaneously with the structural
+// core in a real Animation Timeline check — "those external walls that are
+// darker are not really part of the structural core") — a real, plain
+// (non-quantity) boolean property, same read pattern as Category, just off
+// a different Pset by name. See ifcScheduleExtraction.ts's own
+// 'Non-Structural Walls' classification (extractScheduleElements) for how
+// this reclassifies a wall out of the structural-climb-gating 'Walls'
+// category.
+export async function buildElementPropertyData(handle: IfcModelHandle): Promise<{
+  quantityAreaByExpressId: Map<number, number>
+  categoryByExpressId: Map<number, string>
+  loadBearingByExpressId: Map<number, boolean>
+}> {
+  const elementToPsetIds = new Map<number, number[]>()
+  const psetIdSet = new Set<number>()
+  // One GetLine call per relation instance, deliberately NOT getLinesChunked
+  // (2026-07-25 — tried the bulk-chunked read here, matching the pattern
+  // used two lines below for the psets themselves; measured directly via
+  // console.time on this exact real 131k-element/95k-IfcMember high-rise
+  // file and it made this function slower, not faster — 37.0s bulk-chunked
+  // vs 16.5s with the per-instance GetLine loop below. Root cause not fully
+  // isolated, but IFCRELDEFINESBYPROPERTIES lines carry an array-valued
+  // RelatedObjects field, unlike the flat pset lines getLinesChunked already
+  // works well for — bulk-marshaling many such lines back across the WASM
+  // boundary in one GetLines() response is apparently more expensive here
+  // than paying the per-call overhead of GetLine() individually. Measure any
+  // future attempt to "optimise" this loop again with console.time against
+  // this same file before assuming the usual bulk-read pattern applies.
+  //
+  // Made async + yielding every 2000 relations (2026-07-25, per Maro: this
+  // exact 16.5s stretch on a real 131k-element high-rise runs with zero
+  // progress feedback and fully blocks the main thread — indistinguishable
+  // from a genuine hang to anyone watching the wizard, and worse on a more
+  // loaded machine than the one this was measured on). Doesn't make the
+  // underlying per-relation GetLine cost any faster (same total relation
+  // count, same per-call cost) — it keeps the tab responsive (paint/input
+  // events can still run between chunks) while it works through them,
+  // exactly the same "chunked, not one giant synchronous loop" fix already
+  // applied to extractScheduleElements' own per-candidate loop.
+  const relIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELDEFINESBYPROPERTIES)
+  for (let i = 0; i < relIds.size(); i++) {
+    const rel = handle.api.GetLine(handle.modelID, relIds.get(i), false) as
+      { RelatingPropertyDefinition?: { value: number }; RelatedObjects?: { value: number }[] }
+    const psetId = rel.RelatingPropertyDefinition?.value
+    if (psetId !== undefined && Array.isArray(rel.RelatedObjects)) {
+      psetIdSet.add(psetId)
+      for (const ref of rel.RelatedObjects) {
+        const existing = elementToPsetIds.get(ref.value)
+        if (existing) existing.push(psetId); else elementToPsetIds.set(ref.value, [psetId])
+      }
     }
+    if (i % 2000 === 0) await new Promise(resolve => setTimeout(resolve, 0))
   }
-  return grossArea
+
+  const psetIds = [...psetIdSet]
+  const psetById = new Map<number, Record<string, unknown>>()
+  for (const line of getLinesChunked(handle, psetIds, true)) psetById.set(line.expressID, line)
+
+  const quantityAreaByExpressId = new Map<number, number>()
+  const categoryByExpressId = new Map<number, string>()
+  const loadBearingByExpressId = new Map<number, boolean>()
+  for (const [expressID, ids] of elementToPsetIds) {
+    let netArea: number | null = null
+    let grossArea: number | null = null
+    for (const psetId of ids) {
+      const pset = psetById.get(psetId)
+      if (!pset) continue
+      const quantities = pset.Quantities
+      if (Array.isArray(quantities)) {
+        for (const q of quantities as Record<string, unknown>[]) {
+          const name = unwrapIfcValue(q.Name)
+          if (name !== 'NetArea' && name !== 'GrossArea') continue
+          const value = Number(unwrapIfcValue(q.AreaValue))
+          if (Number.isNaN(value)) continue
+          if (name === 'NetArea') netArea = value
+          else grossArea = value
+        }
+      }
+      // Pset_ProductRequirements.Category — Revit's own real classification
+      // for this element (verified live: "Curtain Panels", "Site", "Ramps"
+      // all seen on this exact high-rise file's real elements) — a plain
+      // property (HasProperties), not a quantity (Quantities), so read off
+      // the same pset line via getElementInfo's own unwrap idiom.
+      if (unwrapIfcValue(pset.Name) === 'Pset_ProductRequirements' && Array.isArray(pset.HasProperties)) {
+        for (const prop of pset.HasProperties as Record<string, unknown>[]) {
+          if (unwrapIfcValue(prop.Name) !== 'Category') continue
+          const category = unwrapIfcValue(prop.NominalValue)
+          if (category !== '—') categoryByExpressId.set(expressID, category)
+        }
+      }
+      // Pset_WallCommon.LoadBearing — real Revit-authored data (verified
+      // live: false for both a real "01-POOL WALL" and "01-flower pot"
+      // element), same unwrap idiom as Category just above.
+      if (unwrapIfcValue(pset.Name) === 'Pset_WallCommon' && Array.isArray(pset.HasProperties)) {
+        for (const prop of pset.HasProperties as Record<string, unknown>[]) {
+          if (unwrapIfcValue(prop.Name) !== 'LoadBearing') continue
+          const value = unwrapIfcValue(prop.NominalValue)
+          if (value === 'true' || value === 'false') loadBearingByExpressId.set(expressID, value === 'true')
+        }
+      }
+    }
+    const area = netArea ?? grossArea
+    if (area !== null) quantityAreaByExpressId.set(expressID, area)
+  }
+  return { quantityAreaByExpressId, categoryByExpressId, loadBearingByExpressId }
 }
 
 // A storey's own Elevation attribute, raw and unconverted (2026-07-11, per

@@ -41,6 +41,12 @@ const DISCIPLINE_DECISION_TITLES: Record<string, string> = {
   Plumbing: 'Confirm Plumbing Fixture Specification',
   Landscape: 'Confirm Landscape / Planting Scheme',
   Misc: 'Confirm FF&E Package',
+  // Added 2026-07-25 alongside "full schedule generation" (see
+  // riskGeneration.ts's own DISCIPLINE_RISK_TEMPLATES header for why) — same
+  // "every discipline CATEGORY_DISCIPLINE actually produces gets one" rule.
+  Preliminaries: 'Confirm Site Mobilisation & Enabling Works Plan',
+  Procurement: 'Confirm Long-Lead Procurement Schedule',
+  Commissioning: 'Confirm Testing & Commissioning Plan',
 }
 
 const WATCH_ISSUE_DESCRIPTION = 'Generated placeholder — review and populate with real detail if this discipline’s coordination/quality issues materialise, or dismiss if not applicable.'
