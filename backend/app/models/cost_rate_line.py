@@ -25,3 +25,14 @@ class CostRateLine(Base, TimestampMixin):
     qty: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     unit: Mapped[str | None] = mapped_column(String(50))
     rate: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # location/system/activity, e.g. "W-0004/COLUMNS/T-0114" (2026-07-27, per
+    # Maro's QS review: "a cost code per line... matching the schedule
+    # activity ID so cost-loading into the 4D is automatic rather than a
+    # mapping exercise") — NULL for a manually-added line with no source
+    # activity. Doubles as the tree structure boqGeneration.ts's own
+    # buildBoqTree groups by: a material/resource line's own code is its
+    # parent activity's code plus a trailing "/MAT" segment, so the parent-
+    # child relationship is recoverable from this one string alone, no
+    # separate parent_id column needed (this is a flat table by design —
+    # see the class docstring above).
+    cost_code: Mapped[str | None] = mapped_column(String(200))

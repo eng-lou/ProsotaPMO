@@ -83,6 +83,33 @@ class BulkActivityInput(BaseModel):
     # where schedule_category/schedule_phase_key are purely internal,
     # never-shown bookkeeping for the later resource-generation pass.
     discipline: str | None = Field(default=None, max_length=100)
+    # As Late As Possible (2026-07-27, per Maro's own JIT procurement catch:
+    # "coverings procurement starts 27th july and will be delivered 10th
+    # sept 26, but the activity itself will start 12th April" — every
+    # generated procurement item's Submittal/Approval/PO/Delivery chain
+    # anchored off the same Construction Start, so it displayed at its own
+    # Early dates regardless of how far out the real install actually was,
+    # clustering delivery months ahead of need). Only ever "alap" (never a
+    # date-based constraint) coming from this generator — a real Literal,
+    # not the full app/schemas/activity.py ConstraintType, since there's no
+    # constraint_date to validate against it: scheduling_cpm.py's own alap
+    # handling (2026-07-07) already displays an activity at its Late Start/
+    # Late Finish instead of Early Start/Early Finish, using float the
+    # network already computes from Procure & Deliver to Site's own real FS
+    # link into the first real installation — no negative lag, no new
+    # relationship, nothing else in this payload needs to change for this
+    # to work.
+    constraint_type: Literal["alap"] | None = None
+    # Real material take-off (2026-07-27, per Maro: "how is concrete and
+    # steel catered for if they exist" — see Activity.schedule_material_name's
+    # own model docstring for the full "why"). All four None together for
+    # every activity that carries no real material line (every non-material
+    # phase, and every category the frontend's own VOLUME_PRICED_CATEGORIES
+    # doesn't cover at all) — never partially set.
+    material_name: str | None = Field(default=None, max_length=200)
+    material_quantity: Decimal | None = Field(default=None, ge=0)
+    material_unit: str | None = Field(default=None, max_length=20)
+    material_cost_per_unit: Decimal | None = Field(default=None, ge=0)
 
 
 class BulkResourceInput(BaseModel):

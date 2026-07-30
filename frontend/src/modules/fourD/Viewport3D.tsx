@@ -1,9 +1,10 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Environment, Grid, GizmoHelper, GizmoViewport, OrbitControls, TransformControls } from '@react-three/drei'
+import { Environment, Grid, GizmoHelper, OrbitControls, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
+import { AxisGizmo } from './AxisGizmo'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
@@ -32,9 +33,13 @@ import {
   getMaterializedMeshes, type BatchState, type EdgesBatch,
 } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
+import { ElementFilterDialog } from './ElementFilterDialog'
 import type { ElementParent } from './elementParents'
 import { MAX_TOTAL_SUBDIVIDED_TRIANGLES, subdivideGeometry, triangleCount } from './geometrySubdivision'
-import { clearClonedRenderModeVariantCache, getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
+import {
+  clearClonedRenderModeVariantCache, enableBatchPerInstanceAlpha, getGouraudVariant, getHiddenLineMaterial,
+  HIDDEN_LINE_BASE_COLOR,
+} from './renderModeMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
 import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
@@ -47,6 +52,8 @@ import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
+import { ZoneGizmos } from './ZoneGizmo'
+import type { Zone, ZonePoint } from './zones'
 import type { PathFollower } from './pathFollowers'
 import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
 import type { Annotation, AnnotationKind } from './annotations'
@@ -194,6 +201,15 @@ interface Props {
   linkedObjectIds: Set<string>
   linkedElementKeys: Set<string>
   onSelectUnassigned: (objectIds: string[], expressIdsByObject: Map<string, number[]>) => void
+  // Filter (2026-07-26, per Maro, referencing Revit's own Modify | Multi-
+  // Select > Filter dialog directly: "i can select elements and filter like
+  // this by categories and additionally spatial decomposition") — narrows
+  // the CURRENT selection to just the expressIds ElementFilterDialog.tsx
+  // hands back (every element whose own Category AND storey both stayed
+  // checked). Owned by FourD.tsx, same "just hand over a ready callback"
+  // split as onHideSelected/onToggleIsolate above — it already owns
+  // selectedExpressIds/selectedObjectIds.
+  onFilterApply: (keptExpressIds: number[]) => void
   // objectIds: whole-object matches (mesh-kind imports, which have no finer
   // sub-element concept). expressIdsByObject: individual IFC sub-elements
   // matched *within* an ifc-kind import, keyed by that import's object id —
@@ -235,6 +251,14 @@ interface Props {
   // onShowAll above), rather than replacing what's visible the way Isolate
   // does — additive, so hiding a second batch doesn't un-hide the first.
   onHideSelected: () => void
+  // Unload Selected (2026-07-26, per Maro: "i need to be able to unload
+  // selected elements") — real disposal (elementBatching.ts's own
+  // removeElementsFromModel), not the reversible Hide above. Only ever
+  // meaningful for specific IFC sub-elements (FourD.tsx's own
+  // handleUnloadSelected no-ops when nothing's selected via
+  // selectedExpressIds specifically); disabled here whenever that's empty,
+  // same as the Filter button just below already does for the same reason.
+  onUnloadSelected: () => void
   // "Linked Activities" widget (2026-07-09, per Maro) — pre-built by
   // FourD.tsx (it owns the async activity-link resolution) and just handed
   // over as a ready-made node to render alongside the Isolate/Show All
@@ -266,6 +290,13 @@ interface Props {
   environmentUrl: string | null
   onEnvironmentError: (message: string) => void
   customTextures: Record<string, CustomTextureSet>
+  // Manual per-element Opacity (2026-07-26) — see ModelObjects' own
+  // opacityOverride header for the full "why a sibling map, not a
+  // CustomTextureSet slot" reasoning. Same ownerKey convention as
+  // customTextures (`${objectId}::${expressID}` for a specific IFC
+  // sub-element, else the plain object id) — absent = 1 (fully opaque,
+  // today's behaviour for every element that's never had this touched).
+  customOpacity: Record<string, number>
   // Orbit camera sync with the Baseline pane (2026-07-24) — see
   // CameraSync's own header. Shared with BaselineViewportPane.tsx via
   // FourD.tsx, same ref-not-state idiom as timelineDateRef just below.
@@ -342,11 +373,26 @@ interface Props {
   // time (PathsPanel.tsx's own "+ Point" toggle) — null means click-to-add
   // is off and ordinary selection/box-select behave as before.
   paths: Path[]
+  // Resolved per-path anim_start/anim_end (2026-07-30) — see
+  // PathGizmo.tsx's own PathGizmos header for what this is keyed/built
+  // from; threaded straight through to PathGizmos below.
+  pathAnimWindows: Map<string, { start: Date | null; end: Date | null }>
   pathFollowers: PathFollower[]
   addingPointsForPathId: string | null
   onPathDragMove: (pathId: string, points: PathPoint[]) => void
   onPathDragEnd: (pathId: string, points: PathPoint[]) => void
   onAddPathPoint: (pathId: string, point: PathPoint) => void
+  // Zones (2026-07-29, per Maro's site-logistics reference — a filled,
+  // labeled ground-plane area like "PROJECT SITE"). Same shape/convention
+  // as paths/addingPointsForPathId/onPathDragMove/onPathDragEnd/
+  // onAddPathPoint just above — see zone.py's own docstring for why this
+  // is a separate resource from Path rather than reusing it.
+  zones: Zone[]
+  zoneAnimWindows: Map<string, { start: Date | null; end: Date | null }>
+  addingPointsForZoneId: string | null
+  onZoneDragMove: (zoneId: string, points: ZonePoint[]) => void
+  onZoneDragEnd: (zoneId: string, points: ZonePoint[]) => void
+  onAddZonePoint: (zoneId: string, point: ZonePoint) => void
   // Annotations — Placemark/Footnote (2026-07-12, per Maro's Navisworks
   // reference screenshot). Reuses timelineDateRef/timelineActivities/
   // timelineLinks/timelineProfiles/timelineElementKeyframes above rather
@@ -438,6 +484,11 @@ interface Props {
 }
 
 const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
+// "Fade Unselected" (2026-07-26) — see viewerSettings.ts's own xrayUnselected
+// header for the full story. Faint enough that a large occluding building
+// still reads as present/for-context, not fully invisible, while a selected
+// element behind it clearly reads through.
+const XRAY_FADE_OPACITY = 0.15
 // Reused every frame by TimelinePlayback's own material diff below —
 // avoids allocating a fresh THREE.Color per material per frame just to
 // compare a candidate colour against what's already applied.
@@ -566,6 +617,7 @@ function computeTintedColor(
 // change, not just once on import.
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
+  customOpacity,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
   varianceByElementKey, clashByElementKey, elementParents,
 }: {
@@ -575,6 +627,7 @@ function ModelObjects({
   onSelect: (expressID: number | null, additive?: boolean, objectId?: string) => void
   onSelectObject: (id: string | null, additive?: boolean) => void
   customTextures: Record<string, CustomTextureSet>
+  customOpacity: Record<string, number>
   boxSelectMode: boolean
   // Every currently-loaded, active Section Box, already resolved against
   // whichever ImportedObject it targets (2026-07-09, per Maro) — see
@@ -717,11 +770,24 @@ function ModelObjects({
     expressId: null, expressIds: new Set(), objectIds: new Set(),
   })
 
+  // "Fade Unselected" (2026-07-26) — whether *any* selection exists at all,
+  // not which specific expressIDs/objects — deliberately included in
+  // heavyDeps below (not left to the cheap touched-only path further down)
+  // because the very first selection after nothing was selected (or
+  // clearing the last one) needs to re-touch *every* mesh in the scene to
+  // apply/lift the fade, not just whichever mesh's own membership just
+  // flipped. A later click that keeps some selection active either way
+  // (e.g. shift-clicking a second element) doesn't change hasSelection, so
+  // it correctly falls through to the existing cheap touched-only pass —
+  // only the newly (de)selected meshes need re-touching, everything else's
+  // fade state is already correct from the prior pass.
+  const hasSelection = selectedExpressId !== null || selectedExpressIds.size > 0 || selectedObjectIds.size > 0
+
   useEffect(() => {
     const heavyDeps = [
       objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
-      settings.showClashColors, settings.shadows, upAxis, customTextures, isolateMode, isolatedObjectIds,
-      isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
+      settings.showClashColors, settings.shadows, settings.xrayUnselected, hasSelection, upAxis, customTextures,
+      customOpacity, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
     ]
     const heavyChanged = heavyDepsRef.current === null
       || heavyDeps.length !== heavyDepsRef.current.length
@@ -783,8 +849,36 @@ function ModelObjects({
     // caller has decided need it this render. Reads selectedExpressId/
     // selectedExpressIds directly off this effect's own closure (same as
     // every other selection check in this file), not passed as params.
+    //
+    // Also writes real per-instance ALPHA now (2026-07-26, second pass on
+    // "Fade Unselected" — per Maro: "i need per instance, i've selected
+    // slabs and cant see anything", see enableBatchPerInstanceAlpha's own
+    // header in renderModeMaterials.ts for the full mechanism/why). The
+    // first pass only ever faded a batch's *shared* material wholesale,
+    // which meant a batch containing any selection was exempted in full —
+    // exactly wrong when the selection is 33 slabs among hundreds of other
+    // elements sharing that same batch. Every element here now gets its
+    // *own* alpha regardless of what else in the same batch is selected.
+    //
+    // No isObjectSelected fallback here (third pass, same day — per Maro:
+    // "why am i seeing some elements visible and not faded when i selected
+    // a single wall") — picking any one expressID also flips
+    // isObjectSelected true for its whole owning object (handleSelectExpressId(s),
+    // FourD.tsx), and honouring that here exempted every *other* element in
+    // the same batch from fading too, not just the one wall actually
+    // clicked. Every call site of this function is kind==='ifc' (batches
+    // only ever exist for IFC content), and the individual-mesh path's own
+    // isPlainObjectSelected already establishes the app-wide rule that a
+    // bare whole-object selection only ever means something for plain
+    // mesh-kind imports (no sub-element concept to fall back to) — never
+    // for IFC content, where a real per-element selection always exists.
     const applyBatchSelectionColour = (batch: BatchState, expressIDs: number[]) => {
       const isBatchExpressSelected = selectedExpressId !== null && batch.byExpressId.has(selectedExpressId)
+      // Lazily initialized by the very first setColorAt call below
+      // regardless (BatchedMesh.js's own _initColorsTexture) — read here
+      // once per call rather than once per instance.
+      const wantsXray = settings.xrayUnselected && hasSelection
+      let colorsArrayChanged = false
       for (const expressID of expressIDs) {
         const infos = batch.byExpressId.get(expressID)
         if (!infos) continue
@@ -796,6 +890,8 @@ function ModelObjects({
         const isExpressSelected = isBatchExpressSelected && expressID === selectedExpressId
         const isExpressAlsoSelected = selectedExpressIds.has(expressID)
         const lerpAmount = isExpressSelected ? 0.6 : isExpressAlsoSelected ? 0.35 : 0
+        const elementSelected = isExpressSelected || isExpressAlsoSelected
+        const alpha = wantsXray && !elementSelected ? XRAY_FADE_OPACITY : 1
         for (const info of infos) {
           if (lerpAmount > 0) {
             _scratchColor.copy(info.color).lerp(SELECTED_EMISSIVE, lerpAmount)
@@ -803,7 +899,24 @@ function ModelObjects({
           } else {
             batch.mesh.setColorAt(info.instanceId, info.color)
           }
+          // setColorAt above only ever writes 3 of the 4 floats per
+          // instance (color.toArray, itemSize 3) — the untouched 4th
+          // (alpha) slot is what enableBatchPerInstanceAlpha's shader
+          // patch actually samples. Direct DataTexture write, not a
+          // second setColorAt-shaped helper: three.js's own public API
+          // has no per-instance-alpha setter to call instead.
+          const colorsTexture = (batch.mesh as unknown as { _colorsTexture: THREE.DataTexture | null })
+            ._colorsTexture
+          if (colorsTexture) {
+            (colorsTexture.image.data as Float32Array)[info.instanceId * 4 + 3] = alpha
+            colorsArrayChanged = true
+          }
         }
+      }
+      if (colorsArrayChanged) {
+        const colorsTexture = (batch.mesh as unknown as { _colorsTexture: THREE.DataTexture | null })
+          ._colorsTexture
+        if (colorsTexture) colorsTexture.needsUpdate = true
       }
     }
 
@@ -887,6 +1000,26 @@ function ModelObjects({
         const elementOverride = elementKey !== null ? customTextures[elementKey] : undefined
         const overrides = elementOverride ?? customTextures[id]
         const ownerKey = elementOverride ? (elementKey as string) : id
+        // Same ownerKey fallback as `overrides` above, hoisted out of the
+        // materials.forEach below (2026-07-29 fix, per Maro, after a real
+        // incident: dialing down Opacity on a handful of selected glass
+        // panels made orbiting the whole model laggy) so it can feed
+        // `everCustomized` just below — an opacity-only edit (no texture
+        // slot touched) used to leave `everCustomized` false, since that
+        // only ever checked `overrides` (customTextures). With no override
+        // to clone for, `standardMaterial` stayed as the mesh's *original*,
+        // often-shared material instance (many meshes across an IFC file
+        // routinely share one material per IfcSurfaceStyle — every pane of
+        // glass in the building, not just the panels actually selected), so
+        // `mat.transparent = true` a few lines down was landing on that
+        // shared instance and silently flipping transparency on every mesh
+        // that happens to reference it, not just the selected ones. Once a
+        // shared material goes transparent, WebGLRenderer has to sort and
+        // blend every mesh using it back-to-front on every single frame —
+        // exactly the orbit lag reported, and scaling with however many
+        // *other* elements happened to share that one material, not with
+        // how many were actually selected.
+        const opacityOverride = (elementKey !== null ? customOpacity[elementKey] : undefined) ?? customOpacity[id]
 
         // Displacement subdivision (2026-07-11, per Maro — see
         // geometrySubdivision.ts's own header for the full reasoning: a
@@ -1021,7 +1154,7 @@ function ModelObjects({
         let standardMaterial = child.userData.standardMaterial as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[]
 
         const firstMat = Array.isArray(standardMaterial) ? standardMaterial[0] : standardMaterial
-        const everCustomized = !!overrides || !!firstMat.userData.textureOverrideOwner
+        const everCustomized = !!overrides || opacityOverride !== undefined || !!firstMat.userData.textureOverrideOwner
         if (everCustomized && Array.isArray(standardMaterial)) {
           standardMaterial = standardMaterial.map(m => (m.userData.textureOverrideOwner === ownerKey ? m : (() => {
             const clone = m.clone()
@@ -1042,19 +1175,17 @@ function ModelObjects({
         const displayMaterials: THREE.Material[] = []
         materials.forEach((mat, i) => {
           {
-            // wireframe/flatShading both apply on the real PBR material
-            // regardless of render mode (2026-07-11) — Wireframe/Flat
-            // Shaded stay on `standardMaterial` for display too (full PBR
-            // fidelity, just a different draw mode or normal
-            // interpolation), unlike Gouraud/Phong/Hidden Line below, which
-            // swap to a different material class entirely. flatShading is a
-            // shader-compile-time parameter (confirmed in three.js's own
-            // WebGLPrograms.js, not assumed) — needsUpdate only flips when
-            // it actually changes, not every frame.
-            const wantsWireframe = settings.renderMode === 'wireframe'
+            // flatShading applies on the real PBR material regardless of
+            // render mode (2026-07-11) — Flat Shaded stays on
+            // `standardMaterial` for display too (full PBR fidelity, just a
+            // different normal interpolation), unlike Gouraud/Phong/Hidden
+            // Line below, which swap to a different material class
+            // entirely. flatShading is a shader-compile-time parameter
+            // (confirmed in three.js's own WebGLPrograms.js, not assumed) —
+            // needsUpdate only flips when it actually changes, not every
+            // frame.
             const wantsFlatShading = settings.renderMode === 'flat'
             if (mat.flatShading !== wantsFlatShading) mat.needsUpdate = true
-            mat.wireframe = wantsWireframe
             mat.flatShading = wantsFlatShading
 
             const isExpressSelected = child.userData.expressID === selectedExpressId
@@ -1179,6 +1310,51 @@ function ModelObjects({
             if (overrides?.displacementMap) { mat.displacementMap = overrides.displacementMap.texture }
             else if (original) { mat.displacementMap = original.displacementMap }
             if (everCustomized) mat.needsUpdate = true
+
+            // "Fade Unselected" (2026-07-26, per Maro: a car mesh-kind
+            // import selected but hard to see behind an occluding IFC
+            // building) — every mesh that isn't part of the current
+            // selection dims while xrayUnselected is on and *something* is
+            // selected; the moment nothing's selected (or the setting's
+            // off) every mesh stays fully opaque, same as before this
+            // feature existed.
+            //
+            // isPlainObjectSelected (not the raw isObjectSelected flag) —
+            // real bug, caught 2026-07-26 third pass, per Maro: "why am i
+            // seeing some elements visible and not faded when i selected a
+            // single wall". Picking any one IFC sub-element also flips
+            // isObjectSelected true for its *whole owning object*
+            // (handleSelectExpressId(s), FourD.tsx — see this file's own
+            // isPlainObjectSelected header above for the exact quote), so
+            // using the raw flag here exempted every other mesh in that
+            // same imported IFC file from the fade too, not just the one
+            // wall actually clicked — for a whole model that's
+            // functionally "fade does nothing." isPlainObjectSelected
+            // already carries the `&& kind !== 'ifc'` gate the emissive
+            // tint above relies on for the exact same reason: a real
+            // whole-object pick (no sub-element involved at all) only
+            // exists for plain mesh-kind imports like the reported car, so
+            // only those should honour isObjectSelected here.
+            const isMeshSelected = isExpressSelected || isExpressAlsoSelected || isPlainObjectSelected
+            const wantsXrayFade = settings.xrayUnselected && hasSelection && !isMeshSelected
+            // Manual per-element Opacity (2026-07-26, per Maro: "allow for
+            // transparency setting (0-1) for materials so i can simply make
+            // the window surfaces less opaque instead of replacing the
+            // materials completely") — same ownerKey fallback (element-
+            // specific override, else whole-object) as `overrides`/
+            // `ownerKey` just above; `opacityOverride` itself is hoisted
+            // above (see its own header, next to `everCustomized`) rather
+            // than computed fresh here, now that the clone decision needs it
+            // too. Read from a sibling map to customTextures rather than
+            // folded into CustomTextureSet itself: this is a plain scalar,
+            // not a texture asset with its own upload/clear/Select-Linked/
+            // preset machinery. Composed *multiplicatively* with the xray
+            // fade below, not overridden by it — a manually-dimmed window
+            // that also isn't the current selection should read as even
+            // fainter, not snap back up to the flat XRAY_FADE_OPACITY value.
+            const baseOpacity = opacityOverride ?? 1
+            mat.opacity = wantsXrayFade ? baseOpacity * XRAY_FADE_OPACITY : baseOpacity
+            mat.transparent = mat.opacity < 1
 
             // Which material object actually gets displayed this frame
             // (2026-07-11) — `mat` above (standardMaterial) has now
@@ -1395,17 +1571,36 @@ function ModelObjects({
         // colour treatment just above; variance/clash/texture-override
         // were already documented as not applying to batched elements
         // before today and aren't part of what was reported broken here.
-        if (!batch.mesh.userData.standardMaterial) batch.mesh.userData.standardMaterial = batch.mesh.material
+        if (!batch.mesh.userData.standardMaterial) {
+          batch.mesh.userData.standardMaterial = batch.mesh.material
+          // "Fade Unselected", second pass (2026-07-26) — patches this
+          // batch's own real material once so its shader can actually read
+          // the per-instance alpha applyBatchSelectionColour writes below;
+          // see enableBatchPerInstanceAlpha's own header (renderModeMaterials.ts)
+          // for the full mechanism.
+          enableBatchPerInstanceAlpha(batch.mesh.userData.standardMaterial as THREE.Material)
+        }
         const batchMat = batch.mesh.userData.standardMaterial as THREE.MeshStandardMaterial
-        const batchWantsWireframe = settings.renderMode === 'wireframe'
         const batchWantsFlatShading = settings.renderMode === 'flat'
         if (batchMat.flatShading !== batchWantsFlatShading) batchMat.needsUpdate = true
-        batchMat.wireframe = batchWantsWireframe
         batchMat.flatShading = batchWantsFlatShading
+
+        // "Fade Unselected" (2026-07-26, second pass) — per-instance alpha
+        // itself is written straight into this batch's own colours texture
+        // by applyBatchSelectionColour above; all that's needed here is
+        // putting the *material* into the transparent render pass whenever
+        // any instance in it might actually be less than fully opaque —
+        // real per-instance blending only applies once transparent is on.
+        // Deliberately no longer gated on whether this particular batch
+        // "contains" the selection (the first pass's bug, per Maro: "i've
+        // selected slabs and cant see anything" — every element gets its
+        // own correct alpha regardless of batch membership now).
+        batchMat.transparent = settings.xrayUnselected && hasSelection
+
         if (settings.renderMode === 'gouraud') {
-          batch.mesh.material = getGouraudVariant(batchMat)
+          batch.mesh.material = getGouraudVariant(batchMat, true)
         } else if (settings.renderMode === 'hiddenLine') {
-          batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR)
+          batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR, true)
         } else {
           batch.mesh.material = batchMat
         }
@@ -1451,6 +1646,34 @@ function ModelObjects({
         // this exactly as cheap as that path, an O(touched) update instead
         // of an O(whole batch) rescan for every click.
         applyBatchSelectionColour(batch, [...touchedExpressIds])
+
+        // "Fade Unselected" (2026-07-26, second pass) — alpha itself is
+        // per-instance now (applyBatchSelectionColour just above already
+        // updated the touched elements' own alpha directly in the colours
+        // texture), so all that's left on this cheap path is keeping
+        // batchMat.transparent in sync the same way the heavy pass does —
+        // needed because moving a selection from an element in *this*
+        // batch to one in a different batch/object can leave hasSelection
+        // true the whole time (no heavy pass triggered), which would
+        // otherwise strand this batch's transparent flag stuck at
+        // whatever it was on the last heavy pass.
+        if (settings.xrayUnselected) {
+          const batchMat = batch.mesh.userData.standardMaterial as THREE.MeshStandardMaterial | undefined
+          if (batchMat) {
+            const wantsTransparent = hasSelection
+            batchMat.transparent = wantsTransparent
+            // Gouraud/Hidden Line display a cached variant derived from
+            // batchMat (renderModeMaterials.ts), not batchMat itself — kept
+            // in sync here the same way the heavy pass's own call to
+            // getGouraudVariant/getHiddenLineMaterial would (those already
+            // copy transparent/opacity from batchMat on every call, but this
+            // cheap path never re-calls them).
+            const lambertVariant = batchMat.userData.lambertVariant as THREE.MeshLambertMaterial | undefined
+            if (lambertVariant) lambertVariant.transparent = wantsTransparent
+            const hiddenLineVariant = batchMat.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
+            if (hiddenLineVariant) hiddenLineVariant.transparent = wantsTransparent
+          }
+        }
       }
     }
     // Narrowed from the whole `settings` object (2026-07-15) — this effect
@@ -1460,9 +1683,9 @@ function ModelObjects({
     // Indicator — none of which this effect touches at all) still forced a
     // full re-pass over every mesh in the loaded model(s).
   }, [
-    objects, selectedExpressId, selectedExpressIds, selectedObjectIds, customTextures, isolateMode, hiddenExpressIds,
-    settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors, settings.showClashColors,
-    settings.shadows, upAxis,
+    objects, selectedExpressId, selectedExpressIds, selectedObjectIds, hasSelection, customTextures, customOpacity,
+    isolateMode, hiddenExpressIds, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
+    settings.showClashColors, settings.shadows, settings.xrayUnselected, upAxis,
   ])
 
   // Section Box clipping is applied every frame here, not inside the
@@ -1966,6 +2189,10 @@ interface ResolvedPathTarget {
   curve: THREE.CatmullRomCurve3 | null
   singlePoint: THREE.Vector3 | null
   orientToPath: boolean
+  // Degrees, applied as an extra yaw on top of the lookAt result
+  // (2026-08-06) — see path_follower.py's own heading_offset_deg header
+  // for the full "why".
+  headingOffsetDeg: number
   progressTrack: { date: Date; value: number }[]
 }
 
@@ -1984,14 +2211,54 @@ function toLocalPoint(object: THREE.Object3D, worldPoint: THREE.Vector3): THREE.
   return object.parent.worldToLocal(worldPoint.clone())
 }
 
-function applyPathFollow(target: ResolvedPathTarget, now: Date) {
+// Shared, reused rather than allocated fresh every applyPathFollow call
+// (2026-08-06) — rotateOnAxis only reads it, never mutates it.
+const UP_Y_AXIS = new THREE.Vector3(0, 1, 0)
+
+function applyPathFollow(target: ResolvedPathTarget, now: Date, upAxis: UpAxis) {
   const progress = target.progressTrack.length > 0 ? (interpolateKeyframeTrack(target.progressTrack, now) ?? 0) : 0
   if (target.curve) {
     const point = pointAtProgress(target.curve, progress)
     target.object.position.copy(toLocalPoint(target.object, point))
     if (target.orientToPath) {
+      // target.object.up (2026-08-06, per Maro: "I aligned it up to the
+      // first point in perfect position but when i hit bind it changed
+      // the rotation of the car" — traced into three.js's own
+      // Object3D.lookAt source: it disambiguates roll using `this.up`,
+      // which for an ordinary imported mesh is never touched anywhere in
+      // this app and stays THREE's own default (0,1,0) forever — unlike
+      // the main camera, whose `.up` CameraSettings actively keeps in
+      // sync with `upAxis` (Viewport3D.tsx's own CameraSettings, a few
+      // hundred lines up). lookAt's own parent-matrix premultiply (three's
+      // Object3D.js) correctly converts the computed *world* orientation
+      // into the right *local* rotation relative to this object's own
+      // up-axis-correction wrapper group — that part was already fine, per
+      // this file's own toLocalPoint header — but the disambiguation
+      // reference used to compute that world orientation in the first
+      // place was still silently Y-up regardless of the scene's actual
+      // upAxis setting, so in the (default) Z-up mode the "roll" solved
+      // for made the object's own local up land on world Y instead of
+      // world Z — tipping it onto its side rather than leaving it upright
+      // and just yawing to face the path, exactly matching a car whose
+      // rotation "changed" the moment Bind (which defaults orient_to_path
+      // on) ran the very first lookAt.
+      target.object.up.set(0, upAxis === 'z' ? 0 : 1, upAxis === 'z' ? 1 : 0)
       const tangent = tangentAtProgress(target.curve, progress)
       target.object.lookAt(point.clone().add(tangent))
+      // Heading offset (2026-08-06, per Maro's follow-up screenshots —
+      // "see the difference?" — the up-axis fix above stopped the object
+      // tipping onto its side, but a *separate* issue remained: lookAt
+      // always aims whatever this model's own local -Z axis is at the
+      // tangent, and this particular car wasn't authored with -Z as its
+      // own visual front, so it landed 90° off. rotateOnAxis, not a raw
+      // quaternion multiply, applies this in the object's own *local*
+      // space, composed after lookAt's result — local Y at this point is
+      // already the up direction just set above (lookAt's own Gram-Schmidt
+      // construction puts it there), so this is a pure yaw around "up",
+      // never reintroducing any tilt.
+      if (target.headingOffsetDeg !== 0) {
+        target.object.rotateOnAxis(UP_Y_AXIS, THREE.MathUtils.degToRad(target.headingOffsetDeg))
+      }
     }
   } else if (target.singlePoint) {
     target.object.position.copy(toLocalPoint(target.object, target.singlePoint))
@@ -2481,6 +2748,7 @@ export function TimelinePlayback({
           curve: buildPathCurve(path.points, path.closed),
           singlePoint: path.points.length === 1 ? new THREE.Vector3(path.points[0].x, path.points[0].y, path.points[0].z) : null,
           orientToPath: follower.orient_to_path,
+          headingOffsetDeg: follower.heading_offset_deg,
           progressTrack,
         })
       }
@@ -2526,11 +2794,11 @@ export function TimelinePlayback({
               // change that may never come in the same session.
               target.cachedActiveLink = pickActiveLink(target.links, now)
               target.cachedState = target.cachedActiveLink
-                ? computeAppliedAnimationStateAt(target.cachedActiveLink, now)
+                ? computeAppliedAnimationStateAt(target.cachedActiveLink, now, upAxis)
                 : null
             }
           }
-          for (const target of nextPathTargets) applyPathFollow(target, now)
+          for (const target of nextPathTargets) applyPathFollow(target, now, upAxis)
           // Batch-visibility targets get the same one-off treatment
           // (2026-07-22 fix, per Maro: a wall linked to an activity starting
           // over a month later was showing fully visible right after
@@ -2555,7 +2823,7 @@ export function TimelinePlayback({
           // migration effect below now does for its own fresh targets.
           for (const bv of batchVisibilityTargetsRef.current) {
             bv.cachedActiveLink = pickActiveLink(bv.links, now)
-            bv.cachedState = bv.cachedActiveLink ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now) : null
+            bv.cachedState = bv.cachedActiveLink ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now, upAxis) : null
           }
         }
       }
@@ -2623,7 +2891,7 @@ export function TimelinePlayback({
     const nowMs = now ? now.getTime() : null
     const migrated: ResolvedTimelineTarget[] = meshes.map(object => {
       const cachedActiveLink = now ? pickActiveLink(bvTarget.links, now) : null
-      const cachedState = cachedActiveLink && now ? computeAppliedAnimationStateAt(cachedActiveLink, now) : null
+      const cachedState = cachedActiveLink && now ? computeAppliedAnimationStateAt(cachedActiveLink, now, upAxis) : null
       // originalColor corrected against getOriginalMaterialSlots, not
       // trusted as collectStandardMaterials captured it (2026-07-22 fix,
       // per Maro: a deselected element's highlight tint was sticking
@@ -2719,7 +2987,7 @@ export function TimelinePlayback({
       if (dateChanged) {
         target.cachedActiveLink = pickActiveLink(target.links, now)
         target.cachedState = target.cachedActiveLink
-          ? computeAppliedAnimationStateAt(target.cachedActiveLink, now)
+          ? computeAppliedAnimationStateAt(target.cachedActiveLink, now, upAxis)
           : null
         // Re-resolved on every real date change, same gate as
         // cachedActiveLink/cachedState above (2026-07-24, third pass) — an
@@ -2905,7 +3173,7 @@ export function TimelinePlayback({
       if (dateChanged) {
         bv.cachedActiveLink = pickActiveLink(bv.links, now)
         bv.cachedState = bv.cachedActiveLink
-          ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now)
+          ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now, upAxis)
           : null
         // Same per-real-date-change refresh as the individual-mesh path
         // above (2026-07-24, third pass) — a batch instance's variance
@@ -2999,7 +3267,7 @@ export function TimelinePlayback({
     // read-only in TransformPanel (see PathProgressSupport's own header),
     // so there's no manual-edit-vs-playback fight to guard against here —
     // always safe to re-apply, last, unconditionally.
-    for (const target of pathTargetsRef.current) applyPathFollow(target, now)
+    for (const target of pathTargetsRef.current) applyPathFollow(target, now, upAxis)
 
     if (activeObjectId) onTick()
   })
@@ -3194,13 +3462,53 @@ function withBatchedMeshesRaycastable<T>(targets: THREE.Object3D[], fn: () => T)
   }
 }
 
+// True world-space face normal for a raycast hit (2026-07-29) — needed by
+// snapObjectToSurface's own floor-preference filter below. Deliberately
+// NOT `hit.face.normal.transformDirection(hit.object.matrixWorld)` for a
+// batched (repeated-geometry) hit: verified directly in
+// node_modules/three/src/objects/BatchedMesh.js's own raycast() — it
+// raycasts each instance through a shared scratch Mesh whose matrixWorld is
+// set to that ONE instance's own world matrix, but then overwrites
+// `intersect.object` with the BatchedMesh itself before returning, whose
+// OWN matrixWorld is the batch's root transform, not any particular
+// instance's. Using that directly would silently misclassify every batched
+// element's surface orientation (railings/columns/repeated structural
+// members — elementBatching.ts — are exactly what this whole fix exists to
+// correctly reject or accept in the first place). Recomputes the same true
+// instance matrix BatchedMesh.raycast itself used internally
+// (`getMatrixAt(i, ...).premultiply(matrixWorld)`, same two calls, same
+// order) via the intersection's own `batchId`.
+function worldNormalForHit(hit: THREE.Intersection): THREE.Vector3 | null {
+  if (!hit.face) return null
+  const normal = hit.face.normal.clone()
+  const isBatched = (hit.object as THREE.Object3D & { isBatchedMesh?: boolean }).isBatchedMesh === true
+  if (isBatched && hit.batchId !== undefined) {
+    const batched = hit.object as THREE.BatchedMesh
+    const instanceWorld = new THREE.Matrix4()
+    if (!batched.getMatrixAt(hit.batchId, instanceWorld)) return null
+    instanceWorld.premultiply(batched.matrixWorld)
+    return normal.transformDirection(instanceWorld).normalize()
+  }
+  return normal.transformDirection(hit.object.matrixWorld).normalize()
+}
+
+// How "up-facing" a hit's own surface normal needs to be, as a dot product
+// against `up`, to count as a real resting surface (2026-07-29, per Maro:
+// Snap to Surface "flickers / picks wrong point" — same failure class as
+// the old Measure per-triangle snap bug, see findSnapPoint's own header in
+// measurementGeometry.ts). ~60° off vertical or shallower. NOT abs() — a
+// hit on the *underside* of a slab/canopy (normal pointing back down, away
+// from the ray's own origin above) isn't a surface anything could rest on
+// either, only a genuine top-facing one is.
+const SNAP_UP_FACING_DOT_THRESHOLD = 0.5
+
 function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], upAxis: UpAxis, modelRadius: number) {
   const up = upAxis === 'z' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)
   const worldPosition = object.getWorldPosition(new THREE.Vector3())
   const origin = worldPosition.clone().addScaledVector(up, modelRadius * 2)
   const raycaster = new THREE.Raycaster(origin, up.clone().negate())
   const raycastTargets = targets.filter(t => t.visible).map(t => t.object)
-  const hit = withBatchedMeshesRaycastable(raycastTargets, () => raycaster.intersectObjects(raycastTargets, true)).find(candidate => {
+  const hits = withBatchedMeshesRaycastable(raycastTargets, () => raycaster.intersectObjects(raycastTargets, true)).filter(candidate => {
     let node: THREE.Object3D | null = candidate.object
     while (node) {
       if (node === object) return false
@@ -3208,7 +3516,21 @@ function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], 
     }
     return true
   })
-  if (!hit) return
+  if (hits.length === 0) return
+  // Prefers the first (nearest) genuinely floor-like hit over the plain
+  // nearest hit outright — a plain nearest-hit-wins raycast happily lands
+  // on the underside of a railing, canopy truss, or any other thin near-
+  // vertical element sitting between the object and the real floor below
+  // it (this app's own reference hospital file has both right where an
+  // object would realistically get dragged), and as the object moves by
+  // fractions of a unit those two candidates trade "nearest" back and
+  // forth, reading as a flicker. Falls back to the plain nearest hit
+  // outright if nothing qualifies, so dragging onto a sloped roof/ramp
+  // still works exactly as it did before this fix.
+  const hit = hits.find(candidate => {
+    const normal = worldNormalForHit(candidate)
+    return normal !== null && normal.dot(up) >= SNAP_UP_FACING_DOT_THRESHOLD
+  }) ?? hits[0]
   // Replaces only the *world*-space vertical component, then converts the
   // whole point back to local space in one shot (2026-07-23 fix, per a
   // real incident: writing straight to object.position.z/.y — matching
@@ -3272,15 +3594,16 @@ function ClippingSetup() {
 
 export function Viewport3D({
   settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, linkedActivitiesWidget,
-  linkedObjectIds, linkedElementKeys, onSelectUnassigned,
+  onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
+  linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
-  environmentUrl, onEnvironmentError, customTextures, cameraSyncRef,
+  environmentUrl, onEnvironmentError, customTextures, customOpacity, cameraSyncRef,
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
   scheduleStart, scheduleEnd,
-  paths, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
+  paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
+  zones, zoneAnimWindows, addingPointsForZoneId, onZoneDragMove, onZoneDragEnd, onAddZonePoint,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
@@ -3329,6 +3652,28 @@ export function Viewport3D({
   // 20 (the old fixed default) when nothing's loaded yet.
   const modelRadius = useMemo(() => computeModelRadius(importedObjects), [importedObjects])
 
+  // Multi-object drag (2026-07-28, per Maro: dragging the gizmo with
+  // several objects selected — "number changes [but] isnt moving the
+  // objects" — since three.js's TransformControls only ever attaches to
+  // one THREE.Object3D (activeObject), everything else stayed exactly
+  // where it was even though it was visibly selected). Tracks the active
+  // object's own position/quaternion/scale as of the *previous* onChange
+  // frame, so each new frame's delta (this frame minus last) can be
+  // reapplied identically to every other selected object — reset whenever
+  // the active object itself changes, so switching selection doesn't
+  // compute a bogus delta against stale data from a different object.
+  const lastActiveTransformRef = useRef<{ position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 } | null>(null)
+  useEffect(() => {
+    lastActiveTransformRef.current = activeObject
+      ? {
+          position: activeObject.object.position.clone(),
+          quaternion: activeObject.object.quaternion.clone(),
+          scale: activeObject.object.scale.clone(),
+        }
+      : null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeObject?.object])
+
   // TransformControls' own onChange, wrapped to run either "Edit Pivot" or
   // "Snap to Surface" (2026-07-23) before the real onTransformChange —
   // both mutate object.position/quaternion directly, same as the drag
@@ -3346,6 +3691,36 @@ export function Viewport3D({
     } else if (snapToSurface && gizmoMode === 'translate' && activeObject) {
       snapObjectToSurface(activeObject.object, importedObjects, settings.upAxis, modelRadius)
     }
+
+    // Reapply this frame's delta to every other selected object — each one
+    // moves/rotates/scales in place around its own origin (not orbiting a
+    // shared pivot), the same "individual origins" behaviour as Blender's
+    // default for a translate; skipped entirely for Edit Pivot, where the
+    // active object's own position/quaternion mutation just above means
+    // something else (redefining that one object's pivot, not a drag any
+    // other object should mirror).
+    if (!editPivot && activeObject && selectedObjectIds.size > 1 && lastActiveTransformRef.current) {
+      const last = lastActiveTransformRef.current
+      const deltaPosition = activeObject.object.position.clone().sub(last.position)
+      const deltaQuaternion = activeObject.object.quaternion.clone().multiply(last.quaternion.clone().invert())
+      const scaleRatio = activeObject.object.scale.clone().divide(last.scale)
+      for (const id of selectedObjectIds) {
+        if (id === activeObject.id) continue
+        const other = importedObjects.find(o => o.id === id)
+        if (!other) continue
+        other.object.position.add(deltaPosition)
+        other.object.quaternion.premultiply(deltaQuaternion)
+        other.object.scale.multiply(scaleRatio)
+      }
+    }
+    if (activeObject) {
+      lastActiveTransformRef.current = {
+        position: activeObject.object.position.clone(),
+        quaternion: activeObject.object.quaternion.clone(),
+        scale: activeObject.object.scale.clone(),
+      }
+    }
+
     onTransformChange()
   }
   // Sun azimuth/elevation -> a real directional-light position (2026-07-19,
@@ -3376,6 +3751,7 @@ export function Viewport3D({
   const [boxSelectMode, setBoxSelectMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false)
   const cameraRef = useRef<THREE.Camera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -3485,10 +3861,17 @@ export function Viewport3D({
   // captureBackgroundOverride's own comment just above already gives for
   // that feature's independence from the live view's current look.
   const showWhiteBackground = captureBackgroundOverride === null && settings.whiteBackground
-  // Path helpers (curve line + control-point handles, PathGizmo.tsx) are a
-  // live-editing aid, not part of the model — forced off for the duration
-  // of a capture/still-export the same way captureBackgroundOverride forces
+  // Path/Zone drag handles (PathGizmo.tsx/ZoneGizmo.tsx) are pure live-
+  // editing chrome, not part of the model — forced off for the duration of
+  // a capture/still-export the same way captureBackgroundOverride forces
   // HDR background on, per path.py's own `visible` docstring (2026-07-11).
+  // Narrowed 2026-07-29 (per Maro's site-logistics reference) to JUST the
+  // handles, not the whole gizmo — a styled Path's own line/arrow/label and
+  // a Zone's own fill/border/label are real content now (the actual point
+  // of that feature: a route/area meant to show up in an exported video),
+  // so they keep rendering during capture the same way an Annotation
+  // always already did; only PathGizmos/ZoneGizmos' own `hideHandles` prop
+  // reads this now, see each component's own matching header.
   const [hidePathHelpers, setHidePathHelpers] = useState(false)
   const [renderCaptureSettings, setRenderCaptureSettings] = useState<RenderCaptureSettings>(loadRenderCaptureSettings)
   const handleRenderCaptureSettingsChange = (next: RenderCaptureSettings) => {
@@ -3975,17 +4358,42 @@ export function Viewport3D({
           // have no sub-element concept at all, so they keep the earlier
           // whole-object behaviour below.
           if (kind === 'ifc') {
+            // Every real placed expressID, batched or already-materialized
+            // (2026-07-26 fix, per Maro: "box select not picking all
+            // elements, just one" — `object.traverse` only ever visits real
+            // individual THREE.Mesh scene-graph nodes, so it silently missed
+            // every element still sitting in the shared THREE.BatchedMesh —
+            // the vast majority of a real model right after import, before
+            // anything's been individually clicked/edited. Only the one
+            // element that happened to already be materialized (e.g. from
+            // an earlier click) was ever a real Mesh child for traverse to
+            // find, matching exactly what was reported live: "just one").
+            // getExpressIdWorldBounds already handles both cases correctly
+            // without materializing anything — same non-destructive,
+            // batch-aware approach ifcScheduleExtraction.ts's own scan uses.
             const matchedIds: number[] = []
-            object.traverse(child => {
-              if (!(child instanceof THREE.Mesh) || !child.visible) return
-              const expressID = child.userData.expressID as number | undefined
-              if (expressID === undefined) return
-              const box = new THREE.Box3().setFromObject(child)
-              if (box.isEmpty()) return
+            const meshIndex = object.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
+            const batch = object.userData.batch as BatchState | undefined
+            const allExpressIds = new Set<number>([...(meshIndex?.keys() ?? []), ...(batch?.byExpressId.keys() ?? [])])
+            for (const expressID of allExpressIds) {
+              // Visibility: a materialized element's own real mesh(es)
+              // already carry the correct .visible flag (set by the
+              // isolate/hide effect above); a still-batched one's per-
+              // instance visibility lives on the shared BatchedMesh itself
+              // (THREE.BatchedMesh.getVisibleAt — the same flag that same
+              // effect's own dedicated batch-visibility pass already set),
+              // not on any individual scene-graph node.
+              const materializedMeshes = meshIndex?.get(expressID)
+              const visible = materializedMeshes && materializedMeshes.length > 0
+                ? materializedMeshes.some(mesh => mesh.visible)
+                : (batch?.byExpressId.get(expressID) ?? []).some(info => batch!.mesh.getVisibleAt(info.instanceId))
+              if (!visible) continue
+              const box = getExpressIdWorldBounds(object, expressID)
+              if (!box || box.isEmpty()) continue
               const center = box.getCenter(new THREE.Vector3())
               center.project(camera)
               if (inRect(center)) matchedIds.push(expressID)
-            })
+            }
             if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
             continue
           }
@@ -4164,12 +4572,28 @@ export function Viewport3D({
           Hide
         </button>
         <button
+          onClick={onUnloadSelected}
+          disabled={selectedExpressIds.size === 0}
+          title="Unload Selected — actually remove the selected elements from this session (frees geometry; not reversible short of re-importing). Unlike Hide, this is real disposal, not just visibility."
+          className="text-xs px-2 py-1 rounded-md border border-red-300 bg-white/90 text-red-600 hover:bg-red-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-600"
+        >
+          Unload Selected
+        </button>
+        <button
           onClick={() => { onSelect(null); onSelectObject(null) }}
           disabled={selectedObjectIds.size === 0 && selectedExpressIds.size === 0}
           title="Deselect All — clear the current selection"
           className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Deselect All
+        </button>
+        <button
+          onClick={() => setFilterDialogOpen(true)}
+          disabled={selectedExpressIds.size === 0}
+          title="Filter — narrow the current selection by Category and Spatial Decomposition (storey)"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Filter
         </button>
         <button
           onClick={handleFrameSelected}
@@ -4224,6 +4648,21 @@ export function Viewport3D({
           }}
         />
       )}
+      {filterDialogOpen && (() => {
+        // selectedExpressIds is implicitly scoped to activeObjectId, same
+        // "one active model" convention FourD.tsx's own handleHideSelected/
+        // handleSelectAll already rely on — see onFilterApply's own header.
+        const handle = ifcHandles.find(h => `ifc-${h.modelID}` === activeObjectId)
+        if (!handle) return null
+        return (
+          <ElementFilterDialog
+            handle={handle}
+            expressIds={[...selectedExpressIds]}
+            onApply={onFilterApply}
+            onClose={() => setFilterDialogOpen(false)}
+          />
+        )
+      })()}
       <Canvas
         frameloop={active ? 'always' : 'never'}
         shadows={settings.shadows}
@@ -4391,6 +4830,7 @@ export function Viewport3D({
             onSelect={onSelect}
             onSelectObject={onSelectObject}
             customTextures={customTextures}
+            customOpacity={customOpacity}
             boxSelectMode={boxSelectMode}
             isolateMode={isolateMode}
             isolatedObjectIds={isolatedObjectIds}
@@ -4433,18 +4873,41 @@ export function Viewport3D({
             clashByElementKey={clashByElementKey}
             showClashColors={settings.showClashColors}
           />
-          {!hidePathHelpers && (
-            <PathGizmos
-              paths={paths}
-              onDragStart={() => {}}
-              onDragMove={onPathDragMove}
-              onDragEnd={onPathDragEnd}
-            />
-          )}
+          <PathGizmos
+            paths={paths}
+            upAxis={settings.upAxis}
+            hideHandles={hidePathHelpers}
+            timelineDateRef={timelineDateRef}
+            animWindows={pathAnimWindows}
+            onDragStart={() => {}}
+            onDragMove={onPathDragMove}
+            onDragEnd={onPathDragEnd}
+          />
           <PathAddPointCatcher
             active={addingPointsForPathId !== null}
             upAxis={settings.upAxis}
             onAddPoint={point => { if (addingPointsForPathId) onAddPathPoint(addingPointsForPathId, point) }}
+          />
+          <ZoneGizmos
+            zones={zones}
+            upAxis={settings.upAxis}
+            hideHandles={hidePathHelpers}
+            timelineDateRef={timelineDateRef}
+            animWindows={zoneAnimWindows}
+            onDragStart={() => {}}
+            onDragMove={onZoneDragMove}
+            onDragEnd={onZoneDragEnd}
+          />
+          {/* Zone vertex placement (2026-07-29) — reuses PathAddPointCatcher
+              verbatim a fourth time (Paths/Annotation placement/Pivot
+              picking above already do); FourD.tsx's own onAddZonePoint
+              zeroes the hit point's up-coordinate before storing it, since
+              a Zone's own points are a flat footprint (zone.py's own
+              docstring) regardless of what surface was actually clicked. */}
+          <PathAddPointCatcher
+            active={addingPointsForZoneId !== null}
+            upAxis={settings.upAxis}
+            onAddPoint={point => { if (addingPointsForZoneId) onAddZonePoint(addingPointsForZoneId, point) }}
           />
           {annotations.map(annotation => (
             <AnnotationMarker
@@ -4544,7 +5007,7 @@ export function Viewport3D({
         )}
         {settings.showAxisIndicator && (
           <GizmoHelper alignment="bottom-left" margin={[80, 80]}>
-            <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
+            <AxisGizmo axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" cameraRef={cameraRef} controlsRef={controlsRef} />
           </GizmoHelper>
         )}
       </Canvas>

@@ -14,7 +14,7 @@ import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
 import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
-import { buildResourceRecipe } from '@/modules/fourD/scheduleGeneration'
+import { buildResourceRecipe, type ResourceRecipeActivity } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
@@ -1074,7 +1074,20 @@ export function Scheduling() {
   // Archived activities are visible by default (2026-07-04, per Maro) — this
   // only ever narrows the list when explicitly ticked, same as the other
   // filter checkboxes below.
-  const [hideArchived, setHideArchived] = useState(false)
+  // Persisted (2026-07-26 fix, per Maro: "when i click hide archived, and
+  // switch tabs. archived goes back to being visible" — this was plain,
+  // unpersisted local state; Scheduling is a normal react-router route
+  // (App.tsx), not given the same always-mounted treatment PersistentFourD
+  // gives the 4D module, so navigating to any other page and back genuinely
+  // unmounts and remounts this whole component, resetting it to its
+  // useState default every time. Same localStorage convention this file
+  // already uses for highlightCritical/panelPinned/collapsed WBS rows just
+  // below/above).
+  const [hideArchived, setHideArchivedState] = useState(() => localStorage.getItem('prosota_scheduling_hide_archived') === 'true')
+  const setHideArchived = (value: boolean) => {
+    setHideArchivedState(value)
+    try { localStorage.setItem('prosota_scheduling_hide_archived', String(value)) } catch { /* ignore */ }
+  }
   const [filterAtRisk, setFilterAtRisk] = useState(false)
 
   // Custom filters (2026-07-05, per Maro, modelled on P6's own Filters
@@ -1795,6 +1808,23 @@ export function Scheduling() {
     setResourceAssignments(assignmentsRes.data)
   }
 
+  // buildResourceRecipe's own ResourceRecipeActivity expects real numbers
+  // for schedule_material_quantity/schedule_material_cost_per_unit
+  // (2026-07-27, per Maro: "how is concrete and steel catered for if they
+  // exist") — Activity itself carries them as strings, same "Decimal
+  // serializes as a string over the wire" convention schedule_quantity
+  // already follows (never converted to a number anywhere before now,
+  // since nothing inside buildResourceRecipe read it until this feature).
+  // Shared by both call sites just below rather than inlined twice.
+  const toResourceRecipeActivities = (source: Activity[]): ResourceRecipeActivity[] =>
+    source.map(a => ({
+      id: a.id, schedule_category: a.schedule_category, schedule_phase_key: a.schedule_phase_key,
+      schedule_material_name: a.schedule_material_name,
+      schedule_material_quantity: a.schedule_material_quantity !== null ? Number(a.schedule_material_quantity) : null,
+      schedule_material_unit: a.schedule_material_unit,
+      schedule_material_cost_per_unit: a.schedule_material_cost_per_unit !== null ? Number(a.schedule_material_cost_per_unit) : null,
+    }))
+
   // "Generate Resources" — stage 1 of Maro's two-stage flow: reads every
   // activity's own schedule_category/schedule_phase_key (set at IFC
   // schedule-generation time, see Activity.schedule_category's backend
@@ -1807,7 +1837,7 @@ export function Scheduling() {
   // for genuinely new crew/equipment names, never duplicates.
   const handleGenerateResources = async () => {
     if (!period) return
-    const { resources: recipeResources } = buildResourceRecipe(activities)
+    const { resources: recipeResources } = buildResourceRecipe(toResourceRecipeActivities(activities))
     if (recipeResources.length === 0) {
       setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
       return
@@ -1844,7 +1874,7 @@ export function Scheduling() {
   // resource.
   const handleAutoAssignResources = async () => {
     if (!period) return
-    const { resources: recipeResources, assignments: recipeAssignments } = buildResourceRecipe(activities)
+    const { resources: recipeResources, assignments: recipeAssignments } = buildResourceRecipe(toResourceRecipeActivities(activities))
     if (recipeAssignments.length === 0) {
       setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
       return
@@ -2248,7 +2278,14 @@ export function Scheduling() {
       if (await handleDelete(soleSelected)) setSelectedIds(new Set())
       return
     }
-    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a))
+    // is_archive_container excluded, not just left to the backend's own 422
+    // (2026-07-27 — "Select All" sweeps up the Archived container along with
+    // everything else, and the button used to just disable itself entirely
+    // whenever it was among the selection, with no explanation, blocking a
+    // legitimate bulk-delete of everything else). Silently skipped rather
+    // than attempted-and-erroring, since it's never a deliberate target of
+    // a broad multi-select the way a real activity is.
+    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a) && !a.is_archive_container)
     if (topLevel.length === 0) return
     const withChildren = topLevel.filter(a => activities.some(x => x.parent_id === a.id))
     const message = withChildren.length > 0
@@ -2276,7 +2313,7 @@ export function Scheduling() {
       if (await handleArchive(soleSelected)) setSelectedIds(new Set())
       return
     }
-    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a))
+    const topLevel = selectedActivities.filter(a => !isDescendantOfSelected(a) && !a.is_archive_container)
     if (topLevel.length === 0) return
     if (!(await confirmWithDontAsk(
       'scheduling.bulk-archive',
@@ -2842,7 +2879,7 @@ export function Scheduling() {
             🔬 Quality Check
           </button>
           <button
-            onClick={() => setHideArchived(h => !h)}
+            onClick={() => setHideArchived(!hideArchived)}
             title="Archived activities are visible by default in the table, Gantt, export, and print — toggle to hide them"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
               hideArchived ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -3043,12 +3080,12 @@ export function Scheduling() {
             )}
           </div>
           <button
-            onClick={handleBulkArchive} disabled={selectedActivities.length === 0 || selectedActivities.some(a => a.is_archive_container)}
+            onClick={handleBulkArchive} disabled={selectedActivities.length === 0 || selectedActivities.every(a => a.is_archive_container)}
             title="Archive all selected — actualise to 100% complete and move under the Archived WBS, instead of deleting"
             className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Archive</button>
           <button
-            onClick={handleBulkDelete} disabled={selectedActivities.length === 0 || selectedActivities.some(a => a.is_archive_container)}
+            onClick={handleBulkDelete} disabled={selectedActivities.length === 0 || selectedActivities.every(a => a.is_archive_container)}
             title="Delete all selected"
             className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Delete</button>

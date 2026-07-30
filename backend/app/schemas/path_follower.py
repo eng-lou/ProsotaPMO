@@ -16,6 +16,10 @@ class PathFollowerBase(BaseModel):
     # docstring on why NULL specifically would have been wrong here.
     element_ref: str = ""
     orient_to_path: bool = True
+    # See path_follower.py's own model docstring — compensates for an
+    # imported model's own authored forward axis not matching three.js's
+    # lookAt convention (local -Z).
+    heading_offset_deg: float = 0.0
 
 
 class PathFollowerCreate(PathFollowerBase):
@@ -25,6 +29,7 @@ class PathFollowerCreate(PathFollowerBase):
 class PathFollowerUpdate(BaseModel):
     path_id: uuid.UUID | None = None
     orient_to_path: bool | None = None
+    heading_offset_deg: float | None = None
 
 
 class PathFollowerResponse(PathFollowerBase):

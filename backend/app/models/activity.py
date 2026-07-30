@@ -218,3 +218,25 @@ class Activity(Base, TimestampMixin):
     # older/other activities still fall back to boqGeneration.ts's own
     # reverse-engineered estimate.
     schedule_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Real material take-off for this one activity (2026-07-27, per Maro:
+    # "how is concrete and steel catered for if they exist" — every
+    # structural category's own resources were crew/equipment only, no
+    # material line at all, so concrete/steel never showed up as a cost or a
+    # resource anywhere). Same "opt-in, not retrofitted" contract as
+    # schedule_category/schedule_quantity just above — null for every
+    # activity created any other way. schedule_material_quantity is a REAL
+    # measured quantity (frontend's own getExpressIdWorldVolume, not a
+    # bounding-box guess) — m³ as-is for concrete, converted through a real
+    # steel-density constant for a 'tonne' material (steel/rebar) —
+    # scheduleGeneration.ts's own CategoryRate.materialName header has the
+    # full "why". All four null together, never partially set; read by the
+    # same later "Generate Resources"/"Auto Assign Resources" pass
+    # schedule_category/schedule_phase_key already exist for, to emit a
+    # resource_type='material' resource + a quantity-costed assignment
+    # (app/services/resource_assignment.py already supports this — "material:
+    # quantity — the original Qty x Rate build-up" — this is simply the
+    # first writer of it from an automatic IFC generation).
+    schedule_material_name: Mapped[str | None] = mapped_column(String(200))
+    schedule_material_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    schedule_material_unit: Mapped[str | None] = mapped_column(String(20))
+    schedule_material_cost_per_unit: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))

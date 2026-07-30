@@ -50,6 +50,16 @@ interface Props {
   linkedAvailable: boolean
   onSelectLinked: (slot: TextureSlot) => void
   onApplyToLinked: (slot: TextureSlot) => void
+  // Manual per-element Opacity (2026-07-26, per Maro: "allow for
+  // transparency setting (0-1) for materials so i can simply make the
+  // window surfaces less opaque instead of replacing the materials
+  // completely") — undefined shows as 1 (fully opaque, matching every
+  // element that's never had this touched). A plain 0-1 material property,
+  // not a texture asset, so it's rendered independent of whether any
+  // texture slot below actually has anything loaded — unlike Tile Size/
+  // Rotation, which only make sense once a real texture exists to tile.
+  opacity: number | undefined
+  onOpacityChange: (value: number) => void
 }
 
 const SLOTS: { key: TextureSlot; label: string }[] = [
@@ -130,15 +140,35 @@ const DEG_TO_RAD = Math.PI / 180
 
 export function TextureFields({
   textures, onUploadTexture, onClearTexture, onFieldChange, lengthUnitToMetres, unitDisplay, onClearAll, hasAnyOverride,
-  linkedAvailable, onSelectLinked, onApplyToLinked,
+  linkedAvailable, onSelectLinked, onApplyToLinked, opacity, onOpacityChange,
 }: Props) {
   // Any one loaded texture stands in for "the" tile size/rotation — both
   // are set identically across every present slot below (see the two
   // onChange handlers), so reading either back off whichever slot happens
   // to exist first is representative of all of them.
   const representativeTexture = SLOTS.map(s => textures?.[s.key]?.texture).find(t => t)
+  const resolvedOpacity = opacity ?? 1
   return (
     <div className="space-y-0.5">
+      <div className="flex items-center gap-1.5 px-3 py-0.5">
+        <span className="w-16 text-[11px] text-gray-400 shrink-0">Opacity</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={resolvedOpacity}
+          onChange={e => onOpacityChange(Number(e.target.value))}
+          title="0 = fully transparent, 1 = fully opaque (this element's real imported look). Applies to every currently-selected element at once."
+          className="flex-1 w-0"
+        />
+        <span className="w-8 text-[11px] text-gray-500 text-right shrink-0">{resolvedOpacity.toFixed(2)}</span>
+        {opacity !== undefined && (
+          <button onClick={() => onOpacityChange(1)} title="Reset to fully opaque" className="text-gray-400 hover:text-red-600 text-xs shrink-0">
+            ✕
+          </button>
+        )}
+      </div>
       {hasAnyOverride && (
         <div className="px-3 pb-1 flex justify-end">
           <button

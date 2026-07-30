@@ -2,10 +2,15 @@ import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/Print
 import type { ProjectLetterhead } from '@/lib/letterhead'
 import { type CostElement } from './types'
 
+// Fixed at exactly 2dp — same fix as CostPlan.tsx's own formatCurrency (see
+// its own header comment): plain toLocaleString() drops a trailing zero
+// from a value like 160690.70, mixing decimal-place counts across the
+// same printed page.
 function formatCurrency(value: string | number | null) {
   if (value === null) return '—'
   const n = Number(value)
-  return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
+  const formatted = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return n < 0 ? `-£${formatted}` : `£${formatted}`
 }
 
 // One column currently switched on, in order (2026-07-18, per Maro: "fix up
@@ -51,13 +56,22 @@ interface CostPrintViewProps {
   elements: CostElement[]
   projectName: string
   letterhead: ProjectLetterhead | null
+  // £/m² GIA (2026-07-27, per Maro's QS review: "the one line a reader will
+  // look for first") — null when the project has no GFA set, same gate
+  // CostSummaryPanel's own on-screen "per m² GFA" figure already uses.
+  gfaM2?: string | null
+}
+
+function effectivePrintBudget(el: CostElement): number {
+  const raw = el.element_type === 'percentage' ? el.computed_budget : el.budget
+  return raw !== null ? Number(raw) : 0
 }
 
 // A dedicated printable rendering, shown only via @media print (see index.css
 // .print-only). 'list' mirrors the on-screen table exactly (same rows, same
 // columns, same collapse state); 'detail' is a full-detail report per
 // element (scope note, variance commentary, EVM, QS sign-off).
-export function CostPrintView({ mode, printRows, printColumns, printElementCount, elements, projectName, letterhead }: CostPrintViewProps) {
+export function CostPrintView({ mode, printRows, printColumns, printElementCount, elements, projectName, letterhead, gfaM2 }: CostPrintViewProps) {
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   const count = mode === 'list' ? (printElementCount ?? 0) : elements.length
   const letterheadTokens = {
@@ -66,10 +80,37 @@ export function CostPrintView({ mode, printRows, printColumns, printElementCount
     printed_at: printedAt,
   }
 
+  const gfa = gfaM2 !== null && gfaM2 !== undefined ? Number(gfaM2) : null
+  const totalBudget = mode === 'list' ? elements.reduce((sum, el) => sum + effectivePrintBudget(el), 0) : null
+  const costPerM2 = gfa && totalBudget !== null ? totalBudget / gfa : null
+
+  // Neither footnote is a new calculation — both just state, in the printed
+  // document itself, the real basis of a figure that's already there (2026-
+  // 07-27, per Maro's QS review: state the risk confidence level; state an
+  // inflation base date/midpoint rather than presenting a flat rate as
+  // precise). Gated on the matching on-cost actually being present, same
+  // pattern as the £/m² line above.
+  const hasRiskContingency = mode === 'list' && elements.some(el => el.element_group === 'Risk')
+  const hasInflation = mode === 'list' && elements.some(el => el.description === 'Inflation' && el.element_type === 'percentage')
+
   return (
     <div className="print-only p-8">
       {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={letterheadTokens} />}
-      <p className="text-sm text-gray-500 mb-4">{mode === 'list' ? 'Cost Plan (as shown)' : 'Full detail'} · {count} element{count === 1 ? '' : 's'}</p>
+      <p className="text-sm text-gray-500 mb-4">
+        {mode === 'list' ? 'Cost Plan (as shown)' : 'Full detail'} · {count} element{count === 1 ? '' : 's'}
+        {costPerM2 !== null && <> · {formatCurrency(costPerM2)} per m² GIA</>}
+      </p>
+      {mode === 'list' && <p className="text-xs text-gray-400 mb-4">Excludes VAT.</p>}
+      {hasRiskContingency && (
+        <p className="text-xs text-gray-400 mb-1">
+          Contingency (Risk-Derived) is an Expected Monetary Value allowance — the risk register's own probability-weighted mean, not a stated confidence percentile (P50/P80).
+        </p>
+      )}
+      {hasInflation && (
+        <p className="text-xs text-gray-400 mb-4">
+          Inflation is a flat annual rate applied at {printedAt} — not yet indexed to a stated base date or construction-programme midpoint.
+        </p>
+      )}
 
       {mode === 'list' ? (
         <table className="w-full text-xs border-collapse">

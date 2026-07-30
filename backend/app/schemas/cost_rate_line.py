@@ -12,6 +12,8 @@ class CostRateLineBase(BaseModel):
     qty: Decimal
     unit: str | None = None
     rate: Decimal
+    # location/system/activity — see CostRateLine.cost_code's own docstring.
+    cost_code: str | None = None
 
 
 class CostRateLineCreate(CostRateLineBase):

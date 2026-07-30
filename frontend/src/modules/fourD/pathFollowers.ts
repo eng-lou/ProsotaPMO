@@ -17,6 +17,11 @@ export interface PathFollower {
   target_kind: PathFollowerTargetKind
   element_ref: string
   orient_to_path: boolean
+  // Yaw correction, in degrees, applied on top of the lookAt orientation
+  // (2026-08-06) — see path_follower.py's own docstring for why: not every
+  // imported model was authored with three.js's -Z-is-forward convention,
+  // so this compensates per-binding rather than assuming one true answer.
+  heading_offset_deg: number
   created_at: string
   updated_at: string
 }
@@ -35,6 +40,7 @@ export async function upsertPathFollower(data: {
   target_kind: PathFollowerTargetKind
   element_ref?: string
   orient_to_path?: boolean
+  heading_offset_deg?: number
 }): Promise<PathFollower> {
   const res = await api.put<PathFollower>('/api/v1/path-followers/', data)
   return res.data
@@ -43,6 +49,7 @@ export async function upsertPathFollower(data: {
 export async function updatePathFollower(id: string, data: Partial<{
   path_id: string
   orient_to_path: boolean
+  heading_offset_deg: number
 }>): Promise<PathFollower> {
   const res = await api.patch<PathFollower>(`/api/v1/path-followers/${id}`, data)
   return res.data

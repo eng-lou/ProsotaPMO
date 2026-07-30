@@ -19,9 +19,15 @@ export interface DefaultCostLine {
   description: string
 }
 
+// No top-level "Prelims" percentage line (2026-07-27, per Maro's QS review)
+// — Preliminaries is now a real, measured discipline bucket under
+// Construction (schedule-generated site-mobilisation activities plus the
+// reclassified Procurement coordination overhead, see
+// scheduleGeneration.ts's CATEGORY_DISCIPLINE), not a guessed top-level %.
+// A separate 12% on-cost on top of that would double-count the same
+// preliminaries spend twice.
 export const DEFAULT_COST_LINES: DefaultCostLine[] = [
-  { element_type: 'percentage', rate: 0.12, element_group: 'On-Costs', description: 'Prelims' },
-  { element_type: 'percentage', rate: 0.08, element_group: 'On-Costs', description: 'Design Fees' },
   { element_type: 'percentage', rate: 0.05, element_group: 'On-Costs', description: 'Overhead' },
+  { element_type: 'percentage', rate: 0.08, element_group: 'On-Costs', description: 'Design Fees' },
   { element_type: 'percentage', rate: 0.03, element_group: 'On-Costs', description: 'Inflation' },
 ]

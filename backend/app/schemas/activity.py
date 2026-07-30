@@ -262,6 +262,16 @@ class ActivityResponse(ActivityBase):
     # engineering an approximation from duration_hours. Same "set once at
     # generation, null for anything else" contract as the two fields above.
     schedule_quantity: Decimal | None = None
+    # Real material take-off (2026-07-27, per Maro: "how is concrete and
+    # steel catered for if they exist" — see Activity.schedule_material_name's
+    # own model docstring). Same "set once at generation, null for anything
+    # else" contract as the three fields above; read by the Resources tab's
+    # same "Generate Resources"/"Auto Assign Resources" flow to emit a real
+    # resource_type='material' resource + quantity-costed assignment.
+    schedule_material_name: str | None = None
+    schedule_material_quantity: Decimal | None = None
+    schedule_material_unit: str | None = None
+    schedule_material_cost_per_unit: Decimal | None = None
     # Server-managed outline position — see app/services/activity.py:_recompute_hierarchy.
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.
     wbs_path: str | None = None

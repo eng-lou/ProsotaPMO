@@ -15,7 +15,12 @@ interface Props {
   onToggleVisible: (id: string) => void
   onUnload: (id: string) => void
   selectedObjectIds: Set<string>
-  onSelectObject: (id: string | null, additive?: boolean) => void
+  onSelectObject: (id: string | null, additive?: boolean, rangeIds?: string[]) => void
+  // Which loaded objects genuinely haven't finished saving to the server
+  // yet — see IfcDataPanel.tsx's own unsavedObjectIds prop header for the
+  // full story (2026-07-28, per Maro: "it shows like everything is fine
+  // until i refresh").
+  unsavedObjectIds: Set<string>
   activities: Activity[]
   links: ModelElementLink[]
   animationProfiles: AnimationProfile[]
@@ -24,9 +29,10 @@ interface Props {
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
 
-function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onToggleSelected, activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile }: {
+function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onToggleSelected, saved, activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile }: {
   item: MeshImportItem; hidden: boolean; onToggleVisible: () => void; onUnload: () => void
-  selected: boolean; onSelect: (additive: boolean) => void; onToggleSelected: () => void
+  selected: boolean; onSelect: (additive: boolean) => void; onToggleSelected: (shiftKey: boolean) => void
+  saved: boolean
   activities: Activity[]; links: ModelElementLink[]; animationProfiles: AnimationProfile[]
   onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
@@ -43,8 +49,8 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
         <input
           type="checkbox"
           checked={selected}
-          onChange={onToggleSelected}
-          title={selected ? 'Selected — click to deselect' : 'Select this object'}
+          onChange={e => onToggleSelected((e.nativeEvent as MouseEvent).shiftKey)}
+          title={selected ? 'Selected — click to deselect (Shift-click to select a range)' : 'Select this object (Shift-click to select a range)'}
         />
         <input
           type="checkbox"
@@ -59,6 +65,14 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
         >
           {item.name}
         </span>
+        {!saved && (
+          <span
+            title="Not saved to the server yet — refreshing now would lose this model. Wait for the upload indicator in the toolbar to clear."
+            className="text-[10px] text-amber-600 shrink-0"
+          >
+            ⚠ unsaved
+          </span>
+        )}
         {ownLinks.length > 0 && <span className="text-[10px] text-gray-400 shrink-0">{ownLinks.length} linked</span>}
         <button onClick={onUnload} title="Unload" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
       </div>
@@ -90,7 +104,7 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
 // identifier a plain mesh import has across re-imports — see
 // modelElementLinks.ts's own header). Content-only — DataPanel.tsx owns the
 // outer chrome and tab bar.
-export function MeshDataPanel({ items, hiddenIds, onToggleVisible, onUnload, selectedObjectIds, onSelectObject, activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile }: Props) {
+export function MeshDataPanel({ items, hiddenIds, onToggleVisible, onUnload, selectedObjectIds, onSelectObject, unsavedObjectIds, activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile }: Props) {
   if (items.length === 0) {
     return (
       <div className="flex-1 p-3 text-xs text-gray-400">
@@ -110,7 +124,8 @@ export function MeshDataPanel({ items, hiddenIds, onToggleVisible, onUnload, sel
           onUnload={() => onUnload(item.id)}
           selected={selectedObjectIds.has(item.id)}
           onSelect={additive => onSelectObject(item.id, additive)}
-          onToggleSelected={() => onSelectObject(item.id, true)}
+          onToggleSelected={shiftKey => onSelectObject(item.id, true, shiftKey ? items.map(i => i.id) : undefined)}
+          saved={!unsavedObjectIds.has(item.id)}
           activities={activities}
           links={links}
           animationProfiles={animationProfiles}

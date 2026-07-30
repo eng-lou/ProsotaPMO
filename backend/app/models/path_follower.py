@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,7 +43,24 @@ class PathFollower(Base, TimestampMixin):
     tangent direction at its current point, not just translated along it;
     off leaves rotation untouched (still driven by whatever its own
     rot_x/y/z keyframes or baseline say, same as an object with no path
-    binding at all)."""
+    binding at all).
+
+    heading_offset_deg (2026-08-06, per Maro: "I aligned it up... but when
+    i hit bind it changed the rotation of the car" — after fixing a real
+    up-axis bug in the lookAt call itself, the car still ended up 90°
+    off, confirmed via screenshots: front pointed along the path before
+    binding, but perpendicular to it after). Root cause is a *second*,
+    separate issue from the up-axis one: three.js's lookAt always aims
+    whichever axis is authored as an imported model's own local -Z at the
+    path's tangent direction, but not every imported FBX/GLTF/OBJ was
+    modeled with -Z as "forward" — this app has no way to know a given
+    car model's own authored heading convention (mirrors why paths.py's
+    own sourceUpAxis exists for the *up* axis: real imported files don't
+    reliably agree on a convention, so it has to be an adjustable
+    per-target correction rather than a guess). Applied as an extra yaw
+    rotation around the object's own up axis *after* the lookAt result,
+    in degrees so it reads naturally in the UI (PathsPanel.tsx's own
+    heading offset field) — 0 leaves lookAt's raw result untouched."""
 
     __tablename__ = "path_followers"
     __table_args__ = (
@@ -66,3 +83,4 @@ class PathFollower(Base, TimestampMixin):
     target_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "camera" | "mesh" | "ifc"
     element_ref: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     orient_to_path: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    heading_offset_deg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

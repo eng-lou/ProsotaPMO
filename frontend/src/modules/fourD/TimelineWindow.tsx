@@ -5,8 +5,10 @@ import { AnimationActorsList } from './AnimationActorsList'
 import type { AnimationProfile } from './animationProfiles'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
+import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
-import { dateFromTimelineValue, formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
+import { dateFromTimelineValue, formatTimelineValue, FPS_OPTIONS, type TimeDisplayMode } from './timelinePlayback'
+import type { Zone } from './zones'
 
 interface Props {
   scheduleStart: Date | null
@@ -51,7 +53,20 @@ interface Props {
   pathFollowers: PathFollower[]
   annotations: Annotation[]
   animationProfiles: AnimationProfile[]
-  onSelectActor: (sourceKind: 'mesh' | 'ifc' | 'annotation', elementRef: string) => void
+  paths: Path[]
+  zones: Zone[]
+  onSelectActor: (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone', elementRef: string) => void
+  // Lifted to FourD.tsx (2026-07-30) — see that file's own header on these
+  // three for the full "why" (PathsPanel.tsx/ZonesPanel.tsx need the same
+  // shared speed/mode/fps for their own Start/End keyframe fields to read
+  // meaningfully alongside this scrubber). Was local useState here before;
+  // every internal use below is unchanged, just sourced from props now.
+  speedDaysPerSecond: number
+  onSpeedChange: (value: number) => void
+  timeDisplayMode: TimeDisplayMode
+  onTimeDisplayModeChange: (mode: TimeDisplayMode) => void
+  fps: number
+  onFpsChange: (value: number) => void
 }
 
 const SPEED_OPTIONS = [
@@ -64,9 +79,6 @@ const SPEED_OPTIONS = [
 const SLIDER_MAX = 1000
 const STEP_DAYS = 1
 const DAY_MS = 86_400_000
-const FPS_OPTIONS = [24, 25, 30, 60]
-const DISPLAY_MODE_KEY = 'prosota_4d_timeline_display_mode'
-const FPS_KEY = 'prosota_4d_timeline_fps'
 
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -88,48 +100,27 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 export function TimelineWindow({
   scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
-  elementKeyframes, pathFollowers, annotations, animationProfiles, onSelectActor,
+  elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, onSelectActor,
+  speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [loop, setLoop] = useState(false)
-  const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const [displayDate, setDisplayDate] = useState<Date | null>(dateRef.current)
-  // Date/Seconds/Frames display (2026-07-12, per Maro: "I want to choose
-  // to see as date or time... so i can be precise and also adjust frame
-  // rate") — see timelinePlayback.ts's own formatTimelineValue header for
-  // why seconds/frames are derived from speedDaysPerSecond rather than an
-  // independent fixed clock. Persisted like every other viewer preference
-  // in this module (ViewerSettings/RenderCaptureSettings's own
-  // localStorage convention).
-  const [timeDisplayMode, setTimeDisplayMode] = useState<TimeDisplayMode>(() => {
-    try {
-      const raw = localStorage.getItem(DISPLAY_MODE_KEY)
-      return raw === 'seconds' || raw === 'frames' ? raw : 'date'
-    } catch {
-      return 'date'
-    }
-  })
-  const [fps, setFps] = useState(() => {
-    try {
-      const raw = Number(localStorage.getItem(FPS_KEY))
-      return FPS_OPTIONS.includes(raw) ? raw : 30
-    } catch {
-      return 30
-    }
-  })
+  // changeTimeDisplayMode/changeFps (2026-07-12, per Maro: "I want to
+  // choose to see as date or time... so i can be precise and also adjust
+  // frame rate") — thin local wrappers around the lifted onTimeDisplayModeChange/
+  // onFpsChange props (2026-07-30 — see FourD.tsx's own header on why
+  // these moved out of local useState here), kept as wrappers rather than
+  // calling the props directly at each call site below purely for the one
+  // bit of local-only behaviour a mode switch still needs: clearing the
+  // End field's own in-progress typing buffer (endInputText, below), whose
+  // raw text is unit-specific (seconds vs. frames) and would otherwise
+  // show stale digits in the new unit until the user happened to blur it.
   const changeTimeDisplayMode = (mode: TimeDisplayMode) => {
-    setTimeDisplayMode(mode)
-    // Clears any in-progress End field typing buffer (2026-07-24) — its
-    // raw text is unit-specific (seconds vs. frames); left alone across a
-    // mode switch it would show stale digits in the new unit's field
-    // until the user happened to blur it.
+    onTimeDisplayModeChange(mode)
     setEndInputText(null)
-    try { localStorage.setItem(DISPLAY_MODE_KEY, mode) } catch { /* ignore */ }
   }
-  const changeFps = (value: number) => {
-    setFps(value)
-    try { localStorage.setItem(FPS_KEY, String(value)) } catch { /* ignore */ }
-  }
+  const changeFps = (value: number) => onFpsChange(value)
   const rafRef = useRef<number | null>(null)
   const lastTimeRef = useRef<number | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -167,10 +158,28 @@ export function TimelineWindow({
   // choice) — re-derived from the live `scheduleEnd` prop every render
   // rather than reset by an effect, so it also transparently stops applying
   // the moment real activity/keyframe data grows past it on its own.
+  //
+  // Memoized (2026-07-26 fix, per Maro: "not playing when i click play
+  // unless i scrub" — a regression of the *exact* bug class FourD.tsx's own
+  // timelineRange comment already documents fixing back on 2026-07-11: this
+  // used to build a plain `new Date(endOverrideMs)` inline in the render
+  // body whenever an override was active, a fresh Date identity on every
+  // render. The play effect below depends on effectiveScheduleEnd by
+  // identity to keep accumulating real elapsed time across frames — and
+  // every rAF tick calls setDisplayDate, which re-renders this component,
+  // which built a brand-new effectiveScheduleEnd object, which the effect
+  // saw as "changed" and tore itself down for, resetting lastTimeRef to null
+  // before any meaningful delta could ever accumulate. Play looked like it
+  // did nothing; a manual scrub (self-contained local state, untouched by
+  // this) worked fine — reproducing the 2026-07-11 symptom exactly. Keyed on
+  // the override's own primitive ms value and scheduleEnd's own timestamp,
+  // not the Date objects themselves, so this only ever produces a new
+  // identity when the real value actually changes.
   const [endOverrideMs, setEndOverrideMs] = useState<number | null>(null)
-  const effectiveScheduleEnd = scheduleEnd && endOverrideMs !== null && endOverrideMs > scheduleEnd.getTime()
-    ? new Date(endOverrideMs)
-    : scheduleEnd
+  const effectiveScheduleEnd = useMemo(
+    () => (scheduleEnd && endOverrideMs !== null && endOverrideMs > scheduleEnd.getTime() ? new Date(endOverrideMs) : scheduleEnd),
+    [scheduleEnd, endOverrideMs],
+  )
 
   // Seeds the shared date once a schedule range becomes available, if
   // nothing's set it yet (e.g. the very first time this window opens).
@@ -400,7 +409,7 @@ export function TimelineWindow({
         </label>
         <select
           value={speedDaysPerSecond}
-          onChange={e => setSpeedDaysPerSecond(Number(e.target.value))}
+          onChange={e => onSpeedChange(Number(e.target.value))}
           className="text-xs border border-gray-300 rounded px-1.5 py-1"
         >
           {SPEED_OPTIONS.map(o => <option key={o.daysPerSecond} value={o.daysPerSecond}>{o.label}</option>)}
@@ -544,6 +553,8 @@ export function TimelineWindow({
         pathFollowers={pathFollowers}
         annotations={annotations}
         animationProfiles={animationProfiles}
+        paths={paths}
+        zones={zones}
         timeDisplayMode={timeDisplayMode}
         speedDaysPerSecond={speedDaysPerSecond}
         fps={fps}

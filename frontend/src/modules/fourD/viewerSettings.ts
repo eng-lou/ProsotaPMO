@@ -16,7 +16,13 @@
 // string literal 'shaded' rather than renamed, so an existing
 // localStorage-persisted ViewerSettings from before this change still
 // resolves to a valid value with no migration needed.
-export type RenderMode = 'wireframe' | 'hiddenLine' | 'flat' | 'gouraud' | 'shaded'
+// 'wireframe' removed (2026-07-26, per Maro) — a value already persisted in
+// some browser's localStorage from before this removal just falls through
+// every render-mode check in Viewport3D.tsx as "not recognised" and renders
+// as plain Rendered (PBR) instead, the same graceful-fallback behaviour
+// this file's own comment above already establishes for unmigrated values,
+// not a crash.
+export type RenderMode = 'hiddenLine' | 'flat' | 'gouraud' | 'shaded'
 
 export interface ViewerSettings {
   renderMode: RenderMode
@@ -89,6 +95,31 @@ export interface ViewerSettings {
   // screenshot) — same "off by default" reasoning as showVarianceColors
   // just above.
   showClashColors: boolean
+  // "Fade Unselected" (2026-07-26, per Maro: "when an element is selected I
+  // want all other elements transparency increased so i can see the
+  // element" — a car mesh-kind import sat right behind/inside an IFC
+  // building in his screenshot, fully selected but hard to actually see
+  // through the occluding building without switching to the much more
+  // drastic Isolate, which hides everything else outright instead of just
+  // dimming it). Off by default, same "opt in" caution as every other
+  // EFFECTS toggle above — Viewport3D.tsx's ModelObjects effect applies the
+  // actual fade only to meshes that aren't part of the current selection
+  // (isExpressSelected/isExpressAlsoSelected/isObjectSelected), and only
+  // while something is genuinely selected at all; nothing renders
+  // differently the moment selection is cleared or this is off. Known
+  // narrowing (documented at the fade's own call site, not silently
+  // assumed): a still-batched IFC element shares one THREE.BatchedMesh
+  // material with every other instance in that same batch, and batched
+  // instances have no per-instance opacity channel (THREE.BatchedMesh.
+  // setColorAt only ever carries RGB) — so the fade is applied per *batch*
+  // (skipped only for a batch containing the current selection), not per
+  // individual still-batched instance. Picking one specific element out of
+  // a batch that also contains other, unselected instances won't dim just
+  // those other instances; the reported car-behind-a-building case (the
+  // car is a plain, never-batched mesh-kind import, and the whole
+  // occluding IFC building is the thing that needs to fade) works exactly
+  // as expected either way.
+  xrayUnselected: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -108,6 +139,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   upAxis: 'z',
   showVarianceColors: false,
   showClashColors: false,
+  xrayUnselected: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

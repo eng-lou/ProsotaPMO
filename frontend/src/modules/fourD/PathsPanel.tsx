@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import type { Path } from './paths'
+import type { Path, PathLineStyle, PathPoint } from './paths'
 import type { PathFollower, PathFollowerTargetKind } from './pathFollowers'
+import type { UpAxis } from './upAxis'
+import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
 
 interface BindTarget {
   kind: Exclude<PathFollowerTargetKind, 'camera'>
@@ -8,12 +10,33 @@ interface BindTarget {
   label: string
 }
 
+// Threaded down for the Start/End fields' own frames/seconds/date display
+// (2026-07-30, per Maro: "I want frames or seconds not dates here") — same
+// bundling AnimationActorsList.tsx's own DisplayFormat uses, reusing
+// FourD.tsx's one shared speed/mode/fps rather than each panel owning an
+// independent copy (that lifted state's own header, FourD.tsx).
+interface DisplayFormat {
+  scheduleStart: Date
+  timeDisplayMode: TimeDisplayMode
+  speedDaysPerSecond: number
+  fps: number
+}
+
 interface Props {
   paths: Path[]
   error: string | null
   addingPointsForPathId: string | null
+  // Needed only for the Elevation field below (2026-07-29) — to read/write
+  // "up" it has to know which raw coordinate that actually is.
+  upAxis: UpAxis
   bindTarget: BindTarget | null
   followers: PathFollower[]
+  // Resolved anim_start/anim_end per path (2026-07-30, ElementKeyframe-
+  // based — see paths.ts's own header) plus the shared display format,
+  // both passed straight through to Item below for its Start/End fields
+  // and Key buttons.
+  animWindows: Map<string, { start: Date | null; end: Date | null }>
+  format: DisplayFormat | null
   onCreate: () => void
   onRename: (id: string, name: string) => void
   onToggleClosed: (id: string) => void
@@ -24,12 +47,51 @@ interface Props {
   onBind: (pathId: string) => void
   onUnbind: (followerId: string) => void
   onToggleOrient: (followerId: string) => void
+  // Heading offset (2026-08-06, per Maro: "when i hit bind it changed the
+  // rotation of the car") — see FourD.tsx's own matching handler header:
+  // compensates for an imported model's own authored forward axis not
+  // matching three.js's lookAt convention (-Z), in degrees.
+  onSetHeadingOffset: (followerId: string, headingOffsetDeg: number) => void
+  onUpdateStyle: (id: string, patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => void
+  // "Key" buttons (2026-07-30, per Maro: "add a key frame buttons to the
+  // side. so i can key frame the start and end") — keys the *current
+  // playhead* (FourD.tsx's own timelineDateRef) as this path's anim_start/
+  // anim_end ElementKeyframe, replacing whichever one was there before.
+  onKeyAnimStart: (id: string) => void
+  onKeyAnimEnd: (id: string) => void
+  // Elevation (2026-07-29, per Maro: "as a failsafe give me the elevation
+  // controls like in zones", after "Trace on ground" still wasn't reliably
+  // landing on a real sidewalk's own true surface — see this handler's own
+  // header in FourD.tsx for the full incident). Unlike Zone's own single
+  // `elevation` column, a Path has no dedicated field for this — it's a raw
+  // points array, computed here as those points' own average up-coordinate
+  // and written back as a uniform shift of the whole array, so a sloped
+  // path's own relative shape survives a nudge, only its overall height
+  // moves.
+  onSetElevation: (id: string, elevation: number) => void
+}
+
+function pathElevation(points: PathPoint[], upAxis: UpAxis): number {
+  if (points.length === 0) return 0
+  const key = upAxis === 'z' ? 'z' : 'y'
+  return points.reduce((sum, p) => sum + p[key], 0) / points.length
+}
+
+// Same compact color-swatch row AnnotationsPanel.tsx's own ColorField uses.
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+      <span className="w-16 shrink-0">{label}</span>
+      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 rounded shrink-0" />
+    </label>
+  )
 }
 
 function Item({
-  path, addingPoints, binding, error: _error, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, bindTarget,
+  path, upAxis, addingPoints, binding, error: _error, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, bindTarget, onUpdateStyle, onSetElevation, animWindow, format, onKeyAnimStart, onKeyAnimEnd,
 }: {
   path: Path
+  upAxis: UpAxis
   addingPoints: boolean
   binding: PathFollower | undefined
   error: string | null
@@ -42,10 +104,18 @@ function Item({
   onBind: () => void
   onUnbind: () => void
   onToggleOrient: () => void
+  onSetHeadingOffset: (headingOffsetDeg: number) => void
   bindTarget: BindTarget | null
+  onUpdateStyle: (patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => void
+  onSetElevation: (elevation: number) => void
+  animWindow: { start: Date | null; end: Date | null } | undefined
+  format: DisplayFormat | null
+  onKeyAnimStart: () => void
+  onKeyAnimEnd: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(path.name)
+  const [styleOpen, setStyleOpen] = useState(false)
 
   const commitRename = () => {
     setEditing(false)
@@ -100,14 +170,177 @@ function Item({
         </label>
         <span className="text-xs text-gray-400">{path.points.length} pt{path.points.length === 1 ? '' : 's'}</span>
       </div>
-      {binding ? (
-        <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-sky-50 border border-sky-100 rounded px-2 py-1">
-          <span className="flex-1 truncate">Bound: {binding.target_kind} · {binding.element_ref || '(whole)'}</span>
-          <label className="flex items-center gap-1 shrink-0">
-            <input type="checkbox" checked={binding.orient_to_path} onChange={onToggleOrient} />
-            Orient
+      <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
+        {styleOpen ? '▾' : '▸'} Style
+      </button>
+      {styleOpen && (
+        // Mirrors AnnotationsPanel.tsx's own Style section (2026-07-29, per
+        // Maro's site-logistics reference — a colored, dashed, arrowed,
+        // labeled route like "RIG 1"/"RIG 2") — see PathGizmo.tsx for how
+        // each of these actually renders.
+        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+          <ColorField label="Color" value={path.color} onChange={v => onUpdateStyle({ color: v })} />
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="w-16 shrink-0">Line style</span>
+            <select
+              value={path.line_style}
+              onChange={e => onUpdateStyle({ line_style: e.target.value as PathLineStyle })}
+              className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+            >
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+            </select>
           </label>
-          <button onClick={onUnbind} className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+          {path.line_style === 'dashed' && (
+            <>
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="w-16 shrink-0">Dash size</span>
+                <input
+                  type="number" min={0.05} step={0.05}
+                  value={path.dash_size}
+                  onChange={e => onUpdateStyle({ dash_size: Number(e.target.value) })}
+                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                />
+              </label>
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="w-16 shrink-0">Gap size</span>
+                <input
+                  type="number" min={0.05} step={0.05}
+                  value={path.gap_size}
+                  onChange={e => onUpdateStyle({ gap_size: Number(e.target.value) })}
+                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                />
+              </label>
+            </>
+          )}
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="w-16 shrink-0">Line width</span>
+            <input
+              type="number" min={1} max={20} step={1}
+              value={path.line_width}
+              onChange={e => onUpdateStyle({ line_width: Number(e.target.value) })}
+              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <input type="checkbox" checked={path.show_arrow} onChange={e => onUpdateStyle({ show_arrow: e.target.checked })} />
+            Show direction arrow
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <input type="checkbox" checked={path.show_label} onChange={e => onUpdateStyle({ show_label: e.target.checked })} />
+            Show label
+          </label>
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            title="Draws the line (and its arrow, if enabled) growing from the first point to the last over the Start/End window below, instead of always fully drawn"
+          >
+            <input type="checkbox" checked={path.animate} onChange={e => onUpdateStyle({ animate: e.target.checked })} />
+            Animate line
+          </label>
+          {path.animate && (
+            <>
+              {/* Frames/Seconds/Date, not a raw datetime-local field
+                  (2026-07-30, per Maro: "I want frames or seconds not
+                  dates here") — reads the same shared display format
+                  TimelineWindow.tsx's own scrubber uses (FourD.tsx's
+                  lifted speed/mode/fps). The "Key" button keys the
+                  *current playhead*, not whatever this field displays —
+                  there's deliberately no way to type an exact value
+                  here, matching Blender's own "keyframe the playhead"
+                  workflow this whole feature is modeled on. */}
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="w-16 shrink-0">Start</span>
+                <span className="flex-1 truncate" title={animWindow?.start ? animWindow.start.toLocaleString() : 'Not keyed yet'}>
+                  {animWindow?.start && format ? formatTimelineValue(animWindow.start, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
+                </span>
+                <button
+                  onClick={onKeyAnimStart}
+                  title="Key the current playhead as this path's reveal Start"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                >
+                  Key
+                </button>
+              </label>
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="w-16 shrink-0">End</span>
+                <span className="flex-1 truncate" title={animWindow?.end ? animWindow.end.toLocaleString() : 'Not keyed yet'}>
+                  {animWindow?.end && format ? formatTimelineValue(animWindow.end, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
+                </span>
+                <button
+                  onClick={onKeyAnimEnd}
+                  title="Key the current playhead as this path's reveal End"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                >
+                  Key
+                </button>
+              </label>
+              <label
+                className="flex items-center gap-1.5 text-[11px] text-gray-500"
+                title="Repeats the reveal every time the playhead passes End, instead of holding fully-drawn"
+              >
+                <input type="checkbox" checked={path.animation_loop} onChange={e => onUpdateStyle({ animation_loop: e.target.checked })} />
+                Loop
+              </label>
+            </>
+          )}
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            title="Shifts every point of this path up or down by the same amount — a manual failsafe for when a click didn't land exactly on the real surface. Preserves any slope; only the overall height moves."
+          >
+            <span className="w-16 shrink-0">Elevation</span>
+            <input
+              type="number" step={0.1}
+              value={pathElevation(path.points, upAxis)}
+              disabled={path.points.length === 0}
+              onChange={e => onSetElevation(Number(e.target.value))}
+              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5 disabled:bg-gray-100 disabled:text-gray-400"
+            />
+          </label>
+        </div>
+      )}
+      {binding ? (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-sky-50 border border-sky-100 rounded px-2 py-1">
+            <span className="flex-1 truncate">Bound: {binding.target_kind} · {binding.element_ref || '(whole)'}</span>
+            <label className="flex items-center gap-1 shrink-0">
+              <input type="checkbox" checked={binding.orient_to_path} onChange={onToggleOrient} />
+              Orient
+            </label>
+            <button onClick={onUnbind} className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+          </div>
+          {binding.orient_to_path && (
+            // Heading offset (2026-08-06, per Maro: "when i hit bind it
+            // changed the rotation of the car" — see FourD.tsx's own
+            // handleSetPathFollowerHeadingOffset header for the full "why":
+            // not every imported model was authored with three.js's own
+            // -Z-is-forward convention, so Orient's lookAt can land 90°/180°
+            // off a model's real visual front. -90/+90 cover the common
+            // case in one click; the number field is there for anything
+            // else (a mirrored import, etc).
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 pl-1">
+              <span className="w-16 shrink-0">Heading</span>
+              <button
+                onClick={() => onSetHeadingOffset(binding.heading_offset_deg - 90)}
+                title="Nudge -90°"
+                className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+              >
+                -90°
+              </button>
+              <input
+                type="number" step={1}
+                value={binding.heading_offset_deg}
+                onChange={e => onSetHeadingOffset(Number(e.target.value))}
+                className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              />
+              <button
+                onClick={() => onSetHeadingOffset(binding.heading_offset_deg + 90)}
+                title="Nudge +90°"
+                className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+              >
+                +90°
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <button
@@ -136,8 +369,8 @@ function Item({
 // existing point, matching the "click-to-place" spirit of the whole feature
 // rather than mixing in a second, numeric-list editing mode.
 export function PathsPanel({
-  paths, error, addingPointsForPathId, bindTarget, followers,
-  onCreate, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient,
+  paths, error, addingPointsForPathId, upAxis, bindTarget, followers, animWindows, format,
+  onCreate, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, onUpdateStyle, onSetElevation, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
@@ -158,6 +391,7 @@ export function PathsPanel({
             <Item
               key={path.id}
               path={path}
+              upAxis={upAxis}
               addingPoints={addingPointsForPathId === path.id}
               binding={followers.find(f => f.path_id === path.id)}
               error={error}
@@ -177,6 +411,16 @@ export function PathsPanel({
                 const binding = followers.find(f => f.path_id === path.id)
                 if (binding) onToggleOrient(binding.id)
               }}
+              onSetHeadingOffset={headingOffsetDeg => {
+                const binding = followers.find(f => f.path_id === path.id)
+                if (binding) onSetHeadingOffset(binding.id, headingOffsetDeg)
+              }}
+              onUpdateStyle={patch => onUpdateStyle(path.id, patch)}
+              onSetElevation={elevation => onSetElevation(path.id, elevation)}
+              animWindow={animWindows.get(path.id)}
+              format={format}
+              onKeyAnimStart={() => onKeyAnimStart(path.id)}
+              onKeyAnimEnd={() => onKeyAnimEnd(path.id)}
             />
           ))}
         </div>

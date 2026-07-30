@@ -39,7 +39,36 @@ export interface CategoryRate {
   // treats crew/labour/equipment identically in resource_costing.py.
   equipmentName?: string
   equipmentCostPerDay?: number
+  // Optional — the one phase per category that's the real material-
+  // placement moment (2026-07-27, per Maro: "how is concrete and steel
+  // catered for if they exist" — every structural category's own resources
+  // were crew/equipment only; concrete/steel never showed up as a cost or a
+  // resource anywhere at all). resource_type='material' downstream
+  // (buildResourceRecipe below), quantity-costed — materialCostPerUnit x a
+  // real measured quantity (buildStagedSchedule's own StagedActivity.
+  // material_quantity, itself CategoryGroup.materialVolumeM3 converted to
+  // this unit — volume as-is for 'm³', or through STEEL_DENSITY_KG_PER_M3
+  // for 'tonne') — never duration_hours x day-rate the way crew/equipment
+  // are, since a material's real cost driver is how much of it there
+  // physically is, not how many days it took to place. Same name reused
+  // across every category that genuinely shares it (Foundation/Slabs/Walls/
+  // Ramps/Piling all place the same ready-mix concrete) — one resource in
+  // the pool, not a separate near-duplicate per category, matching this
+  // table's own existing crew-name-reuse convention exactly (see this
+  // file's own header).
+  materialName?: string
+  materialUnit?: 'm³' | 'tonne'
+  materialCostPerUnit?: number
 }
+
+// Structural/reinforcing steel density (2026-07-27) — real-world constant
+// (7,850 kg/m³ for mild/structural steel), not an editable rate: unlike
+// every $/day or $/unit figure in this table (deliberately ballpark,
+// reviewed and freely edited in the wizard), this is physics, not a
+// business assumption — converts a real measured steel volume (m³, from
+// getExpressIdWorldVolume) into the tonnes a real steel/rebar quote is
+// actually priced by.
+const STEEL_DENSITY_KG_PER_M3 = 7850
 
 // One real construction step within a category (2026-07-13, per Maro: "add
 // more detail to the schedule") — a single "Level 1 — Columns" activity
@@ -78,6 +107,34 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   // not hundreds of near-identical small pours). These are still a single
   // crew's own throughput, not multiple parallel crews — freely edited in
   // the wizard's own Rates & Crews step either way.
+  // Piling (2026-07-25, per Maro: "so you assume for such a high rise
+  // simple shallow foundation is enough?" — real catch, see IFC_TYPE_
+  // CATEGORIES' own header, ifcScheduleExtraction.ts, for the full "why").
+  // Only ever generates real activities for a storey that actually has real
+  // IfcPile elements — a shallow-footing building's own Foundation category
+  // is completely unaffected, same as any other category with nothing to
+  // match. Rig mobilisation/pile installation/integrity testing is the
+  // standard three-step breakdown for either bored or driven piling; this
+  // app has no reliable signal in real IFC data to tell those two methods
+  // apart (Revit doesn't export a pile's installation method as a distinct,
+  // consistently-populated property), so the phases stay method-agnostic
+  // rather than guessing.
+  Piling: [
+    { key: 'mobilise', label: 'Mobilise Piling Rig & Setup', rate: {
+      crewName: 'Piling Crew', crewSize: 5, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 2200,
+      equipmentName: 'Piling Rig', equipmentCostPerDay: 2500,
+    } },
+    { key: 'install_piles', label: 'Install Piles', rate: {
+      crewName: 'Piling Crew', crewSize: 5, productivityPerCrewDay: 4, unit: 'each', costPerCrewDay: 2200,
+      equipmentName: 'Piling Rig', equipmentCostPerDay: 2500,
+      // Bored/driven piles are concrete either way (2026-07-27) — same
+      // material as Foundation/Slabs/Walls/Ramps below, reused by name.
+      materialName: 'Ready-Mix Concrete C30/37', materialUnit: 'm³', materialCostPerUnit: 180,
+    } },
+    { key: 'testing_cutoff', label: 'Pile Integrity Testing & Cut-Off', rate: {
+      crewName: 'Piling Crew', crewSize: 3, productivityPerCrewDay: 8, unit: 'each', costPerCrewDay: 1400,
+    } },
+  ],
   // "Foundation" (2026-07-17, per Maro: "Footings is Foundation") — was
   // 'Footings'; still IfcFooting-sourced, same phases/rates, renamed only.
   Foundation: [
@@ -91,6 +148,7 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'pour', label: 'Pour Concrete', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 18, unit: 'each', costPerCrewDay: 1200,
       equipmentName: 'Concrete Pump Truck', equipmentCostPerDay: 900,
+      materialName: 'Ready-Mix Concrete C30/37', materialUnit: 'm³', materialCostPerUnit: 180,
     } },
     { key: 'strip', label: 'Strip Formwork', rate: {
       crewName: 'Foundation Formwork Crew', crewSize: 3, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 900,
@@ -106,12 +164,23 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   Reinforcement: [
     { key: 'place', label: 'Place Reinforcement', rate: {
       crewName: 'Rebar Crew', crewSize: 4, productivityPerCrewDay: 150, unit: 'each', costPerCrewDay: 1400,
+      // Rebar tonnage, not ready-mix concrete (2026-07-27) — this category
+      // is the actual individually-modeled bars/mesh (IfcReinforcingBar/
+      // Mesh), a real steel quantity of its own, distinct from whatever
+      // concrete volume the pour it sits inside separately prices.
+      materialName: 'Reinforcement Steel (Rebar)', materialUnit: 'tonne', materialCostPerUnit: 1300,
     } },
   ],
   Columns: [
     { key: 'erect', label: 'Erect Steel Columns', rate: {
       crewName: 'Steel Erection Crew', crewSize: 6, productivityPerCrewDay: 6, unit: 'each', costPerCrewDay: 2400,
       equipmentName: 'Mobile Crane (50t)', equipmentCostPerDay: 1500,
+      // Fabricated structural steel section (2026-07-27), not rebar — a
+      // real steel tonnage separate from Reinforcement's own rebar/mesh
+      // quantity, matching this category's own existing Steel Erection
+      // Crew/Mobile Crane choice (a poured-concrete column would use
+      // Foundation/Walls' own Concrete Pour Crew instead).
+      materialName: 'Structural Steel', materialUnit: 'tonne', materialCostPerUnit: 2200,
     } },
     { key: 'bolt', label: 'Bolt & Align', rate: {
       crewName: 'Ironworker Crew', crewSize: 4, productivityPerCrewDay: 10, unit: 'each', costPerCrewDay: 1600,
@@ -121,6 +190,9 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'erect', label: 'Erect Steel Beams', rate: {
       crewName: 'Steel Erection Crew', crewSize: 6, productivityPerCrewDay: 8, unit: 'each', costPerCrewDay: 2400,
       equipmentName: 'Mobile Crane (50t)', equipmentCostPerDay: 1500,
+      // Same Structural Steel material as Columns just above, reused by
+      // name — one steel supply line in the resource pool, not two.
+      materialName: 'Structural Steel', materialUnit: 'tonne', materialCostPerUnit: 2200,
     } },
     { key: 'bolt_weld', label: 'Bolt & Weld Connections', rate: {
       crewName: 'Ironworker Crew', crewSize: 4, productivityPerCrewDay: 8, unit: 'each', costPerCrewDay: 1600,
@@ -133,6 +205,7 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'pour', label: 'Pour Concrete', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 8, productivityPerCrewDay: 300, unit: 'm²', costPerCrewDay: 2000,
       equipmentName: 'Concrete Pump Truck', equipmentCostPerDay: 900,
+      materialName: 'Ready-Mix Concrete C30/37', materialUnit: 'm³', materialCostPerUnit: 180,
     } },
     { key: 'finish', label: 'Cure & Finish', rate: {
       crewName: 'Concrete Finishing Crew', crewSize: 4, productivityPerCrewDay: 400, unit: 'm²', costPerCrewDay: 1200,
@@ -145,6 +218,7 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'pour', label: 'Pour Concrete', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 5, productivityPerCrewDay: 80, unit: 'm²', costPerCrewDay: 1200,
       equipmentName: 'Concrete Pump Truck', equipmentCostPerDay: 900,
+      materialName: 'Ready-Mix Concrete C30/37', materialUnit: 'm³', materialCostPerUnit: 180,
     } },
     { key: 'strip', label: 'Strip Formwork', rate: {
       crewName: 'Wall Formwork Crew', crewSize: 4, productivityPerCrewDay: 100, unit: 'm²', costPerCrewDay: 1000,
@@ -194,6 +268,22 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
       crewName: 'Finishing Crew', crewSize: 3, productivityPerCrewDay: 1, unit: 'each', costPerCrewDay: 1200,
     } },
   ],
+  // 2026-07-27, per Maro's own real example (an "Elevator-Hydraulic:3500
+  // lbs" IfcTransportElement, previously unassigned entirely — see
+  // ifcScheduleExtraction.ts's own IFC_TYPE_CATEGORIES header) — unlike
+  // Stairs/Ramps' plain "erect, then finish" shape, a real elevator
+  // installation's second phase is a genuine, mandatory Test & Commission
+  // step (a lift can't be signed off/used until it's been tested by the
+  // installer), not just a cosmetic finish pass — kept as its own distinct
+  // phase label rather than folded into "finish" for that reason.
+  Elevators: [
+    { key: 'install', label: 'Install Elevator Car & Equipment', rate: {
+      crewName: 'Elevator Installation Crew', crewSize: 3, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 2000,
+    } },
+    { key: 'commission', label: 'Test & Commission Elevator', rate: {
+      crewName: 'Elevator Installation Crew', crewSize: 2, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 1600,
+    } },
+  ],
   // 2026-07-25, per Maro's own real example (an IfcRamp "ENTRANCE RAMP",
   // Pset_ProductRequirements.Category="Ramps", previously unassigned
   // entirely — see ifcScheduleExtraction.ts's own IFC_TYPE_CATEGORIES
@@ -204,6 +294,7 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   Ramps: [
     { key: 'erect', label: 'Erect Ramp Structure', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 2, unit: 'each', costPerCrewDay: 1400,
+      materialName: 'Ready-Mix Concrete C30/37', materialUnit: 'm³', materialCostPerUnit: 180,
     } },
     { key: 'finish', label: 'Install Surface & Railings', rate: {
       crewName: 'Finishing Crew', crewSize: 3, productivityPerCrewDay: 2, unit: 'each', costPerCrewDay: 1200,
@@ -356,23 +447,55 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   // Remove Black Cotton Soil, Excavation for Foundations and Bases, Concrete
   // Blinding, Hardcore Filling/Compaction/Quarry Dust Blinding, Anti-termite
   // treatment/DPM, Waterproofing to Tank Walls, Backfilling — 25-storey Gantt
-  // export) — none of it is ever modeled as 3D geometry, but all of it
-  // genuinely happens, in this order, before a real Foundation pour. Reuses
-  // Foundation's own "Excavation Crew"/"Excavator (Mini)" resource names
-  // (same "one crew, several categories" reuse convention this table's own
-  // header already documents) since it's realistically the same crew that
-  // does both the bulk dig here and Foundation's own excavate-and-prep phase.
+  // export) — none of it is ever modeled as 3D geometry. Reuses Foundation's
+  // own "Excavation Crew"/"Excavator (Mini)" resource names (same "one crew,
+  // several categories" reuse convention this table's own header already
+  // documents) since it's realistically the same crew that does both the
+  // bulk dig here and Foundation's own excavate-and-prep phase.
+  // NOT all six phases in one uninterrupted chain (2026-07-25, first pass,
+  // per Maro's own real catch: "so you went earthworks to basement floor,
+  // what of the foundation?" — the generated schedule ran Bulk Excavation ->
+  // Hardcore Fill -> Anti-Termite/DPM -> Blinding -> Waterproofing ->
+  // Backfilling as one unbroken chain, with the real IFC-derived Foundation
+  // category only starting AFTER Backfilling finished — backwards: you
+  // waterproof and backfill AROUND a real foundation, not before it exists).
+  //
+  // Second pass, same day, per Maro questioning the result directly ("is
+  // that logical, blinding then excavate?"): the first pass's fix still ran
+  // Bulk Excavation -> Hardcore Fill -> Anti-Termite/DPM -> Blinding as one
+  // flat chain BEFORE the real Foundation (or, on this project, the lowest
+  // storey's own Pit) had even been excavated — same "digging back through
+  // work you just did" problem, twice over:
+  // (1) Blinding is a thin mud-mat poured onto an *already-excavated*
+  //     formation to protect it and give a clean base for rebar — it has to
+  //     follow that specific foundation's own excavation, not gate it.
+  //     Blinding is now generated separately (below, in buildStagedSchedule),
+  //     chained from the real Foundation category's own first (lowest)
+  //     occurrence's Excavate & Prep phase, with an *additional* predecessor
+  //     relationship straight into that same occurrence's Formwork & Rebar —
+  //     P6/NEC-style CPM already supports more than one predecessor per
+  //     activity (a successor waits for all of them), so this doesn't need
+  //     to splice into or reorder the existing per-storey phase chain at all.
+  // (2) Hardcore Filling/Anti-Termite & DPM are sub-base-for-the-slab
+  //     activities (they build up and seal the ground *between* foundations,
+  //     up to underside-of-slab level, across the whole footprint) — not
+  //     foundation-trench activities. Compacting hardcore and laying a DPM/
+  //     anti-termite barrier sitewide, then digging a foundation (or a pit)
+  //     straight through it afterward, destroys that barrier at every dig
+  //     location. These two now sit in POST_FOUNDATION_EARTHWORKS_KEYS
+  //     alongside Waterproofing/Backfilling — after the real foundation is
+  //     poured *and* backfilled, immediately before the slab — not before
+  //     any foundation exists.
+  // Bulk Excavation is the only phase left in the flat pre-foundation chain:
+  // reducing the site to formation level is the one thing that genuinely has
+  // to finish before ANY foundation-specific work (including blinding)
+  // starts. 'blinding' stays declared here (for its own rate/label lookup)
+  // but is excluded from both the pre-loop and POST_FOUNDATION_EARTHWORKS_KEYS
+  // filters below — it's generated by its own dedicated code path instead.
   'Substructure Earthworks': [
     { key: 'excavation', label: 'Bulk Excavation & Earthworks', rate: {
       crewName: 'Excavation Crew', crewSize: 4, productivityPerCrewDay: 1 / 15, unit: 'each', costPerCrewDay: 1100,
       equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
-    } },
-    { key: 'hardcore_fill', label: 'Hardcore Filling & Compaction', rate: {
-      crewName: 'Hardcore & Compaction Crew', crewSize: 4, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1000,
-      equipmentName: 'Plate Compactor', equipmentCostPerDay: 300,
-    } },
-    { key: 'anti_termite_dpm', label: 'Anti-Termite Treatment & DPM', rate: {
-      crewName: 'Waterproofing Crew', crewSize: 3, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 900,
     } },
     { key: 'blinding', label: 'Blinding to Foundations', rate: {
       crewName: 'Concrete Pour Crew', crewSize: 4, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 1200,
@@ -384,6 +507,13 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'backfilling', label: 'Backfilling', rate: {
       crewName: 'Excavation Crew', crewSize: 4, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1100,
       equipmentName: 'Excavator (Mini)', equipmentCostPerDay: 600,
+    } },
+    { key: 'hardcore_fill', label: 'Hardcore Filling & Compaction', rate: {
+      crewName: 'Hardcore & Compaction Crew', crewSize: 4, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 1000,
+      equipmentName: 'Plate Compactor', equipmentCostPerDay: 300,
+    } },
+    { key: 'anti_termite_dpm', label: 'Anti-Termite Treatment & DPM', rate: {
+      crewName: 'Waterproofing Crew', crewSize: 3, productivityPerCrewDay: 1 / 3, unit: 'each', costPerCrewDay: 900,
     } },
   ],
   // One shared, reusable submittal->approval->PO->delivery chain (2026-07-25,
@@ -402,8 +532,11 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
     { key: 'submittal', label: 'Submittal', rate: {
       crewName: 'Procurement & Logistics Team', crewSize: 2, productivityPerCrewDay: 1 / 5, unit: 'each', costPerCrewDay: 700,
     } },
+    // 10 working days (2026-07-27, per Maro: "approval durations should be
+    // 10 working days not 7... two weeks basically for client approvals by
+    // default" — was 7).
     { key: 'approval', label: 'Approval', rate: {
-      crewName: 'Procurement & Logistics Team', crewSize: 2, productivityPerCrewDay: 1 / 7, unit: 'each', costPerCrewDay: 700,
+      crewName: 'Procurement & Logistics Team', crewSize: 2, productivityPerCrewDay: 1 / 10, unit: 'each', costPerCrewDay: 700,
     } },
     { key: 'purchase_order', label: 'Place Purchase Order', rate: {
       crewName: 'Procurement & Logistics Team', crewSize: 1, productivityPerCrewDay: 1 / 2, unit: 'each', costPerCrewDay: 700,
@@ -462,18 +595,34 @@ export interface ResourceRecipeActivity {
   id: string
   schedule_category: string | null
   schedule_phase_key: string | null
+  // Real material take-off (2026-07-27, per Maro: "how is concrete and
+  // steel catered for if they exist" — see Activity.schedule_material_name's
+  // own backend docstring). Optional/undefined-safe (not required) since
+  // most activities carry no material line at all — only the one phase per
+  // category that does (CategoryRate.materialName's own header) ever has
+  // these set.
+  schedule_material_name?: string | null
+  schedule_material_quantity?: number | null
+  schedule_material_unit?: string | null
+  schedule_material_cost_per_unit?: number | null
 }
 export interface ResourceRecipeResource {
   temp_id: string
   name: string
-  resource_type: 'crew' | 'equipment'
+  resource_type: 'crew' | 'equipment' | 'material'
   unit: string
   rate: number
 }
 export interface ResourceRecipeAssignment {
   activity_id: string
   resource_temp_id: string
-  utilisation_pct: number
+  // Exactly one of these two is ever set per assignment, mirroring
+  // app/services/resource_assignment.py's own validation (2026-07-27) —
+  // crew/equipment are day-rate x duration (utilisation_pct, defaulting to
+  // 100%); material is quantity x rate (a real measured amount, never a
+  // percentage of a duration that doesn't drive its cost at all).
+  utilisation_pct?: number
+  quantity?: number
 }
 
 // Reusable by the Scheduling module's own Resources tab — "Generate
@@ -511,11 +660,11 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
   const assignments: ResourceRecipeAssignment[] = []
   let nextTempId = 0
 
-  const tempIdFor = (name: string, resource_type: 'crew' | 'equipment', rate: number): string => {
+  const tempIdFor = (name: string, resource_type: 'crew' | 'equipment' | 'material', unit: string, rate: number): string => {
     const existing = resourceByName.get(name)
     if (existing) return existing.temp_id
     const temp_id = `res-${nextTempId++}`
-    resourceByName.set(name, { temp_id, name, resource_type, unit: 'day', rate })
+    resourceByName.set(name, { temp_id, name, resource_type, unit, rate })
     return temp_id
   }
 
@@ -527,13 +676,37 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
     const { rate } = phase
     assignments.push({
       activity_id: activity.id,
-      resource_temp_id: tempIdFor(rate.crewName, 'crew', rate.costPerCrewDay),
+      resource_temp_id: tempIdFor(rate.crewName, 'crew', 'day', rate.costPerCrewDay),
       utilisation_pct: 100,
     })
+    // Material (2026-07-27, per Maro: "how is concrete and steel catered
+    // for if they exist") — read off this specific activity's own
+    // persisted schedule_material_* fields, not today's phase.rate.
+    // materialName directly: phase.rate is this category's CURRENT
+    // default/edited rate, which the wizard's own Rates & Crews step could
+    // have changed since this particular activity was actually generated
+    // and costed — the activity's own persisted quantity/rate is what it
+    // was really priced against, so that's what its own material
+    // assignment should reflect. Same "dedupe resources by name" caveat as
+    // crew/equipment already accepts below (see this function's own
+    // header) — two activities sharing a material name but persisting a
+    // different cost_per_unit (an edited-then-regenerated project) still
+    // only ever create one shared Resource, at whichever rate was seen
+    // first; each assignment's own quantity stays correct regardless.
+    if (activity.schedule_material_name && activity.schedule_material_quantity != null && activity.schedule_material_unit) {
+      assignments.push({
+        activity_id: activity.id,
+        resource_temp_id: tempIdFor(
+          activity.schedule_material_name, 'material', activity.schedule_material_unit,
+          activity.schedule_material_cost_per_unit ?? 0,
+        ),
+        quantity: activity.schedule_material_quantity,
+      })
+    }
     if (rate.equipmentName && rate.equipmentCostPerDay != null) {
       assignments.push({
         activity_id: activity.id,
-        resource_temp_id: tempIdFor(rate.equipmentName, 'equipment', rate.equipmentCostPerDay),
+        resource_temp_id: tempIdFor(rate.equipmentName, 'equipment', 'day', rate.equipmentCostPerDay),
         utilisation_pct: 100,
       })
     }
@@ -557,6 +730,14 @@ export interface CategoryGroup {
   // built on top of that would have shown the identical string N times).
   elementLabels: string[]
   quantity: number
+  // Real total solid volume, m³, summed from ifcScheduleExtraction.ts's own
+  // per-element getExpressIdWorldVolume reads (2026-07-27, per Maro: "how
+  // is concrete and steel catered for if they exist" — see
+  // MATERIAL_BY_CATEGORY's own header, below, for what actually consumes
+  // this). 0 for any category VOLUME_PRICED_CATEGORIES (that module) never
+  // computes a volume for — not null, so every consumer can sum/multiply
+  // this unconditionally without a null check.
+  materialVolumeM3: number
 }
 export interface StoreyGroup {
   storeyName: string
@@ -576,8 +757,8 @@ export interface StoreyGroup {
 // summed from ifcScheduleExtraction.ts's own per-element bounding-box
 // quantity.
 const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
-  'Foundation', 'Reinforcement', 'Columns', 'Beams',
-  'Structural Members', 'Stairs', 'Ramps', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
+  'Piling', 'Foundation', 'Reinforcement', 'Columns', 'Beams',
+  'Structural Members', 'Stairs', 'Elevators', 'Ramps', 'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Furnishings',
   // MEP + facade-detailing additions (2026-07-17) — every one of these is a
   // discrete family instance (a duct fitting, a light fixture, a
   // receptacle), not a continuous surface — same "installed per crew-day"
@@ -594,19 +775,23 @@ const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
 // guess, degrade gracefully" rule ifcModel.ts's own unit-conversion
 // fallback follows).
 export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
-  interface Bucket { storeyName: string; elevationMetres: number | null; categories: Map<ScheduleCategory, { elementRefs: string[]; elementLabels: string[]; quantity: number }> }
+  interface Bucket {
+    storeyName: string; elevationMetres: number | null
+    categories: Map<ScheduleCategory, { elementRefs: string[]; elementLabels: string[]; quantity: number; materialVolumeM3: number }>
+  }
   const byStorey = new Map<string, Bucket>()
   for (const el of elements) {
     let group = byStorey.get(el.storeyName)
     if (!group) { group = { storeyName: el.storeyName, elevationMetres: el.storeyElevation, categories: new Map() }; byStorey.set(el.storeyName, group) }
     let bucket = group.categories.get(el.category)
-    if (!bucket) { bucket = { elementRefs: [], elementLabels: [], quantity: 0 }; group.categories.set(el.category, bucket) }
+    if (!bucket) { bucket = { elementRefs: [], elementLabels: [], quantity: 0, materialVolumeM3: 0 }; group.categories.set(el.category, bucket) }
     bucket.elementRefs.push(el.globalId)
     // el.name falls back to el.ifcType (2026-07-22) — a handful of real
     // elements genuinely have no Name set in the source file; showing the
     // IFC type is still more useful for browsing than an empty string.
     bucket.elementLabels.push(el.name || el.ifcType)
     bucket.quantity += COUNT_BASED.has(el.category) ? 1 : el.quantity
+    bucket.materialVolumeM3 += el.volumeM3 ?? 0
   }
   return [...byStorey.values()]
     .sort((a, b) => {
@@ -698,6 +883,36 @@ export interface StagedActivity {
   // disciplineFor's own header above and BulkActivityInput.discipline's
   // (backend). Null for the same synthetic nodes category/phase_key are.
   discipline: string | null
+  // As Late As Possible (2026-07-27, per Maro's own JIT procurement catch:
+  // "coverings procurement starts 27th july and will be delivered 10th
+  // sept 26, but the activity itself will start 12th April") — set on
+  // Procurement's own 'purchase_order'/'delivery' phases below so they
+  // display at their real Late Start/Late Finish (computed from the
+  // existing Procure & Deliver to Site -> first installation FS link's own
+  // float) instead of clustering at their Early dates alongside every
+  // other item regardless of how far out that item's real install is.
+  // Omitted (undefined) everywhere else — every other generated activity
+  // keeps today's plain Early-date (ASAP) scheduling unchanged.
+  constraint_type?: 'alap'
+  // Real material take-off (2026-07-27, per Maro: "how is concrete and
+  // steel catered for if they exist" — see CategoryRate.materialName's own
+  // header for the full "why"). Omitted (undefined) for every activity
+  // whose own phase.rate carries no materialName (every non-material phase,
+  // and every category outside VOLUME_PRICED_CATEGORIES entirely) — same
+  // "optional, not required-and-usually-null" convention constraint_type
+  // just above already uses, so this doesn't force every other
+  // activities.push call site in this file to start passing four new
+  // always-null fields. material_quantity is the real measured quantity
+  // (m³ as-is for concrete, or through STEEL_DENSITY_KG_PER_M3 for steel/
+  // rebar), not duration_hours-derived — buildResourceRecipe reads these
+  // straight off the persisted Activity row (schedule_material_*, backend)
+  // to emit a resource_type='material' resource + a quantity-costed
+  // assignment, completely independent of the crew/equipment day-rate
+  // assignment the same activity already gets.
+  material_name?: string
+  material_quantity?: number
+  material_unit?: 'm³' | 'tonne'
+  material_cost_per_unit?: number
 }
 export interface StagedResource {
   temp_id: string
@@ -823,7 +1038,61 @@ export function fullSchedulePhaseRows(storeys: StoreyGroup[]): PhaseRow[] {
 // 0-lag FS link either way — this only changes *which* activities connect,
 // not the relationship type/lag, so it stays exactly as DCMA-clean
 // (#3 Relationship Types, #4 Positive Lags, #5 Leads) as the flat chain was.
-const STRUCTURAL_CATEGORIES: ReadonlySet<string> = new Set(['Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs'])
+const STRUCTURAL_CATEGORIES: ReadonlySet<string> = new Set(['Piling', 'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs'])
+
+// The four Substructure Earthworks phases that physically happen AFTER a
+// real foundation exists and is backfilled, not before it (2026-07-25,
+// second pass — see 'Substructure Earthworks' own DEFAULT_CATEGORY_PHASES
+// header for the full "why"). Waterproofing/Backfilling tank and backfill
+// AROUND the poured foundation; Hardcore Filling/Anti-Termite & DPM then
+// build the slab's own sub-base and vapour/pest barrier across the
+// backfilled footprint, immediately before the slab — all four are
+// sub-base-for-the-slab or foundation-protection work, never something a
+// foundation should be excavated/poured through afterward. Order within
+// this set (as filtered from the master phases array, which preserves it)
+// is Waterproofing -> Backfilling -> Hardcore Filling -> Anti-Termite/DPM.
+// buildStagedSchedule's own early Preliminaries+Earthworks block only ever
+// generates Bulk Excavation in its flat pre-foundation chain now (Blinding
+// is generated by its own dedicated code path — see that block's own
+// header); these four get spliced in separately, after the real Foundation
+// category's own first occurrence finishes.
+const POST_FOUNDATION_EARTHWORKS_KEYS: ReadonlySet<string> =
+  new Set(['waterproofing', 'backfilling', 'hardcore_fill', 'anti_termite_dpm'])
+
+// JIT procurement (2026-07-27, per Maro: "coverings procurement starts 27th
+// july and will be delivered 10th sept 26, but the activity itself will
+// start 12th April" — with a real project export screenshot showing exactly
+// that: every procurement item's Submittal/Approval/PO/Delivery chain
+// anchored off the same Construction Start, so it displayed at its own
+// Early dates months ahead of the real install, regardless of how far out
+// that install actually was. Per the JIT procurement glossary Maro linked
+// (tacto.ai) — a pull system, deliveries "synchronized to actual production
+// needs rather than forecasts" — and Maro's own follow-up that a soft
+// constraint is an acceptable fix here). Submittal/Approval are pure
+// paperwork (no inventory risk in settling the design early, so they stay
+// plain ASAP); Place Purchase Order/Procure & Deliver to Site are the two
+// phases that actually create physical inventory, so those get
+// constraint_type: 'alap' (StagedActivity's own header) — scheduling_cpm.py
+// already displays an 'alap' activity at its Late Start/Late Finish using
+// float the network already computes from Procure & Deliver to Site's own
+// real FS link into the first real installation, no new relationship or
+// negative lag needed.
+const PROCUREMENT_ALAP_PHASE_KEYS: ReadonlySet<string> = new Set(['purchase_order', 'delivery'])
+
+// Staggered Submittal starts (2026-07-27, per Maro: "I want you to stagger
+// the submittals with reasonable lag from each other as i dont think the
+// contractor is planning on doing all submittals at the same time
+// especially as there's float in the place/procure/deliver" — then "5 day
+// lag"/"so a working week") — one "Procurement & Logistics Team" (the
+// shared crew name every Procurement phase already uses) realistically
+// releases one item's submittal package a working week apart, not all of
+// them simultaneously the moment Construction Start fires. 5 working days
+// (40h) between each successive item, applied as a positive lag on just the
+// first item->item offset (buildStagedSchedule's own procurement loop,
+// below) — safely absorbed by Place Purchase Order/Procure & Deliver to
+// Site's own real float (PROCUREMENT_ALAP_PHASE_KEYS above) rather than
+// pushing any real installation later.
+const PROCUREMENT_SUBMITTAL_STAGGER_HOURS = 40
 
 // Facade categories (2026-07-17, per Maro, after reviewing an exported real
 // schedule + the 4D viewport: "dont touch facade until architecture walls
@@ -880,8 +1149,9 @@ const LATE_CATEGORIES: ReadonlySet<string> = new Set(['Site & Landscaping'])
 // already does for the Discipline UDF — one source of truth for "what
 // discipline is this category," not a second copy drifting out of sync.
 export const CATEGORY_DISCIPLINE: Record<string, string> = {
-  Foundation: 'Structures', Reinforcement: 'Structures', Columns: 'Structures', Beams: 'Structures',
-  Slabs: 'Structures', Walls: 'Structures', 'Structural Members': 'Structures', Stairs: 'Structures', Ramps: 'Structures',
+  Piling: 'Structures', Foundation: 'Structures', Reinforcement: 'Structures', Columns: 'Structures', Beams: 'Structures',
+  Slabs: 'Structures', Walls: 'Structures', 'Structural Members': 'Structures', Stairs: 'Structures', Elevators: 'Structures',
+  Ramps: 'Structures',
   Roofs: 'Architecture', 'Curtain Walls': 'Architecture', 'Facade Ornamentation': 'Architecture',
   Windows: 'Architecture', Doors: 'Architecture', Railings: 'Architecture', Coverings: 'Architecture',
   // Architecture, not Structures (2026-07-25) — the whole point of this
@@ -892,7 +1162,12 @@ export const CATEGORY_DISCIPLINE: Record<string, string> = {
   Ductwork: 'HVAC', 'Air Terminals': 'HVAC',
   Piping: 'Plumbing', 'Plumbing Fixtures': 'Plumbing',
   'Electrical Containment': 'Electrical', Lighting: 'Electrical', 'Electrical Devices': 'Electrical',
-  Furnishings: 'Misc',
+  // Its own named discipline (2026-07-27), not 'Misc' — FF&E is a real NRM1
+  // element (Group 5), and 'Misc' is the fallback default below; giving
+  // Furnishings its own name means nothing generated here ever surfaces as
+  // an unexplained 'Misc' bucket in an issued Cost Plan (Furnishings is the
+  // only category that ever populated it).
+  Furnishings: 'Furnishings & Equipment',
   'Site & Landscaping': 'Landscape',
   // The four "full schedule" categories (2026-07-25 — see their own
   // DEFAULT_CATEGORY_PHASES header) each get their own discipline rather than
@@ -903,7 +1178,19 @@ export const CATEGORY_DISCIPLINE: Record<string, string> = {
   // 'Preliminaries'/'Procurement'/'Commissioning' is safe.
   Preliminaries: 'Preliminaries',
   'Substructure Earthworks': 'Earthworks',
-  Procurement: 'Procurement',
+  // 'Preliminaries', not 'Procurement' (2026-07-27, per Maro's QS review —
+  // all four phases here are Procurement & Logistics Team day-rate
+  // coordination overhead, per this category's own header below ("Costed
+  // as office/coordination overhead... this schedule generator has never
+  // priced real material cost") — never a real supply cost for the goods
+  // themselves. Labelling that overhead 'Procurement' let it read as a
+  // plausible ~12% discipline sitting beside Structures/HVAC, while the
+  // measured 'Preliminaries' discipline sat at an implausible ~2% —
+  // reclassifying moves it to where it actually belongs (site
+  // management/coordination effort), landing Preliminaries in NRM1's normal
+  // 10-15% band. schedule_category stays 'Procurement' for scheduling/WBS
+  // purposes — only the coarser Discipline rollup changes.
+  Procurement: 'Preliminaries',
   'Testing & Commissioning': 'Commissioning',
 }
 
@@ -1124,10 +1411,12 @@ export function buildStagedSchedule(
     temp_id: constructionStartTempId, task_name: 'Construction Start', parent_temp_id: milestonesWbsTempId,
     duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'start_milestone', discipline: null,
   })
-  activities.push({
-    temp_id: substantialCompletionTempId, task_name: 'Substantial Completion', parent_temp_id: milestonesWbsTempId,
-    duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
-  })
+  // Substantial Completion's own activity row is pushed further down (right
+  // after All Building Work Complete, still unconditional/not gated on
+  // includeFullSchedule — see that push's own header for why) — only the
+  // temp_id constant needs to exist this early, for the many relationships
+  // throughout this function that reference it as a successor regardless of
+  // array position.
 
   // Preliminaries + Substructure Earthworks (2026-07-25, per Maro — see
   // ScheduleCategory's own header) — real work that happens before/around
@@ -1140,6 +1429,28 @@ export function buildStagedSchedule(
   // when the flag is off, which that same linking code reads as "fall back
   // to today's unchanged Construction Start -> first storey edge."
   let earthworksExitTempId: string | null = null
+  // Hoisted so the post-foundation earthworks splice (after storeys.forEach,
+  // below) can still parent its two activities under the same WBS folder —
+  // see POST_FOUNDATION_EARTHWORKS_KEYS' own header for the full "why".
+  let earthworksWbsTempId: string | null = null
+  // This building's own real Foundation category's first (lowest-storey)
+  // occurrence completion — 'Strip Formwork', Foundation's own last phase —
+  // null when the model has no real Foundation elements at all. Set once,
+  // bottom-up, in storeys.forEach below (storeys are already sorted bottom-
+  // up by elevation, so the first storey seen with a Foundation category is
+  // genuinely the lowest one).
+  let firstFoundationCompletionTempId: string | null = null
+  // The SAME first (lowest-storey) real Foundation occurrence's own
+  // Excavate & Prep (phaseIndex 0) and Formwork & Rebar (phaseIndex 1) —
+  // 2026-07-26, second pass, per Maro: "is that logical, blinding then
+  // excavate?" Blinding (generated below, after storeys.forEach, once both
+  // of these are known) chains from firstFoundationExcavationTempId and adds
+  // an *additional* predecessor straight into firstFoundationFormworkRebarTempId
+  // — real buildability (excavate this foundation, blind it, then rebar/pour),
+  // without needing to splice into or reorder the per-storey phase chain
+  // that already links Excavate & Prep -> Formwork & Rebar directly.
+  let firstFoundationExcavationTempId: string | null = null
+  let firstFoundationFormworkRebarTempId: string | null = null
   // Each procurable category's own final "Procure & Deliver to Site" temp_id
   // (2026-07-25), keyed by category name — populated in this same early
   // block (below, alongside Preliminaries/Earthworks) so the Procurement WBS
@@ -1174,13 +1485,19 @@ export function buildStagedSchedule(
       previousPrelimTempId = tempId
     }
 
-    const earthworksWbsTempId = 'wbs-substructure-earthworks'
+    earthworksWbsTempId = 'wbs-substructure-earthworks'
     activities.push({
       temp_id: earthworksWbsTempId, task_name: 'Substructure Earthworks', parent_temp_id: rootTempId,
       duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
     })
     let previousEarthworksTempId: string | null = null
-    for (const phase of resolvePhases('Substructure Earthworks')) {
+    // Bulk Excavation only, in this flat pre-foundation chain (2026-07-26,
+    // second pass) — see POST_FOUNDATION_EARTHWORKS_KEYS' own header for why
+    // waterproofing/backfilling/hardcore_fill/anti_termite_dpm are excluded
+    // and generated separately, after storeys.forEach below; 'blinding' is
+    // also excluded here and generated by its own dedicated code path (same
+    // place, see firstFoundationExcavationTempId's own header above).
+    for (const phase of resolvePhases('Substructure Earthworks').filter(p => !POST_FOUNDATION_EARTHWORKS_KEYS.has(p.key) && p.key !== 'blinding')) {
       const rate = rates[phaseRowId('Substructure Earthworks', phase.key)] ?? phase.rate
       const tempId = `act-earthworks-${phase.key}`
       activities.push({
@@ -1213,26 +1530,62 @@ export function buildStagedSchedule(
         duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
       })
       const procurementPhases = resolvePhases('Procurement')
-      for (const categoryName of procurableCategoriesUsed) {
+      procurableCategoriesUsed.forEach((categoryName, itemIndex) => {
         const slug = categoryName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        // One sub-WBS per procurement item (2026-07-27, per Maro: "repetitive
+        // of 4 activities per procurement item... ensure a sub wbs of the
+        // procurement item is there then the 4 activities under it, that way
+        // it looks more organised") — each category's own
+        // Submittal/Approval/Place Purchase Order/Procure & Deliver chain now
+        // nests under a named summary bar of its own, instead of sitting as
+        // four flat siblings directly under "Procurement — Long-Lead Items"
+        // alongside every other item's own four. Purely a WBS/grouping
+        // change — temp_ids, the phase chain itself, and
+        // procurementDeliveryTempIdByCategory's own downstream linking are
+        // all unchanged.
+        const categoryWbsTempId = `wbs-procurement-${slug}`
+        activities.push({
+          temp_id: categoryWbsTempId, task_name: categoryName, parent_temp_id: procurementWbsTempId,
+          duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
+        })
         let previousTempId: string | null = null
         for (const phase of procurementPhases) {
           const rate = rates[phaseRowId('Procurement', phase.key)] ?? phase.rate
           const tempId = `act-procurement-${slug}-${phase.key}`
           activities.push({
-            temp_id: tempId, task_name: `${phase.label} — ${categoryName}`, parent_temp_id: procurementWbsTempId,
+            temp_id: tempId, task_name: `${phase.label} — ${categoryName}`, parent_temp_id: categoryWbsTempId,
             duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
             category: 'Procurement', phase_key: phase.key, quantity: 1, activity_type: 'task',
             discipline: disciplineFor('Procurement', phase.key),
+            // JIT (2026-07-27, per Maro — see StagedActivity's own
+            // constraint_type header) — Submittal/Approval stay plain ASAP
+            // (design coordination is fine settled early, regardless of
+            // order timing); only the two phases that actually create
+            // physical inventory (placing the order, receiving the goods)
+            // get pulled to their own late float instead.
+            constraint_type: PROCUREMENT_ALAP_PHASE_KEYS.has(phase.key) ? 'alap' : undefined,
           })
           relationships.push({
             predecessor_temp_id: previousTempId ?? constructionStartTempId, successor_temp_id: tempId,
-            relationship_type: 'FS', lag_hours: 0,
+            // Staggered Submittal starts (2026-07-27, per Maro: "I don't
+            // think the contractor is planning on doing all submittals at
+            // the same time especially as there's float in the place/
+            // procure/deliver") — only the first phase of each item's own
+            // chain (previousTempId still null, i.e. Submittal) gets this;
+            // every later phase within the same item stays FS 0 lag off its
+            // own predecessor, unchanged. A positive lag, not a different
+            // predecessor — stays exactly as DCMA-clean (#4 Positive Lags)
+            // as the flat per-item chain already was, and the ALAP-anchored
+            // Place Purchase Order/Procure & Deliver (just below) already
+            // has real float to absorb this without pushing any real
+            // installation later.
+            relationship_type: 'FS',
+            lag_hours: previousTempId === null ? itemIndex * PROCUREMENT_SUBMITTAL_STAGGER_HOURS : 0,
           })
           previousTempId = tempId
         }
         if (previousTempId) procurementDeliveryTempIdByCategory.set(categoryName, previousTempId)
-      }
+      })
     }
   }
 
@@ -1299,6 +1652,16 @@ export function buildStagedSchedule(
       phases.forEach((phase, phaseIndex) => {
         const rate = rates[phaseRowId(category.name, phase.key)] ?? phase.rate
         const tempId = `act-${storeyIndex}-${categoryIndex}-${phaseIndex}`
+        // Real material quantity (2026-07-27) — see CategoryRate.
+        // materialName's own header. Only the one phase per category that
+        // actually carries a materialName gets a real quantity; converts
+        // through STEEL_DENSITY_KG_PER_M3 for a 'tonne' material (steel/
+        // rebar), used as-is for 'm³' (concrete) — category.materialVolumeM3
+        // is already a real measured volume either way (ifcScheduleExtraction.ts's
+        // own getExpressIdWorldVolume), never a bounding-box guess.
+        const materialQuantity = rate.materialUnit === 'tonne'
+          ? (category.materialVolumeM3 * STEEL_DENSITY_KG_PER_M3) / 1000
+          : category.materialVolumeM3
         activities.push({
           temp_id: tempId,
           task_name: `${storey.storeyName} — ${category.name} — ${phase.label}`,
@@ -1311,6 +1674,10 @@ export function buildStagedSchedule(
           element_labels: phaseIndex === phases.length - 1 ? category.elementLabels : [],
           category: category.name, phase_key: phase.key, quantity: category.quantity, activity_type: 'task',
           discipline: disciplineFor(category.name, phase.key),
+          ...(rate.materialName ? {
+            material_name: rate.materialName, material_quantity: materialQuantity,
+            material_unit: rate.materialUnit, material_cost_per_unit: rate.materialCostPerUnit,
+          } : {}),
         })
         firstTempId ??= tempId
         if (phaseIndex === 0 && !firstOccurrenceByCategory.has(category.name)) firstOccurrenceByCategory.set(category.name, tempId)
@@ -1318,6 +1685,17 @@ export function buildStagedSchedule(
           firstStructuralTempId ??= tempId
           lastStructuralTempId = tempId
         }
+        // This building's own real Foundation category's first (lowest)
+        // occurrence completion — see POST_FOUNDATION_EARTHWORKS_KEYS' own
+        // header for what this feeds. Only ever set once (??=) — storeys
+        // are already iterated bottom-up, so the first storey with a
+        // Foundation category is genuinely the lowest one.
+        if (category.name === 'Foundation' && phaseIndex === phases.length - 1) firstFoundationCompletionTempId ??= tempId
+        // Same first (lowest) Foundation occurrence's own Excavate & Prep/
+        // Formwork & Rebar — see firstFoundationExcavationTempId's own
+        // header above for what these feed (Blinding).
+        if (category.name === 'Foundation' && phaseIndex === 0) firstFoundationExcavationTempId ??= tempId
+        if (category.name === 'Foundation' && phaseIndex === 1) firstFoundationFormworkRebarTempId ??= tempId
         // Excludes Late (2026-07-25) same as Facade — neither should ever
         // become a storey's own fallback handoff anchor: a storey made up
         // of ONLY site/landscaping elements (a dedicated ground/site level)
@@ -1400,6 +1778,84 @@ export function buildStagedSchedule(
       lastFacadeTempId: noLocalConflict ? lastFacadeTempId : null,
     })
   })
+
+  // Blinding to Foundations (2026-07-26, second pass, per Maro: "is that
+  // logical, blinding then excavate?") — generated here, once
+  // firstFoundationExcavationTempId/firstFoundationFormworkRebarTempId are
+  // known, rather than in the flat pre-foundation chain above (see that
+  // chain's own header, and firstFoundationExcavationTempId's own header,
+  // for the full "why"). Falls back to earthworksExitTempId/
+  // constructionStartTempId, same "degrade gracefully" convention every
+  // other fallback here follows, in the pathological case where the model
+  // has no real Foundation category at all — Blinding still gets generated
+  // (it's a standard part of the substructure earthworks package), it just
+  // can't gate anything further in that case, since there's no real
+  // foundation activity for it to feed.
+  if (includeFullSchedule && earthworksWbsTempId) {
+    const blindingPhase = resolvePhases('Substructure Earthworks').find(p => p.key === 'blinding')
+    if (blindingPhase) {
+      const rate = rates[phaseRowId('Substructure Earthworks', 'blinding')] ?? blindingPhase.rate
+      const tempId = 'act-earthworks-blinding'
+      activities.push({
+        temp_id: tempId, task_name: blindingPhase.label, parent_temp_id: earthworksWbsTempId,
+        duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+        category: 'Substructure Earthworks', phase_key: 'blinding', quantity: 1, activity_type: 'task',
+        discipline: disciplineFor('Substructure Earthworks', 'blinding'),
+      })
+      relationships.push({
+        predecessor_temp_id: firstFoundationExcavationTempId ?? earthworksExitTempId ?? constructionStartTempId,
+        successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0,
+      })
+      // Additional predecessor, not a replacement (2026-07-26) — the
+      // per-storey loop above already links this same foundation's own
+      // Excavate & Prep -> Formwork & Rebar directly; this just adds
+      // Blinding as a second, equally-required predecessor of Formwork &
+      // Rebar (P6/NEC-style CPM already supports more than one predecessor
+      // per activity — the successor waits for whichever finishes last).
+      if (firstFoundationFormworkRebarTempId) {
+        relationships.push({
+          predecessor_temp_id: tempId, successor_temp_id: firstFoundationFormworkRebarTempId,
+          relationship_type: 'FS', lag_hours: 0,
+        })
+      }
+    }
+  }
+
+  // Post-foundation earthworks — waterproofing/backfilling/hardcore_fill/
+  // anti_termite_dpm (2026-07-25, expanded 2026-07-26 second pass to include
+  // the latter two — see POST_FOUNDATION_EARTHWORKS_KEYS' own header for the
+  // full "why"), spliced in here once firstFoundationCompletionTempId is
+  // known. Falls back to earthworksExitTempId directly in the pathological
+  // case where the model has no real Foundation elements at all, same
+  // "degrade gracefully, don't guess" convention every other fallback in
+  // this function follows. Parented under the same earthworksWbsTempId the
+  // pre-foundation phases already used, so all three pieces (pre-foundation
+  // chain, Blinding, this post-foundation chain) still read as one
+  // "Substructure Earthworks" WBS folder — only reachable when that folder
+  // was actually built (includeFullSchedule on).
+  if (includeFullSchedule && earthworksWbsTempId) {
+    let previousPostEarthworksTempId: string | null = null
+    for (const phase of resolvePhases('Substructure Earthworks').filter(p => POST_FOUNDATION_EARTHWORKS_KEYS.has(p.key))) {
+      const rate = rates[phaseRowId('Substructure Earthworks', phase.key)] ?? phase.rate
+      const tempId = `act-earthworks-${phase.key}`
+      activities.push({
+        temp_id: tempId, task_name: phase.label, parent_temp_id: earthworksWbsTempId,
+        duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
+        category: 'Substructure Earthworks', phase_key: phase.key, quantity: 1, activity_type: 'task',
+        discipline: disciplineFor('Substructure Earthworks', phase.key),
+      })
+      const predecessor = previousPostEarthworksTempId ?? firstFoundationCompletionTempId ?? earthworksExitTempId ?? constructionStartTempId
+      relationships.push({ predecessor_temp_id: predecessor, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
+      previousPostEarthworksTempId = tempId
+    }
+    // Backfilling used to be the earthworks chain's own tail feeding
+    // straight into the first storey's own structural start — now that the
+    // real Foundation work sits BEFORE it instead, it needs its own real
+    // successor (DCMA #2) rather than being left dangling.
+    if (previousPostEarthworksTempId) {
+      relationships.push({ predecessor_temp_id: previousPostEarthworksTempId, successor_temp_id: substantialCompletionTempId, relationship_type: 'FS', lag_hours: 0 })
+    }
+  }
 
   // Structural handoff, not "this storey's overall last phase" — see
   // STRUCTURAL_CATEGORIES' own header. Falls back to the storey's own
@@ -1509,6 +1965,25 @@ export function buildStagedSchedule(
     }
   }
 
+  // Substantial Completion's own row (2026-07-27, per Maro: "ensure
+  // substantial completion is [slotted before] project handover... handover
+  // is actually the latest one" — pushed here, after Structure Complete/All
+  // Building Work Complete rather than right alongside Construction Start
+  // (where it used to sit, immediately confusing to read: it was listed
+  // second, directly under Construction Start, despite actually finishing
+  // later than both milestones now listed above it). Still unconditional,
+  // not gated behind includeFullSchedule — unlike Structure Complete/All
+  // Building Work Complete/Project Handover, Substantial Completion is the
+  // one milestone every generated schedule has always had, full-schedule
+  // mode or not (see constructionStartTempId's own header). Only the WBS
+  // row order changes here — every relationship targeting
+  // substantialCompletionTempId elsewhere in this function (both before and
+  // after this point) already resolves by temp_id, not array position.
+  activities.push({
+    temp_id: substantialCompletionTempId, task_name: 'Substantial Completion', parent_temp_id: milestonesWbsTempId,
+    duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'finish_milestone', discipline: null,
+  })
+
   if (handoffByStorey.length > 0) {
     // Construction Start kicks off the very first (structurally-anchored)
     // storey's own first activity (2026-07-17) — the structural-handoff
@@ -1521,12 +1996,16 @@ export function buildStagedSchedule(
     // role to play; even as the very first storey, Construction Start
     // driving straight into a facade activity would be a semantically odd
     // kickoff, not a real methodology.
-    // Chains off the end of Substructure Earthworks instead of straight off
-    // Construction Start when full-schedule mode is on (2026-07-25) — a real
-    // Foundation pour genuinely can't start before excavation/backfill/
-    // blinding are done; earthworksExitTempId is null (falls back to
-    // Construction Start directly) when the flag is off, reproducing the
-    // exact pre-2026-07-25 edge.
+    // Chains off the end of Substructure Earthworks' own pre-foundation
+    // phases instead of straight off Construction Start when full-schedule
+    // mode is on (2026-07-25) — a real Foundation pour genuinely can't start
+    // before excavation/hardcore fill/anti-termite+DPM/blinding are done
+    // (2026-07-25 fix — earthworksExitTempId used to also include
+    // waterproofing/backfilling, which actually happen AFTER a real
+    // foundation exists; see POST_FOUNDATION_EARTHWORKS_KEYS' own header).
+    // earthworksExitTempId is null (falls back to Construction Start
+    // directly) when the flag is off, reproducing the exact pre-2026-07-25
+    // edge.
     const firstOfSchedule = handoffAnchors[0]?.firstId
     if (firstOfSchedule) {
       relationships.push({
@@ -1554,47 +2033,29 @@ export function buildStagedSchedule(
     }
   }
 
-  // Procurement (2026-07-25, per Maro's own real example — a real Primavera
-  // Tower 2B export's "Drawings & Procurement" section) — one submittal ->
-  // approval -> PO -> delivery chain per real category actually present in
-  // this generation that's genuinely a procured/selected item (see
-  // PROCURABLE_CATEGORIES' own header), starting immediately off
-  // Construction Start (runs in parallel with Preliminaries/Earthworks/the
-  // structural climb, same as a real project orders long-lead materials
-  // while groundworks are still underway) and feeding into that category's
-  // own first real installation activity anywhere in the building — you
-  // can't glaze a curtain wall panel that hasn't been delivered yet.
+  // Procurement's own "delivery -> first real installation" edge only
+  // (2026-07-25) — the WBS folder and submittal->approval->PO->delivery
+  // chains themselves were already built above, before this storeys.forEach
+  // loop ran (see procurementDeliveryTempIdByCategory's own header for why);
+  // this is only reachable once firstOccurrenceByCategory is known. A
+  // second full copy of the activity-building loop used to sit here too —
+  // real bug, not a stylistic duplicate: every procurable category's
+  // WBS folder/phase activities were being pushed onto `activities` TWICE
+  // with the exact same temp_id both times (`wbs-procurement`,
+  // `act-procurement-${slug}-${phase.key}`), which made `activities.length`
+  // exceed the number of actually-unique temp_ids — makeRelationshipsAcyclic's
+  // own topological sort (below) compares `rank.size` (deduped by Map key)
+  // against `order.length` (raw array length, duplicates and all), so once
+  // every real activity was ranked, that comparison could never close and
+  // the sort spun forever — a genuine infinite loop, not a slow one (caught
+  // live: Maro's own real Hotel export hung at exactly this point, with
+  // console instrumentation showing the scan itself completing in
+  // milliseconds and the freeze isolated to inside this function).
   if (includeFullSchedule) {
-    const procurableCategoriesUsed = [...firstOccurrenceByCategory.keys()].filter(name => PROCURABLE_CATEGORIES.has(name))
-    if (procurableCategoriesUsed.length > 0) {
-      const procurementWbsTempId = 'wbs-procurement'
-      activities.push({
-        temp_id: procurementWbsTempId, task_name: 'Procurement — Long-Lead Items', parent_temp_id: rootTempId,
-        duration_hours: 0, element_refs: [], element_labels: [], category: null, phase_key: null, quantity: null, activity_type: 'task', discipline: null,
-      })
-      const procurementPhases = resolvePhases('Procurement')
-      for (const categoryName of procurableCategoriesUsed) {
-        const slug = categoryName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-        let previousTempId: string | null = null
-        for (const phase of procurementPhases) {
-          const rate = rates[phaseRowId('Procurement', phase.key)] ?? phase.rate
-          const tempId = `act-procurement-${slug}-${phase.key}`
-          activities.push({
-            temp_id: tempId, task_name: `${phase.label} — ${categoryName}`, parent_temp_id: procurementWbsTempId,
-            duration_hours: computeDurationHours(1, rate), element_refs: [], element_labels: [],
-            category: 'Procurement', phase_key: phase.key, quantity: 1, activity_type: 'task',
-            discipline: disciplineFor('Procurement', phase.key),
-          })
-          relationships.push({
-            predecessor_temp_id: previousTempId ?? constructionStartTempId, successor_temp_id: tempId,
-            relationship_type: 'FS', lag_hours: 0,
-          })
-          previousTempId = tempId
-        }
-        const installTempId = firstOccurrenceByCategory.get(categoryName)
-        if (previousTempId && installTempId) {
-          relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: installTempId, relationship_type: 'FS', lag_hours: 0 })
-        }
+    for (const [categoryName, deliveryTempId] of procurementDeliveryTempIdByCategory) {
+      const installTempId = firstOccurrenceByCategory.get(categoryName)
+      if (installTempId) {
+        relationships.push({ predecessor_temp_id: deliveryTempId, successor_temp_id: installTempId, relationship_type: 'FS', lag_hours: 0 })
       }
     }
 
@@ -1718,7 +2179,16 @@ export function buildStagedSchedule(
 // linear "find the next ready activity" scan below is trivial, not worth
 // a real priority-queue implementation.
 function makeRelationshipsAcyclic(activities: StagedActivity[], relationships: StagedRelationship[]): StagedRelationship[] {
-  const order = activities.map(a => a.temp_id)
+  // Deduped via Set, not a plain map (2026-07-25, real bug found live: a
+  // duplicate-temp_id bug elsewhere in this generator — two Procurement
+  // blocks both pushing the same activity ids — made `order` longer than
+  // the number of actually-unique ids below it. `rank`/`done` are keyed by
+  // temp_id, so they can never hold more than the unique count; comparing
+  // rank.size against a duplicate-inflated order.length made the while loop
+  // below spin forever once every real activity was ranked. Deduping here
+  // makes that whole bug class structurally impossible for this function to
+  // hang on again, regardless of what generates `activities`.
+  const order = [...new Set(activities.map(a => a.temp_id))]
   const adjacency = new Map<string, string[]>(order.map(id => [id, []]))
   const inDegree = new Map<string, number>(order.map(id => [id, 0]))
   for (const rel of relationships) {

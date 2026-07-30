@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import BigInteger, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -35,7 +35,24 @@ class Model3DFile(Base, TimestampMixin):
     frontend (2026-07-09, per Maro: "if i unload, i expect the data not to
     persist so you dont endlessly store unnecessary data") — never kept
     around as an orphan the way, say, a soft-deleted row might be
-    elsewhere in this app; there's no undo/trash concept for this table."""
+    elsewhere in this app; there's no undo/trash concept for this table.
+
+    unloaded_elements (2026-07-26, per Maro: "if i refresh, i expect the
+    elements i unloaded to stay unloaded... give me an option to reload
+    ifc which can identify the elements unloaded") — a JSONB list of
+    `{guid, name, type_name}` for every IFC sub-element "Unload Selected"
+    (the viewport toolbar action, distinct from unloading this whole file)
+    has removed from the loaded scene. Keyed by GlobalId, not expressID —
+    same reasoning as ModelElementLink.element_ref (model_element_link.py):
+    expressID is only a WASM-session-local number, GlobalId is the one
+    identifier stable across a fresh re-parse of the same file. Read back
+    on every restore-on-mount (FourD.tsx) to re-apply the same removals
+    without the user re-selecting anything, and shown (with name/type, no
+    re-parse needed) in the "Reload IFC" picker so specific ones can be
+    brought back. Nullable/JSONB rather than a dozen scalar columns, same
+    flexible-blob precedent CameraView.viewport_state already established
+    for "small, evolving, per-record structured data that isn't queried
+    across rows"."""
 
     __tablename__ = "model3d_files"
 
@@ -46,3 +63,4 @@ class Model3DFile(Base, TimestampMixin):
     source_up_axis: Mapped[str] = mapped_column(String(1), nullable=False, default="y")  # "y" | "z"
     storage_filename: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    unloaded_elements: Mapped[list | None] = mapped_column(JSONB, nullable=True)

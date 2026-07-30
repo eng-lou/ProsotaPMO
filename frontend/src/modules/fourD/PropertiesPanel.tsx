@@ -57,6 +57,15 @@ interface Props {
   snapToSurface: boolean
   onSnapToSurfaceChange: (snap: boolean) => void
   activeObjectTextures: CustomTextureSet | undefined
+  // Manual per-element Opacity (2026-07-26, per Maro: "allow for
+  // transparency setting (0-1) for materials so i can simply make the
+  // window surfaces less opaque instead of replacing the materials
+  // completely") — undefined means "no override", TextureFields.tsx shows
+  // that as 1 (fully opaque). Passed through to every currently-selected
+  // element at once, not just this one — see FourD.tsx's own
+  // handleOpacityChange header.
+  activeOpacity: number | undefined
+  onOpacityChange: (value: number) => void
   onUploadTexture: (slot: TextureSlot, file: File) => void
   onClearTexture: (slot: TextureSlot) => void
   // Tile Size/Rotation's own forced-rerender, passed straight through to
@@ -116,7 +125,7 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
+  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
@@ -155,7 +164,6 @@ export function PropertiesPanel({
           onChange={e => set('renderMode', e.target.value as ViewerSettings['renderMode'])}
           className="text-xs border border-gray-300 rounded px-1.5 py-0.5"
         >
-          <option value="wireframe">Wireframe</option>
           <option value="hiddenLine">Hidden Line</option>
           <option value="flat">Flat Shaded</option>
           <option value="gouraud">Gouraud Shaded</option>
@@ -244,6 +252,14 @@ export function PropertiesPanel({
           checked={settings.showClashColors}
           onChange={e => set('showClashColors', e.target.checked)}
           title="Tint elements with an un-approved Clash Detective result red"
+        />
+      </Row>
+      <Row label="Fade Unselected">
+        <input
+          type="checkbox"
+          checked={settings.xrayUnselected}
+          onChange={e => set('xrayUnselected', e.target.checked)}
+          title="While something is selected, fade everything else so an occluded selection still shows through"
         />
       </Row>
 
@@ -383,6 +399,8 @@ export function PropertiesPanel({
             linkedAvailable={linkedMaterialsAvailable}
             onSelectLinked={onSelectLinkedMaterial}
             onApplyToLinked={onApplyToLinkedMaterial}
+            opacity={activeOpacity}
+            onOpacityChange={onOpacityChange}
           />
         </>
       )}

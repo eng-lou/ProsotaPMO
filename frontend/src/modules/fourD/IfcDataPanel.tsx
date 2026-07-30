@@ -38,6 +38,26 @@ interface Props {
   // spatial tree's own leaves) — no reason for two near-identical props.
   onSelectMany: (expressIDs: number[], additive: boolean, objectId: string) => void
   onUnload: (id: string) => void
+  // "Reload IFC" (2026-07-26, per Maro: "if i refresh, i expect the
+  // elements i unloaded to stay unloaded... give me an option to reload
+  // ifc which can identify the elements unloaded") — how many elements
+  // "Unload Selected" has removed from this specific model, keyed by the
+  // same `ifc-${modelID}` id everything else in this file already uses.
+  // The per-model Reload button only ever renders when its own count here
+  // is > 0, same "don't show it when there's nothing to do" convention
+  // requestUnloadModel's own confirm dialog already follows.
+  unloadedCountByModelId: Map<string, number>
+  onReloadIfc: (id: string) => void
+  // Which loaded models genuinely haven't finished saving to the server yet
+  // (2026-07-28, per Maro: "you're telling me only 2 of 5 are saved but it
+  // shows like everything is fucking fine until i refresh" — a completely
+  // fair complaint: nothing in this list distinguished a model that's
+  // actually persisted from one that only looks fine in the live scene.
+  // FourD.tsx's own sceneObjects.fileId is null until the upload genuinely
+  // lands — this is just that same fact, surfaced per row instead of only
+  // ever discovered by trying an edit or hitting refresh). Keyed by the
+  // same `ifc-${modelID}` id everything else in this file already uses.
+  unsavedObjectIds: Set<string>
   selectedObjectIds: Set<string>
   // Selects "the whole model" rather than one specific element (2026-07-09
   // fix, per Maro: "I selected the parent and its still showing 1 object,1
@@ -248,14 +268,20 @@ function Field({ label, value }: { label: string; value: string }) {
 // sessions (2026-07-09, per multi-model support).
 function ModelItem({
   handle, isActiveModel, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
+  unloadedCount, onReloadIfc, saved,
   selected, onToggleSelected, onSelectWholeModel, unitDisplay,
   activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
+  expanded, onToggleExpanded,
 }: {
   handle: IfcModelHandle; isActiveModel: boolean
   selectedExpressId: number | null; selectedExpressIds: Set<number>
   onSelect: (id: number, additive: boolean) => void
   onSelectMany: (expressIDs: number[], additive: boolean) => void
   onUnload: () => void
+  unloadedCount: number
+  onReloadIfc: () => void
+  // See IfcDataPanel's own unsavedObjectIds prop header for the full story.
+  saved: boolean
   selected: boolean; onToggleSelected: () => void
   onSelectWholeModel: (additive: boolean) => void
   unitDisplay: IfcUnitDisplay
@@ -263,8 +289,21 @@ function ModelItem({
   onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
+  // Lifted into IfcDataPanel, not local state (2026-07-26, per Maro: "I need
+  // this collapsed like this by default instead of all expanded, and in
+  // there add a collapse all feature") — same "parent owns the Set, this
+  // component just reads/toggles its own membership" convention selected/
+  // onToggleSelected just above already use, and the only way a single
+  // "Collapse All" button in the parent can affect every one of these at
+  // once. Defaults to collapsed (IfcDataPanel's own expandedModelIds starts
+  // empty) — a real project with several federated files (Architectural,
+  // Facade, Plumbing, Electrical, HVAC, Site, Structural — Maro's own real
+  // Snowdon Towers sample set) used to dump all seven full spatial/property
+  // trees open at once, which was the actual "all expanded" clutter this
+  // was reported against.
+  expanded: boolean
+  onToggleExpanded: () => void
 }) {
-  const [expanded, setExpanded] = useState(true)
   const [tree, setTree] = useState<IfcTreeNode | null>(null)
   const [typeCounts, setTypeCounts] = useState<{ typeName: string; count: number }[]>([])
   const [elementInfo, setElementInfo] = useState<IfcElementInfo | null>(null)
@@ -372,7 +411,7 @@ function ModelItem({
   return (
     <div>
       <div className="px-3 py-2 sticky top-0 bg-white flex items-center gap-2 z-10">
-        <button onClick={() => setExpanded(v => !v)} title={expanded ? 'Collapse' : 'Expand'} className="text-gray-400 w-3 shrink-0">
+        <button onClick={onToggleExpanded} title={expanded ? 'Collapse' : 'Expand'} className="text-gray-400 w-3 shrink-0">
           {expanded ? '▾' : '▸'}
         </button>
         <input
@@ -382,7 +421,24 @@ function ModelItem({
           title={selected ? 'Selected — click to deselect' : 'Select this model'}
         />
         <span className="text-xs text-gray-500 truncate" title={handle.object.name}>{handle.object.name || 'IFC model'}</span>
-        <button onClick={onUnload} title="Unload IFC model" className="ml-auto text-xs text-gray-400 hover:text-red-600 shrink-0">
+        {!saved && (
+          <span
+            title="Not saved to the server yet — refreshing now would lose this model. Wait for the upload indicator in the toolbar to clear."
+            className="text-xs text-amber-600 shrink-0"
+          >
+            ⚠ unsaved
+          </span>
+        )}
+        {unloadedCount > 0 && (
+          <button
+            onClick={onReloadIfc}
+            title={`${unloadedCount} element${unloadedCount === 1 ? '' : 's'} unloaded from this model — reload the file to bring some back`}
+            className="ml-auto text-xs text-blue-500 hover:text-blue-700 shrink-0"
+          >
+            Reload IFC ({unloadedCount})
+          </button>
+        )}
+        <button onClick={onUnload} title="Unload IFC model" className={`${unloadedCount > 0 ? '' : 'ml-auto'} text-xs text-gray-400 hover:text-red-600 shrink-0`}>
           Unload
         </button>
       </div>
@@ -570,9 +626,17 @@ function ModelItem({
 // MeshDataPanel.tsx's equivalent.
 export function IfcDataPanel({
   handles, activeObjectId, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
+  unloadedCountByModelId, onReloadIfc, unsavedObjectIds,
   selectedObjectIds, onSelectWholeModel, unitDisplay, onUnitDisplayChange,
   activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: Props) {
+  // Collapsed by default (2026-07-26, per Maro — see ModelItem's own
+  // expanded/onToggleExpanded header for the full "why"). Starts empty
+  // (nothing expanded) rather than seeded from `handles` — a model loaded
+  // *after* this mounts still defaults to collapsed the same way, with no
+  // extra effect needed to keep it in sync.
+  const [expandedModelIds, setExpandedModelIds] = useState<Set<string>>(new Set())
+
   if (handles.length === 0) {
     return (
       <div className="flex-1 p-3 text-xs text-gray-400">
@@ -585,19 +649,28 @@ export function IfcDataPanel({
     <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
       <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100">
         <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Units</span>
-        <div className="flex rounded border border-gray-300 overflow-hidden">
-          {(['auto', 'imperial', 'metric'] as const).map(opt => (
-            <button
-              key={opt}
-              onClick={() => onUnitDisplayChange(opt)}
-              title={opt === 'auto' ? "Match the loaded file's own declared unit" : opt === 'imperial' ? 'Always show feet-inches, regardless of the file\'s own unit' : 'Always show metres, regardless of the file\'s own unit'}
-              className={`px-2 py-0.5 text-[10px] ${
-                unitDisplay === opt ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-              } ${opt !== 'auto' ? 'border-l border-gray-300' : ''}`}
-            >
-              {opt === 'auto' ? 'Auto' : opt === 'imperial' ? 'ft' : 'm'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExpandedModelIds(new Set())}
+            title="Collapse every loaded model's own row back down"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-50"
+          >
+            Collapse All
+          </button>
+          <div className="flex rounded border border-gray-300 overflow-hidden">
+            {(['auto', 'imperial', 'metric'] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => onUnitDisplayChange(opt)}
+                title={opt === 'auto' ? "Match the loaded file's own declared unit" : opt === 'imperial' ? 'Always show feet-inches, regardless of the file\'s own unit' : 'Always show metres, regardless of the file\'s own unit'}
+                className={`px-2 py-0.5 text-[10px] ${
+                  unitDisplay === opt ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
+                } ${opt !== 'auto' ? 'border-l border-gray-300' : ''}`}
+              >
+                {opt === 'auto' ? 'Auto' : opt === 'imperial' ? 'ft' : 'm'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       {handles.map(handle => {
@@ -611,7 +684,16 @@ export function IfcDataPanel({
             selectedExpressIds={selectedExpressIds}
             onSelect={(exprId, additive) => onSelect(exprId, additive, id)}
             onSelectMany={(exprIds, additive) => onSelectMany(exprIds, additive, id)}
+            saved={!unsavedObjectIds.has(id)}
+            expanded={expandedModelIds.has(id)}
+            onToggleExpanded={() => setExpandedModelIds(prev => {
+              const next = new Set(prev)
+              if (next.has(id)) next.delete(id); else next.add(id)
+              return next
+            })}
             onUnload={() => onUnload(id)}
+            unloadedCount={unloadedCountByModelId.get(id) ?? 0}
+            onReloadIfc={() => onReloadIfc(id)}
             selected={selectedObjectIds.has(id)}
             onToggleSelected={() => { onSelectWholeModel(id, true) }}
             onSelectWholeModel={additive => onSelectWholeModel(id, additive)}

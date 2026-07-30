@@ -12,12 +12,20 @@ import { api } from '@/lib/api'
 // currently is," rather than a new value store of its own.
 // visible (2026-07-12) — see annotation.py's own docstring: 0/1, whether a
 // Placemark/Footnote is showing at a given date.
-export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z' | 'path_progress' | 'visible'
+// anim_start/anim_end (2026-07-30, per Maro: "this segment needs to work
+// independent of [a scheduled Activity]... if i keyframe i should see the
+// path actor in the timeline with both keyframes so i can drag, delete
+// etc") — Path/Zone's own line-draw/border-draw reveal window (see
+// paths.ts/zones.ts's own `animate` field header). Only ever written for
+// source_kind 'path'/'zone'; the keyframe's own `date` *is* the reveal
+// window's start/end instant, `value` is unused (always 0), same "a
+// marker keyframe with no meaningful value" convention as `visible`.
+export type KeyframeField = 'pos_x' | 'pos_y' | 'pos_z' | 'rot_x' | 'rot_y' | 'rot_z' | 'scale_x' | 'scale_y' | 'scale_z' | 'path_progress' | 'visible' | 'anim_start' | 'anim_end'
 
 export interface ElementKeyframe {
   id: string
   project_id: string
-  source_kind: 'ifc' | 'mesh' | 'annotation'
+  source_kind: 'ifc' | 'mesh' | 'annotation' | 'path' | 'zone'
   element_ref: string
   field: KeyframeField
   date: string
@@ -50,7 +58,7 @@ export function useElementKeyframes(projectId: string | undefined) {
   // element_keyframes.py's own POST route docstring. Re-keying the same spot
   // (e.g. nudging a value at an already-keyed date) updates it in place
   // rather than erroring or duplicating.
-  const upsert = async (sourceKind: 'ifc' | 'mesh' | 'annotation', elementRef: string, field: KeyframeField, date: Date, value: number): Promise<ElementKeyframe> => {
+  const upsert = async (sourceKind: 'ifc' | 'mesh' | 'annotation' | 'path' | 'zone', elementRef: string, field: KeyframeField, date: Date, value: number): Promise<ElementKeyframe> => {
     const { data } = await api.post<ElementKeyframe>('/api/v1/element-keyframes/', {
       project_id: projectId, source_kind: sourceKind, element_ref: elementRef, field, date: date.toISOString(), value,
     })

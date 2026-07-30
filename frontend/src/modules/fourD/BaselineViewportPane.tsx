@@ -55,8 +55,8 @@ interface Props {
   // regardless of what the live viewport was actually showing). Passed as
   // individual fields rather than the whole ViewerSettings object, same
   // convention this component's own upAxis/fieldOfView/clipStart/clipEnd
-  // props already use. Render *mode* (Wireframe/Hidden Line/Flat/Gouraud/
-  // Rendered) is deliberately not included here — that's driven by
+  // props already use. Render *mode* (Hidden Line/Flat/Gouraud/Rendered) is
+  // deliberately not included here — that's driven by
   // ModelObjects' own per-mesh material-swap effect, which is entangled
   // with selection/isolate/hide logic this read-only pane doesn't have;
   // this pane always renders in the plain PBR look regardless of the main

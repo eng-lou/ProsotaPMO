@@ -21,8 +21,21 @@ from pydantic import BaseModel, ConfigDict
 # date. Only ever written for source_kind="annotation"; ordinary mesh/ifc
 # targets have no use for it (their own visibility is driven by an assigned
 # AnimationProfile's opacity, not a manual on/off keyframe).
+# anim_start/anim_end (2026-07-30, per Maro: "this segment needs to work
+# independent of [a scheduled Activity]... if i keyframe i should see the
+# path actor in the timeline with both keyframes so i can drag, delete
+# etc") — Path/Zone's own line-draw/border-draw reveal window, reusing this
+# exact date-keyed shape instead of the plain animation_start/animation_end
+# datetime columns this replaced: a keyframe's own `date` *is* the
+# start/end instant (value is unused, always 0), which is what makes the
+# reveal's own timing show up as draggable/deletable diamonds in
+# AnimationActorsList.tsx's dope sheet for free, and what makes
+# computeKeyframeRange (timelinePlayback.ts) — already unioned with the
+# schedule range for exactly this "no Activity required" reason — extend
+# the scrubbable range the moment either one is keyed, with zero extra code.
 KeyframeField = Literal[
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "path_progress", "visible",
+    "anim_start", "anim_end",
 ]
 
 
@@ -37,7 +50,10 @@ class ElementKeyframeUpsert(BaseModel):
     # "annotation" (2026-07-12) — element_ref is the Annotation row's own id
     # (annotation.py), for pos_x/y/z and visible keyframes on a Placemark/
     # Footnote.
-    source_kind: Literal["ifc", "mesh", "camera", "annotation"]
+    # "path"/"zone" (2026-07-30) — element_ref is the Path/Zone row's own id
+    # (path.py/zone.py), used only for field="anim_start"/"anim_end" — see
+    # KeyframeField's own header just above.
+    source_kind: Literal["ifc", "mesh", "camera", "annotation", "path", "zone"]
     element_ref: str
     field: KeyframeField
     date: datetime

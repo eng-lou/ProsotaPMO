@@ -70,6 +70,7 @@ from app.api.scheduling_quality_runs import router as scheduling_quality_runs_ro
 from app.api.section_boxes import router as section_boxes_router
 from app.api.user_defined_fields import router as user_defined_fields_router
 from app.api.users import router as users_router
+from app.api.zones import router as zones_router
 from app.core.auth import get_current_user
 
 _auth = [Depends(get_current_user)]
@@ -145,6 +146,7 @@ app.include_router(collection_members_router, prefix="/api/v1", dependencies=_au
 app.include_router(element_transforms_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(paths_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(path_followers_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(zones_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(annotations_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_tests_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(clash_results_router, prefix="/api/v1", dependencies=_auth)

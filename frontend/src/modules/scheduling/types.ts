@@ -163,6 +163,19 @@ export interface Activity {
   // reverse-engineering an approximation from duration_hours. Null for
   // anything not IFC-generated, or generated before this field existed.
   schedule_quantity: string | null
+  // Real material take-off (2026-07-27, per Maro: "how is concrete and
+  // steel catered for if they exist" — see backend Activity.
+  // schedule_material_name's own model docstring). Same "null for anything
+  // not IFC-generated, or generated before this field existed" contract as
+  // schedule_quantity just above; read by scheduleGeneration.ts's own
+  // buildResourceRecipe (via Scheduling.tsx's own Number(...) conversion at
+  // its two call sites — Decimal fields serialize as strings over the wire,
+  // same convention schedule_quantity already follows) to emit a real
+  // resource_type='material' resource + quantity-costed assignment.
+  schedule_material_name: string | null
+  schedule_material_quantity: string | null
+  schedule_material_unit: string | null
+  schedule_material_cost_per_unit: string | null
 }
 
 // One entry in an activity's append-only code-change audit trail (2026-07-04,

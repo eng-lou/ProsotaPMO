@@ -80,6 +80,7 @@ export interface CostRateLine {
   qty: string
   unit: string | null
   rate: string
+  cost_code: string | null
   total: string
   created_at: string
   updated_at: string

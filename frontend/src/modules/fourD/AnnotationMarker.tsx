@@ -153,7 +153,13 @@ export function AnnotationMarker({
         if (vz !== null) z = vz
       } else {
         const activeLink = pickActiveLink(links, now)
-        const state = activeLink ? computeAppliedAnimationStateAt(activeLink, now) : null
+        // 'y' — no remap (2026-07-26, see computeAppliedAnimationStateAt's
+        // own upAxis header) — unlike imported mesh/IFC content, an
+        // annotation is never wrapped in a sourceUpAxis-vs-display
+        // axisCorrectionRotation group (placed directly via a world-space
+        // raycast click), so its own profile axis already means exactly
+        // what it says with no conversion needed either way.
+        const state = activeLink ? computeAppliedAnimationStateAt(activeLink, now, 'y') : null
         if (state) {
           x += state.positionOffset[0]
           y += state.positionOffset[1]

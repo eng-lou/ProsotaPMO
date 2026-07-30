@@ -38,6 +38,7 @@ async def upsert_path_follower(db: AsyncSession, data: PathFollowerCreate) -> Pa
     if existing is not None:
         existing.path_id = data.path_id
         existing.orient_to_path = data.orient_to_path
+        existing.heading_offset_deg = data.heading_offset_deg
         await db.commit()
         await db.refresh(existing)
         return PathFollowerResponse.model_validate(existing)

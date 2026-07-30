@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.model3d_file import Model3DFileResponse, Model3DKind, UpAxis
+from app.schemas.model3d_file import Model3DFileResponse, Model3DFileUnloadedElementsUpdate, Model3DKind, UpAxis
 from app.services import model3d_file as svc
 
 router = APIRouter(prefix="/model3d-files", tags=["model3d-files"])
@@ -53,3 +53,16 @@ async def delete_file(
 ) -> Response:
     await svc.delete_file(db, file_id)
     return Response(status_code=204)
+
+
+# "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i refresh, i
+# expect the elements i unloaded to stay unloaded") — see
+# svc.update_unloaded_elements's own header for why this is always a full
+# replacement, not an append/remove call.
+@router.patch("/{file_id}/unloaded-elements", response_model=Model3DFileResponse)
+async def update_unloaded_elements(
+    file_id: uuid.UUID,
+    payload: Model3DFileUnloadedElementsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    return await svc.update_unloaded_elements(db, file_id, payload.unloaded_elements)

@@ -305,26 +305,31 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
   // Bulk delete (2026-07-15, per Maro: "add bulk delete all resources in
-  // the resource pool") — no backend bulk-delete endpoint exists (nor is
-  // one worth adding just for this: the per-resource DELETE already does
-  // the one thing that matters, refusing a resource still assigned to an
-  // activity with a 422 — see app/services/resource.py's own
-  // delete_resource), so this just loops the same DELETE call this row's
-  // own handleDelete already makes, one at a time, and reports whichever
-  // ones got skipped instead of failing the whole batch on the first
-  // still-assigned resource. Own confirm key, distinct from the per-row
-  // one just above — dismissing "don't ask again" on a single delete
-  // shouldn't silently skip the warning for wiping the entire pool.
+  // the resource pool") — an explicit, confirmed whole-pool wipe (e.g.
+  // clearing out to regenerate the schedule/resources/cost plan from
+  // scratch after a generation-logic change), so unlike the single-row
+  // handleDelete above it cascades: every assignment a resource has is
+  // deleted first (via the new resource_id filter on GET
+  // /resource-assignments/, 2026-07-27 — delete_resource's own guard
+  // otherwise refused almost the entire pool, since nearly everything ends
+  // up assigned to something), then the now-unassigned resource itself.
+  // Still reports whichever resources couldn't be cleared (e.g. a frozen
+  // schedule period refuses the assignment deletes) rather than failing the
+  // whole batch on the first one.
   const handleDeleteAll = async () => {
     if (resources.length === 0) return
     if (!(await confirmWithDontAsk(
       'scheduling.resource-delete-all',
-      `Delete all ${resources.length} resource${resources.length === 1 ? '' : 's'} in the pool? Any resource still assigned to an activity will be skipped — remove those assignments first.`,
+      `Delete all ${resources.length} resource${resources.length === 1 ? '' : 's'} in the pool? This also deletes any of their activity assignments — those activities' resourced costs will need re-generating. Any resource in a frozen schedule period will be skipped.`,
     ))) return
     setBulkDeleting(true)
     const skipped: string[] = []
     for (const r of resources) {
       try {
+        const { data: assignments } = await api.get('/api/v1/resource-assignments/', { params: { resource_id: r.id } })
+        for (const a of assignments as { id: string }[]) {
+          await api.delete(`/api/v1/resource-assignments/${a.id}`)
+        }
         await api.delete(`/api/v1/resources/${r.id}`)
       } catch {
         skipped.push(r.name)
@@ -335,7 +340,7 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
     if (skipped.length > 0) {
       window.alert(
         `Deleted ${resources.length - skipped.length} of ${resources.length} resources.\n`
-        + `Still assigned to an activity, skipped: ${skipped.join(', ')}`,
+        + `Could not clear (e.g. frozen period), skipped: ${skipped.join(', ')}`,
       )
     }
   }

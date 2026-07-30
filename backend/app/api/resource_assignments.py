@@ -16,16 +16,22 @@ router = APIRouter(prefix="/resource-assignments", tags=["resource-assignments"]
 async def list_assignments(
     activity_id: uuid.UUID | None = None,
     schedule_period_id: uuid.UUID | None = None,
+    resource_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> list:
     # schedule_period_id bulk-loads every assignment across the schedule period in
     # one call (e.g. for the Scheduling table's Resources column) — same pattern as
-    # activity-relationships' own schedule_period_id filter.
+    # activity-relationships' own schedule_period_id filter. resource_id is the
+    # reverse lookup (2026-07-27) — every assignment a single resource has, across
+    # whichever activities it's linked to, so the Resource Pool's "Delete All" can
+    # cascade-clear a resource's own assignments before deleting it.
     if activity_id is not None:
         return await svc.list_assignments(db, activity_id)
     if schedule_period_id is not None:
         return await svc.list_assignments_for_period(db, schedule_period_id)
-    raise HTTPException(status_code=422, detail="activity_id or schedule_period_id is required")
+    if resource_id is not None:
+        return await svc.list_assignments_for_resource(db, resource_id)
+    raise HTTPException(status_code=422, detail="activity_id, schedule_period_id, or resource_id is required")
 
 
 @router.post("/", response_model=ResourceAssignmentResponse, status_code=201)

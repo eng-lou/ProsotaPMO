@@ -1,6 +1,7 @@
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfileConfig, Axis, Interpolation } from './animationProfiles'
 import type { ElementKeyframe } from './elementKeyframes'
+import { resolveDisplayAxis, type UpAxis } from './upAxis'
 
 // Moved here from Viewport3D.tsx (2026-07-12) so AnnotationMarker.tsx can
 // resolve its own Mode A link the identical way meshes/IFC elements do,
@@ -59,6 +60,11 @@ export function pickActiveLink(links: ResolvedTimelineLink[], now: Date): Resolv
 }
 
 const DAY_MS = 86_400_000
+
+// Shared between TimelineWindow.tsx's own fps <select> and FourD.tsx's
+// lifted-state validation of a stored localStorage value (2026-07-30) — one
+// definition so the two can never drift apart.
+export const FPS_OPTIONS = [24, 25, 30, 60]
 
 // Date/Seconds/Frames display modes (2026-07-12, per Maro: "I want to
 // choose to see as date or time (normal blender time secs/frames etc)...
@@ -175,6 +181,36 @@ function clamp01(t: number): number {
   return t < 0 ? 0 : t > 1 ? 1 : t
 }
 
+// Shared 0..1 "reveal" progress for Path/Zone draw-in and flash animations
+// (2026-07-29, per Maro: "animate the line itself so it looks like its
+// coming from the first point to the last... can place animation on
+// loop"; "the animation will go like path to set the border then the
+// fill, can also set a flashing zone animation" — PathGizmo.tsx and
+// ZoneGizmo.tsx both drive their own reveal math off this one function).
+// Holds at 0 before `start`, ramps linearly to 1 at `end`, then either
+// holds at 1 (loop=false — the ordinary "plays once" case) or wraps back
+// to 0 and repeats every (end - start) (loop=true), same sawtooth shape
+// AnimationProfileConfig's own 'over_duration' trigger already uses for
+// transform animation, just exposed directly instead of feeding a
+// position/opacity offset. start/end null (animate off, or a path/zone
+// that's never had its animation window set) reads as "fully revealed" —
+// the caller should gate on `animate` itself before ever calling this,
+// but a null-safe default here means a half-configured row still renders
+// its whole shape rather than nothing.
+export function computeRevealProgress(now: Date, start: Date | null, end: Date | null, loop: boolean): number {
+  if (!start || !end) return 1
+  const startMs = start.getTime()
+  const endMs = end.getTime()
+  if (endMs <= startMs) return 1
+  const nowMs = now.getTime()
+  if (nowMs <= startMs) return 0
+  const duration = endMs - startMs
+  if (!loop) return clamp01((nowMs - startMs) / duration)
+  const elapsed = nowMs - startMs
+  const wrapped = ((elapsed % duration) + duration) % duration
+  return wrapped / duration
+}
+
 // Named easing curves matching AnimationProfileConfig.interpolation — plain
 // 0..1 -> 0..1 remaps, applied to the raw linear window-progress before
 // it's used to drive transform/opacity (2026-07-11). "bounce" is a cheap
@@ -258,6 +294,21 @@ function lerpColor(fromHex: string, toHex: string, t: number): string {
 export function computeAppliedAnimationStateAt(
   link: Pick<ResolvedTimelineLink, 'startMs' | 'finishMs' | 'profile'>,
   now: Date,
+  // 2026-07-26 fix, per Maro: "the animation profiles axises are not
+  // aligned to up axis... if im on z up, the animation profiles seem fixed
+  // to y as up axis" — profile.axis used to map straight through
+  // AXIS_VECTOR into a raw LOCAL-space offset, added directly to the
+  // object's position with no awareness of the per-object up-axis-
+  // correction wrapper (Viewport3D's own `<group rotation={
+  // axisCorrectionRotation(sourceUpAxis, upAxis)}>`) that ALL of this app's
+  // keyframed transforms already account for via resolveDisplayAxis
+  // (applyKeyframedTransform, Viewport3D.tsx). Since that wrapper rotates a
+  // native Y-up source (the near-universal default — defaultSourceUpAxis,
+  // upAxis.ts) by +/-90° about X whenever displayUpAxis is 'z', a profile's
+  // raw "local Z" offset actually lands on world -Y after that rotation —
+  // exactly backwards from what "Z axis" should mean once the display is
+  // Z-up. Now resolved the identical way keyframes already are.
+  upAxis: UpAxis,
 ): AppliedAnimationState | null {
   const { startMs: start, finishMs: finish, profile } = link
   const nowMs = now.getTime()
@@ -289,7 +340,11 @@ export function computeAppliedAnimationStateAt(
 
   const eased = applyEasing(rawProgress, profile.interpolation)
   const awayAmount = 1 - eased
-  const axis = AXIS_VECTOR[profile.axis]
+  // Same {localAxis, sign} remap applyKeyframedTransform already applies
+  // per pos_x/pos_y/pos_z keyframe field — see this function's own upAxis
+  // param header for the full "why".
+  const { localAxis, sign } = resolveDisplayAxis(profile.axis, upAxis, 'position')
+  const axis = AXIS_VECTOR[localAxis]
 
   let positionOffset: [number, number, number] = [0, 0, 0]
   let rotationOffsetDeg = 0
@@ -297,9 +352,9 @@ export function computeAppliedAnimationStateAt(
 
   if (['translate', 'fall', 'pop', 'spiral'].includes(profile.transform_kind)) {
     positionOffset = [
-      axis[0] * profile.direction * profile.distance * awayAmount,
-      axis[1] * profile.direction * profile.distance * awayAmount,
-      axis[2] * profile.direction * profile.distance * awayAmount,
+      axis[0] * sign * profile.direction * profile.distance * awayAmount,
+      axis[1] * sign * profile.direction * profile.distance * awayAmount,
+      axis[2] * sign * profile.direction * profile.distance * awayAmount,
     ]
   }
   if (profile.transform_kind === 'pop' || profile.transform_kind === 'scale') {

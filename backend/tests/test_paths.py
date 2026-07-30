@@ -19,9 +19,71 @@ async def test_create_and_list_path(client: AsyncClient, project: Project):
     assert created["closed"] is False
     assert created["visible"] is True
     assert len(created["points"]) == 3
+    assert created["color"] == "#38bdf8"
+    assert created["line_style"] == "solid"
+    assert created["show_arrow"] is False
+    assert created["show_label"] is False
+    assert created["line_width"] == 2
+    assert created["dash_size"] == 0.5
+    assert created["gap_size"] == 0.3
+    assert created["animate"] is False
+    assert created["animation_loop"] is False
 
     listing = (await client.get("/api/v1/paths/", params={"project_id": str(project.id)})).json()
     assert any(p["id"] == created["id"] for p in listing)
+
+
+async def test_style_path(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/paths/", json={"project_id": str(project.id), "points": _points(2)})).json()
+
+    resp = await client.patch(f"/api/v1/paths/{created['id']}", json={
+        "color": "#ef4444", "line_style": "dashed", "show_arrow": True, "show_label": True, "line_width": 5,
+        "dash_size": 1.2, "gap_size": 0.6,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["color"] == "#ef4444"
+    assert updated["line_style"] == "dashed"
+    assert updated["show_arrow"] is True
+    assert updated["show_label"] is True
+    assert updated["line_width"] == 5
+    assert updated["dash_size"] == 1.2
+    assert updated["gap_size"] == 0.6
+
+
+async def test_animate_path(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/paths/", json={"project_id": str(project.id), "points": _points(2)})).json()
+
+    resp = await client.patch(f"/api/v1/paths/{created['id']}", json={"animate": True, "animation_loop": True})
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["animate"] is True
+    assert updated["animation_loop"] is True
+
+
+async def test_animate_path_reveal_window_is_a_keyframe_pair(client: AsyncClient, project: Project):
+    # The reveal window's own start/end (2026-07-30 rework, per Maro: "if i
+    # keyframe i should see the path actor in the timeline with both
+    # keyframes so i can drag, delete etc") live in element_keyframes, not
+    # on the Path row itself — this confirms the same generic upsert route
+    # every other animated actor already uses round-trips "anim_start"/
+    # "anim_end" for source_kind="path" correctly.
+    path = (await client.post("/api/v1/paths/", json={"project_id": str(project.id), "points": _points(2)})).json()
+
+    start_resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id), "source_kind": "path", "element_ref": path["id"],
+        "field": "anim_start", "date": "2026-08-01T00:00:00Z", "value": 0,
+    })
+    end_resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id), "source_kind": "path", "element_ref": path["id"],
+        "field": "anim_end", "date": "2026-08-05T00:00:00Z", "value": 0,
+    })
+    assert start_resp.status_code == 201, start_resp.text
+    assert end_resp.status_code == 201, end_resp.text
+
+    listing = (await client.get("/api/v1/element-keyframes/", params={"project_id": str(project.id)})).json()
+    own = [k for k in listing if k["source_kind"] == "path" and k["element_ref"] == path["id"]]
+    assert {k["field"] for k in own} == {"anim_start", "anim_end"}
 
 
 async def test_rewrite_points_and_toggle_closed(client: AsyncClient, project: Project):

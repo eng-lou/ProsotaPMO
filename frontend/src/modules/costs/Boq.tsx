@@ -1,12 +1,12 @@
 import axios from 'axios'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProjectLetterhead } from '@/lib/letterhead'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { BoqPrintView } from './BoqPrintView'
-import { buildBoqDraft } from './boqGeneration'
+import { buildBoqDraft, buildBoqTree } from './boqGeneration'
 import type { CostElement, CostRateLine } from './types'
 
 // Bill of Quantities tab (2026-07-18, per Maro: "I want a boq form in the
@@ -107,14 +107,18 @@ export function Boq({ projectId, periodId, projectName }: Props) {
         element = data
         setBoqElement(element)
       }
-      // Dedupe by description client-side (mirrors every other generator's
-      // dedupe_by_* flag — no bulk-create endpoint exists for rate lines,
-      // this list is small enough that sequential single-creates are fine).
-      const existingDescriptions = new Set(lines.map(l => l.description))
-      const toCreate = drafts.filter(d => !existingDescriptions.has(d.description))
+      // Deduped by cost_code, not description (2026-07-27) — a real,
+      // stable, per-activity identifier now that one exists, more robust
+      // than text matching (falls back to description for older lines
+      // generated before cost_code existed). No bulk-create endpoint
+      // exists for rate lines, this list is small enough that sequential
+      // single-creates are fine.
+      const existingKeys = new Set(lines.map(l => l.cost_code ?? l.description))
+      const toCreate = drafts.filter(d => !existingKeys.has(d.cost_code))
       for (const d of toCreate) {
         await api.post('/api/v1/cost-rate-lines/', {
           cost_element_id: element.id, description: d.description, qty: d.qty, unit: d.unit, rate: d.rate,
+          cost_code: d.cost_code,
         })
       }
       await load()
@@ -188,7 +192,8 @@ export function Boq({ projectId, periodId, projectName }: Props) {
   }
 
   return (
-    <div>
+    <>
+    <div className="no-print">
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
           onClick={handleGenerate}
@@ -258,6 +263,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
             <tr className="text-left text-xs text-gray-400 uppercase tracking-wide border-b border-gray-200">
               <th className="py-2 pr-2 w-12">Sr.</th>
               <th className="py-2 pr-2">Name of Item</th>
+              <th className="py-2 pr-2 w-32">Cost Code</th>
               <th className="py-2 pr-2 text-right w-24">Quantity</th>
               <th className="py-2 pr-2 w-16">Unit</th>
               <th className="py-2 pr-2 text-right w-24">Rate</th>
@@ -266,63 +272,109 @@ export function Boq({ projectId, periodId, projectName }: Props) {
             </tr>
           </thead>
           <tbody>
-            {lines.map((line, i) => (
-              <tr key={line.id} className="border-b border-gray-100 hover:bg-gray-50">
-                {editingLineId === line.id && editValues ? (
-                  <>
-                    <td className="py-1.5 pr-2 text-gray-400">{i + 1}</td>
-                    <td className="py-1.5 pr-2">
-                      <input value={editValues.description} onChange={e => setEditValues({ ...editValues, description: e.target.value })}
-                        className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input value={editValues.qty} onChange={e => setEditValues({ ...editValues, qty: e.target.value })}
-                        className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input value={editValues.unit} onChange={e => setEditValues({ ...editValues, unit: e.target.value })}
-                        className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input value={editValues.rate} onChange={e => setEditValues({ ...editValues, rate: e.target.value })}
-                        className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
-                    </td>
-                    <td className="py-1.5 pr-2 text-right text-gray-400">—</td>
-                    <td className="py-1.5 pr-2 whitespace-nowrap">
-                      <button onClick={() => handleSaveEdit(line.id)} className="text-xs text-blue-600 hover:text-blue-700 mr-2">Save</button>
-                      <button onClick={() => { setEditingLineId(null); setEditValues(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td className="py-1.5 pr-2 text-gray-400">{i + 1}</td>
-                    <td className="py-1.5 pr-2">{line.description}</td>
-                    <td className="py-1.5 pr-2 text-right">{Number(line.qty).toLocaleString()}</td>
-                    <td className="py-1.5 pr-2 text-gray-500">{line.unit ?? '—'}</td>
-                    <td className="py-1.5 pr-2 text-right">{formatCurrency(Number(line.rate))}</td>
-                    <td className="py-1.5 pr-2 text-right font-medium">{formatCurrency(Number(line.total))}</td>
-                    <td className="py-1.5 pr-2 whitespace-nowrap">
-                      <button
-                        onClick={() => { setEditingLineId(line.id); setEditValues({ description: line.description, qty: line.qty, unit: line.unit ?? '', rate: line.rate }) }}
-                        className="text-xs text-gray-400 hover:text-gray-600 mr-2"
-                      >Edit</button>
-                      <button onClick={() => handleDeleteLine(line)} className="text-xs text-gray-400 hover:text-red-600">Delete</button>
-                    </td>
-                  </>
-                )}
-              </tr>
-            ))}
+            {(() => {
+              const tree = buildBoqTree(lines, scheduleActivities)
+              let sr = 0
+              const renderLine = (line: CostRateLine, label: string, indent: number, showSr: boolean) => {
+                if (showSr) sr++
+                const isEditing = editingLineId === line.id && editValues
+                return (
+                  <tr key={line.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    {isEditing ? (
+                      <>
+                        <td className="py-1.5 pr-2 text-gray-400">{showSr ? sr : '—'}</td>
+                        <td className="py-1.5 pr-2" style={{ paddingLeft: 8 + indent * 16 }}>
+                          <input value={editValues!.description} onChange={e => setEditValues({ ...editValues!, description: e.target.value })}
+                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
+                        </td>
+                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{line.cost_code ?? '—'}</td>
+                        <td className="py-1.5 pr-2">
+                          <input value={editValues!.qty} onChange={e => setEditValues({ ...editValues!, qty: e.target.value })}
+                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
+                        </td>
+                        <td className="py-1.5 pr-2">
+                          <input value={editValues!.unit} onChange={e => setEditValues({ ...editValues!, unit: e.target.value })}
+                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
+                        </td>
+                        <td className="py-1.5 pr-2">
+                          <input value={editValues!.rate} onChange={e => setEditValues({ ...editValues!, rate: e.target.value })}
+                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
+                        </td>
+                        <td className="py-1.5 pr-2 text-right text-gray-400">—</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">
+                          <button onClick={() => handleSaveEdit(line.id)} className="text-xs text-blue-600 hover:text-blue-700 mr-2">Save</button>
+                          <button onClick={() => { setEditingLineId(null); setEditValues(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="py-1.5 pr-2 text-gray-400">{showSr ? sr : '—'}</td>
+                        <td className="py-1.5 pr-2" style={{ paddingLeft: 8 + indent * 16 }}>{label}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{line.cost_code ?? '—'}</td>
+                        <td className="py-1.5 pr-2 text-right">{Number(line.qty).toLocaleString()}</td>
+                        <td className="py-1.5 pr-2 text-gray-500">{line.unit ?? '—'}</td>
+                        <td className="py-1.5 pr-2 text-right">{formatCurrency(Number(line.rate))}</td>
+                        <td className="py-1.5 pr-2 text-right font-medium">{formatCurrency(Number(line.total))}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">
+                          <button
+                            onClick={() => { setEditingLineId(line.id); setEditValues({ description: line.description, qty: line.qty, unit: line.unit ?? '', rate: line.rate }) }}
+                            className="text-xs text-gray-400 hover:text-gray-600 mr-2"
+                          >Edit</button>
+                          <button onClick={() => handleDeleteLine(line)} className="text-xs text-gray-400 hover:text-red-600">Delete</button>
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                )
+              }
+              return (
+                <>
+                  {tree.sections.map(section => (
+                    <Fragment key={section.key}>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <td className="py-1.5 pr-2"></td>
+                        <td className="py-1.5 pr-2 font-bold">{section.label}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{section.key}</td>
+                        <td colSpan={3}></td>
+                        <td className="py-1.5 pr-2 text-right font-bold">{formatCurrency(section.subtotal)}</td>
+                        <td></td>
+                      </tr>
+                      {section.elements.map(element => (
+                        <Fragment key={element.key}>
+                          <tr className="border-b border-gray-100">
+                            <td className="py-1.5 pr-2"></td>
+                            <td className="py-1.5 pr-2 font-semibold text-gray-600" style={{ paddingLeft: 8 + 16 }}>{element.label}</td>
+                            <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{element.key}</td>
+                            <td colSpan={3}></td>
+                            <td className="py-1.5 pr-2 text-right font-semibold text-gray-600">{formatCurrency(element.subtotal)}</td>
+                            <td></td>
+                          </tr>
+                          {element.activities.map(activity => (
+                            <Fragment key={activity.line.id}>
+                              {renderLine(activity.line, activity.label, 2, true)}
+                              {activity.resources.map(resource => renderLine(resource.line, resource.label, 3, false))}
+                            </Fragment>
+                          ))}
+                        </Fragment>
+                      ))}
+                    </Fragment>
+                  ))}
+                  {tree.ungrouped.map(line => renderLine(line, line.description, 0, true))}
+                </>
+              )
+            })()}
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-gray-300 font-bold">
-              <td colSpan={5} className="py-2 pr-2 text-right">Total Cost</td>
+              <td colSpan={6} className="py-2 pr-2 text-right">Total Cost</td>
               <td className="py-2 pr-2 text-right">{formatCurrency(total)}</td>
               <td></td>
             </tr>
           </tfoot>
         </table>
       )}
-      <BoqPrintView lines={lines} total={total} projectName={projectName} letterhead={letterhead} />
     </div>
+    <BoqPrintView lines={lines} total={total} projectName={projectName} letterhead={letterhead} activities={scheduleActivities} />
+    </>
   )
 }

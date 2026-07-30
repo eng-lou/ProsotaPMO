@@ -47,10 +47,18 @@ const GROUP_OPTIONS = [
 ] as const
 type GroupByField = (typeof GROUP_OPTIONS)[number]['value']
 
+// Fixed at exactly 2dp (2026-07-27, per Maro's QS review: "£160,690.7 to one
+// decimal is a formatting bug") — plain toLocaleString() shows however many
+// decimal digits the underlying float happens to carry (0-3, and JS drops a
+// trailing zero from a value like 160690.70), so this table and its print
+// view mixed £3,213,814 / £257,105.12 / £160,690.7 side by side depending on
+// which figure happened to round to a whole number. Currency always has
+// exactly two.
 function formatCurrency(value: string | null) {
   if (value === null) return '—'
   const n = Number(value)
-  return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
+  const formatted = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return n < 0 ? `-£${formatted}` : `£${formatted}`
 }
 
 function formatRatio(value: string | null) {
@@ -737,6 +745,7 @@ export function CostPlan() {
 
   if (costTab === 'boq') {
     return (
+      <>
       <div className="p-8 no-print">
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-2xl font-bold text-gray-900">Bill of Quantities</h1>
@@ -750,8 +759,9 @@ export function CostPlan() {
           Measured-works breakdown for {selectedProject.name} — quantity and rate derived from the committed schedule's own duration and resourced cost.
         </p>
         {costTabSwitcher}
-        {period && <Boq projectId={selectedProject.id} periodId={period.id} projectName={selectedProject.name} />}
       </div>
+      {period && <Boq projectId={selectedProject.id} periodId={period.id} projectName={selectedProject.name} />}
+      </>
     )
   }
 
@@ -1203,6 +1213,7 @@ export function CostPlan() {
       elements={printMode === 'list' ? visibleElements : elements.filter(e => selectedForPrint.has(e.id))}
       projectName={selectedProject.name}
       letterhead={letterhead}
+      gfaM2={projectDetails?.gfa_m2 ?? null}
     />
     </>
   )

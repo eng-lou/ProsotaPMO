@@ -23,7 +23,11 @@ class CostElement(Base, TimestampMixin):
     )
     # Human-readable reference (e.g. "CST-0001"), auto-generated, unique per project. Never reused.
     code: Mapped[str] = mapped_column(String(20), nullable=False)
-    # 'fixed' = direct budget figure; 'percentage' = rate applied to sum of fixed elements
+    # 'fixed' = direct budget figure; 'percentage' = rate applied to the sum of fixed
+    # elements, cascaded in NRM1 order for the four recognised on-costs (Overhead,
+    # Design Fees, Contingency (Risk-Derived), Inflation — see cost_element.py's own
+    # NRM1_CASCADE_ORDER/_cascade_bases) so fees are charged on overhead and inflation
+    # on risk and fees, not all four applied to the same raw subtotal in parallel.
     element_type: Mapped[str] = mapped_column(String(20), nullable=False, default="fixed")
     # For percentage elements: rate as decimal fraction (0.15 = 15%). NULL for fixed elements.
     # Values are calculated at query time — never stored for percentage elements.

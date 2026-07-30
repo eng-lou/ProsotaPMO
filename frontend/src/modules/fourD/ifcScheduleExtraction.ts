@@ -6,7 +6,7 @@ import * as THREE from 'three'
 // IfcDataPanel.tsx already use everywhere else to keep web-ifc out of the
 // main bundle.
 import type { IfcModelHandle } from './ifcModel'
-import { getExpressIdWorldBounds } from './elementBatching'
+import { getExpressIdWorldBounds, getExpressIdWorldVolume } from './elementBatching'
 
 // IFC Schedule Wizard, step 1 (2026-07-13, per Maro: "generate a resource
 // loaded schedule based on an imported ifc") — extracts the elements a
@@ -60,14 +60,29 @@ import { getExpressIdWorldBounds } from './elementBatching'
 // "full schedule" block), bypassing groupByStorey entirely since there's no
 // real element to group.
 export type ScheduleCategory =
-  | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls' | 'Non-Structural Walls'
-  | 'Structural Members' | 'Stairs' | 'Ramps' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
+  | 'Piling' | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls' | 'Non-Structural Walls'
+  | 'Structural Members' | 'Stairs' | 'Elevators' | 'Ramps' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
   | 'Ductwork' | 'Air Terminals' | 'Piping' | 'Plumbing Fixtures'
   | 'Electrical Containment' | 'Lighting' | 'Electrical Devices'
   | 'Coverings' | 'Furnishings' | 'Site & Landscaping'
   | 'Preliminaries' | 'Substructure Earthworks' | 'Procurement' | 'Testing & Commissioning'
 
 export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory }[] = [
+  // 'Piling' (2026-07-25, per Maro: "so you assume for such a high rise
+  // simple shallow foundation is enough?" — real, fair catch: IfcPile wasn't
+  // in this table at all before, so a real high-rise's own piled foundation
+  // elements — if the model actually has them — were being silently dropped
+  // from the schedule entirely, not defaulted to shallow. Whether a building
+  // needs piles is a real geotechnical/structural fact specific to each
+  // file, never something to assume either way from a category label alone
+  // — same "read the real model data, don't guess" rule this whole table
+  // already follows for everything else (BASESLAB detection, Pset
+  // overrides, LoadBearing, ...). A model with no real IfcPile elements
+  // simply produces an empty Piling category, same as any other category
+  // with nothing to match; one that genuinely has them now gets real,
+  // separately-sequenced piling activities instead of losing that geometry
+  // entirely.
+  { ifcType: 'IfcPile', category: 'Piling' },
   { ifcType: 'IfcFooting', category: 'Foundation' },  // "Foundation" (2026-07-17, per Maro: "Footings is Foundation") — was 'Footings'
   // Individual reinforcement (2026-07-15, per Maro, after "Select
   // Unassigned" on a real structural export turned up 149 IfcReinforcingBar
@@ -124,6 +139,26 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
   // either way: the real spatial root simply produces no candidate (no
   // box), while a genuinely placed one now does.
   { ifcType: 'IfcRamp', category: 'Ramps' },
+  // IfcRampFlight (2026-07-27, per Maro: a real "Ramp:Ramp (Wood)" element,
+  // Pset_ProductRequirements.Category="Ramps", showing "Not linked to any
+  // activity" on Select Unassigned) — the actual geometry-bearing flight
+  // component IfcRamp aggregates (IfcRelAggregates); a model can export a
+  // ramp's real placed geometry directly on the flight instance rather than
+  // (or in addition to) the IfcRamp container, same "the container type
+  // alone isn't enough" gap IfcStairFlight already covers for IfcStair
+  // above. Same category as its container either way — a ramp is a ramp
+  // regardless of which IFC class actually carries its geometry.
+  { ifcType: 'IfcRampFlight', category: 'Ramps' },
+  // IfcTransportElement (2026-07-27, per Maro's own real example: an
+  // "Elevator-Hydraulic:3500 lbs" element, Pset_ProductRequirements.
+  // Category="Vertical Circulation", also showing "Not linked to any
+  // activity") — covers elevators/escalators/moving walkways; this file's
+  // real content is elevators, so 'Elevators' (not the broader IFC property
+  // value "Vertical Circulation") to match this table's own established
+  // granularity — Stairs/Ramps/Railings are already separate categories
+  // rather than one lumped "Circulation" bucket, so Elevators gets the same
+  // treatment instead of introducing a differently-grained new one.
+  { ifcType: 'IfcTransportElement', category: 'Elevators' },
   { ifcType: 'IfcSite', category: 'Site & Landscaping' },
   { ifcType: 'IfcRoof', category: 'Roofs' },
   { ifcType: 'IfcCurtainWall', category: 'Curtain Walls' },
@@ -194,8 +229,16 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
 // first-draft placement, freely reordered per project in the wizard same
 // as every other category here.
 export const CATEGORY_ORDER: ScheduleCategory[] = [
-  'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls', 'Non-Structural Walls',
-  'Structural Members', 'Stairs', 'Ramps', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
+  // Piling first (2026-07-25) — real driven/bored piles are installed
+  // before a pile cap/mat foundation can be poured on top of them; only
+  // ever has real activities when the model has real IfcPile elements.
+  'Piling', 'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls', 'Non-Structural Walls',
+  // Elevators (2026-07-27) sits alongside Stairs/Ramps — all three are the
+  // same "vertical circulation" family, sequenced together rather than
+  // scattered; an elevator's own shaft/rail/car installation runs on the
+  // same rough timeline as stairs going in floor-by-floor, well before
+  // Roofs/envelope closes in.
+  'Structural Members', 'Stairs', 'Elevators', 'Ramps', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
   'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
   'Air Terminals', 'Plumbing Fixtures', 'Lighting', 'Electrical Devices', 'Furnishings', 'Site & Landscaping',
 ]
@@ -456,6 +499,16 @@ export interface ExtractedElement {
   // mesh, not a certified takeoff. See this module's own plan doc.
   quantity: number
   quantityUnit: 'm' | 'm²'
+  // Real solid volume, m³ (2026-07-27, per Maro: "how is concrete and steel
+  // catered for if they exist" — resources for structural categories were
+  // crew/equipment only, no material at all) — computed from the element's
+  // own actual triangulated geometry (getExpressIdWorldVolume,
+  // elementBatching.ts), not derived from quantity/quantityUnit above (a
+  // bounding-box length/area estimate, not a real solid measurement). Only
+  // populated for VOLUME_PRICED_CATEGORIES below; null for everything else,
+  // same "don't compute what nothing will read" discipline
+  // AREA_PRICED_CATEGORIES' own real-Qto check already follows.
+  volumeM3: number | null
 }
 
 // The only categories a real IfcElementQuantity area is worth reading for
@@ -469,6 +522,27 @@ export interface ExtractedElement {
 // structural 'Walls' sibling is; see this file's own header on why it's a
 // separate category at all (STRUCTURAL_CATEGORIES-exclusion, not pricing).
 const AREA_PRICED_CATEGORIES = new Set<ScheduleCategory>(['Slabs', 'Walls', 'Non-Structural Walls', 'Roofs', 'Coverings'])
+
+// Categories a real material take-off (concrete/steel volume, ultimately
+// costed in scheduleGeneration.ts's own buildResourceRecipe) is worth
+// computing for (2026-07-27, per Maro: "how is concrete and steel catered
+// for if they exist" — resources/costs for every structural category were
+// crew/equipment only, no material line at all). Matches
+// scheduleGeneration.ts's own per-category material assignment exactly —
+// see MATERIAL_BY_CATEGORY there for which specific material each of these
+// gets and why (mirrors that module's own crew/equipment choice per
+// category, e.g. Columns/Beams are erected by a Steel Erection Crew there,
+// so they're steel here too, not concrete). Deliberately excludes
+// 'Non-Structural Walls' (that category's own header already documents
+// these as "commonly precast/lightweight/block rather than genuinely
+// cast-in-place" — assuming ready-mix concrete for them would be a real
+// guess, not a read of actual data) and 'Structural Members' (a generic
+// IfcMember/IfcPlate/IfcBuildingElementProxy catch-all for bracing/
+// connection hardware — material varies too much per project to assume
+// either way).
+const VOLUME_PRICED_CATEGORIES = new Set<ScheduleCategory>([
+  'Piling', 'Foundation', 'Columns', 'Beams', 'Slabs', 'Walls', 'Reinforcement', 'Ramps',
+])
 
 // Length (columns/beams: the box's longest axis) or area (slabs/footings/
 // walls: the product of the two largest axes — a slab/footing's footprint,
@@ -619,12 +693,21 @@ export async function extractScheduleElements(
       const { quantity, quantityUnit } = realArea !== null
         ? { quantity: realArea, quantityUnit: 'm²' as const }
         : measureElement(box, category, toMetres)
+      // getExpressIdWorldVolume, same never-materialize discipline as
+      // getExpressIdWorldBounds just above (2026-07-27) — only computed for
+      // VOLUME_PRICED_CATEGORIES, not every candidate, so a file with no
+      // structural categories at all pays zero extra cost for this. Raw
+      // units cubed from web-ifc, same as box/measureElement above — cubing
+      // toMetres (not multiplying) converts a *volume*, not a length.
+      const volumeM3 = VOLUME_PRICED_CATEGORIES.has(category)
+        ? (getExpressIdWorldVolume(handle.object, expressID) ?? 0) * toMetres ** 3
+        : null
       elements.push({
         expressID, globalId, name, ifcType, category,
         material: classifyMaterial(name),
         storeyName: storey?.name ?? 'Unassigned',
         storeyElevation: storey?.elevationMetres ?? null,
-        quantity, quantityUnit,
+        quantity, quantityUnit, volumeM3,
       })
     }
 

@@ -61,6 +61,17 @@ async def list_assignments(db: AsyncSession, activity_id: uuid.UUID) -> list[Res
     return assignments
 
 
+async def list_assignments_for_resource(db: AsyncSession, resource_id: uuid.UUID) -> list[ResourceAssignment]:
+    """Every assignment a single resource has, across whichever activities it's
+    linked to (2026-07-27) — the Resource Pool's own bulk "Delete All" needs
+    this to cascade-clear a resource's assignments before the resource itself
+    can be deleted (delete_resource refuses a still-assigned resource)."""
+    result = await db.execute(select(ResourceAssignment).where(ResourceAssignment.resource_id == resource_id))
+    assignments = list(result.scalars().all())
+    await _attach_resource_fields(db, assignments)
+    return assignments
+
+
 async def list_assignments_for_period(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[ResourceAssignment]:
     """Every assignment across a schedule period in one call — e.g. the
     Scheduling table's Resources column, which needs to show real

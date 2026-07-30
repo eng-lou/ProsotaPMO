@@ -215,6 +215,50 @@ async def test_bulk_generate_persists_schedule_quantity(client: AsyncClient, pro
     assert float(activity["schedule_quantity"]) == 193.0
 
 
+async def test_bulk_generate_persists_schedule_material_fields(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    # 2026-07-27, per Maro: "how is concrete and steel catered for if they
+    # exist" — resources for structural categories were crew/equipment only;
+    # concrete/steel never showed up as a cost or a resource anywhere.
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {
+                "temp_id": "act-columns", "task_name": "L2 — Columns — Erect Steel Columns", "parent_temp_id": None,
+                "duration_hours": 200, "category": "Columns", "phase_key": "erect", "quantity": "12",
+                "material_name": "Structural Steel", "material_quantity": "8.45", "material_unit": "tonne",
+                "material_cost_per_unit": "2200",
+            },
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    activity_id = resp.json()["activity_ids_by_temp_id"]["act-columns"]
+
+    activity = (await client.get(f"/api/v1/activities/{activity_id}")).json()
+    assert activity["schedule_material_name"] == "Structural Steel"
+    assert float(activity["schedule_material_quantity"]) == 8.45
+    assert activity["schedule_material_unit"] == "tonne"
+    assert float(activity["schedule_material_cost_per_unit"]) == 2200.0
+
+
+async def test_bulk_generate_schedule_material_fields_null_by_default(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "act-plain-material", "task_name": "Hand-added task", "parent_temp_id": None, "duration_hours": 8},
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    activity_id = resp.json()["activity_ids_by_temp_id"]["act-plain-material"]
+    activity = (await client.get(f"/api/v1/activities/{activity_id}")).json()
+    assert activity["schedule_material_name"] is None
+    assert activity["schedule_material_quantity"] is None
+    assert activity["schedule_material_unit"] is None
+    assert activity["schedule_material_cost_per_unit"] is None
+
+
 async def test_bulk_generate_schedule_quantity_null_by_default(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     payload = {
         "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
@@ -226,6 +270,53 @@ async def test_bulk_generate_schedule_quantity_null_by_default(client: AsyncClie
     activity_id = resp.json()["activity_ids_by_temp_id"]["act-plain"]
     activity = (await client.get(f"/api/v1/activities/{activity_id}")).json()
     assert activity["schedule_quantity"] is None
+
+
+async def test_bulk_generate_alap_constraint_persists_and_pulls_procurement_late(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
+):
+    # 2026-07-27, per Maro's own JIT procurement catch: "coverings
+    # procurement starts 27th july and will be delivered 10th sept 26, but
+    # the activity itself will start 12th April" — every generated
+    # procurement item's chain used to anchor off the same start regardless
+    # of how far out its real install actually was. Place Purchase Order/
+    # Procure & Deliver to Site now carry constraint_type="alap"
+    # (scheduleGeneration.ts), so the CPM engine displays them at their own
+    # Late Start/Late Finish instead of clustering at the Early dates
+    # alongside a long, unrelated parallel branch that's the real reason
+    # Install can't start any sooner.
+    payload = {
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
+        "activities": [
+            {"temp_id": "act-long-branch", "task_name": "Long parallel branch", "parent_temp_id": None, "duration_hours": 240},
+            {"temp_id": "act-po", "task_name": "Place Purchase Order", "parent_temp_id": None, "duration_hours": 16, "constraint_type": "alap"},
+            {"temp_id": "act-delivery", "task_name": "Procure & Deliver to Site", "parent_temp_id": None, "duration_hours": 40, "constraint_type": "alap"},
+            {"temp_id": "act-install", "task_name": "Install", "parent_temp_id": None, "duration_hours": 8},
+        ],
+        "relationships": [
+            {"predecessor_temp_id": "act-po", "successor_temp_id": "act-delivery"},
+            {"predecessor_temp_id": "act-delivery", "successor_temp_id": "act-install"},
+            {"predecessor_temp_id": "act-long-branch", "successor_temp_id": "act-install"},
+        ],
+    }
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    ids = resp.json()["activity_ids_by_temp_id"]
+
+    po = (await client.get(f"/api/v1/activities/{ids['act-po']}")).json()
+    delivery = (await client.get(f"/api/v1/activities/{ids['act-delivery']}")).json()
+    long_branch = (await client.get(f"/api/v1/activities/{ids['act-long-branch']}")).json()
+    install = (await client.get(f"/api/v1/activities/{ids['act-install']}")).json()
+
+    assert po["constraint_type"] == "alap"
+    assert delivery["constraint_type"] == "alap"
+    # Pulled right up against Install's own start, not sitting at its early
+    # dates right after a 2-day Place Purchase Order.
+    assert delivery["finish"] == install["start"]
+    # And genuinely later than the project's own early start (act-long-branch,
+    # which has no predecessor at all) — the whole point of alap: it shows
+    # the late float instead of clustering everything at day one.
+    assert po["start"] > long_branch["start"]
 
 
 async def test_bulk_generate_creates_discipline_udf(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):

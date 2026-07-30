@@ -4,10 +4,12 @@ import type { Annotation } from './annotations'
 import type { AnimationProfile } from './animationProfiles'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
+import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
+import type { Zone } from './zones'
 
-type ActorSourceKind = 'mesh' | 'ifc' | 'annotation'
+type ActorSourceKind = 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone'
 
 interface Actor {
   sourceKind: ActorSourceKind
@@ -54,6 +56,12 @@ const LOCATION_FIELDS = ['pos_x', 'pos_y', 'pos_z'] as const
 const ROTATION_FIELDS = ['rot_x', 'rot_y', 'rot_z'] as const
 const SCALE_FIELDS = ['scale_x', 'scale_y', 'scale_z'] as const
 const PATH_FIELDS = ['path_progress'] as const
+// A Path/Zone's own line-draw/border-draw reveal window (2026-07-30, per
+// Maro: "if i keyframe i should see the path actor in the timeline with
+// both keyframes so i can drag, delete etc") — reuses KeyframeTrack
+// exactly like every other field group here, just for source_kind
+// 'path'/'zone' actors instead of 'mesh'/'annotation'.
+const ANIM_FIELDS = ['anim_start', 'anim_end'] as const
 
 // One editable sub-track row (2026-07-12, per Maro: "underneath, the
 // animation timeline... actors with a sub line with keyframes on those")
@@ -265,13 +273,14 @@ function useBoxSelect(keyframes: ElementKeyframe[], scheduleStart: Date, totalMs
 }
 
 function ActorRow({
-  actor, links, keyframes, isPathBound, activityById, profileById, scheduleStart, scheduleEnd, totalMs, format,
+  actor, links, keyframes, isPathBound, isAnimatable, activityById, profileById, scheduleStart, scheduleEnd, totalMs, format,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelect, selectedIds, onBoxSelect,
 }: {
   actor: Actor
   links: ModelElementLink[]
   keyframes: ElementKeyframe[]
   isPathBound: boolean
+  isAnimatable: boolean
   activityById: Map<string, Activity>
   profileById: Map<string, AnimationProfile>
   scheduleStart: Date
@@ -292,6 +301,7 @@ function ActorRow({
   const locationGroups = useMemo(() => groupByDay(keyframes, LOCATION_FIELDS), [keyframes])
   const rotationGroups = useMemo(() => groupByDay(keyframes, ROTATION_FIELDS), [keyframes])
   const scaleGroups = useMemo(() => groupByDay(keyframes, SCALE_FIELDS), [keyframes])
+  const animGroups = useMemo(() => groupByDay(keyframes, ANIM_FIELDS), [keyframes])
   // A PathFollower binding (2026-07-12 fix, per Maro: "where's my
   // keyframes?" — a path-bound object sitting right on its curve in the
   // viewport, with no "3D Path" row at all) shows this sub-track even
@@ -303,6 +313,11 @@ function ActorRow({
   // was the bug — a fresh binding has nothing to show there yet, but is
   // very much an animated actor.
   const hasPath = isPathBound || pathGroups.length > 0
+  // Same "binding alone is immediately visible" reasoning for a Path/Zone's
+  // own reveal window (2026-07-30) — `animate` toggled on with no keyframes
+  // keyed yet is still an animated actor, per Maro: "if i keyframe i should
+  // see the path actor in the timeline."
+  const hasAnim = isAnimatable || animGroups.length > 0
 
   const trackProps = { scheduleStart, scheduleEnd, totalMs, format, onJumpTo, onMoveKeyframes, onDeleteKeyframes, selectedIds }
 
@@ -312,6 +327,9 @@ function ActorRow({
   }
   if (hasPath) {
     subTracks.push({ label: '3D Path', content: <KeyframeTrack dayGroups={pathGroups} {...trackProps} /> })
+  }
+  if (hasAnim) {
+    subTracks.push({ label: 'Reveal', content: <KeyframeTrack dayGroups={animGroups} {...trackProps} /> })
   }
   if (locationGroups.length > 0) {
     subTracks.push({ label: 'Location', content: <KeyframeTrack dayGroups={locationGroups} {...trackProps} /> })
@@ -396,7 +414,7 @@ function ActorRow({
 // list, occasionally unblocking just long enough to paint whichever date
 // the (still-advancing, wall-clock-driven) playhead had reached by then.
 export const AnimationActorsList = memo(function AnimationActorsList({
-  scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles,
+  scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones,
   timeDisplayMode, speedDaysPerSecond, fps,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onCreateKeyframes, onReverseKeyframes, onSelectActor,
 }: {
@@ -411,6 +429,8 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   pathFollowers: PathFollower[]
   annotations: Annotation[]
   animationProfiles: AnimationProfile[]
+  paths: Path[]
+  zones: Zone[]
   timeDisplayMode: TimeDisplayMode
   speedDaysPerSecond: number
   fps: number
@@ -494,15 +514,20 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   // mean every single animation frame). Grouped once here, keyed the same
   // way `actors` itself is deduped (`${sourceKind}:${elementRef}`), so the
   // render below becomes a plain O(1) Map lookup per actor instead.
-  const { actors, linksByActor, keyframesByActor, pathBoundActors } = useMemo(() => {
+  const { actors, linksByActor, keyframesByActor, pathBoundActors, animatableActors } = useMemo(() => {
     const byKey = new Map<string, Actor>()
     const annotationById = new Map(annotations.map(a => [a.id, a]))
+    const pathById = new Map(paths.map(p => [p.id, p]))
+    const zoneById = new Map(zones.map(z => [z.id, z]))
     const linksByActor_ = new Map<string, ModelElementLink[]>()
     const keyframesByActor_ = new Map<string, ElementKeyframe[]>()
     const pathBoundActors_ = new Set<string>()
+    const animatableActors_ = new Set<string>()
 
     const labelFor = (sourceKind: ActorSourceKind, elementRef: string): string => {
       if (sourceKind === 'mesh') return elementRef
+      if (sourceKind === 'path') return pathById.get(elementRef)?.name ?? elementRef
+      if (sourceKind === 'zone') return zoneById.get(elementRef)?.name ?? elementRef
       const a = annotationById.get(elementRef)
       return a ? `[${a.kind}] ${a.text || '(no note)'}` : elementRef
     }
@@ -535,7 +560,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       if (group) group.push(link); else linksByActor_.set(key, [link])
     }
     for (const k of elementKeyframes) {
-      if (k.source_kind !== 'mesh' && k.source_kind !== 'annotation') continue
+      if (k.source_kind !== 'mesh' && k.source_kind !== 'annotation' && k.source_kind !== 'path' && k.source_kind !== 'zone') continue
       const key = add(k.source_kind, k.element_ref)
       const group = keyframesByActor_.get(key)
       if (group) group.push(k); else keyframesByActor_.set(key, [k])
@@ -548,13 +573,25 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       const key = add(f.target_kind, f.element_ref)
       pathBoundActors_.add(key)
     }
+    // A Path/Zone with `animate` on is its own actor the moment that toggle
+    // is flipped (2026-07-30) — same "binding alone is immediately visible"
+    // reasoning as pathBoundActors above, so the row appears in time to key
+    // the very first anim_start/anim_end, not only after one already exists.
+    for (const p of paths) {
+      if (!p.animate) continue
+      animatableActors_.add(add('path', p.id))
+    }
+    for (const z of zones) {
+      if (!z.animate) continue
+      animatableActors_.add(add('zone', z.id))
+    }
     for (const actor of byKey.values()) actor.label = labelFor(actor.sourceKind, actor.elementRef)
 
     return {
       actors: [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label)),
-      linksByActor: linksByActor_, keyframesByActor: keyframesByActor_, pathBoundActors: pathBoundActors_,
+      linksByActor: linksByActor_, keyframesByActor: keyframesByActor_, pathBoundActors: pathBoundActors_, animatableActors: animatableActors_,
     }
-  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations])
+  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations, paths, zones])
 
   // Built once here, not per PresetTrack render (2026-07-21 perf fix) —
   // PresetTrack used to build these same two Maps itself, from the full
@@ -615,6 +652,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
               links={linksByActor.get(key) ?? EMPTY_LINKS}
               keyframes={keyframesByActor.get(key) ?? EMPTY_KEYFRAMES}
               isPathBound={pathBoundActors.has(key)}
+              isAnimatable={animatableActors.has(key)}
               activityById={activityById}
               profileById={profileById}
               scheduleStart={scheduleStart}

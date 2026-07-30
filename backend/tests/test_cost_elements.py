@@ -219,6 +219,65 @@ async def test_list_includes_computed_values_for_percentage_elements(
 
 
 # ---------------------------------------------------------------------------
+# NRM1 cascade — Overhead -> Design Fees -> Contingency (Risk-Derived) -> Inflation
+# ---------------------------------------------------------------------------
+
+async def test_nrm1_on_costs_cascade_in_order(client: AsyncClient, project: Project, live_period: Period):
+    """The four recognised on-costs must each apply to the running total left
+    by every on-cost before it in NRM1's own sequence — not all four to the
+    same raw fixed subtotal in parallel (2026-07-27, per Maro's QS review:
+    same percentages, correct order)."""
+    await _create(client, project, live_period, description="Works", budget="3213814.00")
+
+    overhead = await _create(client, project, live_period, description="Overhead", element_type="percentage", rate="0.05")
+    fees = await _create(client, project, live_period, description="Design Fees", element_type="percentage", rate="0.08")
+    risk = await _create(client, project, live_period, description="Contingency (Risk-Derived)", element_type="percentage", rate="0.045293")
+    inflation = await _create(client, project, live_period, description="Inflation", element_type="percentage", rate="0.03")
+
+    # Overhead: 5% of Works (3,213,814) — first in the sequence, unaffected by the cascade
+    assert float(overhead["computed_budget"]) == 160690.70
+    # Design Fees: 8% of Works + Overhead (3,374,504.70)
+    assert float(fees["computed_budget"]) == 269960.38
+    # Risk: 4.5293% of Works + Overhead + Fees (3,644,465.08)
+    assert float(risk["computed_budget"]) == 165068.76
+    # Inflation: 3% of Works + Overhead + Fees + Risk (3,809,533.84), last in the sequence
+    assert float(inflation["computed_budget"]) == 114286.02
+
+
+async def test_unrecognised_percentage_line_keeps_parallel_behaviour(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """A custom on-cost with no known NRM1 position (not one of the four
+    recognised descriptions) has no defined place in the sequence, so it
+    keeps computing off the raw fixed subtotal alone, same as before the
+    cascade existed — it must not silently insert itself into the NRM1 order
+    or shift what Overhead/Fees/Risk/Inflation compute against."""
+    await _create(client, project, live_period, description="Works", budget="1000000.00")
+    overhead = await _create(client, project, live_period, description="Overhead", element_type="percentage", rate="0.05")
+    custom = await _create(client, project, live_period, description="Insurance", element_type="percentage", rate="0.02")
+
+    assert float(custom["computed_budget"]) == 20000.00     # 2% of Works alone, not Works + Overhead
+    assert float(overhead["computed_budget"]) == 50000.00    # unaffected by the unrecognised line existing
+
+
+async def test_nrm1_cascade_consistent_between_list_and_get(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """The single-element GET must compute the exact same cascaded value the
+    list endpoint does for the same element — one cascade implementation,
+    not two independently-derived numbers."""
+    await _create(client, project, live_period, description="Works", budget="1000000.00")
+    await _create(client, project, live_period, description="Overhead", element_type="percentage", rate="0.05")
+    fees = await _create(client, project, live_period, description="Design Fees", element_type="percentage", rate="0.08")
+
+    listed = (await client.get("/api/v1/cost-elements/", params={"project_id": str(project.id)})).json()
+    listed_fees = next(e for e in listed if e["id"] == fees["id"])
+    fetched = (await client.get(f"/api/v1/cost-elements/{fees['id']}")).json()
+
+    assert float(listed_fees["computed_budget"]) == float(fetched["computed_budget"]) == 84000.00  # 8% of 1,050,000
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 

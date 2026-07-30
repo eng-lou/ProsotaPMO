@@ -153,6 +153,31 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   const flatMeshes = api.LoadAllGeometry(modelID)
   const meshCount = flatMeshes.size()
 
+  // Filters out flatMeshes owned by non-product geometric-resource/style
+  // entities (2026-07-28, per Maro: "select all... shows even non 3d
+  // elements... elements that are not even visible when you isolate. its a
+  // waste" — confirmed directly via the Filter Selection dialog: "Styled
+  // Item", "Surface Style", "Surface Style Rendering", "Trimmed Curve",
+  // "Vector" were showing up as real, selectable "elements" for Select
+  // All/Filter/Isolate to burn instances and UI space on, despite never
+  // being real occurrence elements a PM would want to schedule/isolate/
+  // select. A real IfcProduct occurrence never resolves to one of these
+  // types — some IFC exports leave orphaned/malformed geometric-resource
+  // entities that LoadAllGeometry's own occurrence-resolution falls back
+  // to using as a flatMesh's owning expressID when it can't trace a proper
+  // parent product back to it. Checked once per flatMesh here (same
+  // GetLineType+GetNameFromTypeCode pattern getIfcTypeName already uses
+  // elsewhere in this file), not per placement, and skipped across every
+  // one of the three passes below via this same array — these never enter
+  // occurrenceCount, never get their geometry built, and never become a
+  // selectable batch instance or individual mesh at all.
+  const NON_PRODUCT_IFC_TYPES = new Set(['IFCSTYLEDITEM', 'IFCSURFACESTYLE', 'IFCSURFACESTYLERENDERING', 'IFCTRIMMEDCURVE', 'IFCVECTOR'])
+  const skipFlatMesh = new Array<boolean>(meshCount)
+  for (let i = 0; i < meshCount; i++) {
+    const typeName = api.GetNameFromTypeCode(api.GetLineType(modelID, flatMeshes.get(i).expressID))
+    skipFlatMesh[i] = NON_PRODUCT_IFC_TYPES.has(typeName)
+  }
+
   // Pass 1 (cheap — just reads the already-computed flatMesh structure, no
   // GetGeometry/GetVertexArray calls): tally how many placements reference
   // each geometryExpressID. Every geometry goes into the shared batch below
@@ -204,6 +229,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   let offsetSum: THREE.Vector3 | null = null
   let offsetCount = 0
   for (let i = 0; i < meshCount; i++) {
+    if (skipFlatMesh[i]) continue
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
       const placed = flatMesh.geometries.get(j)
@@ -313,6 +339,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   let individualMeshCount = 0
   let mirroredCount = 0
   for (let i = 0; i < meshCount; i++) {
+    if (skipFlatMesh[i]) continue
     const flatMesh = flatMeshes.get(i)
     for (let j = 0; j < flatMesh.geometries.size(); j++) {
       const placed = flatMesh.geometries.get(j)
@@ -556,6 +583,22 @@ export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): 
   const out: number[] = []
   for (let i = 0; i < ids.size(); i++) out.push(ids.get(i))
   return out
+}
+
+// The inverse of getExpressIdsForType — every real element's own IFC type
+// name, in one bulk pass (2026-07-26, for the Filter dialog's Category
+// fallback — ElementFilterDialog.tsx) — iterates GetAllTypesOfModel's own
+// small, fixed list of distinct types actually present (never one call per
+// element) exactly like getTypeCounts above already does, just keeping the
+// ids themselves instead of only their count.
+export function buildIfcTypeByExpressId(handle: IfcModelHandle): Map<number, string> {
+  const result = new Map<number, string>()
+  const types = handle.api.GetAllTypesOfModel(handle.modelID)
+  for (const { typeID, typeName } of types) {
+    const ids = handle.api.GetLineIDsWithType(handle.modelID, typeID)
+    for (let i = 0; i < ids.size(); i++) result.set(ids.get(i), typeName)
+  }
+  return result
 }
 
 export interface IfcTreeNode {

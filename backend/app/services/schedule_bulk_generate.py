@@ -266,6 +266,9 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
             duration_hours=staged.duration_hours, calendar_id=data.calendar_id,
             schedule_category=staged.category, schedule_phase_key=staged.phase_key,
             schedule_quantity=staged.quantity,
+            constraint_type=staged.constraint_type,
+            schedule_material_name=staged.material_name, schedule_material_quantity=staged.material_quantity,
+            schedule_material_unit=staged.material_unit, schedule_material_cost_per_unit=staged.material_cost_per_unit,
         )
         _apply_computed_fields(activity)
         db.add(activity)

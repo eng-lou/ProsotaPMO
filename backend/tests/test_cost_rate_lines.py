@@ -85,3 +85,29 @@ async def test_rate_line_for_unknown_element_404s(client: AsyncClient):
         "cost_element_id": str(uuid.uuid4()), "description": "Orphan line", "qty": "1", "rate": "100.00",
     })
     assert resp.status_code == 404
+
+
+async def test_rate_line_persists_cost_code(client: AsyncClient, project: Project, live_period: Period):
+    """cost_code (location/system/activity, 2026-07-27) round-trips like any
+    other field — the BOQ tree (buildBoqTree, frontend) is built entirely
+    from this string at read time, so it must actually persist."""
+    el = await _create_element(client, project, live_period)
+    created = await client.post("/api/v1/cost-rate-lines/", json={
+        "cost_element_id": el["id"], "description": "L2 — Columns — Erect Steel Columns",
+        "qty": "9", "rate": "866.67", "cost_code": "W-0004/COLUMNS/T-0114",
+    })
+    assert created.status_code == 201
+    assert created.json()["cost_code"] == "W-0004/COLUMNS/T-0114"
+
+    listed = await client.get("/api/v1/cost-rate-lines/", params={"cost_element_id": el["id"]})
+    assert listed.json()[0]["cost_code"] == "W-0004/COLUMNS/T-0114"
+
+
+async def test_rate_line_cost_code_null_by_default(client: AsyncClient, project: Project, live_period: Period):
+    """A manually-added line (no source activity) has no cost code — must
+    come back None, not an empty string or an error."""
+    el = await _create_element(client, project, live_period)
+    created = await client.post("/api/v1/cost-rate-lines/", json={
+        "cost_element_id": el["id"], "description": "Manual line", "qty": "1", "rate": "500.00",
+    })
+    assert created.json()["cost_code"] is None

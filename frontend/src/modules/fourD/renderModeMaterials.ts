@@ -35,11 +35,16 @@ import * as THREE from 'three'
 // metal/roughness map applied via TextureFields.tsx genuinely has nothing
 // to affect in this mode — an honest limitation of switching lighting
 // models, not a bug.
-export function getGouraudVariant(source: THREE.MeshStandardMaterial): THREE.MeshLambertMaterial {
+export function getGouraudVariant(source: THREE.MeshStandardMaterial, forBatch = false): THREE.MeshLambertMaterial {
   let variant = source.userData.lambertVariant as THREE.MeshLambertMaterial | undefined
   if (!variant) {
     variant = new THREE.MeshLambertMaterial()
     source.userData.lambertVariant = variant
+    // Only for the one shared batch material per still-batched IFC model
+    // (forBatch, set by Viewport3D.tsx's own batch-material call site) —
+    // see enableBatchPerInstanceAlpha's own header for why this must never
+    // apply to an individual mesh's Gouraud variant too.
+    if (forBatch) enableBatchPerInstanceAlpha(variant)
   }
   variant.color.copy(source.color)
   variant.map = source.map
@@ -90,11 +95,15 @@ export function getGouraudVariant(source: THREE.MeshStandardMaterial): THREE.Mes
 // deliberately don't show their real per-element colour in this mode
 // (matching Synchro/Blender's own Hidden Line convention, not "Flat Shaded
 // plus edges").
-export function getHiddenLineMaterial(source: THREE.MeshStandardMaterial, tintColor: THREE.Color): THREE.MeshBasicMaterial {
+export function getHiddenLineMaterial(
+  source: THREE.MeshStandardMaterial, tintColor: THREE.Color, forBatch = false,
+): THREE.MeshBasicMaterial {
   let variant = source.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
   if (!variant) {
     variant = new THREE.MeshBasicMaterial()
     source.userData.hiddenLineVariant = variant
+    // See getGouraudVariant's own forBatch note just above.
+    if (forBatch) enableBatchPerInstanceAlpha(variant)
   }
   variant.color.copy(tintColor)
   variant.transparent = source.transparent
@@ -103,6 +112,99 @@ export function getHiddenLineMaterial(source: THREE.MeshStandardMaterial, tintCo
   // Same clippingPlanes gap as getGouraudVariant above, same fix.
   variant.clippingPlanes = source.clippingPlanes
   return variant
+}
+
+// "Fade Unselected" (2026-07-26, second pass — per Maro: "i need per
+// instance, i've selected slabs and cant see anything") — real
+// PER-INSTANCE transparency for still-batched IFC content. The first pass
+// only ever toggled the *whole batch's* shared material opacity, on the
+// (wrong) assumption that a batch containing the current selection could
+// just be exempted wholesale — but every still-batched element in this
+// app shares one THREE.BatchedMesh per model (see ifcModel.ts's own "batch
+// ALL geometry" header), so selecting 33 slabs among hundreds of other
+// walls/windows/etc in the *same* batch left literally everything in that
+// model at full opacity, selection included, exactly the "cant see
+// anything" report.
+//
+// THREE.BatchedMesh already has a real per-instance channel that could
+// carry this: its own colours texture (`_colorsTexture`, confirmed
+// directly in three.js's own BatchedMesh.js — RGBAFormat/FloatType, 4
+// floats per instance, initialized to 1,1,1,1). setColorAt/getColorAt
+// only ever read/write the first 3 floats (`color.toArray(colorsArray,
+// instanceId*4)`, itemSize 3) — the 4th (alpha) slot sits there unused,
+// still at its initial 1.0, for every instance, forever. Nothing in
+// three.js's own shader chunks ever samples it either: ShaderChunk/
+// color_vertex.glsl.js's `vColor.xyz *= batchingColor.xyz` and
+// batching_pars_vertex.glsl.js's `getBatchingColor()` both explicitly
+// return/consume only `.rgb` (confirmed by reading those chunk sources
+// directly, not assumed) — so writing to that 4th float alone changes
+// nothing on screen without this patch.
+//
+// This function (called once per material, guarded below) patches the
+// compiled shader via `onBeforeCompile` — three.js's own sanctioned
+// extension point for exactly this, never a node_modules edit — to: (1)
+// force `vertexAlphas` on, the same flag WebGLPrograms.js normally only
+// sets for a real per-vertex geometry `color` attribute with itemSize 4,
+// so `USE_COLOR_ALPHA` gets defined and `vColor` becomes a vec4 (without
+// this, ShaderChunk/color_fragment.glsl.js's alpha multiply is compiled
+// out entirely, `diffuseColor.rgb *= vColor` instead of `diffuseColor *=
+// vColor`); (2) inject one extra block right after the stock
+// `#include <color_vertex>` expansion (still governed by the same
+// `USE_BATCHING_COLOR` define, using the same `batchingColorTexture`
+// uniform and `getIndirectIndex`/gl_DrawID plumbing that chunk already
+// declares — nothing new to declare, so no duplicate-uniform risk) that
+// reads that same texture's own alpha channel into `vColor.a`, the one
+// component the stock chunk never touches.
+//
+// Every element in a batch's own alpha now genuinely varies per instance
+// (Viewport3D.tsx's own applyBatchSelectionColour writes it directly into
+// `_colorsTexture.image.data[instanceId*4+3]`), so once ANY instance
+// needs to be partially transparent the whole material has to render in
+// the transparent pass for blending to apply at all — Viewport3D.tsx
+// toggles `material.transparent` itself (settings.xrayUnselected &&
+// hasSelection), never forced on permanently here, so a project with the
+// feature off keeps the exact same opaque-pass render/sort behaviour as
+// before this existed.
+//
+// customProgramCacheKey — three.js's own documented mechanism for exactly
+// this situation (a material whose *compiled shader* now differs from
+// what its other properties alone would predict) — material.uuid is
+// always unique per instance, so this only ever costs one extra shader
+// compile for this exact material (there are at most 3 of these across
+// the whole app per loaded IFC model: the batch's real standardMaterial
+// plus its Gouraud/Hidden Line variants), never risks silently sharing a
+// compiled program with — or stealing one from — any other material.
+//
+// NOT patched here: shadow casting. Three.js auto-generates its own
+// MeshDepthMaterial for shadow maps unless a mesh sets customDepthMaterial
+// explicitly, and that auto-generated material has no awareness of this
+// patch at all — a faded (or fully invisible) batched instance still
+// casts a full, un-faded shadow. Accepted as a known, narrow cosmetic gap
+// (a documented trade-off, not an overlooked one) rather than also
+// building and maintaining a second, parallel shadow-depth shader patch
+// for a comparatively minor visual mismatch.
+export function enableBatchPerInstanceAlpha(material: THREE.Material) {
+  if (material.userData.batchPerInstanceAlphaPatched) return
+  material.userData.batchPerInstanceAlphaPatched = true
+  material.onBeforeCompile = shader => {
+    shader.vertexAlphas = true
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <color_vertex>',
+      `#include <color_vertex>
+      #ifdef USE_BATCHING_COLOR
+      {
+        float batchAlphaIndex = getIndirectIndex( gl_DrawID );
+        int batchAlphaSize = textureSize( batchingColorTexture, 0 ).x;
+        int batchAlphaJ = int( batchAlphaIndex );
+        int batchAlphaX = batchAlphaJ % batchAlphaSize;
+        int batchAlphaY = batchAlphaJ / batchAlphaSize;
+        vColor.a = texelFetch( batchingColorTexture, ivec2( batchAlphaX, batchAlphaY ), 0 ).a;
+      }
+      #endif`,
+    )
+  }
+  material.needsUpdate = true
+  material.customProgramCacheKey = () => material.uuid
 }
 
 export const HIDDEN_LINE_BASE_COLOR = new THREE.Color(0xe5e7eb)

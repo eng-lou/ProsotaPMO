@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { captureBaseline, captureOriginalGeometry, captureOriginalMaterial } from './elementBaseline'
+import { captureBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
 // Split out of ifcModel.ts (2026-07-17) specifically so Viewport3D.tsx can
 // import ensureMaterialized statically without pulling 'web-ifc' into the
@@ -243,6 +243,57 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   return firstMesh
 }
 
+// "Unload Selected" (2026-07-26, per Maro: "i need to be able to unload
+// selected elements" — the IFC Data panel's own per-model Unload button
+// only ever removes a *whole* loaded file; there was no way to drop just a
+// handful of unwanted elements — clutter like furniture, or a discipline's
+// worth of MEP the user never needed this session — without unloading and
+// re-importing the entire model). Real disposal, not Hide: geometry is
+// actually freed and the expressID stops existing in this rootObject at
+// all (hasGeometry/ensureMaterialized/getExpressIdWorldBounds etc. all
+// correctly report/no-op on it afterwards), unlike Hide (still
+// present/allocated, just setVisibleAt(false)/mesh.visible=false).
+//
+// Two cases per expressID, same split ensureMaterialized above already
+// establishes: still batched (deleteInstance — BatchedMesh's own public
+// API, confirmed directly in three.js's BatchedMesh.js: marks the slot
+// inactive and returns its instanceId to the pool for reuse, exactly what
+// setColorAt/getColorAt/raycast already treat as "gone") or already
+// materialized into a real individual THREE.Mesh (ensureMaterialized
+// itself, or the mirrored-placement import path that never batches at
+// all). Deliberately never calls BatchedMesh.deleteGeometry — a
+// geometryId is frequently shared by many *other* still-batched instances
+// of the same repeated shape (BatchState.geometryById's own header), and
+// there's no per-geometryId reference count kept anywhere to know it's
+// safe; leaving the shape definition allocated (a small cost next to the
+// per-instance data actually being reclaimed) is the safe default here,
+// the same trade-off ensureMaterialized already makes for the batch slot
+// it leaves behind (its own "orphaned instance" comment above).
+export function removeElementsFromModel(rootObject: THREE.Object3D, expressIDs: number[]): void {
+  const batch = rootObject.userData.batch as BatchState | null | undefined
+  const meshIndex = getMeshIndex(rootObject)
+  for (const expressID of expressIDs) {
+    const infos = batch?.byExpressId.get(expressID)
+    if (batch && infos) {
+      for (const info of infos) {
+        removeFromEdgesBatch(rootObject, info)
+        batch.mesh.deleteInstance(info.instanceId)
+        batch.expressIdByInstanceId.delete(info.instanceId)
+      }
+      batch.byExpressId.delete(expressID)
+    }
+    const meshes = meshIndex.get(expressID)
+    if (meshes) {
+      for (const mesh of meshes) {
+        disposeMeshGeometries(mesh)
+        disposeMeshMaterials(mesh, false)
+        mesh.parent?.remove(mesh)
+      }
+      meshIndex.delete(expressID)
+    }
+  }
+}
+
 // Batched Edges overlay (2026-07-25, per Maro: edges only ever worked on an
 // individually-clicked/materialized element, never on the ~100%-batched bulk
 // of a real file — "edge seems to not work unless i click an individual
@@ -476,6 +527,97 @@ export function getExpressIdWorldBounds(rootObject: THREE.Object3D, expressID: n
     any = true
   }
   return any ? box : null
+}
+
+// Signed-tetrahedron volume sum over a geometry's own triangles, in whatever
+// space its vertex positions are already in (2026-07-27, for material
+// quantity take-off — ifcScheduleExtraction.ts's own real concrete/steel
+// volume, see its VOLUME_PRICED_CATEGORIES header for the full "why": a
+// bounding-box estimate is fine for a rough length/area, but a real
+// material quantity — "how many m3 of concrete does this footing actually
+// contain" — needs the element's own real solid volume, not its box's).
+// Standard divergence-theorem identity for a closed, consistently-wound
+// mesh: sum over every triangle (a,b,c) of a·(b×c), divided by 6 — correct
+// regardless of which point the "origin" for that dot/cross happens to be
+// (any offset term cancels out algebraically once the mesh is closed), so
+// this can run directly on a geometry's own local-space positions with no
+// origin-recentring step. Math.abs() at the end is a deliberate safety net,
+// not a sign the maths above might be wrong: a real BIM solid *should* wind
+// consistently outward and need no correction, but this app has zero
+// control over how a given authoring tool/exporter triangulated any one
+// element, and a mesh that happens to wind inward for whatever reason
+// should still read as a real positive volume rather than a nonsensical
+// negative one.
+//
+// Deliberately computed once per unique geometry (cached on
+// geometry.userData), not per placed instance — see
+// getExpressIdWorldVolume below for why a batched instance's own *world*
+// volume is then just this cached local number times its own placement
+// matrix's determinant, rather than re-walking every triangle per instance
+// of a shape that might repeat hundreds of times.
+function computeLocalGeometryVolume(geometry: THREE.BufferGeometry): number {
+  const cached = geometry.userData.cachedLocalVolume as number | undefined
+  if (cached !== undefined) return cached
+  const position = geometry.attributes.position
+  const index = geometry.index
+  const triangleCount = (index ? index.count : position.count) / 3
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  const c = new THREE.Vector3()
+  let sum = 0
+  for (let i = 0; i < triangleCount; i++) {
+    const i0 = index ? index.getX(i * 3) : i * 3
+    const i1 = index ? index.getX(i * 3 + 1) : i * 3 + 1
+    const i2 = index ? index.getX(i * 3 + 2) : i * 3 + 2
+    a.fromBufferAttribute(position, i0)
+    b.fromBufferAttribute(position, i1)
+    c.fromBufferAttribute(position, i2)
+    sum += a.dot(b.clone().cross(c))
+  }
+  const volume = Math.abs(sum) / 6
+  geometry.userData.cachedLocalVolume = volume
+  return volume
+}
+
+// Real-world-space solid volume for one expressID, in m³ raw-unit-cubed
+// (caller's own responsibility to cube whatever toMetres conversion applies
+// — same convention getExpressIdWorldBounds's own callers already handle
+// for length/area). Same dual materialized/batched path as
+// getExpressIdWorldBounds just above, for the identical reason (never
+// forces a still-batched element out of the shared BatchedMesh just to
+// measure it). A transform's own determinant scales enclosed volume by
+// exactly that factor regardless of rotation/translation/non-uniform scale
+// (translation contributes nothing — only the matrix's linear 3x3 part
+// does, and THREE.Matrix4.determinant() already reduces to exactly that for
+// a proper affine transform with no projective row) — so each instance's
+// own world volume is just its cached local geometry volume times
+// |worldMatrix.determinant()|, no per-vertex retransformation needed.
+// Returns null only if the expressID genuinely has no geometry anywhere.
+export function getExpressIdWorldVolume(rootObject: THREE.Object3D, expressID: number): number | null {
+  const materialized = getMeshIndex(rootObject).get(expressID)
+  if (materialized && materialized.length > 0) {
+    let total = 0
+    for (const mesh of materialized) {
+      mesh.updateWorldMatrix(true, false)
+      total += computeLocalGeometryVolume(mesh.geometry) * Math.abs(mesh.matrixWorld.determinant())
+    }
+    return total
+  }
+
+  const batch = rootObject.userData.batch as BatchState | null | undefined
+  const infos = batch?.byExpressId.get(expressID)
+  if (!batch || !infos || infos.length === 0) return null
+
+  let total = 0
+  let any = false
+  for (const info of infos) {
+    const geometry = batch.geometryById.get(info.geometryId)
+    if (!geometry) continue
+    const worldMatrix = rootObject.matrixWorld.clone().multiply(info.matrix)
+    total += computeLocalGeometryVolume(geometry) * Math.abs(worldMatrix.determinant())
+    any = true
+  }
+  return any ? total : null
 }
 
 // For TimelinePlayback (Viewport3D.tsx) — a schedule-linked element can carry

@@ -71,6 +71,58 @@ async def _fixed_subtotals(
     return sum_budget, sum_forecast, sum_actuals
 
 
+# NRM1's own cascade order (2026-07-27, per Maro's QS review: "same rates,
+# correct order" — works cost estimate -> main contractor's OH&P -> building
+# works estimate -> project/design team fees -> base cost estimate -> risk
+# allowances -> cost limit -> inflation). Matched by description, the same
+# way _CONTINGENCY_DESCRIPTION already identifies that one specific line
+# elsewhere (risk_bulk_generate.py) — these four are the only percentage
+# on-costs this platform generates, so a whitelist by name is enough; a
+# custom percentage line a user adds by hand with some other description
+# has no known position in this sequence and keeps the old (parallel,
+# fixed-subtotal-only) behaviour rather than being silently slotted in
+# somewhere wrong.
+NRM1_CASCADE_ORDER: tuple[str, ...] = ("Overhead", "Design Fees", "Contingency (Risk-Derived)", "Inflation")
+
+
+def _cascade_bases(
+    fixed_subs: tuple[Decimal, Decimal, Decimal],
+    percentage_elements: list[CostElement],
+) -> dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]]:
+    """Each recognised on-cost applies to the running total left by every
+    on-cost before it in NRM1's sequence, not to the same raw fixed subtotal
+    in parallel — the previous behaviour understated the total (~1.3% on a
+    real project) because fees were never charged on overhead, and inflation
+    was never applied to risk or fees. Contingency's own rate is still
+    exactly what risk_bulk_generate.py froze from the real EMV total at
+    generation time (total_emv_cost / fixed_total then) — only the base it's
+    re-multiplied against here changes when this is read later, same as
+    Overhead/Fees/Inflation. budget/forecast/actuals each cascade against
+    their own running total independently, since they can genuinely differ
+    once progress has been assessed."""
+    order_index = {name: i for i, name in enumerate(NRM1_CASCADE_ORDER)}
+    ordered = sorted(
+        (el for el in percentage_elements if el.description in order_index),
+        key=lambda el: order_index[el.description],
+    )
+    other = [el for el in percentage_elements if el.description not in order_index]
+
+    bases: dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]] = {}
+    running = fixed_subs
+    for el in ordered:
+        bases[el.id] = running
+        if el.rate is not None:
+            rate = Decimal(str(el.rate))
+            running = (
+                running[0] + (rate * running[0]).quantize(_MONEY),
+                running[1] + (rate * running[1]).quantize(_MONEY),
+                running[2] + (rate * running[2]).quantize(_MONEY),
+            )
+    for el in other:
+        bases[el.id] = fixed_subs
+    return bases
+
+
 async def _project_gfa(db: AsyncSession, project_id: uuid.UUID) -> Decimal | None:
     project = await db.get(Project, project_id)
     if project is None or project.gfa_m2 is None or project.gfa_m2 == 0:
@@ -282,16 +334,24 @@ async def list_cost_elements(
     activity_dates = await _linked_activity_dates(db, elements)
     data_dates = await _period_data_dates(db, {el.period_id for el in elements})
 
-    # Group percentage calculations by period to avoid N+1 subtotal queries
-    period_subtotals: dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]] = {}
+    # Group percentage calculations by period to avoid N+1 subtotal queries,
+    # then cascade each period's own percentage elements in NRM1 order
+    # (_cascade_bases) rather than handing every one of them the same raw
+    # fixed subtotal.
+    percentage_by_period: dict[uuid.UUID, list[CostElement]] = {}
     for el in elements:
-        if el.element_type == "percentage" and el.period_id not in period_subtotals:
-            period_subtotals[el.period_id] = await _fixed_subtotals(db, project_id, el.period_id)
+        if el.element_type == "percentage":
+            percentage_by_period.setdefault(el.period_id, []).append(el)
+
+    period_bases: dict[uuid.UUID, dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]]] = {}
+    for period_id, period_elements in percentage_by_period.items():
+        fixed_subs = await _fixed_subtotals(db, project_id, period_id)
+        period_bases[period_id] = _cascade_bases(fixed_subs, period_elements)
 
     results = []
     for el in elements:
         if el.element_type == "percentage":
-            subs = period_subtotals[el.period_id]
+            subs = period_bases[el.period_id][el.id]
         else:
             subs = (Decimal(0), Decimal(0), Decimal(0))
         results.append(_apply_computed(
@@ -308,7 +368,15 @@ async def get_cost_element(db: AsyncSession, element_id: uuid.UUID) -> CostEleme
     activity_dates = await _linked_activity_dates(db, [el])
     data_dates = await _period_data_dates(db, {el.period_id})
     if el.element_type == "percentage":
-        subs = await _fixed_subtotals(db, el.project_id, el.period_id)
+        fixed_subs = await _fixed_subtotals(db, el.project_id, el.period_id)
+        siblings = list((await db.execute(
+            select(CostElement).where(
+                CostElement.project_id == el.project_id,
+                CostElement.period_id == el.period_id,
+                CostElement.element_type == "percentage",
+            )
+        )).scalars().all())
+        subs = _cascade_bases(fixed_subs, siblings)[el.id]
     else:
         subs = (Decimal(0), Decimal(0), Decimal(0))
     return _apply_computed(

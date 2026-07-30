@@ -109,3 +109,39 @@ async def test_reimporting_different_name_does_not_replace(client: AsyncClient, 
     listing = (await client.get("/api/v1/model3d-files/", params={"project_id": str(project.id)})).json()
     ids = {f["id"] for f in listing}
     assert tower["id"] in ids and annex["id"] in ids  # both survive -- different names, not a re-import of the same file
+
+
+async def test_unloaded_elements_defaults_empty_and_round_trips(client: AsyncClient, project: Project):
+    # "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i refresh, i
+    # expect the elements i unloaded to stay unloaded").
+    data, files = upload_payload(str(project.id))
+    created = (await client.post("/api/v1/model3d-files/", data=data, files=files)).json()
+    assert created["unloaded_elements"] is None
+
+    elements = [
+        {"guid": "2FEbCL3SD6jBrcV_5oCbiC", "name": "Wall-01", "type_name": "IfcWallStandardCase"},
+        {"guid": "3GFcDM4TE7kCsdW_6pDciD", "name": "Slab-04", "type_name": "IfcSlab"},
+    ]
+    patch_resp = await client.patch(
+        f"/api/v1/model3d-files/{created['id']}/unloaded-elements", json={"unloaded_elements": elements},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["unloaded_elements"] == elements
+
+    listing = (await client.get("/api/v1/model3d-files/", params={"project_id": str(project.id)})).json()
+    match = next(f for f in listing if f["id"] == created["id"])
+    assert match["unloaded_elements"] == elements
+
+    # A later call fully replaces the list, not appends to it (matches the
+    # frontend's own "always send the full current state" convention).
+    replace_resp = await client.patch(
+        f"/api/v1/model3d-files/{created['id']}/unloaded-elements", json={"unloaded_elements": elements[:1]},
+    )
+    assert replace_resp.json()["unloaded_elements"] == elements[:1]
+
+
+async def test_update_unloaded_elements_unknown_file_404s(client: AsyncClient, project: Project):
+    resp = await client.patch(
+        f"/api/v1/model3d-files/{uuid.uuid4()}/unloaded-elements", json={"unloaded_elements": []},
+    )
+    assert resp.status_code == 404

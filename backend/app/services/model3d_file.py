@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.model3d_file import Model3DFile
-from app.schemas.model3d_file import Model3DFileResponse, Model3DKind, UpAxis
+from app.schemas.model3d_file import Model3DFileResponse, Model3DKind, UnloadedElementInfo, UpAxis
 from app.services.model3d_storage import delete_stored_file, generate_storage_filename, storage_path
 
 # A defensive cap, not a tuned production limit — this app has no CDN/chunked
@@ -96,3 +96,21 @@ async def delete_file(db: AsyncSession, file_id: uuid.UUID) -> None:
     delete_stored_file(row.storage_filename)
     await db.delete(row)
     await db.commit()
+
+
+# "Unload Selected"/"Reload IFC" (2026-07-26, per Maro) — full replacement,
+# not an append/remove-by-guid endpoint: the frontend always resolves the
+# complete authoritative set (whichever elements are currently gone from the
+# loaded scene) before calling this, the same "send the whole current state"
+# convention CameraView.viewport_state already uses, so there's no risk of
+# this drifting from what's actually unloaded client-side.
+async def update_unloaded_elements(
+    db: AsyncSession, file_id: uuid.UUID, unloaded_elements: list[UnloadedElementInfo],
+) -> Model3DFileResponse:
+    row = await db.get(Model3DFile, file_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Model file not found")
+    row.unloaded_elements = [e.model_dump() for e in unloaded_elements]
+    await db.commit()
+    await db.refresh(row)
+    return Model3DFileResponse.model_validate(row)

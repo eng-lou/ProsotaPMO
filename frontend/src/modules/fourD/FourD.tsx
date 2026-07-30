@@ -20,7 +20,10 @@ import { findLinkedExpressIds } from './linkedMaterials'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind, type SourceKind } from './modelElementLinks'
-import { deleteModel3DFile, downloadModel3DFile, listModel3DFiles, uploadModel3DFile, type Model3DKind } from './model3dFiles'
+import {
+  deleteModel3DFile, downloadModel3DFile, listModel3DFiles, updateUnloadedElements, uploadModel3DFile,
+  type Model3DKind, type UnloadedElementInfo,
+} from './model3dFiles'
 import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds, type SectionBoxRotation } from './sectionBoxes'
 import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sectionBoxGeometry'
 import { AnimationProfilePanel } from './AnimationProfilePanel'
@@ -57,14 +60,14 @@ import type { IfcModelHandle } from './ifcModel'
 // site like the rest of ifcModel.ts) because the render-body TransformPanel
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
-import { ensureMaterialized, hasGeometry, materializeAll } from './elementBatching'
+import { ensureMaterialized, hasGeometry, materializeAll, removeElementsFromModel } from './elementBatching'
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
 import { computeVisibleActivities, ScheduleWindow } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
-import { computeKeyframeRange, computeScheduleRange, padDegenerateRange, unionRanges } from './timelinePlayback'
+import { computeKeyframeRange, computeScheduleRange, FPS_OPTIONS, padDegenerateRange, unionRanges, type TimeDisplayMode } from './timelinePlayback'
 import type { GizmoMode, GizmoSpace, KeyframeSupport, PathProgressSupport, PivotRotationSupport, PivotSupport } from './TransformPanel'
 import { ensurePivotSnapshot, getPivot, getPivotRotation, setPivot, setPivotRotation } from './elementPivot'
 import { deleteElementParent, listElementParents, upsertElementParent, type ElementParent as ElementParentType } from './elementParents'
@@ -72,6 +75,8 @@ import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
+import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
+import { ZonesPanel } from './ZonesPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import {
@@ -90,9 +95,11 @@ import type { MeasurementHit } from './MeasurementGizmo'
 import { distanceMetres, measureFacePatch } from './measurementGeometry'
 import { Viewport3D, type CameraSyncState, type ImportedObject, type ResolvedSectionBox, type VarianceEntry } from './Viewport3D'
 import { BaselineViewportPane } from './BaselineViewportPane'
+import { ImportErrorsBadge } from './ImportErrorsBadge'
 import { ImportModelDialog } from './ImportModelDialog'
 import { IfcScheduleWizard } from './IfcScheduleWizard'
 import { UnloadModelDialog } from './UnloadModelDialog'
+import { ReloadIfcDialog } from './ReloadIfcDialog'
 import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
 import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
@@ -139,6 +146,8 @@ const SPLIT_PANEL_OPEN_KEY = 'prosota_4d_split_panel_open'
 const SPLIT_PANEL_DOCK_KEY = 'prosota_4d_split_panel_dock'
 const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
 const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
+const ZONES_PANEL_OPEN_KEY = 'prosota_4d_zones_panel_open'
+const ZONES_PANEL_DOCK_KEY = 'prosota_4d_zones_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
@@ -193,6 +202,32 @@ function loadPanelOpen(key: string, defaultOpen = true): boolean {
 // hidden so Viewport3D.tsx can drop its Canvas to frameloop="never" instead
 // of rendering into an invisible tab. Defaults true so this still works if
 // ever rendered directly (e.g. in isolation).
+// Hoisted out of the restore-on-mount effect below (2026-07-26, for
+// "Reload IFC" — see handleReloadIfc's own header) — a pure function with
+// no closure over component state, so sharing it between the normal
+// restore-on-mount flow and a one-off single-file reload is just a plain
+// function reference, not a refactor of either call site's own logic.
+function applyElementTransform(object: Object3D, t: ElementTransform | undefined) {
+  if (!t) return
+  // Pivot first (2026-07-12, extended 2026-07-22 for pivot rotation) —
+  // setPivot/setPivotRotation's own compensating position/quaternion
+  // writes would otherwise be immediately overwritten by the .set() calls
+  // below anyway, but running them first means those correctly land on
+  // the saved *final* authored position/rotation rather than fighting a
+  // pivot-driven change applied after the fact — geometry recentering is
+  // the part that actually matters here, since nothing else re-derives
+  // it. See elementPivot.ts's own header.
+  if (t.pivot_x !== null && t.pivot_y !== null && t.pivot_z !== null) {
+    setPivot(object, new Vector3(t.pivot_x, t.pivot_y, t.pivot_z))
+  }
+  if (t.pivot_rotation_x !== null && t.pivot_rotation_y !== null && t.pivot_rotation_z !== null) {
+    setPivotRotation(object, new Euler(t.pivot_rotation_x, t.pivot_rotation_y, t.pivot_rotation_z))
+  }
+  object.position.set(t.position_x, t.position_y, t.position_z)
+  object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
+  object.scale.set(t.scale_x, t.scale_y, t.scale_z)
+}
+
 export function FourD({ active = true }: { active?: boolean } = {}) {
   const { selectedProject } = useProject()
   // hasEverBeenActive (2026-07-20, optimization pass) — flips true the
@@ -787,6 +822,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // hiddenIds. A whole-object-only selection (Select All, or a plain mesh
   // click) has no expressIds at all, so it falls straight to the second
   // branch instead.
+  // Filter (2026-07-26, per Maro — see Viewport3D.tsx's own onFilterApply
+  // prop header for the full "why"). keptExpressIds already comes back
+  // scoped to activeObjectId (ElementFilterDialog.tsx only ever reads one
+  // handle at a time), so this just replaces selectedExpressIds outright —
+  // same "narrows to a fresh result set" convention onSelectUnassigned/
+  // handleSelectAll already use, not an additive selection gesture.
+  const handleFilterApply = (keptExpressIds: number[]) => {
+    setSelectedExpressIds(new Set(keptExpressIds))
+    setSelectedExpressId(keptExpressIds.length === 1 ? keptExpressIds[0] : null)
+    if (activeObjectId) setSelectedObjectIds(new Set([activeObjectId]))
+  }
+
   const handleHideSelected = () => {
     if (selectedObjectIds.size === 0 && selectedExpressIds.size === 0) return
     if (activeObjectId && selectedExpressIds.size > 0) {
@@ -843,7 +890,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible'>>) => {
+  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => {
     try {
       setPathError(null)
       const updated = await updatePath(id, data)
@@ -868,9 +915,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setPaths(prev => prev.filter(p => p.id !== id))
       setPathFollowers(prev => prev.filter(f => f.path_id !== id))
       if (addingPointsForPathId === id) setAddingPointsForPathId(null)
+      await deleteOrphanedAnimKeyframes('path', id)
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 404) {
         setPaths(prev => prev.filter(p => p.id !== id))
+        await deleteOrphanedAnimKeyframes('path', id)
         return
       }
       setPathError(pathErrorMessage(err, 'Failed to delete path'))
@@ -887,10 +936,33 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Click-to-place (PathGizmo.tsx's PathAddPointCatcher) appends straight
   // to the server copy — no local-only preview needed here since each click
   // is already a discrete, deliberate action (unlike a continuous drag).
+  // Every point lands exactly where clicked, height included — no ground
+  // lock, no surface-snap refinement (2026-07-29, per Maro: removed after
+  // "Trace on ground"/"Snap to surface" went through several attempts —
+  // rooftop-arcing fix, lock-to-first-point, a vertical-refine raycast,
+  // a pending-point confirm step — and still wasn't reliable; plain
+  // per-click placement, with PathGizmo.tsx's own drag-to-real-surface fix
+  // and handleSetPathElevation's manual nudge below, "works better").
   const handleAddPathPoint = (id: string, point: PathPoint) => {
     const path = paths.find(p => p.id === id)
     if (!path) return
     handleUpdatePath(id, { points: [...path.points, point] })
+  }
+  // Path has no dedicated `elevation` column the way Zone does (path.py's
+  // points are a genuine 3D curve, not a flat footprint) — computed here
+  // instead as the points' own average up-coordinate, and written back as
+  // a uniform shift of the whole array, so a sloped path's own relative
+  // shape survives a nudge; only its overall height moves. PathsPanel.tsx's
+  // own pathElevation() computes the identical average for display, kept
+  // in sync with this write by construction (same formula, same source
+  // data) rather than by any shared constant.
+  const handleSetPathElevation = (id: string, elevation: number) => {
+    const path = paths.find(p => p.id === id)
+    if (!path || path.points.length === 0) return
+    const key = settings.upAxis === 'z' ? 'z' : 'y'
+    const current = path.points.reduce((sum, p) => sum + p[key], 0) / path.points.length
+    const delta = elevation - current
+    handleUpdatePath(id, { points: path.points.map(p => ({ ...p, [key]: p[key] + delta })) })
   }
   // PathGizmo.tsx's own live-drag/commit for an existing control point —
   // same local-preview-then-PATCH-on-release convention as
@@ -917,6 +989,92 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const resolvedPaths: Path[] = useMemo(
     () => paths.map(p => (draggingPath?.id === p.id ? { ...p, points: draggingPath.points } : p)),
     [paths, draggingPath],
+  )
+
+  // Zones — filled, labeled ground-plane areas (2026-07-29, per Maro's
+  // site-logistics reference — a "PROJECT SITE" style boundary). See
+  // zone.py's own docstring for why this is a separate resource from Path.
+  // Mirrors the Path state block just above field-for-field.
+  const [zones, setZones] = useState<Zone[]>([])
+  const [zoneError, setZoneError] = useState<string | null>(null)
+  const [addingPointsForZoneId, setAddingPointsForZoneId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    listZones(selectedProject.id).then(zs => { if (!cancelled) setZones(zs) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  const handleCreateZone = async () => {
+    if (!selectedProject) return
+    try {
+      setZoneError(null)
+      const zone = await createZone({ project_id: selectedProject.id })
+      setZones(prev => [...prev, zone])
+    } catch (err) {
+      setZoneError(pathErrorMessage(err, 'Failed to create zone'))
+    }
+  }
+  const handleUpdateZone = async (id: string, data: Partial<Pick<Zone, 'name' | 'points' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' | 'visible' | 'animate' | 'animation_loop' | 'animation_mode'>>) => {
+    try {
+      setZoneError(null)
+      const updated = await updateZone(id, data)
+      setZones(prev => prev.map(z => (z.id === id ? updated : z)))
+    } catch (err) {
+      setZoneError(pathErrorMessage(err, 'Failed to update zone'))
+    }
+  }
+  const handleRenameZone = (id: string, name: string) => handleUpdateZone(id, { name })
+  const handleToggleZoneVisible = (id: string) => {
+    const zone = zones.find(z => z.id === id)
+    if (zone) handleUpdateZone(id, { visible: !zone.visible })
+  }
+  const handleDeleteZone = async (id: string) => {
+    try {
+      setZoneError(null)
+      await deleteZone(id)
+      setZones(prev => prev.filter(z => z.id !== id))
+      if (addingPointsForZoneId === id) setAddingPointsForZoneId(null)
+      await deleteOrphanedAnimKeyframes('zone', id)
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setZones(prev => prev.filter(z => z.id !== id))
+        await deleteOrphanedAnimKeyframes('zone', id)
+        return
+      }
+      setZoneError(pathErrorMessage(err, 'Failed to delete zone'))
+    }
+  }
+  const handleToggleAddZonePoints = (id: string) => {
+    setAddingPointsForZoneId(prev => (prev === id ? null : id))
+  }
+  const handleRemoveLastZonePoint = (id: string) => {
+    const zone = zones.find(z => z.id === id)
+    if (!zone || zone.points.length === 0) return
+    handleUpdateZone(id, { points: zone.points.slice(0, -1) })
+  }
+  // Zeroes the up-axis coordinate of PathAddPointCatcher's raw hit point
+  // before storing it (2026-07-29) — a Zone's own points are a flat
+  // footprint (zone.py's own docstring), regardless of what real surface
+  // was actually clicked to place this corner.
+  const handleAddZonePoint = (id: string, point: ZonePoint) => {
+    const zone = zones.find(z => z.id === id)
+    if (!zone) return
+    const flattened: ZonePoint = settings.upAxis === 'z' ? { ...point, z: 0 } : { ...point, y: 0 }
+    handleUpdateZone(id, { points: [...zone.points, flattened] })
+  }
+  // Live-drag preview (2026-07-29) — same local-preview-then-PATCH-on-
+  // release convention as draggingPath above.
+  const [draggingZone, setDraggingZone] = useState<{ id: string; points: ZonePoint[] } | null>(null)
+  const handleZoneDragMove = (id: string, points: ZonePoint[]) => setDraggingZone({ id, points })
+  const handleZoneDragEnd = (id: string, points: ZonePoint[]) => {
+    setDraggingZone(null)
+    handleUpdateZone(id, { points })
+  }
+  // Same identity-churn fix as resolvedPaths above.
+  const resolvedZones: Zone[] = useMemo(
+    () => zones.map(z => (draggingZone?.id === z.id ? { ...z, points: draggingZone.points } : z)),
+    [zones, draggingZone],
   )
 
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
@@ -951,6 +1109,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     try {
       setPathError(null)
       const updated = await updatePathFollower(followerId, { orient_to_path: !follower.orient_to_path })
+      setPathFollowers(prev => prev.map(f => (f.id === followerId ? updated : f)))
+    } catch (err) {
+      setPathError(pathErrorMessage(err, 'Failed to update path binding'))
+    }
+  }
+  // Heading offset (2026-08-06, per Maro: "when i hit bind it changed the
+  // rotation of the car" — see path_follower.py's own docstring for the
+  // full "why": compensates for an imported model's own authored forward
+  // axis not matching three.js's lookAt convention, applied as an extra
+  // yaw on top of it in Viewport3D.tsx's applyPathFollow.
+  const handleSetPathFollowerHeadingOffset = async (followerId: string, headingOffsetDeg: number) => {
+    try {
+      setPathError(null)
+      const updated = await updatePathFollower(followerId, { heading_offset_deg: headingOffsetDeg })
       setPathFollowers(prev => prev.map(f => (f.id === followerId ? updated : f)))
     } catch (err) {
       setPathError(pathErrorMessage(err, 'Failed to update path binding'))
@@ -1244,6 +1416,98 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (timelineDateRef.current === null) timelineDateRef.current = timelineRange?.start ?? new Date()
   }, [timelineRange])
 
+  // Lifted out of TimelineWindow.tsx (2026-07-30, per Maro: "I want frames
+  // or seconds not dates" for Path/Zone's own Start/End keyframe fields) —
+  // PathsPanel.tsx/ZonesPanel.tsx need the exact same Date/Seconds/Frames
+  // formatting TimelineWindow.tsx's own scrubber already uses
+  // (formatTimelineValue/dateFromTimelineValue, timelinePlayback.ts), and
+  // "the same numbers on two different panels" only actually means
+  // anything if both read the one shared speed/mode/fps instead of each
+  // owning an independent copy. TimelineWindow.tsx now receives these as
+  // controlled props instead of local useState — same lifted-state
+  // pattern already used for timelineDateRef/timelineRange just above.
+  // localStorage keys/defaults unchanged from TimelineWindow.tsx's own
+  // former local state, so an existing user's saved preference carries
+  // over exactly.
+  const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
+  const [timeDisplayMode, setTimeDisplayMode] = useState<TimeDisplayMode>(() => {
+    try {
+      const raw = localStorage.getItem('prosota_4d_timeline_display_mode')
+      return raw === 'seconds' || raw === 'frames' ? raw : 'date'
+    } catch {
+      return 'date'
+    }
+  })
+  const [fps, setFps] = useState(() => {
+    try {
+      const raw = Number(localStorage.getItem('prosota_4d_timeline_fps'))
+      return FPS_OPTIONS.includes(raw) ? raw : 30
+    } catch {
+      return 30
+    }
+  })
+  const handleTimeDisplayModeChange = (mode: TimeDisplayMode) => {
+    setTimeDisplayMode(mode)
+    try { localStorage.setItem('prosota_4d_timeline_display_mode', mode) } catch { /* ignore */ }
+  }
+  const handleFpsChange = (value: number) => {
+    setFps(value)
+    try { localStorage.setItem('prosota_4d_timeline_fps', String(value)) } catch { /* ignore */ }
+  }
+
+  // Resolves each Path/Zone's own reveal window straight out of the
+  // ElementKeyframe rows keyed anim_start/anim_end for it (2026-07-30 —
+  // see paths.ts's/PathGizmo.tsx's own headers for why these moved off the
+  // old plain animation_start/animation_end columns). Passed to
+  // PathGizmos/ZoneGizmos in Viewport3D.tsx below instead of each gizmo
+  // reading path.animation_start itself, since that field no longer exists
+  // on the Path/Zone type at all.
+  const pathAnimWindows = useMemo(() => {
+    const map = new Map<string, { start: Date | null; end: Date | null }>()
+    for (const k of elementKeyframes.keyframes) {
+      if (k.source_kind !== 'path' || (k.field !== 'anim_start' && k.field !== 'anim_end')) continue
+      const entry = map.get(k.element_ref) ?? { start: null, end: null }
+      if (k.field === 'anim_start') entry.start = new Date(k.date); else entry.end = new Date(k.date)
+      map.set(k.element_ref, entry)
+    }
+    return map
+  }, [elementKeyframes.keyframes])
+  const zoneAnimWindows = useMemo(() => {
+    const map = new Map<string, { start: Date | null; end: Date | null }>()
+    for (const k of elementKeyframes.keyframes) {
+      if (k.source_kind !== 'zone' || (k.field !== 'anim_start' && k.field !== 'anim_end')) continue
+      const entry = map.get(k.element_ref) ?? { start: null, end: null }
+      if (k.field === 'anim_start') entry.start = new Date(k.date); else entry.end = new Date(k.date)
+      map.set(k.element_ref, entry)
+    }
+    return map
+  }, [elementKeyframes.keyframes])
+  // "Key" buttons in PathsPanel.tsx/ZonesPanel.tsx (2026-07-30, per Maro:
+  // "add a key frame buttons to the side. so i can key frame the start and
+  // end") — anim_start/anim_end are singleton markers (paths.ts's own
+  // header: "the keyframe's own date IS the value"), so re-keying a field
+  // replaces whichever row already holds it rather than upserting
+  // alongside it — upsert's own conflict key includes `date`, so keying at
+  // a *different* playhead position than last time would otherwise leave
+  // two anim_start rows instead of moving the one that matters.
+  const handleKeyAnim = async (sourceKind: 'path' | 'zone', elementRef: string, field: 'anim_start' | 'anim_end') => {
+    const now = timelineDateRef.current ?? new Date()
+    const existing = elementKeyframes.keyframes.filter(k => k.source_kind === sourceKind && k.element_ref === elementRef && k.field === field)
+    for (const k of existing) await elementKeyframes.remove(k.id)
+    await elementKeyframes.upsert(sourceKind, elementRef, field, now, 0)
+  }
+  // Deleting a Path/Zone doesn't cascade to its own anim_start/anim_end rows
+  // on its own (2026-07-30 fix, per Maro: "there's nothing in the scene...
+  // why do i see the animation data" — a deleted Path/Zone's own reveal
+  // keyframes were still showing in the Animation Timeline under a raw
+  // UUID). ElementKeyframe has no FK to Path/Zone at all (by design — see
+  // elementKeyframes.ts's own header), so handleDeletePath/handleDeleteZone
+  // above call this explicitly right after the delete succeeds.
+  const deleteOrphanedAnimKeyframes = async (sourceKind: 'path' | 'zone', elementRef: string) => {
+    const orphaned = elementKeyframes.keyframes.filter(k => k.source_kind === sourceKind && k.element_ref === elementRef && (k.field === 'anim_start' || k.field === 'anim_end'))
+    for (const k of orphaned) await elementKeyframes.remove(k.id)
+  }
+
   const [openWindows, setOpenWindows] = useState<Set<WindowKey>>(new Set())
   const toggleWindow = (key: WindowKey) => {
     setOpenWindows(prev => {
@@ -1434,6 +1698,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setPathsPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(PATHS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Zones panel (2026-07-29, per Maro's site-logistics reference —
+  // a filled, labeled ground-plane area like "PROJECT SITE") — same shared-
+  // side-dock treatment as Paths just above.
+  const [zonesPanelOpen, setZonesPanelOpen] = useState(() => loadPanelOpen(ZONES_PANEL_OPEN_KEY, false))
+  const toggleZonesPanel = () => {
+    setZonesPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(ZONES_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [zonesPanelDock, setZonesPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(ZONES_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleZonesPanelDock = () => {
+    setZonesPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(ZONES_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -1897,6 +2186,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const getIfcHandleFor = (objectId: string | null | undefined): IfcModelHandle | null =>
     ifcHandles.find(h => `ifc-${h.modelID}` === objectId) ?? null
 
+  // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i refresh, i
+  // expect the elements i unloaded to stay unloaded... give me an option to
+  // reload ifc which can identify the elements unloaded") — Model3DFile's
+  // own unloaded_elements column, mirrored here keyed by fileId so
+  // performUnloadElements/the "Reload IFC" dialog can read/merge it without
+  // a network round-trip on every keystroke. Seeded from listModel3DFiles'
+  // response in the restore-on-mount effect below, kept in sync afterwards
+  // by whichever of this file's own calls to updateUnloadedElements last
+  // succeeded.
+  const [unloadedElementsByFileId, setUnloadedElementsByFileId] = useState<Map<string, UnloadedElementInfo[]>>(new Map())
+  // Re-keyed by scene-object id (not fileId) for IfcDataPanel.tsx's own
+  // per-model Reload button, which only ever knows the model's `ifc-${modelID}`
+  // id, not its backend fileId.
+  const unloadedCountByModelId = new Map(
+    sceneObjects.filter(o => o.kind === 'ifc' && o.fileId).map(o => [o.id, unloadedElementsByFileId.get(o.fileId!)?.length ?? 0]),
+  )
+  // Which loaded scene objects genuinely haven't finished saving yet
+  // (2026-07-28, per Maro — see IfcDataPanel.tsx's own unsavedObjectIds
+  // prop header for the full story) — fileId stays null until the upload
+  // truly lands, same fact the beforeunload guard/toolbar progress
+  // indicator already read, now surfaced per row in both data panels too.
+  const unsavedObjectIds = new Set(sceneObjects.filter(o => o.fileId === null).map(o => o.id))
+
   // Regenerates every level-slice clone whenever the loaded IFC models or
   // the split configuration change (2026-07-15) — see elementSplitTargets.ts's
   // own header for why this is a full rebuild each time, not an incremental
@@ -2345,8 +2657,66 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // (persistActiveTransform needs all three, so it's defined there, not
   // here — this ref just needs to exist before that point).
   const pendingTransformSaveRef = useRef<{ timeout: ReturnType<typeof setTimeout>; flush: () => void } | null>(null)
+  // "Fix these incessant warnings" (2026-07-28, per Maro) — once a scene
+  // object's underlying file is confirmed genuinely gone server-side (self-
+  // heal-by-name in persistActiveTransform/persistSiblingTransform/
+  // performUnloadElements below all found nothing, not even a namesake
+  // re-import to recover onto), every further interaction with that same
+  // object — another drag, another Unload Selected — used to re-attempt
+  // the exact same doomed save and re-report the exact same failure, over
+  // and over, for as long as that object stayed selected/being edited.
+  // Marking its id here once, checked at the top of all three save paths,
+  // means the error surfaces exactly once per object per session instead
+  // of on every single subsequent edit — re-importing the file creates a
+  // brand-new scene object with a brand-new id, so this never blocks a
+  // real fix, only repeat noise for the same still-broken one.
+  const brokenModelObjectIdsRef = useRef<Set<string>>(new Set())
   const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
+  // "Show a percentage save" (2026-07-28, per Maro) — a real byte-count
+  // percentage per in-flight upload (persistModelFile's own onProgress
+  // callback, model3dFiles.ts's uploadModel3DFile), keyed by scene object
+  // id since more than one can be uploading at once (the concurrency-
+  // capped queue above). Replaces the old plain "⏳ Saving N models…"
+  // count, which said nothing about how far along any of them actually
+  // were.
+  const [uploadProgress, setUploadProgress] = useState<Map<string, { name: string; percent: number }>>(new Map())
+  // A list, not a single string (2026-07-28, per Maro: "on refresh some 3d
+  // and ifc dont return" — a 39-file batch import chains every file's own
+  // handleImport3D through importQueueRef in a tight sequence now (see its
+  // own multi-file-batch header), and each one's own setImportError(null)
+  // at the top of that function was silently wiping out whatever error the
+  // PREVIOUS file in the same batch had just reported the instant the next
+  // one started — so if file #5 of 39 failed to upload, and files #6-39
+  // succeeded, only ever the last thing set — usually nothing — survived
+  // to be seen. The actual failure only surfaced later, confusingly, as a
+  // "couldn't save the last edit" error when the user tried to move the
+  // one object whose upload had genuinely never landed. Every import/save
+  // failure now gets appended, not overwritten, and stays until explicitly
+  // dismissed — the restore-on-load path already did its own version of
+  // this (joining multiple restore failures with '\n' into one string);
+  // this generalizes that same fix to every other setImportError call site
+  // as a real list instead.
+  const [importErrors, setImportErrors] = useState<string[]>([])
+  // Deduped by exact message (2026-07-28, per Maro — a broken object (its
+  // upload genuinely never landed server-side) reports the identical
+  // "couldn't save the last edit" failure every time a save is retried
+  // against it — every debounced sibling-transform save during a drag, for
+  // instance — which used to flood this list with the same line six-plus
+  // times over instead of surfacing it once. Same underlying failure
+  // shouldn't grow the list just because it was hit again.
+  const addImportError = (message: string) => setImportErrors(prev => (prev.includes(message) ? prev : [...prev, message]))
+  // Re-importing the same file name is the user's own explicit "try again"
+  // in response to a prior save-issue message (both persistModelFile's own
+  // "failed to save to the server" and the animation-bake warning embed the
+  // file name in quotes) — without this, a genuinely successful re-import
+  // still left the old failure sitting in the badge forever, since nothing
+  // ever cleared importErrors except a manual dismiss (2026-07-29, per Maro:
+  // "save issue persists... even if i reimport same [file]"). Matched by
+  // substring against the quoted name rather than a stored id/index, since
+  // that's the only thing every one of these messages already reliably
+  // carries in common.
+  const clearImportErrorsForFile = (fileName: string) =>
+    setImportErrors(prev => prev.filter(msg => !msg.includes(`"${fileName}"`)))
   const importInputRef = useRef<HTMLInputElement>(null)
   // Combined "Import Model" flow (2026-07-08, per Maro: "combine the two
   // import widgets to one... after selecting the model and its type, there
@@ -2357,13 +2727,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // default" — see handleFileSelected's own header) since this queue is
   // mesh-only these days — GLTF/OBJ/FBX axis convention genuinely varies
   // file-to-file, unlike IFC.
-  // A queue, not a single pending file (2026-07-17, per Maro: "allow me to
-  // bulk import ifc files not one by one" — this predates the IFC-skips-the-
-  // dialog change above, but the same multi-select-picker mechanism still
-  // matters for mesh imports). Every mesh file picked lands here; the
-  // confirm dialog (JSX below) always shows pendingImports[0] — confirming
-  // or cancelling one just advances to the next.
-  const [pendingImports, setPendingImports] = useState<{ file: File }[]>([])
+  // A queue of BATCHES, not a queue of files (2026-07-28, per Maro: "i said
+  // i didnt want this?" — a 39-file mesh selection was showing the confirm
+  // dialog 39 times in a row, "38 more queued" ticking down one file at a
+  // time; every one of those confirms would've picked the identical Up
+  // Axis anyway. One whole multi-select is now one dialog: confirming it
+  // applies that single axis choice, and includeAnimation=false, to every
+  // file in the batch at once. A single-file pick is just a batch of one —
+  // same dialog, still gets the full per-file axis + animation choice
+  // (isMultiFile below is false for it). This predates a 2026-07-17 fix
+  // (per Maro: "allow me to bulk import ifc files not one by one") for the
+  // same underlying multi-select-picker mechanism.
+  const [pendingImports, setPendingImports] = useState<File[][]>([])
 
   const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
@@ -2391,17 +2766,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       )
     }
     if (meshFiles.length > 0) {
-      setPendingImports(prev => [...prev, ...meshFiles.map(file => ({ file, kind: 'mesh' as const }))])
+      setPendingImports(prev => [...prev, meshFiles])
     }
   }
 
   // Uploads a freshly-imported file to the backend so it survives a hard
   // refresh (2026-07-09, per Maro: "keep the models and associated data
   // similar to the persistent data in Schedule. so i dont have to repeat my
-  // actions import again") — deliberately fire-and-forget relative to the
-  // import itself, since the model is already usable in the viewport the
-  // moment it's parsed locally; this just catches the backend up in the
-  // background. Checks the object is still loaded once the upload resolves
+  // actions import again"). Used to be fire-and-forget relative to the
+  // import itself — the model is usable in the viewport the instant it's
+  // parsed locally, well before this finishes — but that's exactly what
+  // let large IFC files (100MB+) sit fully loaded and seemingly fine for
+  // as long as the tab stayed open, while genuinely never landing server-
+  // side (2026-07-28, per Maro, after confirmed data loss: 4 of 5 Hospital
+  // IFC files were never actually saved, confirmed via a direct DB check,
+  // despite all 5 being fully visible/usable in the live scene). Callers
+  // now await this (via enqueueUpload) before considering an import done,
+  // so "Importing…" stays visible for the whole real upload, not just the
+  // parse. Checks the object is still loaded once the upload resolves
   // before recording its fileId — if it was unloaded in the meantime, the
   // upload only just landed a copy nobody wants, so it's deleted right back
   // off per Maro's explicit "if i unload, i expect the data not to persist"
@@ -2409,8 +2791,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // unload feel laggy for no real benefit.
   const persistModelFile = async (id: string, file: File, kind: Model3DKind, sourceUpAxis: UpAxis, name: string) => {
     if (!selectedProject) return
+    setUploadProgress(prev => new Map(prev).set(id, { name, percent: 0 }))
     try {
-      const saved = await uploadModel3DFile(selectedProject.id, name, kind, sourceUpAxis, file)
+      const saved = await uploadModel3DFile(selectedProject.id, name, kind, sourceUpAxis, file, percent => {
+        setUploadProgress(prev => new Map(prev).set(id, { name, percent }))
+      })
       let stillLoaded = false
       setSceneObjects(prev => {
         stillLoaded = prev.some(o => o.id === id)
@@ -2438,14 +2823,42 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
               : `Network error: ${err.message}`)
         : err instanceof Error ? err.message : 'Unknown error'
       console.error('Failed to persist imported model — it will not survive a hard refresh', err)
-      setImportError(`"${file.name}" imported but failed to save to the server — it will NOT survive a refresh (${detail}). Try again, or check your connection.`)
+      addImportError(`"${file.name}" imported but failed to save to the server — it will NOT survive a refresh (${detail}). Try again, or check your connection.`)
+    } finally {
+      setUploadProgress(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next })
     }
+  }
+
+  // Re-importing a name/kind that's already loaded removes the old scene
+  // object first (2026-07-28, per Maro, after a real incident: re-
+  // importing a permanently-broken "2018_Hospital_Electrical.ifc" without
+  // unloading the old one first left TWO scene objects with the identical
+  // name in the list — the old one, forever fileId: null, and the new one
+  // actually uploading. Several self-heal paths elsewhere (persist
+  // ActiveTransform/persistSiblingTransform/performUnloadElements) look up
+  // "the file with this name" via listModel3DFiles and attach whatever
+  // they find to *whichever scene object triggered the save*, with no way
+  // to tell the two apart by name alone — so the instant the real upload
+  // landed server-side, an unrelated interaction against the OLD, still-
+  // broken object could self-heal onto the NEW file's real id, making the
+  // wrong object show as saved while the actual new import stayed
+  // disconnected. Backend model3d_file.py already treats same name/kind as
+  // "this is a re-import, replace it" for the persisted row (create_file's
+  // own docstring) — this just makes the *client-side* scene object follow
+  // the identical rule, so name+kind stays a genuinely unique key and that
+  // whole class of misattachment can't happen at all.
+  const unloadExistingNamesake = async (name: string, kind: Model3DKind) => {
+    const existing = sceneObjects.find(o => o.name === name && o.kind === kind)
+    if (!existing) return
+    if (kind === 'ifc') await performUnloadIfc(existing.id)
+    else performUnloadMesh(existing.id)
   }
 
   const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string, includeAnimation: boolean = true) => {
     setImporting(true)
-    setImportError(null)
+    clearImportErrorsForFile(file.name)
     try {
+      await unloadExistingNamesake(name, 'mesh')
       const object = await loadModel3DFile(file)
       const id = crypto.randomUUID()
       object.name = name
@@ -2468,7 +2881,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         startDate.setHours(0, 0, 0, 0)
         const baked = bakeEmbeddedAnimationToKeyframes(object, settings.upAxis, startDate)
         if (baked === null) {
-          setImportError(`"${name}" imported, but its animation couldn't be converted to keyframes — it animates more than one part independently (e.g. a rig/skeleton), and this app can only key a mesh import as one rigid whole. The mesh itself imported fine.`)
+          addImportError(`"${name}" imported, but its animation couldn't be converted to keyframes — it animates more than one part independently (e.g. a rig/skeleton), and this app can only key a mesh import as one rigid whole. The mesh itself imported fine.`)
         } else {
           for (const kf of baked) await elementKeyframes.upsert('mesh', name, kf.field, kf.date, kf.value)
         }
@@ -2476,9 +2889,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       object.animations = []
       setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setDataTab('3d')
-      persistModelFile(id, file, 'mesh', sourceUpAxis, name)
+      await enqueueUpload(() => persistModelFile(id, file, 'mesh', sourceUpAxis, name))
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
+      addImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
     } finally {
       setImporting(false)
     }
@@ -2486,8 +2899,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const handleImportIfc = async (file: File, sourceUpAxis: UpAxis, name: string) => {
     setImporting(true)
-    setImportError(null)
+    clearImportErrorsForFile(file.name)
     try {
+      await unloadExistingNamesake(name, 'ifc')
       const { loadIfcModel } = await import('./ifcModel')
       const handle = await loadIfcModel(file)
       const id = `ifc-${handle.modelID}`
@@ -2499,9 +2913,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setSelectedExpressIds(new Set())
       setSceneObjects(prev => [...prev, { id, name, kind: 'ifc', sourceUpAxis, object: handle.object, fileId: null }])
       setDataTab('ifc')
-      persistModelFile(id, file, 'ifc', sourceUpAxis, name)
+      await enqueueUpload(() => persistModelFile(id, file, 'ifc', sourceUpAxis, name))
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Failed to import IFC file — see console for detail')
+      addImportError(err instanceof Error ? err.message : 'Failed to import IFC file — see console for detail')
       console.error(err)
     } finally {
       setImporting(false)
@@ -2522,14 +2936,63 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // itself (name/axis, no WASM involved) is instant per file.
   const importQueueRef = useRef<Promise<void>>(Promise.resolve())
 
-  // Mesh-only now (2026-07-17) — IFC files bypass this dialog entirely,
-  // see handleFileSelected's own header.
-  const handleConfirmImport = (sourceUpAxis: UpAxis, name: string, includeAnimation: boolean) => {
-    const next = pendingImports[0]
+  // Caps how many persistModelFile uploads run at once (2026-07-28, per
+  // Maro: "the warning doesnt persist" — a 39-file batch import used to
+  // fire all 39 uploads simultaneously (persistModelFile is deliberately
+  // fire-and-forget relative to import itself — see its own header — but
+  // that was always one file at a time before batch import existed). A
+  // thundering herd of that many concurrent large uploads can genuinely
+  // overwhelm the browser's own per-origin connection limit or the
+  // backend, causing some to fail from overload rather than from any
+  // refresh at all — indistinguishable from the "you closed the tab mid-
+  // upload" case this whole mechanism exists to warn about, and it made
+  // the "⏳ Saving N models…" counter collapse almost immediately (most
+  // finishing together) instead of counting down meaningfully while a
+  // batch was genuinely still in flight. Capped at 3 concurrent uploads;
+  // the rest queue and start as slots free up.
+  const MAX_CONCURRENT_UPLOADS = 3
+  const uploadQueueRef = useRef<(() => Promise<void>)[]>([])
+  const activeUploadsRef = useRef(0)
+  const runNextUpload = () => {
+    if (activeUploadsRef.current >= MAX_CONCURRENT_UPLOADS) return
+    const next = uploadQueueRef.current.shift()
     if (!next) return
-    const { file } = next
+    activeUploadsRef.current++
+    next().finally(() => {
+      activeUploadsRef.current--
+      runNextUpload()
+    })
+  }
+  // Returns a promise that resolves only once the upload has genuinely
+  // finished (2026-07-28, per Maro, after confirmed data loss: 4 of 5
+  // Hospital IFC files never actually persisted — direct DB check found
+  // only 1 real row — while all 5 sat fully loaded and usable in the live
+  // scene). handleImport3D/handleImportIfc now await this instead of
+  // firing it and moving on immediately, so "Importing…" stays visible for
+  // the real upload duration too, not just the parse — by the time it
+  // clears, the file is actually saved, not "probably saved by now."
+  // Trades some throughput on a big batch import for the one guarantee
+  // that actually matters here: nothing you can already see in the
+  // viewport is secretly still unsaved behind your back.
+  const enqueueUpload = (task: () => Promise<void>): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      uploadQueueRef.current.push(() => task().then(resolve, reject))
+      runNextUpload()
+    })
+  }
+
+  // Mesh-only now (2026-07-17) — IFC files bypass this dialog entirely,
+  // see handleFileSelected's own header. One confirm applies sourceUpAxis
+  // (and includeAnimation, always false for a real multi-file batch — see
+  // ImportModelDialog's own header) to every file in the batch at once
+  // (2026-07-28) — not just pendingImports[0] itself.
+  const handleConfirmImport = (sourceUpAxis: UpAxis, includeAnimation: boolean) => {
+    const batch = pendingImports[0]
+    if (!batch) return
     setPendingImports(prev => prev.slice(1))
-    importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, name, includeAnimation))
+    for (const file of batch) {
+      importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, file.name, includeAnimation))
+    }
   }
 
   // Restores every persisted model on load (2026-07-09, per Maro: "if i hard
@@ -2611,6 +3074,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const projectIdForThisRestore = selectedProject.id
     const stale = () => restoreStartedForProjectIdRef.current !== projectIdForThisRestore
     ;(async () => {
+      // Clears every previous project's own 3D scene state before this
+      // (possibly new) project's own restore runs below (2026-07-28, per
+      // Maro: "fix the root cause i only imported some glb objects" — a
+      // Hospital IFC dataset from a completely different, earlier-viewed
+      // project was still sitting in sceneObjects/ifcHandles, still
+      // rendered and interactive, its fileId now meaningless to whatever
+      // project is actually selected. FourD.tsx stays mounted across a
+      // project switch (PersistentFourD, see this effect's own header) and
+      // nothing ever reset these — a switch away and back just kept
+      // appending the new project's own files on top of the old one's,
+      // forever, for the life of the tab). Harmless on a project's first-
+      // ever activation too (everything's already empty then).
+      setSceneObjects([])
+      setIfcHandles([])
+      setActiveIfcModelId(null)
+      setSelectedExpressId(null)
+      setSelectedExpressIds(new Set())
+      setActiveObjectId(null)
+      setSelectedObjectIds(new Set())
+      setHiddenExpressIds(new Set())
+      setIsolatedExpressIds(new Set())
+      setUnloadedElementsByFileId(new Map())
+      brokenModelObjectIdsRef.current.clear()
       // Reset first (2026-07-19), before any model for this (possibly new)
       // project gets restored/loaded below — see ifcModel.ts's own
       // sharedRecenterOffset/resetRecenterOffset header for why a project
@@ -2625,6 +3111,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         listElementTransforms(selectedProject.id).catch(err => { listFailure ??= err; return [] }),
       ])
       if (stale()) return
+      // "Unload Selected"/"Reload IFC" (2026-07-26) — seeded here so
+      // performUnloadElements/the "Reload IFC" dialog have this file's
+      // already-unloaded elements without a second round-trip; each file's
+      // own persisted removals get re-applied to its handle right after
+      // loadIfcModel below.
+      setUnloadedElementsByFileId(new Map(files.map(f => [f.id, f.unloaded_elements ?? []])))
       // Distinguishes "you genuinely have no saved models" from "the
       // request to check failed" (2026-07-11) — these two used to look
       // identical (both landed on an empty `files` array), which is
@@ -2637,31 +3129,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // know (2026-07-11, per Maro pasting back the exact static text).
       if (listFailure) {
         console.error('Failed to list persisted models/transforms', listFailure)
-        setImportError(`Failed to check for your saved models (${sectionBoxErrorMessage(listFailure, 'unknown error')}) — try refreshing again. If this keeps happening, try signing out and back in.`)
+        addImportError(`Failed to check for your saved models (${sectionBoxErrorMessage(listFailure, 'unknown error')}) — try refreshing again. If this keeps happening, try signing out and back in.`)
       }
       elementTransformsRef.current = transforms
 
-      const applyTransform = (object: Object3D, t: ElementTransform | undefined) => {
-        if (!t) return
-        // Pivot first (2026-07-12, extended 2026-07-22 for pivot rotation)
-        // — setPivot/setPivotRotation's own compensating position/
-        // quaternion writes would otherwise be immediately overwritten by
-        // the .set() calls below anyway, but running them first means
-        // those correctly land on the saved *final* authored position/
-        // rotation rather than fighting a pivot-driven change applied
-        // after the fact — geometry recentering is the part that actually
-        // matters here, since nothing else re-derives it. See
-        // elementPivot.ts's own header.
-        if (t.pivot_x !== null && t.pivot_y !== null && t.pivot_z !== null) {
-          setPivot(object, new Vector3(t.pivot_x, t.pivot_y, t.pivot_z))
-        }
-        if (t.pivot_rotation_x !== null && t.pivot_rotation_y !== null && t.pivot_rotation_z !== null) {
-          setPivotRotation(object, new Euler(t.pivot_rotation_x, t.pivot_rotation_y, t.pivot_rotation_z))
-        }
-        object.position.set(t.position_x, t.position_y, t.position_z)
-        object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
-        object.scale.set(t.scale_x, t.scale_y, t.scale_z)
-      }
+      const applyTransform = applyElementTransform
 
       // Downloads are kicked off for every file up front, in parallel
       // (2026-07-17, per Maro: "only loaded 3 out of 6 ifc files" on
@@ -2682,15 +3154,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         error => ({ file, blob: null as Blob | null, error }),
       ))
 
-      // Every restore failure now gets its own line instead of overwriting
-      // the last one (same fix, same root cause: silently losing files was
-      // impossible to diagnose because only the LAST file's error ever
-      // survived in importError, whatever it was).
-      const restoreFailures: string[] = []
-      const reportRestoreFailure = (message: string) => {
-        restoreFailures.push(message)
-        setImportError(restoreFailures.join('\n'))
-      }
+      // Every restore failure gets its own entry in importErrors instead of
+      // overwriting the last one (silently losing files was impossible to
+      // diagnose because only the LAST failure ever survived).
+      const reportRestoreFailure = addImportError
 
       for (const download of downloads) {
         if (stale()) return
@@ -2728,6 +3195,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                   if (t) applyTransform(child, t)
                 })
               }
+            }
+            // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i
+            // refresh, i expect the elements i unloaded to stay unloaded")
+            // — re-applies this file's own persisted removals to the fresh
+            // handle before it's ever shown, the same getExpressIdFromGuid
+            // resolution elementTransforms_ just above already uses (a
+            // GUID that no longer resolves — the file changed since — is
+            // silently skipped, not an error: there's nothing left to
+            // remove).
+            const persistedUnloaded = file.unloaded_elements ?? []
+            if (persistedUnloaded.length > 0) {
+              const { getExpressIdFromGuid } = await import('./ifcModel')
+              const unloadedExpressIds = persistedUnloaded
+                .map(e => getExpressIdFromGuid(handle, e.guid))
+                .filter((expressId): expressId is number => expressId !== undefined)
+              if (unloadedExpressIds.length > 0) removeElementsFromModel(handle.object, unloadedExpressIds)
             }
             const id = `ifc-${handle.modelID}`
             handle.object.userData.sceneObjectId = id
@@ -2811,8 +3294,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // (2026-07-08, per Maro: "multi individual select (maybe hold control and
   // click)"): toggle membership, last-toggled-on becomes the new active
   // object — same convention Blender uses for ctrl/shift-click.
-  const handleSelectObject = (id: string | null, additive = false) => {
+  //
+  // Shift+click (2026-07-28, per Maro: "click shift and hold and click the
+  // bottom should select inclusive") — rangeIds is the full ordered list
+  // of ids the clicked checkbox's own panel is showing (MeshDataPanel/
+  // IfcDataPanel), only passed when shift was actually held; every id
+  // between the current active object and the one just shift-clicked,
+  // inclusive, gets added to the selection — same file-manager convention
+  // as everywhere else this gesture exists. activeObjectId is the anchor
+  // (the last plain-clicked object), matching Blender's own "active
+  // object" as the shift-range start. Falls through to the plain
+  // additive-toggle behaviour if there's no active object yet to anchor
+  // from, or the ids involved aren't both in rangeIds for some reason.
+  const handleSelectObject = (id: string | null, additive = false, rangeIds?: string[]) => {
     if (id === null) { setSelectedObjectIds(new Set()); setActiveObjectId(null); return }
+    if (rangeIds && activeObjectId) {
+      const fromIndex = rangeIds.indexOf(activeObjectId)
+      const toIndex = rangeIds.indexOf(id)
+      if (fromIndex !== -1 && toIndex !== -1) {
+        const [start, end] = fromIndex <= toIndex ? [fromIndex, toIndex] : [toIndex, fromIndex]
+        setSelectedObjectIds(prev => new Set([...prev, ...rangeIds.slice(start, end + 1)]))
+        setActiveObjectId(id)
+        return
+      }
+    }
     if (!additive) { setSelectedObjectIds(new Set([id])); setActiveObjectId(id); return }
     const next = new Set(selectedObjectIds)
     const turningOn = !next.has(id)
@@ -2833,7 +3338,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // resolution does, which isn't worth pulling into a click handler for a
   // v1 pass, same "IFC sub-element identity is out of scope for now"
   // precedent Follow Path/manual keyframing already set.
-  const handleSelectActor = (sourceKind: 'mesh' | 'ifc' | 'annotation', elementRef: string) => {
+  // path/zone (2026-07-30) — no viewport "selection" concept exists for
+  // either yet (PathsPanel.tsx/ZonesPanel.tsx have no selected-row
+  // highlight), so this is a deliberate no-op for now rather than a gap —
+  // same treatment as 'ifc' above, just for a different reason.
+  const handleSelectActor = (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone', elementRef: string) => {
     if (sourceKind === 'mesh') {
       const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === elementRef)
       if (match) handleSelectObject(match.id)
@@ -3117,6 +3626,250 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // "Unload Selected" (2026-07-26, per Maro: "i need to be able to unload
+  // selected elements" — distinct from the IFC Data panel's own per-model
+  // Unload, which only ever drops a *whole* loaded file, and from Hide
+  // Selected above, which is reversible/still fully allocated). Same
+  // link/keyframe confirmation shape as requestUnloadModel/handleConfirmUnload
+  // just above (per Maro's answer when asked: "warn, then let me choose"),
+  // just resolved against a specific expressID subset instead of every
+  // element in the file — resolveLinkedDataForModel's own getExpressIdFromGuid
+  // check, inlined here against a target Set instead of "any expressID at
+  // all". Only ever targets specific IFC sub-elements (selectedExpressIds) —
+  // a whole mesh-kind object or whole-IFC-model selection with no
+  // sub-elements picked is already covered by that model/object's own
+  // Unload button elsewhere, so this stays a no-op for that case rather than
+  // duplicating it.
+  const resolveLinkedDataForElements = async (
+    handle: IfcModelHandle, expressIds: number[],
+  ): Promise<{ linkIds: string[]; keyframeIds: string[] }> => {
+    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc')
+    const ifcKeyframes = elementKeyframes.keyframes.filter(k => k.source_kind === 'ifc')
+    if (ifcLinks.length === 0 && ifcKeyframes.length === 0) return { linkIds: [], keyframeIds: [] }
+    const { getExpressIdFromGuid } = await import('./ifcModel')
+    const targetIds = new Set(expressIds)
+    const matches = (elementRef: string) => {
+      const expressID = getExpressIdFromGuid(handle, elementRef)
+      return expressID !== undefined && targetIds.has(expressID)
+    }
+    return {
+      linkIds: ifcLinks.filter(l => matches(l.element_ref)).map(l => l.id),
+      keyframeIds: ifcKeyframes.filter(k => matches(k.element_ref)).map(k => k.id),
+    }
+  }
+
+  // Real disposal (elementBatching.ts's own removeElementsFromModel — see
+  // its header for exactly what "real" means: BatchedMesh.deleteInstance or
+  // a disposed individual Mesh, either way the expressID stops existing in
+  // this rootObject at all), plus the same selection/hidden/isolated
+  // bookkeeping cleanup Deselect All-adjacent flows already do for expressIDs
+  // that no longer resolve to anything — hiddenExpressIds is keyed by the
+  // composite `${objectId}::${expressID}` (Hide Selected's own convention
+  // above), isolatedExpressIds is a bare expressID Set (same "implicitly
+  // scoped to the one active IFC model" assumption Isolate itself relies on).
+  const performUnloadElements = async (objectId: string, expressIds: number[]) => {
+    const handle = getIfcHandleFor(objectId)
+    if (!handle) return
+    removeElementsFromModel(handle.object, expressIds)
+    const removedSet = new Set(expressIds)
+    setSelectedExpressIds(prev => {
+      if (![...removedSet].some(id => prev.has(id))) return prev
+      const next = new Set(prev)
+      removedSet.forEach(id => next.delete(id))
+      return next
+    })
+    setSelectedExpressId(prev => (prev !== null && removedSet.has(prev) ? null : prev))
+    const removedKeys = new Set(expressIds.map(id => `${objectId}::${id}`))
+    setHiddenExpressIds(prev => {
+      if (![...removedKeys].some(key => prev.has(key))) return prev
+      const next = new Set(prev)
+      removedKeys.forEach(key => next.delete(key))
+      return next
+    })
+    setIsolatedExpressIds(prev => {
+      if (![...removedSet].some(id => prev.has(id))) return prev
+      const next = new Set(prev)
+      removedSet.forEach(id => next.delete(id))
+      return next
+    })
+
+    // "Unload Selected"/"Reload IFC" persistence (2026-07-26, per Maro: "if
+    // i refresh, i expect the elements i unloaded to stay unloaded... give
+    // me an option to reload ifc which can identify the elements
+    // unloaded") — captured here, once, while handle.api is still the
+    // live/open WASM session for this exact file (removeElementsFromModel
+    // above never touches it, only the three.js side), so the "Reload IFC"
+    // picker can show a real name/type list later without ever re-parsing
+    // anything. Merged with (not replacing) whatever this file already had
+    // unloaded — Unload Selected is additive across repeated uses, same as
+    // Hide Selected already is.
+    const target = sceneObjects.find(o => o.id === objectId)
+    if (!target) return
+    if (brokenModelObjectIdsRef.current.has(objectId)) return
+    // Self-heals a stale/never-persisted fileId the same way
+    // persistActiveTransform/persistSiblingTransform already do (2026-07-28
+    // — this path used to just read target.fileId directly with no
+    // fallback at all, so a stale id from a since-replaced/re-imported
+    // namesake file 404'd here with no recovery, and a null fileId
+    // silently gave up with no error and no retry even if the upload had
+    // actually just finished concurrently).
+    let fileId = target.fileId
+    const modelFiles = await listModel3DFiles(selectedProject!.id).catch(() => null)
+    const currentFile = modelFiles?.find(f => f.name === target.name && f.kind === target.kind)
+    if (currentFile && currentFile.id !== fileId) {
+      fileId = currentFile.id
+      setSceneObjects(prev => prev.map(o => (o.id === objectId ? { ...o, fileId: currentFile.id } : o)))
+    } else if (!currentFile) {
+      brokenModelObjectIdsRef.current.add(objectId)
+      addImportError(
+        `Couldn't save the last edit to "${target.name}" — this model was never fully saved to the server ` +
+        `(likely a reload or navigation away while a large file was still uploading). Re-import it to fix this ` +
+        `and any other unsaved position/rotation/scale edits made since.`,
+      )
+      return
+    }
+    if (!fileId) return
+    const { getGuidFromExpressId, getElementTypeName, getElementName } = await import('./ifcModel')
+    const newEntries = await Promise.all(expressIds.map(async expressID => ({
+      guid: getGuidFromExpressId(handle, expressID) ?? String(expressID),
+      name: await getElementName(handle, expressID).catch(() => ''),
+      type_name: getElementTypeName(handle, expressID),
+    })))
+    const existing = unloadedElementsByFileId.get(fileId) ?? []
+    const merged = [...existing.filter(e => !newEntries.some(n => n.guid === e.guid)), ...newEntries]
+    try {
+      const updated = await updateUnloadedElements(fileId, merged)
+      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId!, updated.unloaded_elements ?? merged))
+    } catch (err) {
+      // Non-fatal (2026-07-26, same "fire-and-forget persistence, tell the
+      // user, don't roll back a scene edit that already visibly happened"
+      // convention as performUnloadIfc/persistModelFile elsewhere in this
+      // file) — the element really is unloaded either way; only "stays
+      // unloaded after a refresh" is at risk if this specific save failed.
+      console.error('Failed to persist unloaded elements', err)
+      addImportError(`"${target.name}": removed from view, but couldn't save that so it stays gone after a refresh (${err instanceof Error ? err.message : String(err)}).`)
+    }
+  }
+
+  // Confirmation state for unloading specific selected elements that still
+  // have links/keyframes attached — the element-scoped sibling of
+  // pendingUnload above; null means no prompt showing. UnloadModelDialog.tsx
+  // is fully generic (name/linkCount/keyframeCount + 3 callbacks), reused
+  // as-is rather than building a second near-identical modal.
+  const [pendingElementUnload, setPendingElementUnload] = useState<{
+    objectId: string; expressIds: number[]; linkIds: string[]; keyframeIds: string[]
+  } | null>(null)
+
+  const handleUnloadSelected = async () => {
+    if (!activeObjectId || selectedExpressIds.size === 0) return
+    const handle = getIfcHandleFor(activeObjectId)
+    if (!handle) return
+    const expressIds = [...selectedExpressIds]
+    const { linkIds, keyframeIds } = await resolveLinkedDataForElements(handle, expressIds)
+    if (linkIds.length === 0 && keyframeIds.length === 0) {
+      await performUnloadElements(activeObjectId, expressIds)
+      return
+    }
+    setPendingElementUnload({ objectId: activeObjectId, expressIds, linkIds, keyframeIds })
+  }
+
+  const handleConfirmElementUnload = (deleteLinks: boolean) => {
+    if (!pendingElementUnload) return
+    const { objectId, expressIds, linkIds, keyframeIds } = pendingElementUnload
+    setPendingElementUnload(null)
+    performUnloadElements(objectId, expressIds)
+    if (deleteLinks) {
+      linkIds.forEach(handleUnlinkElement)
+      keyframeIds.forEach(keyframeId => elementKeyframes.remove(keyframeId))
+    }
+  }
+
+  // "Reload IFC" (2026-07-26, per Maro: "give me an option to reload ifc
+  // which can identify the elements unloaded and i can choose which ones
+  // to reload") — which model's own ReloadIfcDialog is currently open;
+  // null means none. IfcDataPanel.tsx's own per-model row only shows the
+  // button that sets this when unloadedElementsByFileId actually has
+  // something for that file, so there's always something to pick from
+  // once this is non-null.
+  const [reloadIfcTarget, setReloadIfcTarget] = useState<{ objectId: string; fileId: string; fileName: string } | null>(null)
+
+  // Full re-download + re-parse of the same file (2026-07-26, per Maro's
+  // own answer when asked to choose over a live-patch: "simple and safe...
+  // reuses the exact same loading path as a normal import"), not a splice
+  // into the already-loaded batch — see viewport3D's/elementBatching.ts's
+  // own already-fragile BatchedMesh instancing internals for why that
+  // alternative was avoided. guidsToRestore are the ones the dialog's
+  // checkboxes marked "bring back"; anything in this file's own
+  // unloadedElementsByFileId NOT in that list stays excluded on the fresh
+  // handle, same as a normal restore-on-mount would apply it.
+  //
+  // Any selection/isolate/hide state that referenced the *old* object id
+  // is dropped rather than migrated to the new one (the old model's own
+  // WASM session — and its expressID numbering — genuinely doesn't exist
+  // anymore once a fresh loadIfcModel replaces it) — the same "you'll
+  // need to re-select afterward" trade-off a plain unload-then-reimport
+  // already has today, and this is a deliberate, occasional action, not a
+  // hot-path click that trade-off would actually sting on.
+  const handleReloadIfc = async (guidsToRestore: string[]) => {
+    if (!reloadIfcTarget) return
+    const { objectId, fileId, fileName } = reloadIfcTarget
+    setReloadIfcTarget(null)
+    const oldHandle = getIfcHandleFor(objectId)
+    if (!oldHandle) return
+    try {
+      const blob = await downloadModel3DFile(fileId)
+      const freshFile = new File([blob], fileName)
+      const { loadIfcModel, disposeIfcModel, getExpressIdFromGuid } = await import('./ifcModel')
+      const handle = await loadIfcModel(freshFile)
+
+      const wholeFileTransform = elementTransformsRef.current.find(t => t.model3d_file_id === fileId && t.element_ref === null)
+      applyElementTransform(handle.object, wholeFileTransform)
+      const perElementTransforms = elementTransformsRef.current.filter(t => t.model3d_file_id === fileId && t.element_ref !== null)
+      if (perElementTransforms.length > 0) {
+        const byExpressId = new Map<number, ElementTransform>()
+        for (const t of perElementTransforms) {
+          const expressId = getExpressIdFromGuid(handle, t.element_ref as string)
+          if (expressId !== undefined) byExpressId.set(expressId, t)
+        }
+        if (byExpressId.size > 0) {
+          handle.object.traverse(child => {
+            const t = byExpressId.get(child.userData.expressID)
+            if (t) applyElementTransform(child, t)
+          })
+        }
+      }
+
+      const stillExcluded = (unloadedElementsByFileId.get(fileId) ?? []).filter(e => !guidsToRestore.includes(e.guid))
+      const excludeExpressIds = stillExcluded
+        .map(e => getExpressIdFromGuid(handle, e.guid))
+        .filter((expressId): expressId is number => expressId !== undefined)
+      if (excludeExpressIds.length > 0) removeElementsFromModel(handle.object, excludeExpressIds)
+
+      const oldSourceUpAxis = sceneObjects.find(o => o.id === objectId)?.sourceUpAxis ?? 'z'
+      disposeIfcModel(oldHandle)
+      const newId = `ifc-${handle.modelID}`
+      handle.object.userData.sceneObjectId = newId
+      setIfcHandles(prev => [...prev.filter(h => h !== oldHandle), handle])
+      setSceneObjects(prev => [
+        ...prev.filter(o => o.id !== objectId),
+        { id: newId, name: fileName, kind: 'ifc' as const, sourceUpAxis: oldSourceUpAxis, object: handle.object, fileId },
+      ])
+      setActiveIfcModelId(prev => (prev === objectId ? newId : prev))
+      setActiveObjectId(prev => (prev === objectId ? newId : prev))
+      setSelectedObjectIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
+      setSelectedExpressIds(new Set())
+      setSelectedExpressId(null)
+      setIsolatedObjectIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
+      setHiddenIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
+
+      const updated = await updateUnloadedElements(fileId, stillExcluded)
+      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId, updated.unloaded_elements ?? stillExcluded))
+    } catch (err) {
+      console.error('Failed to reload IFC model', err)
+      addImportError(`Failed to reload "${fileName}" (${err instanceof Error ? err.message : String(err)}).`)
+    }
+  }
+
   const toggleMeshVisible = (id: string) => {
     setHiddenIds(prev => {
       const next = new Set(prev)
@@ -3205,25 +3958,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // reasoning.
   const [customTextures, setCustomTextures] = useState<Record<string, CustomTextureSet>>({})
   const [textureError, setTextureError] = useState<string | null>(null)
-  const handleUploadTexture = async (objectId: string, slot: TextureSlot, file: File) => {
-    try {
-      setTextureError(null)
-      const value = await loadCustomTexture(file, slot)
-      setCustomTextures(prev => ({ ...prev, [objectId]: { ...prev[objectId], [slot]: value } }))
-    } catch (err) {
-      setTextureError(err instanceof Error ? err.message : 'Failed to load texture file')
-    }
-  }
-  const handleClearTexture = (objectId: string, slot: TextureSlot) => {
-    setCustomTextures(prev => {
-      const current = prev[objectId]
-      if (!current?.[slot]) return prev
-      current[slot]?.texture.dispose()
-      const nextSet = { ...current }
-      delete nextSet[slot]
-      return { ...prev, [objectId]: nextSet }
-    })
-  }
+  // Manual per-element Opacity (2026-07-26, per Maro: "allow for
+  // transparency setting (0-1) for materials so i can simply make the
+  // window surfaces less opaque instead of replacing the materials
+  // completely") — a plain scalar sibling to customTextures, not a new
+  // CustomTextureSet slot: opacity is a real material property with no
+  // asset to upload/clear/link/preset, so it doesn't need any of that
+  // machinery. Same ownerKey convention (`${objectId}::${expressID}` for
+  // one IFC sub-element, else the whole object id) — absent = 1 (fully
+  // opaque, unchanged from before this existed). Applied directly to every
+  // currently-selected element at once (resolveActiveTextureKeys, below —
+  // the same bulk-target resolution Clear Materials/Apply to Linked
+  // already use), not gated behind a separate "Apply to Linked" click:
+  // unlike an uploaded texture (a distinct asset worth deliberately
+  // choosing to share), a single 0-1 slider value has no real "just the
+  // primary element" use case worth a second step.
+  const [customOpacity, setCustomOpacity] = useState<Record<string, number>>({})
   // Adapters for PropertiesPanel's Material/Texture section (2026-07-11,
   // per Maro: "move... object material and texture settings in the 3d view
   // properties... so if i select an object, 3d or ifc, i can see and
@@ -3232,11 +3982,50 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // rather than threading an objectId through every call site; these just
   // supply activeObjectId to the id-keyed handlers above. A no-op if
   // nothing's selected (the section isn't rendered in that case anyway).
-  const handleUploadActiveTexture = (slot: TextureSlot, file: File) => {
-    if (activeTextureKey) handleUploadTexture(activeTextureKey, slot, file)
+  // Multi-target (2026-07-29 fix, per Maro, after a real incident: box-
+  // selecting only the columns and applying a material changed the slabs
+  // too, even though they were never selected) — a real multi-element
+  // selection has no single primary expressID (isElementTransform/
+  // activeTextureKey both fall back to the *whole object* the instant more
+  // than one sub-element is picked, see resolveActiveTextureKeys' own
+  // header), so writing through activeTextureKey alone landed every one of
+  // these edits on the whole-model override instead of the elements
+  // actually selected. Loops resolveActiveTextureKeys() the same way
+  // handleClearAllActiveTextures/handleOpacityChange already do, sharing one
+  // loaded texture across every selected element's own key — same sharing
+  // convention handleApplyToLinkedMaterial below already established.
+  const handleUploadActiveTexture = async (slot: TextureSlot, file: File) => {
+    const keys = resolveActiveTextureKeys()
+    if (keys.length === 0) return
+    try {
+      setTextureError(null)
+      const value = await loadCustomTexture(file, slot)
+      setCustomTextures(prev => {
+        const next = { ...prev }
+        for (const key of keys) next[key] = { ...next[key], [slot]: value }
+        return next
+      })
+    } catch (err) {
+      setTextureError(err instanceof Error ? err.message : 'Failed to load texture file')
+    }
   }
   const handleClearActiveTexture = (slot: TextureSlot) => {
-    if (activeTextureKey) handleClearTexture(activeTextureKey, slot)
+    const keys = resolveActiveTextureKeys()
+    if (keys.length === 0) return
+    setCustomTextures(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const key of keys) {
+        const current = next[key]
+        if (!current?.[slot]) continue
+        current[slot]?.texture.dispose()
+        const nextSet = { ...current }
+        delete nextSet[slot]
+        next[key] = nextSet
+        changed = true
+      }
+      return changed ? next : prev
+    })
   }
   // Tile Size/Rotation's own forced re-render (2026-07-11) — TextureFields.tsx
   // mutates each slot's live THREE.Texture.repeat/.rotation directly (its
@@ -3257,18 +4046,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // if i choose i can toggle between different materials I've saved and
   // apply the one i want while not losing the original ones") — same
   // project-scoped library pattern as animationProfiles above. Applying a
-  // preset writes into the exact same customTextures slot per-element
-  // texture editing already uses (activeTextureKey), so it's
-  // indistinguishable from a fresh manual upload from this point on, and
-  // the element's true original material (elementBaseline.ts) is never
-  // touched by it either way.
+  // preset writes into the exact same customTextures slots per-element
+  // texture editing already uses (resolveActiveTextureKeys — every
+  // currently-selected element, not just the primary one; 2026-07-29 fix,
+  // see that function's own header for the box-select-columns-recolours-
+  // slabs incident this fixes), so it's indistinguishable from a fresh
+  // manual upload from this point on, and the element's true original
+  // material (elementBaseline.ts) is never touched by it either way.
   const materialPresets = useMaterialPresets(selectedProject?.id)
   const handleApplyMaterialPreset = async (preset: MaterialPreset) => {
-    if (!activeTextureKey) return
+    const keys = resolveActiveTextureKeys()
+    if (keys.length === 0) return
     try {
       setTextureError(null)
       const textureSet = await loadPresetAsTextureSet(preset)
-      setCustomTextures(prev => ({ ...prev, [activeTextureKey]: { ...prev[activeTextureKey], ...textureSet } }))
+      setCustomTextures(prev => {
+        const next = { ...prev }
+        for (const key of keys) next[key] = { ...next[key], ...textureSet }
+        return next
+      })
     } catch {
       setTextureError('Failed to load material preset')
     }
@@ -3371,9 +4167,26 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Respects the same "Hide Archived" preference Scheduling.tsx's own
+  // Activities tab already persists (2026-07-26 fix, per Maro: "i hid it
+  // but i see still see it in table in 4d" — this window fetches its own
+  // separate `activities` list entirely independent of Scheduling's, so
+  // toggling Hide Archived there never touched what the 4D Activity Table/
+  // Gantt Chart windows render at all). A plain, uncached localStorage read
+  // rather than useState — FourD stays persistently mounted across
+  // navigation (App.tsx's PersistentFourD) while Scheduling is a normal
+  // route that mounts/unmounts, so caching this in state here would go
+  // stale the moment the user toggles it over on the Scheduling page and
+  // comes back without this component ever re-mounting to pick up a fresh
+  // initial read.
+  const hideArchivedInViewport = localStorage.getItem('prosota_scheduling_hide_archived') === 'true'
+  const scheduleWindowActivities = useMemo(
+    () => (hideArchivedInViewport ? activities.filter(a => !a.is_archived && !a.is_archive_container) : activities),
+    [activities, hideArchivedInViewport],
+  )
   const scheduleVisibleActivities = useMemo(
-    () => computeVisibleActivities(activities, scheduleCollapsedIds),
-    [activities, scheduleCollapsedIds],
+    () => computeVisibleActivities(scheduleWindowActivities, scheduleCollapsedIds),
+    [scheduleWindowActivities, scheduleCollapsedIds],
   )
 
   // Native scrollTop mirroring between the Activity Table and Gantt windows
@@ -3597,6 +4410,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // self-heal comment already says it needs to cover — it just never
     // got the chance to run.
     if (!activeTransformObject || !activeSceneObject) return
+    if (brokenModelObjectIdsRef.current.has(activeSceneObject.id)) return
     const modelFileId = activeSceneObject.fileId
     const sceneObjectId = activeSceneObject.id
     const sceneObjectName = activeSceneObject.name
@@ -3637,7 +4451,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         modelFileIdToUse = current.id
         setSceneObjects(prev => prev.map(o => (o.id === sceneObjectId ? { ...o, fileId: current.id } : o)))
       } else if (!current) {
-        setImportError(
+        brokenModelObjectIdsRef.current.add(sceneObjectId)
+        addImportError(
           `Couldn't save the last edit to "${sceneObjectName}" — this model was never fully saved to the server ` +
           `(likely a reload or navigation away while a large file was still uploading). Re-import it to fix this ` +
           `and any other unsaved position/rotation/scale edits made since.`,
@@ -3674,7 +4489,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         ]
       } catch (err) {
         console.error('Failed to save transform', err)
-        setImportError(`Couldn't save the last edit to "${sceneObjectName}" (${sectionBoxErrorMessage(err, 'unknown error')}).`)
+        addImportError(`Couldn't save the last edit to "${sceneObjectName}" (${sectionBoxErrorMessage(err, 'unknown error')}).`)
       }
     }
 
@@ -3685,9 +4500,82 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Sibling transforms from a multi-object gizmo drag (2026-07-28, per
+  // Maro — see Viewport3D.tsx's own handleGizmoChange header: dragging
+  // with several objects selected now moves all of them, not just the
+  // single active one). Mirrors persistActiveTransform's own self-heal +
+  // save logic above, but always whole-object (element_ref null) — a
+  // sibling in a multi-select is itself a whole scene object, never an IFC
+  // sub-element (selectedExpressIds is a separate, single-object-scoped
+  // concept unrelated to this). One independent debounce timer per
+  // sibling id, keyed in this Map, so several objects moved in the same
+  // drag each get their own 700ms window instead of clobbering a single
+  // shared timer the way persistActiveTransform's own ref would.
+  const pendingSiblingTransformSavesRef = useRef<Map<string, { timeout: ReturnType<typeof setTimeout>; flush: () => void }>>(new Map())
+  const persistSiblingTransform = (sceneObject: SceneObject) => {
+    if (brokenModelObjectIdsRef.current.has(sceneObject.id)) return
+    const doSave = async () => {
+      let modelFileIdToUse = sceneObject.fileId
+      const files = await listModel3DFiles(selectedProject!.id).catch(() => null)
+      const current = files?.find(f => f.name === sceneObject.name && f.kind === sceneObject.kind)
+      if (current && current.id !== modelFileIdToUse) {
+        modelFileIdToUse = current.id
+        setSceneObjects(prev => prev.map(o => (o.id === sceneObject.id ? { ...o, fileId: current.id } : o)))
+      } else if (!current) {
+        brokenModelObjectIdsRef.current.add(sceneObject.id)
+        addImportError(
+          `Couldn't save the last edit to "${sceneObject.name}" — this model was never fully saved to the server ` +
+          `(likely a reload or navigation away while a large file was still uploading). Re-import it to fix this ` +
+          `and any other unsaved position/rotation/scale edits made since.`,
+        )
+        return
+      }
+      if (!modelFileIdToUse) return
+      try {
+        const object = sceneObject.object
+        const currentPivot = getPivot(object)
+        const currentPivotRotation = getPivotRotation(object)
+        const saved = await saveElementTransform({
+          model3d_file_id: modelFileIdToUse, element_ref: null,
+          position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
+          rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
+          scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
+          pivot_x: currentPivot?.x ?? null, pivot_y: currentPivot?.y ?? null, pivot_z: currentPivot?.z ?? null,
+          pivot_rotation_x: currentPivotRotation?.x ?? null,
+          pivot_rotation_y: currentPivotRotation?.y ?? null,
+          pivot_rotation_z: currentPivotRotation?.z ?? null,
+        })
+        elementTransformsRef.current = [
+          ...elementTransformsRef.current.filter(t => !(t.model3d_file_id === saved.model3d_file_id && t.element_ref === saved.element_ref)),
+          saved,
+        ]
+      } catch (err) {
+        console.error('Failed to save sibling transform', err)
+        addImportError(`Couldn't save the last edit to "${sceneObject.name}" (${sectionBoxErrorMessage(err, 'unknown error')}).`)
+      }
+    }
+    const existing = pendingSiblingTransformSavesRef.current.get(sceneObject.id)
+    if (existing) clearTimeout(existing.timeout)
+    pendingSiblingTransformSavesRef.current.set(sceneObject.id, {
+      flush: doSave,
+      timeout: setTimeout(() => { pendingSiblingTransformSavesRef.current.delete(sceneObject.id); doSave() }, 700),
+    })
+  }
+
   const handleTransformChange = () => {
     setTransformTick(t => t + 1)
     persistActiveTransform()
+    // Every other selected object moved right alongside the active one
+    // this frame (Viewport3D.tsx's own handleGizmoChange) — persist each
+    // of them too, not just the active object persistActiveTransform
+    // already covers.
+    if (selectedObjectIds.size > 1 && activeObjectId) {
+      for (const id of selectedObjectIds) {
+        if (id === activeObjectId) continue
+        const sceneObject = sceneObjects.find(o => o.id === id)
+        if (sceneObject) persistSiblingTransform(sceneObject)
+      }
+    }
   }
 
   // Timeline playback's own per-frame re-render signal (TimelinePlayback's
@@ -3798,7 +4686,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // fire on its own (2026-07-11) — without this, editing object A then
   // switching to object B within that window would clearTimeout A's
   // still-pending save (persistActiveTransform above) and silently lose
-  // it. Also covers unmount, via the same cleanup mechanism.
+  // it. Also covers unmount, via the same cleanup mechanism. Extended
+  // 2026-07-28 to flush every still-pending sibling save too (a multi-
+  // object drag's own persistSiblingTransform, above) — same reasoning,
+  // one Map entry per sibling instead of the single ref the active object
+  // uses.
   useEffect(() => {
     return () => {
       if (pendingTransformSaveRef.current) {
@@ -3806,6 +4698,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         pendingTransformSaveRef.current.flush()
         pendingTransformSaveRef.current = null
       }
+      for (const pending of pendingSiblingTransformSavesRef.current.values()) {
+        clearTimeout(pending.timeout)
+        pending.flush()
+      }
+      pendingSiblingTransformSavesRef.current.clear()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeObjectId, selectedExpressId])
@@ -3860,16 +4757,34 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // resolveActiveTextureKeys() *immediately*, during render, unlike
   // handleClearAllActiveTextures itself (only invoked later, on click,
   // by which point the whole render's `let`/`const` chain has already run
-  // once top-to-bottom) — so it genuinely needs isElementTransform to
+  // once top-to-bottom) — so it genuinely needs activeIfcHandle to
   // already exist at the point this line executes, not just by the time a
   // user clicks something.
+  //
+  // Gated on activeIfcHandle, NOT isElementTransform (2026-07-29 fix, per
+  // Maro, after a real incident: box-selecting only the columns and
+  // applying a material changed the slabs too) — isElementTransform is only
+  // ever true for a genuine single-primary-element selection
+  // (handleSelectExpressId/handleSelectExpressIds both null out
+  // selectedExpressId the instant more than one expressID ends up selected,
+  // by design, so a click doesn't pin "primary" to whichever one happened
+  // to resolve last). That made this multi-key branch dead code for every
+  // *real* multi-element selection — a box-select or Select by Type/Storey
+  // covering more than one element always fell through to the
+  // single-activeTextureKey branch below, which resolves to the *whole
+  // object* the moment isElementTransform is false. Every write that used
+  // to go through this (Clear Materials, Opacity, and now Material Preset/
+  // texture upload/clear too) landed on the whole-model override instead of
+  // just the selected elements. activeIfcHandle only requires "this
+  // selection belongs to some loaded IFC model" — the actual per-element
+  // fan-out still depends on selectedExpressIds itself, same as before.
   const resolveActiveTextureKeys = (): string[] =>
-    isElementTransform && activeObjectId && selectedExpressIds.size > 0
+    activeIfcHandle && activeObjectId && selectedExpressIds.size > 0
       ? [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
       : activeTextureKey ? [activeTextureKey] : []
   const hasAnyActiveTextureOverride = resolveActiveTextureKeys().some(key => {
     const set = customTextures[key]
-    return set && Object.keys(set).length > 0
+    return (set && Object.keys(set).length > 0) || customOpacity[key] !== undefined
   })
   const handleClearAllActiveTextures = () => {
     const keys = resolveActiveTextureKeys()
@@ -3885,6 +4800,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         changed = true
       }
       return changed ? next : prev
+    })
+    // Opacity rides along with Clear Materials (2026-07-26) — it's a
+    // manual departure from "this element's original imported appearance"
+    // same as any texture slot, even though it lives in its own sibling
+    // map rather than a CustomTextureSet.
+    setCustomOpacity(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const key of keys) {
+        if (next[key] === undefined) continue
+        delete next[key]
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }
+
+  // See customOpacity's own declaration header for the full "why a bulk,
+  // no-separate-apply-step slider" reasoning.
+  const handleOpacityChange = (value: number) => {
+    const keys = resolveActiveTextureKeys()
+    if (keys.length === 0) return
+    setCustomOpacity(prev => {
+      const next = { ...prev }
+      for (const key of keys) next[key] = value
+      return next
     })
   }
 
@@ -4070,7 +5011,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'schedule':
         return (
           <ScheduleWindow
-            activities={activities}
+            activities={scheduleWindowActivities}
             visibleActivities={scheduleVisibleActivities}
             collapsedIds={scheduleCollapsedIds}
             onToggleCollapsed={toggleScheduleCollapsed}
@@ -4165,7 +5106,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             pathFollowers={pathFollowers}
             annotations={resolvedAnnotations}
             animationProfiles={animationProfiles.profiles}
+            paths={paths}
+            zones={zones}
             onSelectActor={handleSelectActor}
+            speedDaysPerSecond={speedDaysPerSecond}
+            onSpeedChange={setSpeedDaysPerSecond}
+            timeDisplayMode={timeDisplayMode}
+            onTimeDisplayModeChange={handleTimeDisplayModeChange}
+            fps={fps}
+            onFpsChange={handleFpsChange}
           />
         )
     }
@@ -4176,7 +5125,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       <WindowChrome
         key={key}
         title={WINDOW_LABELS[key]}
-        subtitle={key === 'schedule' ? `${activities.length} activit${activities.length === 1 ? 'y' : 'ies'} · read-only` : undefined}
+        subtitle={key === 'schedule' ? `${scheduleWindowActivities.length} activit${scheduleWindowActivities.length === 1 ? 'y' : 'ies'} · read-only` : undefined}
         headerActions={(
           <>
             {(key === 'schedule' || key === 'gantt') && (
@@ -4342,6 +5291,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           paths={resolvedPaths}
           error={pathError}
           addingPointsForPathId={addingPointsForPathId}
+          upAxis={settings.upAxis}
           bindTarget={pathBindTarget}
           followers={pathFollowers}
           onCreate={handleCreatePath}
@@ -4354,6 +5304,37 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onBind={pathId => { if (pathBindTarget) handleBindPathFollower(pathId, pathBindTarget.kind, pathBindTarget.ref) }}
           onUnbind={handleUnbindPathFollower}
           onToggleOrient={handleTogglePathFollowerOrient}
+          onSetHeadingOffset={handleSetPathFollowerHeadingOffset}
+          onUpdateStyle={handleUpdatePath}
+          onSetElevation={handleSetPathElevation}
+          animWindows={pathAnimWindows}
+          format={timelineRange ? { scheduleStart: timelineRange.start, timeDisplayMode, speedDaysPerSecond, fps } : null}
+          onKeyAnimStart={id => handleKeyAnim('path', id, 'anim_start')}
+          onKeyAnimEnd={id => handleKeyAnim('path', id, 'anim_end')}
+        />
+      ),
+    })
+  }
+  if (zonesPanelOpen) {
+    dockablePanels.push({
+      id: 'zones', label: 'Zones', dock: zonesPanelDock,
+      onToggleDock: toggleZonesPanelDock, onClose: toggleZonesPanel,
+      content: (
+        <ZonesPanel
+          zones={resolvedZones}
+          error={zoneError}
+          addingPointsForZoneId={addingPointsForZoneId}
+          onCreate={handleCreateZone}
+          onRename={handleRenameZone}
+          onToggleVisible={handleToggleZoneVisible}
+          onDelete={handleDeleteZone}
+          onToggleAddPoints={handleToggleAddZonePoints}
+          onRemoveLastPoint={handleRemoveLastZonePoint}
+          onUpdateStyle={handleUpdateZone}
+          animWindows={zoneAnimWindows}
+          format={timelineRange ? { scheduleStart: timelineRange.start, timeDisplayMode, speedDaysPerSecond, fps } : null}
+          onKeyAnimStart={id => handleKeyAnim('zone', id, 'anim_start')}
+          onKeyAnimEnd={id => handleKeyAnim('zone', id, 'anim_end')}
         />
       ),
     })
@@ -4468,6 +5449,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       linkedObjectIds={linkedMeshObjectIds}
       linkedElementKeys={linkedIfcElementKeys}
       onSelectUnassigned={handleSelectUnassigned}
+      onFilterApply={handleFilterApply}
       isolateMode={isolateMode}
       isolatedObjectIds={isolatedObjectIds}
       isolatedExpressIds={isolatedExpressIds}
@@ -4475,6 +5457,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleIsolate={handleToggleIsolate}
       onShowAll={handleShowAll}
       onHideSelected={handleHideSelected}
+      onUnloadSelected={handleUnloadSelected}
       linkedActivitiesWidget={
         <LinkedActivitiesWidget
           activities={activities.filter(a => isolatedLinkedActivityIds.has(a.id))}
@@ -4491,6 +5474,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       environmentUrl={customEnvironment?.url ?? null}
       onEnvironmentError={handleEnvironmentError}
       customTextures={customTextures}
+      customOpacity={customOpacity}
       cameraSyncRef={cameraSyncRef}
       compareBaselineOpen={compareBaselineOpen}
       baselineCanvasRef={baselineCanvasRef}
@@ -4519,11 +5503,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       applyCameraViewRequest={applyCameraViewRequest}
       onExportVideo={handleExportVideoUpload}
       paths={resolvedPaths}
+      pathAnimWindows={pathAnimWindows}
       pathFollowers={pathFollowers}
       addingPointsForPathId={addingPointsForPathId}
       onPathDragMove={handlePathDragMove}
       onPathDragEnd={handlePathDragEnd}
       onAddPathPoint={handleAddPathPoint}
+      zones={resolvedZones}
+      zoneAnimWindows={zoneAnimWindows}
+      addingPointsForZoneId={addingPointsForZoneId}
+      onZoneDragMove={handleZoneDragMove}
+      onZoneDragEnd={handleZoneDragEnd}
+      onAddZonePoint={handleAddZonePoint}
       annotations={resolvedAnnotations}
       addingAnnotationKind={addingAnnotationKind}
       onPlaceAnnotation={handlePlaceAnnotation}
@@ -4626,6 +5617,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Paths
         </button>
         <button
+          onClick={toggleZonesPanel}
+          title="Filled, labeled ground-plane areas — project boundary, laydown/exclusion zones"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            zonesPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Zones
+        </button>
+        <button
           onClick={toggleAnnotationsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
             annotationsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -4678,24 +5678,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           ⬆ Import Model
         </button>
-        {importing && <span className="text-xs text-gray-400">Importing…</span>}
-        {(() => {
-          // Visible counterpart to the beforeunload guard above (2026-07-17,
-          // per Maro: "force a save and recall ifc after every refresh") —
-          // the browser prompt only ever fires at the moment of an actual
-          // refresh/close, which tells the user nothing while they're still
-          // deciding whether it's safe to leave. This makes "still saving"
-          // an ordinary, always-visible fact instead of a surprise dialog.
-          const pendingSaveCount = sceneObjects.filter(o => o.fileId === null).length
-          return pendingSaveCount > 0 ? (
-            <span
-              className="text-xs text-amber-600"
-              title="These model(s) are still uploading to the server — refreshing now would lose them. Wait for this to clear before reloading."
-            >
-              ⏳ Saving {pendingSaveCount} model{pendingSaveCount === 1 ? '' : 's'}…
-            </span>
-          ) : null
-        })()}
+        {importing && uploadProgress.size === 0 && <span className="text-xs text-gray-400">Importing…</span>}
+        {/* Visible counterpart to the beforeunload guard above (2026-07-17,
+            per Maro: "force a save and recall ifc after every refresh") —
+            the browser prompt only ever fires at the moment of an actual
+            refresh/close, which tells the user nothing while they're still
+            deciding whether it's safe to leave. A real byte-count
+            percentage per upload (2026-07-28, per Maro: "show a percentage
+            save") replaces the old plain "Saving N models…" count, which
+            said nothing about how far along any of them actually were. */}
+        {[...uploadProgress.values()].map(({ name, percent }, i) => (
+          <span
+            key={i}
+            className="text-xs text-amber-600"
+            title={`"${name}" is still uploading to the server — refreshing now would lose it. Wait for this to clear before reloading.`}
+          >
+            ⏳ {name} {percent}%
+          </span>
+        ))}
         {ifcHandles.length > 0 && (
           <button
             onClick={() => setScheduleWizardOpen(true)}
@@ -4705,9 +5705,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             Generate Schedule
           </button>
         )}
-        {importError && <span className="text-xs text-red-600">{importError}</span>}
         {textureError && <span className="text-xs text-red-600">{textureError}</span>}
         {linkError && <span className="text-xs text-red-600">{linkError}</span>}
+        {/* A collapsed badge, not a stack of permanent full-width banners
+            (2026-07-28, per Maro: "dont print that nonsense any more, its
+            unsightly" — see ImportErrorsBadge.tsx's own header). Same
+            toolbar row the old inline version used to sit below. */}
+        <ImportErrorsBadge
+          errors={importErrors}
+          onDismissOne={i => setImportErrors(prev => prev.filter((_, j) => j !== i))}
+          onDismissAll={() => setImportErrors([])}
+        />
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -4735,7 +5743,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onEditPivotChange={setEditPivot}
           snapToSurface={snapToSurface}
           onSnapToSurfaceChange={setSnapToSurface}
-          activeObjectTextures={activeTextureKey ? customTextures[activeTextureKey] : undefined}
+          /* First of resolveActiveTextureKeys(), not activeTextureKey (2026-07-29
+             fix, alongside the same function's write-path fix above) — for a
+             real multi-element selection activeTextureKey resolves to the
+             whole-object key, which nothing here writes to any more, so the
+             panel would otherwise show "no override" even right after
+             applying one. Showing the primary/first selected element's own
+             state keeps this preview honest about what a Clear click would
+             actually remove. */
+          activeObjectTextures={resolveActiveTextureKeys()[0] ? customTextures[resolveActiveTextureKeys()[0]] : undefined}
+          activeOpacity={resolveActiveTextureKeys()[0] ? customOpacity[resolveActiveTextureKeys()[0]] : undefined}
+          onOpacityChange={handleOpacityChange}
           onUploadTexture={handleUploadActiveTexture}
           onTextureFieldChange={handleTextureFieldChange}
           onClearAllTextures={handleClearAllActiveTextures}
@@ -4826,12 +5844,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onSelectExpressId={handleSelectExpressId}
           onSelectMany={handleSelectExpressIds}
           onUnloadIfc={requestUnloadModel}
+          unloadedCountByModelId={unloadedCountByModelId}
+          onReloadIfc={id => {
+            const target = sceneObjects.find(o => o.id === id)
+            if (target?.fileId) setReloadIfcTarget({ objectId: id, fileId: target.fileId, fileName: target.name })
+          }}
           meshImports={meshImports}
           hiddenIds={hiddenIds}
           onToggleMeshVisible={toggleMeshVisible}
           onUnloadMesh={requestUnloadModel}
           selectedObjectIds={selectedObjectIds}
           onSelectObject={handleSelectObject}
+          unsavedObjectIds={unsavedObjectIds}
           unitDisplay={ifcUnitDisplay}
           onUnitDisplayChange={setIfcUnitDisplay}
           activities={activities}
@@ -4844,7 +5868,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       </div>
       {pendingImports[0] && (
         <ImportModelDialog
-          file={pendingImports[0].file}
+          files={pendingImports[0]}
           kind="mesh"
           queuePosition={pendingImports.length > 1 ? { remaining: pendingImports.length } : undefined}
           onConfirm={handleConfirmImport}
@@ -4877,6 +5901,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onUnloadOnly={() => handleConfirmUnload(false)}
           onUnloadAndDelete={() => handleConfirmUnload(true)}
           onCancel={() => setPendingUnload(null)}
+        />
+      )}
+      {pendingElementUnload && (
+        <UnloadModelDialog
+          name={`${pendingElementUnload.expressIds.length} selected element${pendingElementUnload.expressIds.length === 1 ? '' : 's'}`}
+          linkCount={pendingElementUnload.linkIds.length}
+          keyframeCount={pendingElementUnload.keyframeIds.length}
+          onUnloadOnly={() => handleConfirmElementUnload(false)}
+          onUnloadAndDelete={() => handleConfirmElementUnload(true)}
+          onCancel={() => setPendingElementUnload(null)}
+        />
+      )}
+      {reloadIfcTarget && (
+        <ReloadIfcDialog
+          fileName={reloadIfcTarget.fileName}
+          unloadedElements={unloadedElementsByFileId.get(reloadIfcTarget.fileId) ?? []}
+          onReload={handleReloadIfc}
+          onCancel={() => setReloadIfcTarget(null)}
         />
       )}
     </div>

@@ -23,12 +23,19 @@ interface Props {
   // doesn't otherwise touch bulk selection.
   onSelectMany: (expressIDs: number[], additive: boolean, objectId: string) => void
   onUnloadIfc: (id: string) => void
+  // "Reload IFC" (2026-07-26) — passed straight through to IfcDataPanel.tsx;
+  // see that component's own doc comment on these two.
+  unloadedCountByModelId: Map<string, number>
+  onReloadIfc: (id: string) => void
   meshImports: MeshImportItem[]
   hiddenIds: Set<string>
   onToggleMeshVisible: (id: string) => void
   onUnloadMesh: (id: string) => void
   selectedObjectIds: Set<string>
   onSelectObject: (id: string | null, additive?: boolean) => void
+  // Passed straight through to both tabs — see IfcDataPanel.tsx's own
+  // unsavedObjectIds prop header for the full story.
+  unsavedObjectIds: Set<string>
   // Unit toggle for IfcDataPanel's Spatial Decomposition list — see
   // FourD.tsx's own ifcUnitDisplay state for why it's owned there and just
   // passed through here (2026-07-11, per Maro: "rewire units").
@@ -68,7 +75,8 @@ interface Props {
 // panel doesn't otherwise touch linking itself.
 export function DataPanel({
   open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
-  meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unitDisplay, onUnitDisplayChange,
+  unloadedCountByModelId, onReloadIfc,
+  meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
 }: Props) {
   if (!open) {
@@ -130,6 +138,9 @@ export function DataPanel({
           onSelect={onSelectExpressId}
           onSelectMany={onSelectMany}
           onUnload={onUnloadIfc}
+          unloadedCountByModelId={unloadedCountByModelId}
+          onReloadIfc={onReloadIfc}
+          unsavedObjectIds={unsavedObjectIds}
           selectedObjectIds={selectedObjectIds}
           onSelectWholeModel={selectWholeIfcModel}
           unitDisplay={unitDisplay}
@@ -149,6 +160,7 @@ export function DataPanel({
           onUnload={onUnloadMesh}
           selectedObjectIds={selectedObjectIds}
           onSelectObject={onSelectObject}
+          unsavedObjectIds={unsavedObjectIds}
           activities={activities}
           links={modelElementLinks}
           animationProfiles={animationProfiles}
