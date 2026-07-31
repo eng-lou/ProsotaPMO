@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 
-export type TransformKind = 'none' | 'translate' | 'scale' | 'rotate' | 'pop' | 'spiral' | 'fall'
+export type TransformKind = 'none' | 'translate' | 'scale' | 'rotate' | 'pop' | 'spiral' | 'fall' | 'grow'
 export type Axis = 'x' | 'y' | 'z'
 export type Direction = 1 | -1
 export type Trigger = 'on_start' | 'on_finish' | 'over_duration'
@@ -80,6 +80,33 @@ export const BUILTIN_PRESETS: { name: string; config: AnimationProfileConfig }[]
   { name: 'Rotate In Bounce X', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'rotate', axis: 'x', bounce: true } },
   { name: 'Rotate In Bounce Y', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'rotate', axis: 'y', bounce: true } },
   { name: 'Rotate In Bounce Z', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'rotate', axis: 'z', bounce: true } },
+  // Grow X/Y (2026-07-30, per Maro's own concrete-slab reference video —
+  // "how it forms from the right to the left") — a real materialise-across-
+  // its-own-footprint wipe (a moving world-space clip plane, see
+  // timelinePlayback.ts's own growProgress header), not a uniform opacity
+  // fade or a rigid-body slide-in the way every other preset above is.
+  // "X"/"Y" here follow this app's own established semantic-axis
+  // convention (AnnotationMarker.tsx's upVector/otherHorizontalVector) —
+  // X is always world X, Y is whichever horizontal axis isn't X once
+  // upAxis is resolved — rather than raw world Y, so "Grow Y" reads the
+  // same regardless of whether a project is Z-up or Y-up. direction
+  // flips which end the reveal starts from (1 = grows from the −axis end
+  // toward +, −1 = grows from + toward −, e.g. "right to left" if + reads
+  // as right on screen) — Grow -X/-Y give the flipped direction as its
+  // own named preset, same "Pop Up X" vs "Pop Up -X" precedent above,
+  // rather than a config field a user would have to find in the editor.
+  { name: 'Grow X', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'x' } },
+  { name: 'Grow -X', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'x', direction: -1 } },
+  { name: 'Grow Y', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'y' } },
+  { name: 'Grow -Y', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'y', direction: -1 } },
+  // Grow Z (per Maro: column formations) — same clip-plane wipe, but along
+  // the semantic *vertical* axis (growAxisWorldVector's own fallback
+  // branch already resolved this correctly for either upAxis convention,
+  // it just had no preset exposing it yet). direction 1 (default) grows
+  // bottom-to-top — a column pouring/casting upward out of its base — -1
+  // gives top-to-bottom for the rarer reverse case.
+  { name: 'Grow Z', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'z' } },
+  { name: 'Grow -Z', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'z', direction: -1 } },
   // Maro's own "remove site office" example — red while the demolition task
   // is ongoing, then gone: an on_finish trigger (the disappearance itself
   // is instant at the end of the task) with the colour held red across the

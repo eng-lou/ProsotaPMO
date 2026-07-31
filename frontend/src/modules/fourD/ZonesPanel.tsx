@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import type { Zone, ZoneAnimationMode, ZoneBorderStyle } from './zones'
+import type { Zone, ZoneAnimationMode, ZoneBorderStyle, ZoneShape } from './zones'
 import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
 
 type ZoneStylePatch = Partial<Pick<Zone,
-  'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' |
+  'radius' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' |
   'animate' | 'animation_loop' | 'animation_mode'
 >>
 
@@ -25,7 +25,7 @@ interface Props {
   // see PathsPanel.tsx's own matching props for the full rationale.
   animWindows: Map<string, { start: Date | null; end: Date | null }>
   format: DisplayFormat | null
-  onCreate: () => void
+  onCreate: (shape: ZoneShape) => void
   onRename: (id: string, name: string) => void
   onToggleVisible: (id: string) => void
   onDelete: (id: string) => void
@@ -96,25 +96,42 @@ function Item({
         )}
         <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
       </div>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <button
-          onClick={onToggleAddPoints}
-          className={`text-xs px-2 py-0.5 rounded border font-medium ${
-            addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-          }`}
-          title={addingPoints ? 'Click in the viewport to add corners — click again to stop' : 'Click points in the viewport to trace this area'}
-        >
-          {addingPoints ? 'Adding… (click viewport)' : '+ Point'}
-        </button>
-        <button
-          onClick={onRemoveLastPoint}
-          disabled={zone.points.length === 0}
-          className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
-        >
-          Undo last point
-        </button>
-        <span className="text-xs text-gray-400">{zone.points.length} pt{zone.points.length === 1 ? '' : 's'}</span>
-      </div>
+      {zone.shape === 'circle' ? (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={onToggleAddPoints}
+            className={`text-xs px-2 py-0.5 rounded border font-medium ${
+              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+            title={addingPoints ? 'Click in the viewport to place the center' : 'Click in the viewport to place (or move) the center'}
+          >
+            {addingPoints ? 'Click viewport…' : zone.points.length === 0 ? '+ Center' : 'Move center'}
+          </button>
+          <span className="text-xs text-gray-400">
+            {zone.points.length === 0 ? 'no center yet' : 'drag the center point in the viewport, or edit Radius below'}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={onToggleAddPoints}
+            className={`text-xs px-2 py-0.5 rounded border font-medium ${
+              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+            title={addingPoints ? 'Click in the viewport to add corners — click again to stop' : 'Click points in the viewport to trace this area'}
+          >
+            {addingPoints ? 'Adding… (click viewport)' : '+ Point'}
+          </button>
+          <button
+            onClick={onRemoveLastPoint}
+            disabled={zone.points.length === 0}
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          >
+            Undo last point
+          </button>
+          <span className="text-xs text-gray-400">{zone.points.length} pt{zone.points.length === 1 ? '' : 's'}</span>
+        </div>
+      )}
       <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
         {styleOpen ? '▾' : '▸'} Style
       </button>
@@ -173,6 +190,17 @@ function Item({
                 />
               </label>
             </>
+          )}
+          {zone.shape === 'circle' && (
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="World-unit radius of the clearance circle, e.g. a crane's swing radius">
+              <span className="w-16 shrink-0">Radius</span>
+              <input
+                type="number" min={0.01} step={0.5}
+                value={zone.radius}
+                onChange={e => onUpdateStyle({ radius: Number(e.target.value) })}
+                className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              />
+            </label>
           )}
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
             <span className="w-16 shrink-0">Elevation</span>
@@ -262,16 +290,26 @@ export function ZonesPanel({
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Zones</span>
-        <button onClick={onCreate} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">
-          + Add
-        </button>
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white gap-1.5 flex-wrap">
+        <span className="text-xs text-gray-500 shrink-0">Zones</span>
+        <div className="flex items-center gap-1">
+          <button onClick={() => onCreate('polygon')} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">
+            + Zone
+          </button>
+          {/* Radial/clearance zone (2026-07-30, per Maro: "the radial zone
+              for things like crane clearance etc") — shape is fixed at
+              creation (zone.py's own docstring), so this is a separate
+              button rather than a switchable field, same "+ Placemark"/
+              "+ Comment" precedent AnnotationsPanel.tsx already uses. */}
+          <button onClick={() => onCreate('circle')} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50" title="A circular clearance zone, e.g. a crane's swing radius">
+            + Circle
+          </button>
+        </div>
       </div>
       {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
       {zones.length === 0 ? (
         <p className="px-3 py-3 text-xs text-gray-400">
-          "+ Add" a zone, then "+ Point" and click in the viewport to trace its boundary.
+          "+ Zone" then "+ Point" to trace a boundary, or "+ Circle" then click once to place a clearance radius.
         </p>
       ) : (
         <div className="divide-y divide-gray-100">

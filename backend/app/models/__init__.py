@@ -61,6 +61,7 @@ from app.models.element_parent import ElementParent
 from app.models.element_split import ElementSplit
 from app.models.measurement import Measurement
 from app.models.dashboard_layout import DashboardLayout
+from app.models.radial_chart import RadialChart
 
 __all__ = [
     "Base",
@@ -134,4 +135,5 @@ __all__ = [
     "ElementSplit",
     "Measurement",
     "DashboardLayout",
+    "RadialChart",
 ]

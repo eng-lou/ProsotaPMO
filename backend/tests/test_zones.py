@@ -28,10 +28,42 @@ async def test_create_and_list_zone(client: AsyncClient, project: Project):
     assert created["animate"] is False
     assert created["animation_loop"] is False
     assert created["animation_mode"] == "draw"
+    assert created["shape"] == "polygon"
+    assert created["radius"] == 5.0
     assert len(created["points"]) == 4
 
     listing = (await client.get("/api/v1/zones/", params={"project_id": str(project.id)})).json()
     assert any(z["id"] == created["id"] for z in listing)
+
+
+async def test_create_circle_zone(client: AsyncClient, project: Project):
+    # Radial/clearance zone (2026-07-30, per Maro: "the radial zone for
+    # things like crane clearance etc") — shape="circle" stores exactly
+    # one point (the center) plus radius; a real caller (ZonesPanel.tsx's
+    # own "+ Circle" button) always sends both together.
+    resp = await client.post("/api/v1/zones/", json={
+        "project_id": str(project.id), "shape": "circle", "points": [{"x": 3.0, "y": 0.0, "z": 4.0}], "radius": 8.0,
+    })
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["shape"] == "circle"
+    assert created["radius"] == 8.0
+    assert len(created["points"]) == 1
+
+
+async def test_update_zone_radius(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/zones/", json={
+        "project_id": str(project.id), "shape": "circle", "points": [{"x": 0.0, "y": 0.0, "z": 0.0}],
+    })).json()
+
+    resp = await client.patch(f"/api/v1/zones/{created['id']}", json={"radius": 12.5})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["radius"] == 12.5
+
+
+async def test_zone_radius_must_be_positive(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/zones/", json={"project_id": str(project.id), "radius": 0})
+    assert resp.status_code == 422
 
 
 async def test_rewrite_points_and_style(client: AsyncClient, project: Project):

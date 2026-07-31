@@ -585,6 +585,14 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       if (!z.animate) continue
       animatableActors_.add(add('zone', z.id))
     }
+    // Same "binding alone is immediately visible" reasoning, for an
+    // Annotation's own whole-marker reveal window (2026-08-06, per Maro:
+    // "how the leader works and how its animated which should also have
+    // the ability to be animated independent of tasks").
+    for (const a of annotations) {
+      if (!a.animate) continue
+      animatableActors_.add(add('annotation', a.id))
+    }
     for (const actor of byKey.values()) actor.label = labelFor(actor.sourceKind, actor.elementRef)
 
     return {

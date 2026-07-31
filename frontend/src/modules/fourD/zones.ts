@@ -17,6 +17,15 @@ export interface ZonePoint {
 // enforces it beyond the value ZonesPanel.tsx's own <select> writes.
 export type ZoneBorderStyle = 'solid' | 'dashed'
 
+// 2026-07-30, per Maro: "the radial zone for things like crane clearance
+// etc" — a second footprint kind alongside the original "polygon": circle
+// zones store exactly one point (the center) in `points` and use `radius`
+// instead of tracing corners. See zone.py's own matching docstring for why
+// this is a fixed-at-creation `shape` field rather than inferred from
+// points.length, and ZonesPanel.tsx's "+ Zone"/"+ Circle" buttons for the
+// only place it's actually chosen.
+export type ZoneShape = 'polygon' | 'circle'
+
 // 'draw' | 'flash' — same loose-string convention. See ZoneGizmo.tsx for
 // what each actually does; ZonesPanel.tsx's own <select> writes the value.
 export type ZoneAnimationMode = 'draw' | 'flash'
@@ -25,7 +34,11 @@ export interface Zone {
   id: string
   project_id: string
   name: string
+  shape: ZoneShape
   points: ZonePoint[]
+  // Only meaningful for shape="circle" — see this file's own ZoneShape
+  // header for the full "why".
+  radius: number
   elevation: number
   fill_color: string
   fill_opacity: number
@@ -60,7 +73,9 @@ export async function listZones(projectId: string): Promise<Zone[]> {
 export async function createZone(data: {
   project_id: string
   name?: string
+  shape?: ZoneShape
   points?: ZonePoint[]
+  radius?: number
   elevation?: number
   fill_color?: string
   fill_opacity?: number
@@ -80,7 +95,9 @@ export async function createZone(data: {
 
 export async function updateZone(id: string, data: Partial<{
   name: string
+  shape: ZoneShape
   points: ZonePoint[]
+  radius: number
   elevation: number
   fill_color: string
   fill_opacity: number

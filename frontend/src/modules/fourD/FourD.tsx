@@ -77,6 +77,10 @@ import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFo
 import { PathsPanel } from './PathsPanel'
 import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
 import { ZonesPanel } from './ZonesPanel'
+import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialChart, uploadRadialChartIcon, type RadialChart, type RadialChartCenterMode } from './radialCharts'
+import { RadialChartsPanel } from './RadialChartsPanel'
+import { matchingActivityIds } from './radialChartProgress'
+import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import {
@@ -148,6 +152,8 @@ const PATHS_PANEL_OPEN_KEY = 'prosota_4d_paths_panel_open'
 const PATHS_PANEL_DOCK_KEY = 'prosota_4d_paths_panel_dock'
 const ZONES_PANEL_OPEN_KEY = 'prosota_4d_zones_panel_open'
 const ZONES_PANEL_DOCK_KEY = 'prosota_4d_zones_panel_dock'
+const RADIAL_CHARTS_PANEL_OPEN_KEY = 'prosota_4d_radial_charts_panel_open'
+const RADIAL_CHARTS_PANEL_DOCK_KEY = 'prosota_4d_radial_charts_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
@@ -1005,17 +1011,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject, hasEverBeenActive])
 
-  const handleCreateZone = async () => {
+  // shape (2026-07-30, per Maro: "the radial zone for things like crane
+  // clearance etc") — fixed at creation, see zone.py's own docstring for
+  // why; ZonesPanel.tsx's own "+ Zone"/"+ Circle" buttons are the only
+  // callers that ever pass 'circle'.
+  const handleCreateZone = async (shape: Zone['shape'] = 'polygon') => {
     if (!selectedProject) return
     try {
       setZoneError(null)
-      const zone = await createZone({ project_id: selectedProject.id })
+      const zone = await createZone({ project_id: selectedProject.id, shape })
       setZones(prev => [...prev, zone])
     } catch (err) {
       setZoneError(pathErrorMessage(err, 'Failed to create zone'))
     }
   }
-  const handleUpdateZone = async (id: string, data: Partial<Pick<Zone, 'name' | 'points' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' | 'visible' | 'animate' | 'animation_loop' | 'animation_mode'>>) => {
+  const handleUpdateZone = async (id: string, data: Partial<Pick<Zone, 'name' | 'points' | 'radius' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' | 'visible' | 'animate' | 'animation_loop' | 'animation_mode'>>) => {
     try {
       setZoneError(null)
       const updated = await updateZone(id, data)
@@ -1056,11 +1066,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Zeroes the up-axis coordinate of PathAddPointCatcher's raw hit point
   // before storing it (2026-07-29) — a Zone's own points are a flat
   // footprint (zone.py's own docstring), regardless of what real surface
-  // was actually clicked to place this corner.
+  // was actually clicked to place this corner. A circle zone (2026-07-30)
+  // only ever wants exactly one point (its center) — a click *replaces*
+  // that single point instead of appending, and immediately exits add-
+  // point mode, same "one click, done" convention Annotation placement
+  // already uses, rather than leaving the user to notice on their own that
+  // a second click would be pointless (the circle renderer only ever reads
+  // points[0] — see zoneGeometry.ts's own buildZoneShapeGeometry).
   const handleAddZonePoint = (id: string, point: ZonePoint) => {
     const zone = zones.find(z => z.id === id)
     if (!zone) return
     const flattened: ZonePoint = settings.upAxis === 'z' ? { ...point, z: 0 } : { ...point, y: 0 }
+    if (zone.shape === 'circle') {
+      handleUpdateZone(id, { points: [flattened] })
+      setAddingPointsForZoneId(null)
+      return
+    }
     handleUpdateZone(id, { points: [...zone.points, flattened] })
   }
   // Live-drag preview (2026-07-29) — same local-preview-then-PATCH-on-
@@ -1076,6 +1097,105 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     () => zones.map(z => (draggingZone?.id === z.id ? { ...z, points: draggingZone.points } : z)),
     [zones, draggingZone],
   )
+
+  // Radial Progress Charts (2026-07-31, per Maro's own Synchro-style
+  // reference screenshot — a progress ring per discipline, e.g. "CONCRETE
+  // STRUCTURE"). Unlike Zone/Path/Annotation above, this is a screen-space
+  // HUD widget, not a 3D-world object — see radial_chart.py's own
+  // docstring. Mirrors the Zone state block just above field-for-field for
+  // the CRUD parts; the UDF-matching/progress bits below are new
+  // (radialChartProgress.ts).
+  const [radialCharts, setRadialCharts] = useState<RadialChart[]>([])
+  const [radialChartError, setRadialChartError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    listRadialCharts(selectedProject.id).then(cs => { if (!cancelled) setRadialCharts(cs) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  const handleCreateRadialChart = async () => {
+    if (!selectedProject) return
+    try {
+      setRadialChartError(null)
+      const chart = await createRadialChart({ project_id: selectedProject.id })
+      setRadialCharts(prev => [...prev, chart])
+    } catch (err) {
+      setRadialChartError(pathErrorMessage(err, 'Failed to create radial chart'))
+    }
+  }
+  const handleUpdateRadialChart = async (id: string, data: Partial<{
+    title: string
+    visible: boolean
+    position_x_pct: number
+    position_y_pct: number
+    radius_px: number
+    thickness_px: number
+    border_color: string
+    track_color: string
+    progress_color: string
+    fill_color: string
+    text_color: string
+    center_mode: RadialChartCenterMode
+    udf_field_definition_id: string | null
+    udf_value: string | null
+  }>) => {
+    try {
+      setRadialChartError(null)
+      const updated = await updateRadialChart(id, data)
+      setRadialCharts(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setRadialChartError(pathErrorMessage(err, 'Failed to update radial chart'))
+    }
+  }
+  const handleRenameRadialChart = (id: string, title: string) => handleUpdateRadialChart(id, { title })
+  const handleToggleRadialChartVisible = (id: string) => {
+    const chart = radialCharts.find(c => c.id === id)
+    if (chart) handleUpdateRadialChart(id, { visible: !chart.visible })
+  }
+  const handleDeleteRadialChart = async (id: string) => {
+    try {
+      setRadialChartError(null)
+      await deleteRadialChart(id)
+      setRadialCharts(prev => prev.filter(c => c.id !== id))
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setRadialCharts(prev => prev.filter(c => c.id !== id))
+        return
+      }
+      setRadialChartError(pathErrorMessage(err, 'Failed to delete radial chart'))
+    }
+  }
+  const handleUpdateRadialChartFilter = (id: string, udfFieldDefinitionId: string | null, udfValue: string | null) => {
+    handleUpdateRadialChart(id, { udf_field_definition_id: udfFieldDefinitionId, udf_value: udfValue })
+  }
+  const handleUploadRadialChartIcon = async (id: string, file: File) => {
+    try {
+      setRadialChartError(null)
+      const updated = await uploadRadialChartIcon(id, file)
+      setRadialCharts(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setRadialChartError(pathErrorMessage(err, 'Failed to upload icon'))
+    }
+  }
+  const handleCommitRadialChartPosition = (id: string, positionXPct: number, positionYPct: number) => {
+    handleUpdateRadialChart(id, { position_x_pct: positionXPct, position_y_pct: positionYPct })
+  }
+
+  // UDF-based activity filter for each radial chart — one bulk-fetch across
+  // every "activity" UDF definition in the project (not one per chart),
+  // same perf reasoning useUserDefinedFieldValues's own header already
+  // documents for its per-cell grid callers.
+  const activityUdfDefinitions = useUserDefinedFieldDefinitions(selectedProject?.id, 'activity')
+  const radialChartActivityIds = useMemo(() => activities.map(a => a.id), [activities])
+  const activityUdfValues = useUserDefinedFieldValues(activityUdfDefinitions.definitions, radialChartActivityIds)
+  const radialChartMatchingIds = useMemo(() => {
+    const map = new Map<string, Set<string>>()
+    for (const chart of radialCharts) {
+      map.set(chart.id, matchingActivityIds(activities, chart, activityUdfValues.getValue))
+    }
+    return map
+  }, [radialCharts, activities, activityUdfValues.getValue])
 
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
     if (!selectedProject) return
@@ -1129,10 +1249,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  // Annotations — Placemark/Footnote (2026-07-12, per Maro's Navisworks
+  // Annotations — Placemark/Comment (2026-07-12, per Maro's Navisworks
   // reference screenshot). Project-scoped, persisted server-side like
   // everything else this session (see annotation.py's own docstring).
-  // "+ Placemark"/"+ Footnote" (AnnotationsPanel.tsx) arm addingAnnotationKind,
+  // "+ Placemark"/"+ Comment" (AnnotationsPanel.tsx) arm addingAnnotationKind,
   // which AnnotationAddCatcher (reusing PathGizmo.tsx's own
   // PathAddPointCatcher verbatim — see Viewport3D.tsx's render below) turns
   // into a single click-to-place; handlePlaceAnnotation creates it and
@@ -1149,13 +1269,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject, hasEverBeenActive])
 
-  // Default icon per kind (2026-07-12, per Maro: "so what's the difference
-  // [between Comment and Footnote]") — Placemark keeps the pin, Footnote
-  // defaults to a flag (a technical callout), Comment defaults to its own
-  // speech-bubble glyph (a review note) — immediately visually distinct
-  // the moment you place one, on top of the status/style differences.
+  // Default icon per kind (2026-07-12) — Placemark keeps the pin, Comment
+  // defaults to its own speech-bubble glyph — immediately visually
+  // distinct the moment you place one, on top of the status/style
+  // differences.
   const DEFAULT_ANNOTATION_ICON: Record<AnnotationKind, Annotation['icon']> = {
-    placemark: 'pin', footnote: 'flag', comment: 'comment',
+    placemark: 'pin', comment: 'comment',
   }
   const handlePlaceAnnotation = async (point: { x: number; y: number; z: number }) => {
     if (!selectedProject || !addingAnnotationKind) return
@@ -1187,6 +1306,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       await deleteAnnotation(id)
       setAnnotations(prev => prev.filter(a => a.id !== id))
       if (selectedAnnotationId === id) setSelectedAnnotationId(null)
+      await deleteOrphanedAnimKeyframes('annotation', id)
     } catch (err) {
       setAnnotationError(err instanceof Error ? err.message : 'Failed to delete annotation')
     }
@@ -1201,13 +1321,38 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setDraggingAnnotation(null)
     handleUpdateAnnotation(id, { position_x: point.x, position_y: point.y, position_z: point.z })
   }
+  // Leader-offset handle drag (2026-08-06) — same local-preview-then-PATCH-
+  // on-release convention as draggingAnnotation just above, for
+  // leader_offset_x/y/z instead of position_x/y/z. AnnotationMarker.tsx's
+  // own useFrame already renders *its own* live preview imperatively via
+  // calloutGroupRef while dragging (same as PathGizmo/ZoneGizmo's own
+  // vertex-drag convention, bypassing the annotation prop entirely mid-
+  // drag) — this state feeds resolvedAnnotations purely so any *other*
+  // consumer (a live numeric readout, say) sees the same in-progress value,
+  // mirroring draggingAnnotation's own precedent for consistency.
+  const [draggingAnnotationLeader, setDraggingAnnotationLeader] = useState<{ id: string; offset: { x: number; y: number; z: number } } | null>(null)
+  const handleAnnotationLeaderDragStart = () => {}
+  const handleAnnotationLeaderDragMove = (id: string, offset: { x: number; y: number; z: number }) => setDraggingAnnotationLeader({ id, offset })
+  const handleAnnotationLeaderDragEnd = (id: string, offset: { x: number; y: number; z: number }) => {
+    setDraggingAnnotationLeader(null)
+    handleUpdateAnnotation(id, { leader_offset_x: offset.x, leader_offset_y: offset.y, leader_offset_z: offset.z })
+  }
   // Memoized (2026-07-12) — same resolvedPaths lesson from tonight's own
   // Follow Path debugging: a plain .map() here would hand Viewport3D a
   // fresh array identity on every render, and this array feeds straight
   // into each AnnotationMarker's own useMemo dependencies.
   const resolvedAnnotations: Annotation[] = useMemo(
-    () => annotations.map(a => (draggingAnnotation?.id === a.id ? { ...a, position_x: draggingAnnotation.point.x, position_y: draggingAnnotation.point.y, position_z: draggingAnnotation.point.z } : a)),
-    [annotations, draggingAnnotation],
+    () => annotations.map(a => {
+      let next = a
+      if (draggingAnnotation?.id === a.id) {
+        next = { ...next, position_x: draggingAnnotation.point.x, position_y: draggingAnnotation.point.y, position_z: draggingAnnotation.point.z }
+      }
+      if (draggingAnnotationLeader?.id === a.id) {
+        next = { ...next, leader_offset_x: draggingAnnotationLeader.offset.x, leader_offset_y: draggingAnnotationLeader.offset.y, leader_offset_z: draggingAnnotationLeader.offset.z }
+      }
+      return next
+    }),
+    [annotations, draggingAnnotation, draggingAnnotationLeader],
   )
   const handleBindAnnotationLeader = (id: string) => {
     if (!pathBindTarget) return
@@ -1482,28 +1627,45 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
     return map
   }, [elementKeyframes.keyframes])
-  // "Key" buttons in PathsPanel.tsx/ZonesPanel.tsx (2026-07-30, per Maro:
-  // "add a key frame buttons to the side. so i can key frame the start and
-  // end") — anim_start/anim_end are singleton markers (paths.ts's own
-  // header: "the keyframe's own date IS the value"), so re-keying a field
-  // replaces whichever row already holds it rather than upserting
-  // alongside it — upsert's own conflict key includes `date`, so keying at
-  // a *different* playhead position than last time would otherwise leave
-  // two anim_start rows instead of moving the one that matters.
-  const handleKeyAnim = async (sourceKind: 'path' | 'zone', elementRef: string, field: 'anim_start' | 'anim_end') => {
+  // Annotation's own leader-reveal window (2026-08-06, per Maro: "how the
+  // leader works and how its animated which should also have the ability
+  // to be animated independent of tasks") — same anim_start/anim_end
+  // convention as Path/Zone just above, keyed by the Annotation row's own
+  // id.
+  const annotationAnimWindows = useMemo(() => {
+    const map = new Map<string, { start: Date | null; end: Date | null }>()
+    for (const k of elementKeyframes.keyframes) {
+      if (k.source_kind !== 'annotation' || (k.field !== 'anim_start' && k.field !== 'anim_end')) continue
+      const entry = map.get(k.element_ref) ?? { start: null, end: null }
+      if (k.field === 'anim_start') entry.start = new Date(k.date); else entry.end = new Date(k.date)
+      map.set(k.element_ref, entry)
+    }
+    return map
+  }, [elementKeyframes.keyframes])
+  // "Key" buttons in PathsPanel.tsx/ZonesPanel.tsx/AnnotationsPanel.tsx
+  // (2026-07-30, per Maro: "add a key frame buttons to the side. so i can
+  // key frame the start and end") — anim_start/anim_end are singleton
+  // markers (paths.ts's own header: "the keyframe's own date IS the
+  // value"), so re-keying a field replaces whichever row already holds it
+  // rather than upserting alongside it — upsert's own conflict key
+  // includes `date`, so keying at a *different* playhead position than
+  // last time would otherwise leave two anim_start rows instead of moving
+  // the one that matters.
+  const handleKeyAnim = async (sourceKind: 'path' | 'zone' | 'annotation', elementRef: string, field: 'anim_start' | 'anim_end') => {
     const now = timelineDateRef.current ?? new Date()
     const existing = elementKeyframes.keyframes.filter(k => k.source_kind === sourceKind && k.element_ref === elementRef && k.field === field)
     for (const k of existing) await elementKeyframes.remove(k.id)
     await elementKeyframes.upsert(sourceKind, elementRef, field, now, 0)
   }
-  // Deleting a Path/Zone doesn't cascade to its own anim_start/anim_end rows
-  // on its own (2026-07-30 fix, per Maro: "there's nothing in the scene...
-  // why do i see the animation data" — a deleted Path/Zone's own reveal
-  // keyframes were still showing in the Animation Timeline under a raw
-  // UUID). ElementKeyframe has no FK to Path/Zone at all (by design — see
-  // elementKeyframes.ts's own header), so handleDeletePath/handleDeleteZone
-  // above call this explicitly right after the delete succeeds.
-  const deleteOrphanedAnimKeyframes = async (sourceKind: 'path' | 'zone', elementRef: string) => {
+  // Deleting a Path/Zone/Annotation doesn't cascade to its own anim_start/
+  // anim_end rows on its own (2026-07-30 fix, per Maro: "there's nothing
+  // in the scene... why do i see the animation data" — a deleted Path/
+  // Zone's own reveal keyframes were still showing in the Animation
+  // Timeline under a raw UUID). ElementKeyframe has no FK to any of these
+  // at all (by design — see elementKeyframes.ts's own header), so
+  // handleDeletePath/handleDeleteZone/handleDeleteAnnotation all call this
+  // explicitly right after the delete succeeds.
+  const deleteOrphanedAnimKeyframes = async (sourceKind: 'path' | 'zone' | 'annotation', elementRef: string) => {
     const orphaned = elementKeyframes.keyframes.filter(k => k.source_kind === sourceKind && k.element_ref === elementRef && (k.field === 'anim_start' || k.field === 'anim_end'))
     for (const k of orphaned) await elementKeyframes.remove(k.id)
   }
@@ -1726,7 +1888,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
-  // Dockable Annotations panel — Placemark/Footnote (2026-07-12, per Maro's
+  // Dockable Radial Charts panel (2026-07-31, per Maro's own Synchro-style
+  // reference screenshot) — same shared-side-dock treatment as Zones just
+  // above.
+  const [radialChartsPanelOpen, setRadialChartsPanelOpen] = useState(() => loadPanelOpen(RADIAL_CHARTS_PANEL_OPEN_KEY, false))
+  const toggleRadialChartsPanel = () => {
+    setRadialChartsPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(RADIAL_CHARTS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [radialChartsPanelDock, setRadialChartsPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(RADIAL_CHARTS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleRadialChartsPanelDock = () => {
+    setRadialChartsPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(RADIAL_CHARTS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Annotations panel — Placemark/Comment (2026-07-12, per Maro's
   // Navisworks reference screenshot) — same shared-side-dock treatment as
   // Paths/Collections/Section Box/Camera Views/Animation Profiles above.
   const [annotationsPanelOpen, setAnnotationsPanelOpen] = useState(() => loadPanelOpen(ANNOTATIONS_PANEL_OPEN_KEY, false))
@@ -5339,6 +5526,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (radialChartsPanelOpen) {
+    dockablePanels.push({
+      id: 'radial-charts', label: 'Radial Charts', dock: radialChartsPanelDock,
+      onToggleDock: toggleRadialChartsPanelDock, onClose: toggleRadialChartsPanel,
+      content: (
+        <RadialChartsPanel
+          charts={radialCharts}
+          error={radialChartError}
+          udfDefinitions={activityUdfDefinitions.definitions}
+          activities={activities}
+          getUdfValue={activityUdfValues.getValue}
+          onCreate={handleCreateRadialChart}
+          onRename={handleRenameRadialChart}
+          onToggleVisible={handleToggleRadialChartVisible}
+          onDelete={handleDeleteRadialChart}
+          onUpdateStyle={handleUpdateRadialChart}
+          onUpdateFilter={handleUpdateRadialChartFilter}
+          onUploadIcon={handleUploadRadialChartIcon}
+        />
+      ),
+    })
+  }
   if (annotationsPanelOpen) {
     dockablePanels.push({
       id: 'annotations', label: '3D Notations', dock: annotationsPanelDock,
@@ -5360,6 +5569,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onLinkActivity={handleLinkAnnotationToActivity}
           onUnlinkActivity={handleUnlinkElement}
           onAssignProfile={handleAssignProfile}
+          animWindows={annotationAnimWindows}
+          format={timelineRange ? { scheduleStart: timelineRange.start, timeDisplayMode, speedDaysPerSecond, fps } : null}
+          onKeyAnimStart={id => handleKeyAnim('annotation', id, 'anim_start')}
+          onKeyAnimEnd={id => handleKeyAnim('annotation', id, 'anim_end')}
         />
       ),
     })
@@ -5515,6 +5728,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onZoneDragMove={handleZoneDragMove}
       onZoneDragEnd={handleZoneDragEnd}
       onAddZonePoint={handleAddZonePoint}
+      radialCharts={radialCharts}
+      radialChartMatchingIds={radialChartMatchingIds}
+      onCommitRadialChartPosition={handleCommitRadialChartPosition}
       annotations={resolvedAnnotations}
       addingAnnotationKind={addingAnnotationKind}
       onPlaceAnnotation={handlePlaceAnnotation}
@@ -5522,6 +5738,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onSelectAnnotation={setSelectedAnnotationId}
       onAnnotationDragMove={handleAnnotationDragMove}
       onAnnotationDragEnd={handleAnnotationDragEnd}
+      onAnnotationLeaderDragStart={handleAnnotationLeaderDragStart}
+      onAnnotationLeaderDragMove={handleAnnotationLeaderDragMove}
+      onAnnotationLeaderDragEnd={handleAnnotationLeaderDragEnd}
+      annotationAnimWindows={annotationAnimWindows}
       varianceByElementKey={varianceByElementKey}
       clashByElementKey={clashByElementKey}
       pivotPicking={pivotPicking}
@@ -5624,6 +5844,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           }`}
         >
           Zones
+        </button>
+        <button
+          onClick={toggleRadialChartsPanel}
+          title="Draggable radial progress-ring HUD overlays, e.g. one per discipline, filterable by a User Defined Field"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            radialChartsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Radial Charts
         </button>
         <button
           onClick={toggleAnnotationsPanel}

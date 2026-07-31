@@ -41,55 +41,140 @@ async def test_create_and_list_placemark(client: AsyncClient, project: Project):
     # Python-side defaults exactly.
     assert created["has_background"] is True
     assert created["background_color"] == "#f59e0b"
+    assert created["background_opacity"] == 1.0
     assert created["border_color"] == "#ffffff"
     assert created["thick_border"] is False
     assert created["text_color"] == "#111827"
     assert created["font_size"] == 14
     assert created["hide_closer_than"] is None
     assert created["hide_farther_than"] is None
-    assert created["status"] == "open"
+    assert created["box_shape"] == "rounded"
+    assert created["leader_offset_x"] == 2.0
+    assert created["leader_offset_y"] == 0.0
+    assert created["leader_offset_z"] == 0.0
+    assert created["leader_visible"] is True
+    assert created["animate"] is False
+    assert created["animation_loop"] is False
+    assert created["leader_dot_radius"] == 0.06
+    assert created["leader_color"] == "#ffffff"
+    assert created["leader_rotation"] == 0.0
+    assert created["leader_scale"] == 1.0
+    assert created["placemark_scale"] == 1.0
+    assert created["placemark_rotation"] == 0.0
 
     listing = (await client.get("/api/v1/annotations/", params={"project_id": str(project.id)})).json()
     assert any(a["id"] == created["id"] for a in listing)
 
 
 async def test_create_comment(client: AsyncClient, project: Project):
-    # Comment (2026-07-12) — folded in as a third kind alongside Placemark/
-    # Footnote after the fuller Navisworks reference showed it as the same
-    # kind of spatial 3D marker, not a CameraView-attached review note.
+    # Comment (2026-07-12) — folded in as a second kind alongside Placemark
+    # after the fuller Navisworks reference showed it as the same kind of
+    # spatial 3D marker, not a CameraView-attached review note.
     resp = await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment", icon="comment"))
     assert resp.status_code == 201, resp.text
     created = resp.json()
     assert created["kind"] == "comment"
     assert created["icon"] == "comment"
-    assert created["status"] == "open"
 
 
-async def test_resolve_and_reopen_comment(client: AsyncClient, project: Project):
-    # status (2026-07-12, per Maro: "so what's the difference [between
-    # Comment and Footnote]") — the one functional distinction: Comment is
-    # a review note you resolve, Footnote is a permanent technical callout.
-    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment"))).json()
-
-    resolved = await client.patch(f"/api/v1/annotations/{created['id']}", json={"status": "resolved"})
-    assert resolved.status_code == 200, resolved.text
-    assert resolved.json()["status"] == "resolved"
-
-    reopened = await client.patch(f"/api/v1/annotations/{created['id']}", json={"status": "open"})
-    assert reopened.status_code == 200, reopened.text
-    assert reopened.json()["status"] == "open"
-
-
-async def test_create_footnote_with_element_leader(client: AsyncClient, project: Project):
+async def test_create_comment_with_element_leader(client: AsyncClient, project: Project):
     resp = await client.post("/api/v1/annotations/", json=_placemark_payload(
-        str(project.id), kind="footnote", source_kind="mesh", element_ref="crane.glb", icon="flag",
+        str(project.id), kind="comment", source_kind="mesh", element_ref="crane.glb", icon="flag",
     ))
     assert resp.status_code == 201, resp.text
     created = resp.json()
-    assert created["kind"] == "footnote"
+    assert created["kind"] == "comment"
     assert created["source_kind"] == "mesh"
     assert created["element_ref"] == "crane.glb"
     assert created["icon"] == "flag"
+
+
+async def test_update_leader_offset_and_animate(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(
+        str(project.id), kind="comment", source_kind="mesh", element_ref="crane.glb",
+    ))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={
+        "leader_offset_x": 2.5, "leader_offset_y": 1.2, "leader_offset_z": -0.5,
+        "animate": True, "animation_loop": True,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["leader_offset_x"] == 2.5
+    assert updated["leader_offset_y"] == 1.2
+    assert updated["leader_offset_z"] == -0.5
+    assert updated["animate"] is True
+    assert updated["animation_loop"] is True
+
+
+async def test_update_box_shape(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment"))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={"box_shape": "rectangle"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["box_shape"] == "rectangle"
+
+
+async def test_update_leader_dot_color_rotation_scale(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment"))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={
+        "leader_dot_radius": 0.2, "leader_color": "#ff0000", "leader_rotation": 15.0, "leader_scale": 1.5,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["leader_dot_radius"] == 0.2
+    assert updated["leader_color"] == "#ff0000"
+    assert updated["leader_rotation"] == 15.0
+    assert updated["leader_scale"] == 1.5
+
+
+async def test_leader_scale_must_be_positive(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment", **{"leader_scale": 0}))
+    assert resp.status_code == 422
+
+
+async def test_update_placemark_scale_and_rotation(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id)))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={
+        "placemark_scale": 1.8, "placemark_rotation": 20.0,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["placemark_scale"] == 1.8
+    assert updated["placemark_rotation"] == 20.0
+
+
+async def test_placemark_scale_must_be_positive(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), **{"placemark_scale": 0}))
+    assert resp.status_code == 422
+
+
+async def test_update_background_opacity(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id)))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={"background_opacity": 0.4})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["background_opacity"] == 0.4
+
+
+async def test_background_opacity_out_of_range_rejected(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), **{"background_opacity": 1.5}))
+    assert resp.status_code == 422
+
+
+async def test_update_leader_offset_x_z_and_visible(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/annotations/", json=_placemark_payload(str(project.id), kind="comment"))).json()
+
+    resp = await client.patch(f"/api/v1/annotations/{created['id']}", json={
+        "leader_offset_x": 3.5, "leader_offset_z": -1.2, "leader_visible": False,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["leader_offset_x"] == 3.5
+    assert updated["leader_offset_z"] == -1.2
+    assert updated["leader_visible"] is False
 
 
 async def test_update_text_position_and_style(client: AsyncClient, project: Project):
@@ -166,6 +251,33 @@ async def test_annotation_keyframe_visible_field(client: AsyncClient, project: P
 
     listing = (await client.get("/api/v1/element-keyframes/", params={"project_id": str(project.id)})).json()
     assert any(k["element_ref"] == annotation["id"] and k["field"] == "visible" for k in listing)
+
+
+async def test_animate_reveal_window_is_a_keyframe_pair(client: AsyncClient, project: Project):
+    # Same convention as Path/Zone's own reveal window (2026-08-06, per
+    # Maro: "how the leader works and how its animated which should also
+    # have the ability to be animated independent of tasks") — anim_start/
+    # anim_end live in element_keyframes, not on the Annotation row itself,
+    # so the reveal shows up in the Animation Timeline's dope-sheet and
+    # keys off the playhead with no Activity involved at all.
+    annotation = (await client.post("/api/v1/annotations/", json=_placemark_payload(
+        str(project.id), kind="comment", **{"animate": True},
+    ))).json()
+
+    start_resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id), "source_kind": "annotation", "element_ref": annotation["id"],
+        "field": "anim_start", "date": "2026-08-01T00:00:00Z", "value": 0,
+    })
+    end_resp = await client.post("/api/v1/element-keyframes/", json={
+        "project_id": str(project.id), "source_kind": "annotation", "element_ref": annotation["id"],
+        "field": "anim_end", "date": "2026-08-05T00:00:00Z", "value": 0,
+    })
+    assert start_resp.status_code == 201, start_resp.text
+    assert end_resp.status_code == 201, end_resp.text
+
+    listing = (await client.get("/api/v1/element-keyframes/", params={"project_id": str(project.id)})).json()
+    fields = {k["field"] for k in listing if k["element_ref"] == annotation["id"]}
+    assert {"anim_start", "anim_end"} <= fields
 
 
 async def test_annotation_can_link_to_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):

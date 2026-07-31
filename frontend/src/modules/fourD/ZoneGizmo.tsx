@@ -11,6 +11,7 @@ import { computeRevealProgress } from './timelinePlayback'
 // the same Line2/InstancedBufferGeometry max-instance-count caching gotcha
 // applies here for the border reveal below.
 import { resetLine2InstanceCap } from './PathGizmo'
+import type { ExportLabelRegistry } from './exportLabels'
 
 const HANDLE_COLOR = 0xffffff
 
@@ -25,7 +26,7 @@ const HANDLE_COLOR = 0xffffff
 // axis; the fill mesh/border/label/handles all live in the same
 // zoneGeometry.ts-built local frame (up-coordinate always 0) underneath it.
 function ZoneGizmo({
-  zone, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, onDragStart, onDragMove, onDragEnd,
+  zone, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
   zone: Zone
   upAxis: UpAxis
@@ -48,6 +49,10 @@ function ZoneGizmo({
   // see PathGizmo.tsx's own matching prop header for the full rationale.
   animationStart: Date | null
   animationEnd: Date | null
+  // Capture/Export Video text visibility (2026-07-30, per Maro: "the text
+  // boxes and texts dont show up in the captured renders") — see
+  // exportLabels.ts's own header.
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
   onDragStart: () => void
   onDragMove: (zoneId: string, points: ZonePoint[]) => void
   onDragEnd: (zoneId: string, points: ZonePoint[]) => void
@@ -58,7 +63,10 @@ function ZoneGizmo({
   const fillMaterialRef = useRef<THREE.MeshBasicMaterial>(null)
   const wasAnimatingRef = useRef(false)
 
-  const shapeResult = useMemo(() => buildZoneShapeGeometry(zone.points, upAxis), [zone.points, upAxis])
+  const shapeResult = useMemo(
+    () => buildZoneShapeGeometry(zone.points, upAxis, zone.shape, zone.radius),
+    [zone.points, upAxis, zone.shape, zone.radius],
+  )
   // Densified border, 'draw' reveal only (2026-08-06) — see
   // zoneGeometry.ts's own densifyBorderForReveal header for the full "why".
   // The complete-border render (fill mesh, non-animating border, 'flash'
@@ -81,6 +89,12 @@ function ZoneGizmo({
   useEffect(() => {
     return () => { shapeResult?.geometry.dispose() }
   }, [shapeResult])
+  // Removes this zone's own export-label entry on unmount (2026-07-30) —
+  // same "don't leave a ghost label behind after deletion" reasoning
+  // AnnotationMarker.tsx's own matching cleanup effect explains.
+  useEffect(() => {
+    return () => { exportLabelsRef.current.delete(`${zone.id}-label`) }
+  }, [zone.id, exportLabelsRef])
   const groupPosition: [number, number, number] = upAxis === 'z' ? [0, 0, zone.elevation] : [0, zone.elevation, 0]
 
   // Reveal animation (2026-07-29, per Maro: "the animation will go like
@@ -97,6 +111,28 @@ function ZoneGizmo({
   // back out every cycle) — a flash that isn't set to loop just plays that
   // one fade in/out and then rests, same as 'draw' would.
   useFrame(() => {
+    // Capture/Export Video text visibility (2026-07-30, per Maro: "the
+    // text boxes and texts dont show up in the captured renders") — see
+    // exportLabels.ts's own header. Written unconditionally, ahead of the
+    // animate/flash branching below, so the label stays in sync regardless
+    // of which reveal mode (or none) is active — the Html label itself is
+    // never gated by any of that either (only the border/fill are).
+    if (groupRef.current && shapeResult) {
+      exportLabelsRef.current.set(`${zone.id}-label`, {
+        kind: 'zone-label',
+        visible: zone.visible,
+        worldPos: groupRef.current.localToWorld(shapeResult.centroid.clone()),
+        text: zone.name,
+        backgroundColor: null,
+        borderColor: null,
+        textColor: zone.border_color,
+        fontSize: 15,
+        borderRadius: 0,
+        bold: true,
+        anchor: 'center',
+      })
+    }
+
     if (!zone.animate) {
       if (wasAnimatingRef.current) {
         wasAnimatingRef.current = false
@@ -246,7 +282,7 @@ function ZoneGizmo({
 // Every currently-visible Zone's own gizmo (2026-07-29) — same "always
 // render every visible one" convention as PathGizmo.tsx's own PathGizmos.
 export function ZoneGizmos({
-  zones, upAxis, hideHandles, timelineDateRef, animWindows, onDragStart, onDragMove, onDragEnd,
+  zones, upAxis, hideHandles, timelineDateRef, animWindows, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
   zones: Zone[]
   upAxis: UpAxis
@@ -255,6 +291,7 @@ export function ZoneGizmos({
   // Keyed by zone.id (2026-07-30) — see ZoneGizmo's own animationStart/
   // animationEnd header for what these resolve from.
   animWindows: Map<string, { start: Date | null; end: Date | null }>
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
   onDragStart: () => void
   onDragMove: (zoneId: string, points: ZonePoint[]) => void
   onDragEnd: (zoneId: string, points: ZonePoint[]) => void
@@ -272,6 +309,7 @@ export function ZoneGizmos({
             timelineDateRef={timelineDateRef}
             animationStart={window?.start ?? null}
             animationEnd={window?.end ?? null}
+            exportLabelsRef={exportLabelsRef}
             onDragStart={onDragStart}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}

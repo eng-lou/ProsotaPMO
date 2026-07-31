@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { Html, Line } from '@react-three/drei'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
 import { distanceMetres, formatMeasurementValue } from './measurementGeometry'
 import type { Measurement, MeasurementPoint } from './measurements'
+import type { ExportLabelRegistry } from './exportLabels'
 
 const LENGTH_COLOR = '#f59e0b' // amber — distinct from Path's sky-blue and SectionBox's own handle colour
 const AREA_COLOR = '#a855f7' // purple — distinct from both Length and the selection-tint palette
@@ -16,12 +17,19 @@ const SELECTED_COLOR = '#0ea5e9'
 // animation resolution needed, so this stays a plain static render rather
 // than AnnotationMarker's own useFrame-driven one.
 export function MeasurementMarker({
-  measurement, unitPreference, selected, onSelect,
+  measurement, unitPreference, selected, onSelect, exportLabelsRef,
 }: {
   measurement: Measurement
   unitPreference: IfcUnitDisplay
   selected: boolean
   onSelect: (id: string) => void
+  // Capture/Export Video text visibility (2026-07-30, per Maro: "the text
+  // boxes and texts dont show up in the captured renders") — see
+  // exportLabels.ts's own header. Registered via useEffect, not useFrame
+  // (2026-07-30) — this component's own header already explains why it
+  // has no per-frame logic at all: a Measurement's points never move, so
+  // there's nothing to keep re-syncing every frame.
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
 }) {
   const color = selected ? SELECTED_COLOR : measurement.kind === 'length' ? LENGTH_COLOR : AREA_COLOR
   const linePositions = useMemo((): [number, number, number][] => {
@@ -36,6 +44,23 @@ export function MeasurementMarker({
     const sum = pts.reduce((acc, p) => new THREE.Vector3(acc.x + p.x, acc.y + p.y, acc.z + p.z), new THREE.Vector3())
     return [sum.x / pts.length, sum.y / pts.length, sum.z / pts.length]
   }, [measurement.points])
+
+  useEffect(() => {
+    exportLabelsRef.current.set(`${measurement.id}-label`, {
+      kind: 'measurement-label',
+      visible: measurement.visible,
+      worldPos: new THREE.Vector3(...labelPosition),
+      text: `${measurement.name}: ${formatMeasurementValue(measurement.kind, measurement.value, unitPreference)}`,
+      backgroundColor: 'rgba(17, 24, 39, 0.85)',
+      borderColor: selected ? SELECTED_COLOR : color,
+      textColor: '#ffffff',
+      fontSize: 12,
+      borderRadius: 4,
+      bold: false,
+      anchor: 'center',
+    })
+    return () => { exportLabelsRef.current.delete(`${measurement.id}-label`) }
+  }, [measurement.id, measurement.visible, measurement.name, measurement.kind, measurement.value, labelPosition, unitPreference, selected, color, exportLabelsRef])
 
   if (!measurement.visible) return null
 
@@ -153,17 +178,18 @@ export function MeasurementHoverIndicator({ point }: { point: MeasurementPoint |
 }
 
 export function MeasurementMarkers({
-  measurements, unitPreference, selectedId, onSelect,
+  measurements, unitPreference, selectedId, onSelect, exportLabelsRef,
 }: {
   measurements: Measurement[]
   unitPreference: IfcUnitDisplay
   selectedId: string | null
   onSelect: (id: string) => void
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
 }) {
   return (
     <>
       {measurements.map(m => (
-        <MeasurementMarker key={m.id} measurement={m} unitPreference={unitPreference} selected={m.id === selectedId} onSelect={onSelect} />
+        <MeasurementMarker key={m.id} measurement={m} unitPreference={unitPreference} selected={m.id === selectedId} onSelect={onSelect} exportLabelsRef={exportLabelsRef} />
       ))}
     </>
   )

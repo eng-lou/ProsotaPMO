@@ -149,6 +149,14 @@ export function RenderCaptureSettingsPopover({ settings, onChange, compareBaseli
                 />
                 Date Overlay
               </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Bakes in every visible Radial Chart ring at its own dragged position — hidden rings (Radial Charts panel) stay hidden even with this on">
+                <input
+                  type="checkbox"
+                  checked={settings.includeRadialCharts}
+                  onChange={e => set('includeRadialCharts', e.target.checked)}
+                />
+                Radial Charts
+              </label>
               <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds a monthly cost bar chart along the bottom — the same figures as the Resource Usage tab's own 'Cost' unit">
                 <input
                   type="checkbox"

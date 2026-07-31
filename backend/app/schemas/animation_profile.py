@@ -22,7 +22,14 @@ class AnimationProfileConfig(BaseModel):
     # persists across the duration).
     trigger: Literal["on_start", "on_finish", "over_duration"] = "over_duration"
 
-    transform_kind: Literal["none", "translate", "scale", "rotate", "pop", "spiral", "fall"] = "none"
+    # "grow" (2026-07-30, per Maro's own concrete-slab reference video —
+    # "how it forms from the right to the left") — a moving world-space
+    # clip plane (frontend's own Viewport3D.tsx useFrame, growClipPlane),
+    # not a transform/opacity effect like every other kind here; still
+    # validated the same way since config is otherwise opaque JSONB (this
+    # class's own header) and the frontend's own AnimationProfileConfig
+    # TransformKind union is the actual source of truth for the full set.
+    transform_kind: Literal["none", "translate", "scale", "rotate", "pop", "spiral", "fall", "grow"] = "none"
     axis: Literal["x", "y", "z"] = "z"
     direction: Literal[1, -1] = 1
     distance: float = 1.0

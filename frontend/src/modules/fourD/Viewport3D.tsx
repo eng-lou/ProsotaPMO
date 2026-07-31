@@ -5,7 +5,7 @@ import { Environment, Grid, GizmoHelper, OrbitControls, TransformControls } from
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
-import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile } from './animationProfiles'
+import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type Axis } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
 // TimelinePlayback's resolution effect below, so web-ifc's real weight
@@ -49,11 +49,15 @@ import { SectionBoxCaps } from './SectionBoxCap'
 import type { CameraViewPose } from './cameraViews'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
+import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
 import { ZoneGizmos } from './ZoneGizmo'
 import type { Zone, ZonePoint } from './zones'
+import { RadialChartHud } from './RadialChartHud'
+import { loadRadialChartIcons, type RadialChart } from './radialCharts'
+import { computeRadialChartProgress } from './radialChartProgress'
 import type { PathFollower } from './pathFollowers'
 import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
 import type { Annotation, AnnotationKind } from './annotations'
@@ -393,7 +397,20 @@ interface Props {
   onZoneDragMove: (zoneId: string, points: ZonePoint[]) => void
   onZoneDragEnd: (zoneId: string, points: ZonePoint[]) => void
   onAddZonePoint: (zoneId: string, point: ZonePoint) => void
-  // Annotations — Placemark/Footnote (2026-07-12, per Maro's Navisworks
+  // Radial Progress Charts (2026-07-31, per Maro's own Synchro-style
+  // reference screenshot) — unlike zones/paths/annotations above, these are
+  // screen-space HUD rings, not 3D-world objects; RadialChartHud.tsx renders
+  // each as a plain HTML overlay inside this component's own containerRef
+  // wrapper (see the sibling right after </Canvas> below), reusing
+  // timelineDateRef/timelineActivities already threaded through above for
+  // its own live progress tick rather than a second copy of the same data.
+  // radialChartMatchingIds is pre-computed in FourD.tsx (one UDF bulk-fetch
+  // for every chart's filter, not N redundant fetches) — see
+  // radialChartProgress.ts's own matchingActivityIds.
+  radialCharts: RadialChart[]
+  radialChartMatchingIds: Map<string, Set<string>>
+  onCommitRadialChartPosition: (chartId: string, positionXPct: number, positionYPct: number) => void
+  // Annotations — Placemark/Comment (2026-07-12, per Maro's Navisworks
   // reference screenshot). Reuses timelineDateRef/timelineActivities/
   // timelineLinks/timelineProfiles/timelineElementKeyframes above rather
   // than threading a second copy of the same data down — AnnotationMarker
@@ -407,6 +424,12 @@ interface Props {
   onSelectAnnotation: (id: string) => void
   onAnnotationDragMove: (id: string, point: PathPoint) => void
   onAnnotationDragEnd: (id: string, point: PathPoint) => void
+  // Leader-offset handle drag + leader reveal window (2026-08-06) — see
+  // AnnotationMarker.tsx's own matching prop headers.
+  onAnnotationLeaderDragStart: () => void
+  onAnnotationLeaderDragMove: (id: string, offset: PathPoint) => void
+  onAnnotationLeaderDragEnd: (id: string, offset: PathPoint) => void
+  annotationAnimWindows: Map<string, { start: Date | null; end: Date | null }>
   // App.tsx's PersistentFourD keeps FourD mounted (CSS-hidden) rather than
   // unmounting it on navigation, so imported 3D/IFC data survives leaving
   // the tab (2026-07-11, per Maro). While hidden there's nothing to see, so
@@ -1900,6 +1923,25 @@ function ModelObjects({
 // correctly show "at rest" (computeAppliedAnimationStateAt already clamps
 // that), so falling back to the earliest link when `now` precedes every
 // link's start is safe, not just a default-of-convenience.
+// Grow X/Y (2026-07-30) — the world-space direction a 'grow' profile's own
+// axis actually sweeps along. Deliberately NOT resolveDisplayAxis (that
+// remaps into *local* space inside a target's own axisCorrectionRotation
+// wrapper, for offsetting a LOCAL position — see that function's own call
+// site above) — a clip plane is built directly in world space (same
+// convention Section Box/Split-by-Level's own computeWorldClipPlanes/
+// worldSlicePlanes already use), so this instead mirrors
+// AnnotationMarker.tsx's own upVector/otherHorizontalVector: 'x' is always
+// world X (X never swaps in this app's own upAxis convention), 'y' is
+// whichever horizontal axis isn't X once upAxis is resolved, 'z' is up —
+// the exact same semantic-axis split leader_offset_x/y/z already
+// established, just reimplemented here rather than importing a private
+// helper out of an unrelated component.
+function growAxisWorldVector(axis: Axis, upAxis: UpAxis): THREE.Vector3 {
+  if (axis === 'x') return new THREE.Vector3(1, 0, 0)
+  if (axis === 'y') return upAxis === 'z' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1)
+  return upAxis === 'z' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)
+}
+
 interface ResolvedTimelineTarget {
   object: THREE.Object3D
   links: ResolvedTimelineLink[]
@@ -1965,6 +2007,16 @@ interface ResolvedTimelineTarget {
   // every frame the date hasn't moved.
   cachedActiveLink: ResolvedTimelineLink | null
   cachedState: AppliedAnimationState | null
+  // Grow X/Y (2026-07-30) — the target's own world-space bounding box,
+  // captured once alongside basePosition/baseScale above (same "captured
+  // at resolve time, not continuously refreshed" convention those already
+  // use — a 'grow' profile never itself moves the object, so this stays
+  // correct for the object's whole animated window). Only computed lazily,
+  // the first frame a 'grow' profile actually becomes active for this
+  // target (Box3().setFromObject traverses the whole subtree — not worth
+  // paying for on every target, the overwhelming majority of which never
+  // use this transform_kind at all), by the per-frame loop below.
+  worldBBox: THREE.Box3 | null
 }
 
 // Batched-visibility fast path (2026-07-21, per Maro — see
@@ -2463,6 +2515,7 @@ export function TimelinePlayback({
             cachedState: null,
             cachedVarianceMagnitude: variance.magnitude,
             cachedVarianceIsLate: variance.isLate,
+            worldBBox: null,
           }
           byObject.set(object, target)
         }
@@ -2941,6 +2994,7 @@ export function TimelinePlayback({
         cachedState,
         cachedVarianceMagnitude: variance.magnitude,
         cachedVarianceIsLate: variance.isLate,
+        worldBBox: null,
       }
     })
     targetsRef.current = [...targetsRef.current, ...migrated]
@@ -3045,6 +3099,32 @@ export function TimelinePlayback({
         // than inside the materials loop below.
         const clashActive = showClashColors && target.elementKey ? (clashByElementKey.get(target.elementKey) ?? false) : false
         const varianceActive = showVarianceColors && target.cachedVarianceMagnitude > 0
+        // Grow X/Y (2026-07-30, per Maro's own concrete-slab reference —
+        // "how it forms from the right to the left") — a moving world-
+        // space clip plane, same primitive Section Box/Split-by-Level
+        // already use (computeWorldClipPlanes/worldSlicePlanes above),
+        // just animated against growProgress + the target's own captured
+        // worldBBox instead of a static user-placed box. Reassigning
+        // material.clippingPlanes unconditionally every frame is the
+        // established-safe pattern here (see this file's own Section Box
+        // useFrame above — no material.needsUpdate needed, confirmed
+        // against real working code already doing exactly that every
+        // frame for every section-boxed object).
+        let growClipPlane: THREE.Plane | null = null
+        if (state.growProgress !== null && activeLink) {
+          if (!target.worldBBox) target.worldBBox = new THREE.Box3().setFromObject(target.object)
+          const axisVec = growAxisWorldVector(activeLink.profile.axis, upAxis)
+          const minC = target.worldBBox.min.dot(axisVec)
+          const maxC = target.worldBBox.max.dot(axisVec)
+          const direction = activeLink.profile.direction
+          growClipPlane = direction === 1
+            // Kept region grows from the −axis end toward +: coord <=
+            // boundary, boundary sweeping min -> max as progress goes 0->1.
+            ? new THREE.Plane(axisVec.clone().negate(), minC + (maxC - minC) * state.growProgress)
+            // Kept region grows from the +axis end toward −: coord >=
+            // boundary, boundary sweeping max -> min as progress goes 0->1.
+            : new THREE.Plane(axisVec.clone(), -(maxC - (maxC - minC) * state.growProgress))
+        }
         for (const { material, originalColor, mesh } of target.materials) {
           // Diffed before writing, not applied unconditionally (2026-07-17
           // perf fix, per Maro: "mad laggy" — this loop runs every single
@@ -3064,6 +3144,11 @@ export function TimelinePlayback({
           // GPU-facing write (and the costly needsUpdate flag) whenever
           // nothing would change, which is the overwhelming majority of
           // frames whenever the timeline itself isn't actively moving.
+          // Unconditional reassignment, no diff/budget (2026-07-30) —
+          // matches this file's own Section Box useFrame precedent exactly
+          // (see growClipPlane's own header above); clipping-plane VALUE
+          // changes are cheap and don't touch needsUpdate at all.
+          material.clippingPlanes = growClipPlane ? [growClipPlane] : null
           const nextTransparent = state.opacity < 1
           // state.color is a hex string (profile config), originalColor a
           // real, untinted THREE.Color — normalized through one reused
@@ -3132,6 +3217,7 @@ export function TimelinePlayback({
             lambertVariant.transparent = material.transparent
             lambertVariant.opacity = material.opacity
             lambertVariant.color.copy(material.color)
+            lambertVariant.clippingPlanes = material.clippingPlanes
           }
           const hiddenLineVariant = material.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
           if (hiddenLineVariant) {
@@ -3140,6 +3226,7 @@ export function TimelinePlayback({
             // only opacity/transparency need to track playback here.
             hiddenLineVariant.transparent = material.transparent
             hiddenLineVariant.opacity = material.opacity
+            hiddenLineVariant.clippingPlanes = material.clippingPlanes
           }
 
           // The black EdgesGeometry overlay (ModelObjects' own effect
@@ -3158,6 +3245,13 @@ export function TimelinePlayback({
             const edgesMaterial = edges.material as THREE.LineBasicMaterial
             edgesMaterial.transparent = state.opacity < 1
             edgesMaterial.opacity = state.opacity
+            // Grow X/Y (2026-07-30) — same "edges must clip along with the
+            // face material" fix this file's own Section Box useFrame
+            // already applies (see that block's own header, "a section box
+            // cut the shaded faces but left the black wireframe sticking
+            // out past the cut plane untouched") — identical failure mode
+            // here otherwise.
+            edgesMaterial.clippingPlanes = growClipPlane ? [growClipPlane] : null
           }
         }
       }
@@ -3604,7 +3698,9 @@ export function Viewport3D({
   scheduleStart, scheduleEnd,
   paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   zones, zoneAnimWindows, addingPointsForZoneId, onZoneDragMove, onZoneDragEnd, onAddZonePoint,
+  radialCharts, radialChartMatchingIds, onCommitRadialChartPosition,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
+  onAnnotationLeaderDragStart, onAnnotationLeaderDragMove, onAnnotationLeaderDragEnd, annotationAnimWindows,
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
   measurementHoverPoint, onMeasurementHoverPoint,
@@ -3755,6 +3851,14 @@ export function Viewport3D({
   const cameraRef = useRef<THREE.Camera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Shared Html-overlay-content registry for Capture/Export Video
+  // (2026-07-30, per Maro: "the text boxes and texts dont show up in the
+  // captured renders") — see exportLabels.ts's own header for the full
+  // story. Created once here (not per-render) since AnnotationMarker/
+  // ZoneGizmo/PathGizmo/MeasurementMarker below all write into the exact
+  // same Map instance every frame; handleCaptureImage/handleExportVideo
+  // read it back at capture time.
+  const exportLabelsRef = useRef<ExportLabelRegistry>(createExportLabelRegistry())
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   // "Real-time path tracer" was the actual ask, scoped down deliberately
   // (2026-07-11, per Maro: "i just wont move around so it gives me a good
@@ -4037,7 +4141,7 @@ export function Viewport3D({
     return Math.min(4, Math.max(resolutionWidth / cssWidth, resolutionHeight / cssHeight, 1))
   }
 
-  const handleCaptureImage = () => {
+  const handleCaptureImage = async () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
     // Include Baseline (2026-07-24) — only meaningful while the pane is
@@ -4045,7 +4149,12 @@ export function Viewport3D({
     // canvas (baselineCanvasRef.current, populated by
     // BaselineViewportPane's own CaptureCamera-like helper).
     const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
-    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, resolutionWidth, resolutionHeight } = renderCaptureSettings
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, resolutionWidth, resolutionHeight } = renderCaptureSettings
+    // Radial Progress Charts (2026-07-31) — icons need an actual network
+    // fetch (loadRadialChartIcons), so this is resolved up front, before the
+    // triple-rAF/doCapture below, rather than inside that synchronous path.
+    const visibleRadialCharts = includeRadialCharts ? radialCharts.filter(c => c.visible) : []
+    const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
     const doCapture = () => {
       // Computed fresh here, not from any outer const (2026-07-25 fix, per
       // Maro: "at 4x resolution it needs scale adjustments" — the same
@@ -4071,6 +4180,9 @@ export function Viewport3D({
       composite.height = layout.totalHeight
       const ctx = composite.getContext('2d')
       if (ctx) {
+        const radialChartProgress = new Map(visibleRadialCharts.map(c => [
+          c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), timelineDateRef.current ?? new Date()),
+        ]))
         composeExportFrame(ctx, layout, {
           mainCanvas: canvas, baselineCanvas,
           activities: timelineActivities, profiles: timelineProfiles,
@@ -4078,6 +4190,8 @@ export function Viewport3D({
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
           mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+          camera: cameraRef.current, exportLabels: exportLabelsRef.current,
+          includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
         })
       }
       composite.toBlob(blob => {
@@ -4176,7 +4290,9 @@ export function Viewport3D({
     const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
     if (totalMs <= 0) return
     const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
-    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, resolutionWidth, resolutionHeight } = renderCaptureSettings
+    const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, resolutionWidth, resolutionHeight } = renderCaptureSettings
+    const visibleRadialCharts = includeRadialCharts ? radialCharts.filter(c => c.visible) : []
+    const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
 
     setIsExportingVideo(true)
     setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
@@ -4254,6 +4370,12 @@ export function Viewport3D({
           const now = new Date(scheduleStart.getTime() + totalMs * t)
           timelineDateRef.current = now
           if (compositeCtx) {
+            // Recomputed every frame, unlike radialChartIcons above — a
+            // chart's own progress is a function of `now`, which is exactly
+            // what's advancing across this recording (2026-07-31).
+            const radialChartProgress = new Map(visibleRadialCharts.map(c => [
+              c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), now),
+            ]))
             composeExportFrame(compositeCtx, layout, {
               mainCanvas: canvas, baselineCanvas,
               activities: timelineActivities, profiles: timelineProfiles,
@@ -4261,6 +4383,8 @@ export function Viewport3D({
               scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
               mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
               includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+              camera: cameraRef.current, exportLabels: exportLabelsRef.current,
+              includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
             })
           }
           if (t >= 1) { resolve(); return }
@@ -4879,6 +5003,7 @@ export function Viewport3D({
             hideHandles={hidePathHelpers}
             timelineDateRef={timelineDateRef}
             animWindows={pathAnimWindows}
+            exportLabelsRef={exportLabelsRef}
             onDragStart={() => {}}
             onDragMove={onPathDragMove}
             onDragEnd={onPathDragEnd}
@@ -4894,6 +5019,7 @@ export function Viewport3D({
             hideHandles={hidePathHelpers}
             timelineDateRef={timelineDateRef}
             animWindows={zoneAnimWindows}
+            exportLabelsRef={exportLabelsRef}
             onDragStart={() => {}}
             onDragMove={onZoneDragMove}
             onDragEnd={onZoneDragEnd}
@@ -4918,8 +5044,9 @@ export function Viewport3D({
               modelElementLinks={timelineLinks}
               animationProfiles={timelineProfiles}
               elementKeyframes={timelineElementKeyframes}
+              upAxis={settings.upAxis}
               leaderTargetObject={
-                (annotation.kind === 'footnote' || annotation.kind === 'comment') && annotation.source_kind === 'mesh' && annotation.element_ref
+                annotation.kind === 'comment' && annotation.source_kind === 'mesh' && annotation.element_ref
                   ? (timelineSceneObjects.find(o => o.kind === 'mesh' && o.name === annotation.element_ref)?.object ?? null)
                   : null
               }
@@ -4928,9 +5055,15 @@ export function Viewport3D({
               onDragStart={() => {}}
               onDragMove={onAnnotationDragMove}
               onDragEnd={onAnnotationDragEnd}
+              animationStart={annotationAnimWindows.get(annotation.id)?.start ?? null}
+              animationEnd={annotationAnimWindows.get(annotation.id)?.end ?? null}
+              onLeaderDragStart={onAnnotationLeaderDragStart}
+              onLeaderDragMove={onAnnotationLeaderDragMove}
+              onLeaderDragEnd={onAnnotationLeaderDragEnd}
+              exportLabelsRef={exportLabelsRef}
             />
           ))}
-          {/* Single click-to-place for a new Placemark/Footnote (2026-07-12)
+          {/* Single click-to-place for a new Placemark/Comment (2026-07-12)
               — reuses PathAddPointCatcher verbatim (its own raycast-the-scene-
               then-fall-back-to-ground-plane logic has nothing Path-specific
               in it); onPlaceAnnotation itself clears addingAnnotationKind
@@ -4955,6 +5088,7 @@ export function Viewport3D({
             unitPreference={unitPreference}
             selectedId={selectedMeasurementId}
             onSelect={onSelectMeasurement}
+            exportLabelsRef={exportLabelsRef}
           />
           {measuringTool === 'length' && (
             <MeasurementPreview
@@ -5011,6 +5145,17 @@ export function Viewport3D({
           </GizmoHelper>
         )}
       </Canvas>
+      {radialCharts.map(chart => (
+        <RadialChartHud
+          key={chart.id}
+          chart={chart}
+          activities={timelineActivities}
+          matchingIds={radialChartMatchingIds.get(chart.id) ?? new Set()}
+          timelineDateRef={timelineDateRef}
+          containerRef={containerRef}
+          onCommitPosition={onCommitRadialChartPosition}
+        />
+      ))}
       {importedObjects.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <p className="text-sm text-gray-400 bg-white/70 px-3 py-1.5 rounded-md">

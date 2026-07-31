@@ -1,5 +1,8 @@
+import * as THREE from 'three'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
+import type { ExportLabel, ExportLabelRegistry } from './exportLabels'
+import type { RadialChart } from './radialCharts'
 
 // Export Content overlays for Capture/Export Video (2026-07-25, per Maro's
 // Synchro "Export Animation" reference: a Gantt bar strip, an Activity
@@ -713,6 +716,78 @@ export function drawDateOverlay(ctx: CanvasRenderingContext2D, x: number, y: num
   ctx.restore()
 }
 
+// Radial Progress Chart (2026-07-31, per Maro's own Synchro-style
+// reference screenshot) — the canvas-export equivalent of
+// RadialChartHud.tsx's own live SVG ring, same geometry (stroke centered on
+// r = radius_px - thickness_px/2, progress arc drawn clockwise from 12
+// o'clock via a -90° start angle) so a baked-in export matches what was
+// actually on screen. x/y is the ring's own top-left anchor — same
+// convention RadialChartHud.tsx's `left/top` percentages use — with the
+// title label bar drawn immediately above it.
+export function drawRadialChart(
+  ctx: CanvasRenderingContext2D, x: number, y: number, chart: RadialChart, progress: number,
+  iconImage: HTMLImageElement | null, scale: number,
+): void {
+  const radius = chart.radius_px * scale
+  const thickness = chart.thickness_px * scale
+  const labelHeight = 18 * scale
+  const cx = x + radius
+  const cy = y + labelHeight + radius
+
+  ctx.save()
+  ctx.font = `bold ${Math.round(10 * scale)}px system-ui, sans-serif`
+  const textWidth = ctx.measureText(chart.title).width
+  const labelPaddingX = 6 * scale
+  const labelWidth = textWidth + labelPaddingX * 2
+  ctx.fillStyle = '#000000'
+  ctx.fillRect(cx - labelWidth / 2, y, labelWidth, labelHeight)
+  ctx.fillStyle = chart.text_color
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'center'
+  ctx.fillText(chart.title, cx, y + labelHeight / 2)
+
+  const r = radius - thickness / 2
+  ctx.lineCap = 'butt'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.strokeStyle = chart.track_color
+  ctx.lineWidth = thickness
+  ctx.stroke()
+
+  const startAngle = -Math.PI / 2
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, startAngle, startAngle + Math.PI * 2 * progress)
+  ctx.strokeStyle = chart.progress_color
+  ctx.lineWidth = thickness
+  ctx.stroke()
+
+  const innerR = r - thickness / 2 - 3 * scale
+  ctx.beginPath()
+  ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
+  ctx.fillStyle = chart.fill_color
+  ctx.fill()
+  ctx.strokeStyle = chart.border_color
+  ctx.lineWidth = Math.max(1, 2 * scale)
+  ctx.stroke()
+
+  if (chart.center_mode === 'icon' && iconImage) {
+    const iconSize = innerR * 1.4
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
+    ctx.clip()
+    ctx.drawImage(iconImage, cx - iconSize / 2, cy - iconSize / 2, iconSize, iconSize)
+    ctx.restore()
+  } else {
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = `bold ${Math.round(12 * scale)}px system-ui, sans-serif`
+    ctx.fillStyle = chart.text_color
+    ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy)
+  }
+  ctx.restore()
+}
+
 // Greedy word-wrap — breaks `text` into lines no wider than `maxWidth` at
 // this ctx's own current font, same measure-first approach
 // drawTruncatedText uses rather than trusting fillText's own maxWidth
@@ -839,6 +914,27 @@ export interface ComposeExportFrameOptions {
   costProfileResourceBreakdown: { name: string; values: number[] }[]
   exportTitle: string
   exportNarrative: string
+  // 2026-07-30, per Maro: "the text boxes and texts dont show up in the
+  // captured renders" — see exportLabels.ts's own header. camera is
+  // whatever's live in Viewport3D.tsx's own cameraRef at capture time;
+  // null (e.g. before the first real frame) just skips this pass.
+  camera: THREE.Camera | null
+  exportLabels: ExportLabelRegistry
+  // Radial Progress Charts (2026-07-31) — includeRadialCharts is the one
+  // master opt-in switch (RenderCaptureSettings.includeRadialCharts,
+  // matching includeAppearanceLegend's own precedent); each chart's own
+  // `visible` still gates it individually (radialCharts here is already
+  // pre-filtered to visible ones — see Viewport3D.tsx's own
+  // handleCaptureImage/handleExportVideo). radialChartProgress is each
+  // chart's own duration-weighted % at THIS frame's own "now" (computed by
+  // the caller, not here — this file stays activity-matching-free);
+  // radialChartIcons holds pre-loaded HTMLImageElements for any chart in
+  // "icon" mode (canvas drawImage needs a already-loaded image, not an
+  // async blob fetch mid-draw).
+  includeRadialCharts: boolean
+  radialCharts: RadialChart[]
+  radialChartProgress: Map<string, number>
+  radialChartIcons: Map<string, HTMLImageElement>
 }
 
 // Cover-fit (2026-07-25, for the explicit-output-resolution rework above) —
@@ -856,6 +952,135 @@ function drawCoverFit(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, 
   const sx = (source.width - sw) / 2
   const sy = (source.height - sh) / 2
   ctx.drawImage(source, sx, sy, sw, sh, dest.x, dest.y, dest.width, dest.height)
+}
+
+// Rounded rect path — Canvas 2D's own native ctx.roundRect() would do this,
+// but this codebase's own convention elsewhere (drawTruncatedText etc.)
+// leans toward not assuming a specific newer-browser API is available;
+// cheap enough to just build the path with arcs directly.
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  const r = Math.min(radius, width / 2, height / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + width, y, x + width, y + height, r)
+  ctx.arcTo(x + width, y + height, x, y + height, r)
+  ctx.arcTo(x, y + height, x, y, r)
+  ctx.arcTo(x, y, x + width, y, r)
+  ctx.closePath()
+}
+
+// Projects a world position through `camera` into the composite frame's
+// own pixel space (2026-07-30, see exportLabels.ts's own header for the
+// full "why" — this is the piece that makes a label land on top of
+// whatever it's meant to annotate): NDC -> source-canvas pixel -> the SAME
+// cover-fit crop+scale drawCoverFit already applied when it copied that
+// canvas into `dest`, so this stays correct regardless of how aggressively
+// cover-fit had to crop to fill the requested output resolution/aspect.
+function projectToDestPixel(
+  worldPos: THREE.Vector3, camera: THREE.Camera, sourceWidth: number, sourceHeight: number, dest: Rect,
+): { x: number; y: number } | null {
+  // In-front-of-camera check via view-space z, not the projected NDC z
+  // (2026-07-30) — NDC z alone isn't a reliable "is this behind the
+  // camera" signal for every camera type this app uses; view-space z is
+  // unambiguous (negative = in front) for both perspective and orthographic.
+  const viewSpace = worldPos.clone().applyMatrix4(camera.matrixWorldInverse)
+  if (viewSpace.z > 0) return null
+  const ndc = worldPos.clone().project(camera)
+  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null
+
+  const px = (ndc.x + 1) / 2 * sourceWidth
+  const py = (1 - ndc.y) / 2 * sourceHeight
+
+  const scale = Math.max(dest.width / sourceWidth, dest.height / sourceHeight)
+  const sw = dest.width / scale
+  const sh = dest.height / scale
+  const sx = (sourceWidth - sw) / 2
+  const sy = (sourceHeight - sh) / 2
+  return { x: dest.x + (px - sx) * scale, y: dest.y + (py - sy) * scale }
+}
+
+// Draws one ExportLabel at its already-projected screen position. The
+// 'annotation-placemark' kind gets a small circular pin (its live-view
+// balloon shape isn't worth replicating exactly here — see
+// exportLabels.ts's own anchor header); every other kind is a plain
+// rounded/square box, closely matching its own source component's CSS
+// (background/border/radius/bold), not pixel-identical.
+function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; y: number }, label: ExportLabel, scale: number): void {
+  ctx.save()
+  if (label.kind === 'annotation-placemark') {
+    const r = 12 * scale
+    const cy = screenPos.y - r
+    ctx.beginPath()
+    ctx.arc(screenPos.x, cy, r, 0, Math.PI * 2)
+    if (label.backgroundColor) { ctx.fillStyle = label.backgroundColor; ctx.fill() }
+    if (label.borderColor) {
+      ctx.strokeStyle = label.borderColor
+      ctx.lineWidth = Math.max(1, 2 * scale)
+      ctx.stroke()
+    }
+    ctx.font = `${Math.round(14 * scale)}px system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = label.textColor
+    ctx.fillText(label.text, screenPos.x, cy)
+    ctx.restore()
+    return
+  }
+
+  ctx.font = `${label.bold ? 'bold ' : ''}${Math.round(label.fontSize * scale)}px system-ui, sans-serif`
+  ctx.textBaseline = 'middle'
+  const paddingX = 8 * scale
+  const paddingY = 5 * scale
+  const textWidth = ctx.measureText(label.text).width
+  const boxWidth = textWidth + paddingX * 2
+  const boxHeight = label.fontSize * scale + paddingY * 2
+
+  let boxX: number
+  let boxY: number
+  if (label.anchor === 'bottom-left') {
+    boxX = screenPos.x
+    boxY = screenPos.y - boxHeight
+  } else if (label.anchor === 'bottom-center') {
+    boxX = screenPos.x - boxWidth / 2
+    boxY = screenPos.y - boxHeight - 20 * scale
+  } else {
+    boxX = screenPos.x - boxWidth / 2
+    boxY = screenPos.y - boxHeight / 2
+  }
+
+  if (label.backgroundColor) {
+    ctx.fillStyle = label.backgroundColor
+    if (label.borderRadius > 0) { roundRectPath(ctx, boxX, boxY, boxWidth, boxHeight, label.borderRadius * scale); ctx.fill() }
+    else ctx.fillRect(boxX, boxY, boxWidth, boxHeight)
+  }
+  if (label.borderColor) {
+    ctx.strokeStyle = label.borderColor
+    ctx.lineWidth = Math.max(1, scale)
+    if (label.borderRadius > 0) { roundRectPath(ctx, boxX, boxY, boxWidth, boxHeight, label.borderRadius * scale); ctx.stroke() }
+    else ctx.strokeRect(boxX, boxY, boxWidth, boxHeight)
+  }
+  ctx.fillStyle = label.textColor
+  ctx.fillText(label.text, boxX + paddingX, boxY + boxHeight / 2)
+  ctx.restore()
+}
+
+// Draws every currently-visible entry in the shared registry on top of the
+// main 3D view (2026-07-30, per Maro: "the text boxes and texts dont show
+// up in the captured renders" — see exportLabels.ts's own header for the
+// full root-cause/fix story). Called right after drawCoverFit/drawViewTitle
+// place the real 3D canvas into `dest`, so labels land on top of it, same
+// draw order the live DOM already uses (Html overlays sit above the canvas
+// too).
+function drawExportLabels(
+  ctx: CanvasRenderingContext2D, dest: Rect, registry: ExportLabelRegistry,
+  camera: THREE.Camera, sourceWidth: number, sourceHeight: number, scale: number,
+): void {
+  for (const label of registry.values()) {
+    if (!label.visible) continue
+    const screenPos = projectToDestPixel(label.worldPos, camera, sourceWidth, sourceHeight, dest)
+    if (!screenPos) continue
+    drawExportLabel(ctx, screenPos, label, scale)
+  }
 }
 
 // Orchestrator — white background, whichever bands/overlays are enabled,
@@ -882,6 +1107,7 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
 
   const mv = layout.mainViewRect
   drawCoverFit(ctx, opts.mainCanvas, mv)
+  if (opts.camera) drawExportLabels(ctx, mv, opts.exportLabels, opts.camera, opts.mainCanvas.width, opts.mainCanvas.height, opts.scale)
   drawViewTitle(ctx, mv, opts.mainViewTitle, opts.scale)
   if (layout.baselineViewRect && opts.baselineCanvas) {
     const bv = layout.baselineViewRect
@@ -900,5 +1126,17 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   // clear of both the legend (bottom-left) and the Gantt/Table bands.
   if (opts.includeDateOverlay) {
     drawDateOverlay(ctx, mv.x + padding, mv.y + padding, opts.now, opts.scheduleStart, opts.scale)
+  }
+  // Positions stay relative to the main 3D view's own rect, not the full
+  // canvas (2026-07-31) — same behaviour whether or not Gantt/Table bands
+  // are also included, matching what's actually on screen live.
+  if (opts.includeRadialCharts) {
+    for (const chart of opts.radialCharts) {
+      const xPx = mv.x + (chart.position_x_pct / 100) * mv.width
+      const yPx = mv.y + (chart.position_y_pct / 100) * mv.height
+      const progress = opts.radialChartProgress.get(chart.id) ?? 0
+      const icon = opts.radialChartIcons.get(chart.id) ?? null
+      drawRadialChart(ctx, xPx, yPx, chart, progress, icon, opts.scale)
+    }
   }
 }

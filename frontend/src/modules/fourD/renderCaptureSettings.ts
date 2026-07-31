@@ -87,6 +87,13 @@ export interface RenderCaptureSettings {
   // ("if set") — see exportOverlays.ts's own drawAppearanceLegend.
   includeAppearanceLegend: boolean
   includeDateOverlay: boolean
+  // Radial Progress Charts (2026-07-31, per Maro: "this can be enabled in
+  // the render/capture settings to be seen as well") — one master opt-in
+  // switch, same "off by default, each individual item's own visibility
+  // still gates it" convention as includeAppearanceLegend; a chart hidden
+  // live (RadialChart.visible off) is never exported even with this on —
+  // see exportOverlays.ts's own drawRadialChart/composeExportFrame.
+  includeRadialCharts: boolean
   // View titles (2026-07-25, per Maro: "add a title for both 3d views,
   // Current for the left and Baseline for the right, allow me to name the
   // titles") — always drawn when non-blank (not behind a separate on/off
@@ -125,6 +132,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   includeActivityTable: false,
   includeAppearanceLegend: false,
   includeDateOverlay: false,
+  includeRadialCharts: false,
   mainViewTitle: 'Current',
   baselineViewTitle: 'Baseline',
   includeCostProfile: false,

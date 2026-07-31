@@ -6,6 +6,7 @@ import type { Line2 } from 'three-stdlib'
 import type { Path, PathPoint } from './paths'
 import type { UpAxis } from './upAxis'
 import { computeRevealProgress } from './timelinePlayback'
+import type { ExportLabelRegistry } from './exportLabels'
 
 // Handles keep this fixed neutral color regardless of the route's own
 // `path.color` (2026-07-29) — only the line/arrow/label pick up the
@@ -209,7 +210,7 @@ function sliceRevealTuples(points: [number, number, number][], progress: number)
   return sliced.length >= 2 ? sliced : null
 }
 function PathGizmo({
-  path, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, onDragStart, onDragMove, onDragEnd,
+  path, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
   path: Path
   // Needed only for the arrow's own flat-lie-and-yaw orientation below
@@ -243,6 +244,10 @@ function PathGizmo({
   // scheduled Activity involved at all).
   animationStart: Date | null
   animationEnd: Date | null
+  // Capture/Export Video text visibility (2026-07-30, per Maro: "the text
+  // boxes and texts dont show up in the captured renders") — see
+  // exportLabels.ts's own header.
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
   onDragStart: () => void
   onDragMove: (pathId: string, points: PathPoint[]) => void
   onDragEnd: (pathId: string, points: PathPoint[]) => void
@@ -257,6 +262,12 @@ function PathGizmo({
   const arrowRef = useRef<THREE.Mesh>(null)
   const lineRef = useRef<Line2>(null)
   const dragRaycaster = useRef(new THREE.Raycaster())
+  // Removes this path's own export-label entry on unmount (2026-07-30) —
+  // same "don't leave a ghost label behind after deletion" reasoning
+  // AnnotationMarker.tsx's own matching cleanup effect explains.
+  useEffect(() => {
+    return () => { exportLabelsRef.current.delete(`${path.id}-label`) }
+  }, [path.id, exportLabelsRef])
 
   const curvePositions = useMemo(() => {
     if (path.points.length < 2) return null
@@ -314,6 +325,31 @@ function PathGizmo({
   // it did to thousands of keyframed actors, so this never triggers a
   // React re-render at all while playing.
   useFrame(() => {
+    // Capture/Export Video text visibility (2026-07-30, per Maro: "the
+    // text boxes and texts dont show up in the captured renders") — see
+    // exportLabels.ts's own header. Points are already world-space (this
+    // group has no position offset of its own — path.py's own docstring
+    // is explicit a Path lives directly in world space), so no
+    // localToWorld conversion is needed here, unlike Zone/Annotation.
+    if (path.show_label && path.name && path.points.length > 0) {
+      const p = path.points[0]
+      exportLabelsRef.current.set(`${path.id}-label`, {
+        kind: 'path-label',
+        visible: true,
+        worldPos: new THREE.Vector3(p.x, p.y, p.z),
+        text: path.name,
+        backgroundColor: 'rgba(255,255,255,0.85)',
+        borderColor: path.color,
+        textColor: path.color,
+        fontSize: 13,
+        borderRadius: 4,
+        bold: true,
+        anchor: 'bottom-center',
+      })
+    } else {
+      exportLabelsRef.current.delete(`${path.id}-label`)
+    }
+
     if (!path.animate) {
       if (wasAnimatingRef.current) {
         wasAnimatingRef.current = false
@@ -478,7 +514,7 @@ function PathGizmo({
 // sibling of ModelObjects, not nested under any imported model, since a
 // Path is project-scoped rather than attached to one target.
 export function PathGizmos({
-  paths, upAxis, hideHandles, timelineDateRef, animWindows, onDragStart, onDragMove, onDragEnd,
+  paths, upAxis, hideHandles, timelineDateRef, animWindows, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
   paths: Path[]
   upAxis: UpAxis
@@ -487,6 +523,7 @@ export function PathGizmos({
   // Keyed by path.id (2026-07-30) — see PathGizmo's own animationStart/
   // animationEnd header for what these resolve from.
   animWindows: Map<string, { start: Date | null; end: Date | null }>
+  exportLabelsRef: React.MutableRefObject<ExportLabelRegistry>
   onDragStart: () => void
   onDragMove: (pathId: string, points: PathPoint[]) => void
   onDragEnd: (pathId: string, points: PathPoint[]) => void
@@ -504,6 +541,7 @@ export function PathGizmos({
             timelineDateRef={timelineDateRef}
             animationStart={window?.start ?? null}
             animationEnd={window?.end ?? null}
+            exportLabelsRef={exportLabelsRef}
             onDragStart={onDragStart}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}

@@ -23,14 +23,33 @@ class Zone(Base, TimestampMixin):
     convention as Path.points/MaterialPreset.config.
 
     visible mirrors Path's own identical field — live-viewport helper
-    visibility, not a rendering-time capture override."""
+    visibility, not a rendering-time capture override.
+
+    shape/radius (2026-07-30, per Maro's own reference screenshot — a
+    dashed clearance ring under a crane, "the radial zone for things like
+    crane clearance etc") — shape="circle" is a second footprint kind
+    alongside the original "polygon": `points` holds exactly one entry
+    (the center) instead of 3+ corners, and `radius` (world units) is the
+    one extra scalar that actually draws it, same "one extra numeric
+    field, not a whole new points shape" spirit `elevation` already uses.
+    Deliberately its own `shape` kind rather than inferring "circle" from
+    a 1-point `points` array — a zone mid-trace with only one corner so
+    far would otherwise look identical to a real circle. kind is fixed at
+    creation (ZonesPanel.tsx's own "+ Zone"/"+ Circle" buttons), not
+    switchable after — same spirit Annotation's own `kind` already is,
+    since a polygon's extra corners would just become dead data the
+    frontend's own circle renderer (zoneGeometry.ts) silently ignores.
+    Every other field (fill/border/elevation/animate/...) is shared and
+    means exactly the same thing for either shape."""
 
     __tablename__ = "zones"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False, default="Zone")
+    shape: Mapped[str] = mapped_column(String(10), nullable=False, default="polygon")  # "polygon" | "circle"
     points: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    radius: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
     elevation: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     fill_color: Mapped[str] = mapped_column(String(9), nullable=False, default="#ef4444")
     fill_opacity: Mapped[float] = mapped_column(Float, nullable=False, default=0.35)

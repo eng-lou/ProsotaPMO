@@ -1,6 +1,14 @@
 import * as THREE from 'three'
 import type { UpAxis } from './upAxis'
-import type { ZonePoint } from './zones'
+import type { ZonePoint, ZoneShape } from './zones'
+
+// Segment count for a circle zone's own geometry/border loop (2026-07-30,
+// per Maro: "the radial zone for things like crane clearance etc") — fixed
+// rather than scaled by radius like REVEAL_SAMPLES_PER_UNIT below, since a
+// circle's own smoothness need doesn't grow with size the way a reveal
+// animation's sampling density does; 64 is smooth at any on-screen size
+// this app's own camera distances actually show.
+const CIRCLE_SEGMENTS = 64
 
 // Pure geometry math for Zone's flat-footprint fill/border (2026-07-29) —
 // kept separate from ZoneGizmo.tsx's own React glue, same split
@@ -38,19 +46,44 @@ function toLocal2D(point: ZonePoint, upAxis: UpAxis): [number, number] {
   return upAxis === 'z' ? [point.x, point.y] : [point.x, point.z]
 }
 
-export function buildZoneShapeGeometry(points: ZonePoint[], upAxis: UpAxis): ZoneShapeResult | null {
+// shape/radius (2026-07-30, per Maro: "the radial zone for things like
+// crane clearance etc") — a circle zone stores exactly one point (the
+// center, see zone.py's own docstring) instead of 3+ corners; radius only
+// matters for this branch. THREE.Shape.absarc + ShapeGeometry's own
+// curveSegments param handle the actual circle tessellation, so the fill
+// mesh is a real smooth disc, not a coarse N-gon approximation.
+export function buildZoneShapeGeometry(points: ZonePoint[], upAxis: UpAxis, shape: ZoneShape = 'polygon', radius = 5): ZoneShapeResult | null {
+  if (shape === 'circle') {
+    if (points.length < 1) return null
+    const [cx, cy] = toLocal2D(points[0], upAxis)
+    const circleShape = new THREE.Shape()
+    circleShape.absarc(cx, cy, radius, 0, Math.PI * 2, false)
+    const geometry = new THREE.ShapeGeometry(circleShape, CIRCLE_SEGMENTS)
+    if (upAxis === 'y') geometry.rotateX(Math.PI / 2)
+
+    const borderPoints: THREE.Vector3[] = []
+    for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
+      const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
+      const x = cx + radius * Math.cos(angle)
+      const y = cy + radius * Math.sin(angle)
+      borderPoints.push(upAxis === 'z' ? new THREE.Vector3(x, y, 0) : new THREE.Vector3(x, 0, y))
+    }
+    const centroid = upAxis === 'z' ? new THREE.Vector3(cx, cy, 0) : new THREE.Vector3(cx, 0, cy)
+    return { geometry, borderPoints, centroid }
+  }
+
   if (points.length < 3) return null
 
-  const shape = new THREE.Shape()
+  const shapePath = new THREE.Shape()
   const [x0, y0] = toLocal2D(points[0], upAxis)
-  shape.moveTo(x0, y0)
+  shapePath.moveTo(x0, y0)
   for (let i = 1; i < points.length; i++) {
     const [x, y] = toLocal2D(points[i], upAxis)
-    shape.lineTo(x, y)
+    shapePath.lineTo(x, y)
   }
-  shape.closePath()
+  shapePath.closePath()
 
-  const geometry = new THREE.ShapeGeometry(shape)
+  const geometry = new THREE.ShapeGeometry(shapePath)
   if (upAxis === 'y') geometry.rotateX(Math.PI / 2)
 
   const borderPoints = points.map(p => {

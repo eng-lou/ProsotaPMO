@@ -49,7 +49,9 @@ class ElementKeyframeUpsert(BaseModel):
     # PathFollower's own docstring explains.
     # "annotation" (2026-07-12) — element_ref is the Annotation row's own id
     # (annotation.py), for pos_x/y/z and visible keyframes on a Placemark/
-    # Footnote.
+    # Comment, plus (2026-08-06) field="anim_start"/"anim_end" for its own
+    # whole-annotation reveal window — see annotation.py's own
+    # animate/animation_loop header.
     # "path"/"zone" (2026-07-30) — element_ref is the Path/Zone row's own id
     # (path.py/zone.py), used only for field="anim_start"/"anim_end" — see
     # KeyframeField's own header just above.

@@ -242,6 +242,18 @@ export interface AppliedAnimationState {
   opacity: number
   // null = don't touch the material's own colour.
   color: string | null
+  // Grow X/Y (2026-07-30, per Maro's own concrete-slab reference — "how it
+  // forms from the right to the left") — null unless
+  // profile.transform_kind === 'grow', in which case this is the same
+  // `eased` 0..1 progress every other transform_kind already derives
+  // (respecting trigger/interpolation identically), but Viewport3D.tsx's
+  // own per-frame loop is the one that turns it into an actual moving
+  // world-space clip plane against the target's own captured bounding
+  // box — this function stays position/scale/rotation/opacity-only
+  // otherwise, deliberately not reaching into Three.js clipping-plane
+  // territory itself (that needs the target's real Object3D, which this
+  // function never receives).
+  growProgress: number | null
 }
 
 const AXIS_VECTOR: Record<string, [number, number, number]> = {
@@ -368,6 +380,7 @@ export function computeAppliedAnimationStateAt(
   }
 
   const opacity = profile.opacity_from + (profile.opacity_to - profile.opacity_from) * eased
+  const growProgress = profile.transform_kind === 'grow' ? eased : null
 
-  return { positionOffset, rotationOffsetDeg, scaleMultiplier, opacity, color }
+  return { positionOffset, rotationOffsetDeg, scaleMultiplier, opacity, color, growProgress }
 }

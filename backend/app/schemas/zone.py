@@ -14,7 +14,9 @@ class ZonePoint(BaseModel):
 
 class ZoneBase(BaseModel):
     name: str = Field(default="Zone", min_length=1, max_length=300)
+    shape: str = Field(default="polygon", max_length=10)
     points: list[ZonePoint] = Field(default_factory=list)
+    radius: float = Field(default=5.0, gt=0)
     elevation: float = 0.0
     fill_color: str = Field(default="#ef4444", max_length=9)
     fill_opacity: float = Field(default=0.35, ge=0, le=1)
@@ -35,7 +37,9 @@ class ZoneCreate(ZoneBase):
 
 class ZoneUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=300)
+    shape: str | None = Field(default=None, max_length=10)
     points: list[ZonePoint] | None = None
+    radius: float | None = Field(default=None, gt=0)
     elevation: float | None = None
     fill_color: str | None = Field(default=None, max_length=9)
     fill_opacity: float | None = Field(default=None, ge=0, le=1)

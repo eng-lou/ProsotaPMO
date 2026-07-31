@@ -47,6 +47,7 @@ from app.api.paths import router as paths_router
 from app.api.periods import router as periods_router
 from app.api.project_letterhead import router as project_letterhead_router
 from app.api.projects import router as projects_router
+from app.api.radial_charts import router as radial_charts_router
 from app.api.reassessments import router as reassessments_router
 from app.api.record_links import router as record_links_router
 from app.api.resource_assignments import router as resource_assignments_router
@@ -155,6 +156,7 @@ app.include_router(element_splits_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(measurements_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(dashboard_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(dashboard_layouts_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(radial_charts_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")
