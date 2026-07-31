@@ -60,6 +60,7 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | Command | What it does |
 |---|---|
 | `python -c "import psycopg; conn = psycopg.connect(...); cur = conn.cursor(); cur.execute('select ...'); print(cur.fetchall())"` | Talks directly to the real Postgres database from the command line, bypassing the app entirely — useful when a bug might be in the *data itself* rather than the code. This is exactly how a real bug was found in session 20: querying the `periods` table directly revealed two "Period 1" rows created 1.5 milliseconds apart for the same project, something no amount of reading the code alone would have shown. |
+| `SELECT pid, state, query_start, query FROM pg_stat_activity WHERE datname = '<db_name>'` (run the same way, via a quick `python -c` + psycopg) | Lists every live connection currently open to a given database — who's connected, what they last ran, and whether they're idle or mid-query. Used to confirm a genuinely reproducible-looking test failure (`DeadlockDetected`) was actually caused by two `pytest` runs hitting the same test database at the same time, not a real code bug — the failures vanished entirely once this query showed zero lingering connections and the suite was run alone. |
 
 ## curl (a simple way to check a website or server from the command line)
 

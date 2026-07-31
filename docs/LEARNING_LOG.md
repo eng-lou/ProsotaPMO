@@ -3108,3 +3108,99 @@ metallic-roughness by spec, so `GLTFLoader` already returns a real
 
 **Not yet verified live** (unlike everything else in this entry) — Maro
 asked to commit before re-importing `man.fbx` to confirm the fix.
+
+## 2026-07-31 — Picking up a large uncommitted Annotation/Zone/Grow-Z
+rework, then building a new "Radial Progress Charts" feature end to end
+
+**Where the previous session had stopped**: a substantial Annotation/Zone
+rework was sitting fully built but uncommitted (9 chained Alembic
+migrations) — the "footnote" annotation kind scrapped and folded into
+"comment" (with a data migration for existing rows), the resolve/reopen
+`status` field removed outright, and a full CAD-style bent leader-line
+system added (offset_x/y/z, visible toggle, dot radius/color/rotation/
+scale, box_shape, placemark scale/rotation, background_opacity, and an
+animate/animation_loop reveal keyed as `ElementKeyframe` rows — same
+`anim_start`/`anim_end` convention Path/Zone already established — so it
+shows up in the Animation Timeline independent of any scheduled Activity).
+Separately, four new Animation Profile presets ("Grow X/-X/Y/-Y") had
+shipped the day before: a real materialise-across-footprint wipe via a
+moving world-space clip plane (`growClipPlane` in `Viewport3D.tsx`), not
+opacity fade or rigid translation. All of it verified (31/31 backend tests,
+clean `tsc`) but never committed, and no Learning Log entry existed for it —
+the session had ended mid-work rather than at a natural stopping point.
+Backend tests were re-run to confirm the inherited state was actually sound
+before building on top of it.
+
+**Grow Z**, per Maro: "add a z axis grow profile for animations like
+concrete column formations etc" — turned out to need zero new plumbing.
+`growAxisWorldVector` (`Viewport3D.tsx`) already had a branch resolving the
+semantic *vertical* axis correctly for either Y-up or Z-up projects; it
+just had no preset exposing it. Added `Grow Z`/`Grow -Z` to
+`animationProfiles.ts`'s `BUILTIN_PRESETS` — direction 1 (default) grows
+bottom-to-top, matching a column casting upward out of its own base.
+
+**Radial Progress Charts** — a new feature end to end, per Maro's own
+Synchro-style reference screenshot (a black-labeled progress ring per
+discipline, e.g. "CONCRETE STRUCTURE" filling orange as work progresses).
+Planned with `EnterPlanMode` first since it touched a genuinely new overlay
+category — not a 3D-world object like Zone/Annotation/Path, but a
+screen-space HUD widget with a saved percentage position:
+
+- **Backend**: a `RadialChart` resource mirroring Zone's file layout exactly
+  (model/schema/service/api, one new Alembic migration) plus a PNG-icon
+  upload/download pair reusing `model3d_storage.py`'s existing disk-storage
+  helpers (same convention as Material Preset textures — opaque UUID
+  filename on disk, never the user's own name).
+- **Progress math**: `radialChartProgress.ts` is a direct TypeScript port of
+  `scheduling_cpm.py`'s own `elapsed_duration_fraction` (same degenerate-
+  window handling), aggregated duration-weighted across whichever
+  Activities match a chart's own User Defined Field filter (e.g. "Sub
+  Discipline" = "Concrete Works") — reusing the existing
+  `POST /user-defined-fields/values/bulk-fetch` endpoint client-side rather
+  than adding a new backend query.
+- **Live HUD**: `RadialChartHud.tsx` renders as a plain absolutely-positioned
+  `<div>` sibling to Viewport3D's `<Canvas>` (same convention its existing
+  corner badges already use), runs its own `requestAnimationFrame` tick
+  loop reading `timelineDateRef.current` directly (never a React prop —
+  same "don't re-render the whole tree every scrub frame" reasoning that
+  ref already documents), and is dragged via a `DockDivider.tsx`-style
+  native mousemove/mouseup listener pair, converting pixel deltas into a
+  percent-of-viewport position committed on release.
+- **Export**: a new `includeRadialCharts` master toggle in
+  `RenderCaptureSettings` (same "off by default" precedent as
+  `includeAppearanceLegend`), with a new `drawRadialChart` canvas function
+  slotting into `exportOverlays.ts`'s existing per-frame compositing
+  pipeline.
+
+**Verified live in the browser** (Hospital project, real IFC model):
+opened the panel, created a chart, saw it render in-viewport with a live
+"0%" ring, dragged it to a new corner, reloaded the page, and confirmed the
+position round-tripped through the backend correctly.
+
+**A real, reproducible bug caught the hard way — running two `pytest`
+sessions against the same test database concurrently deadlocks Postgres**:
+a full-suite run reported 150 failed/8 errors, every one of them in
+scheduling/CPM/reschedule/variant tests this session never touched. The
+actual error was `psycopg.errors.DeadlockDetected` on `schedule_subprojects`
+— two different Postgres backend processes blocking each other. Root
+cause: a second full-suite run had been started (to double-check) before
+the first one had actually finished, and `conftest.py`'s own autouse
+`_truncate` fixture runs a `TRUNCATE ... CASCADE` after *every single test*
+— which collides badly with a second session's concurrent queries against
+the same shared `prosotapmo_test` database. Confirmed directly by checking
+`pg_stat_activity` for lingering connections, then running the suite a
+third time, alone, once the other session had genuinely finished: clean,
+814 passed, 1 failed — and that one failure
+(`test_dashboard_baseline_comparison.py::test_schedule_spi_uses_baseline_vs_current_schedule_linked_cost_data`,
+`baseline_spi_first` reads `None`) is pre-existing, in a file this session
+never touched (confirmed via `git diff --stat` showing zero changes to it
+or to `dashboard.py`/`cost_element.py`), likely a real gap in the Controls
+Dashboard's SPI-vs-baseline calc worth a look in its own separate session.
+**The lesson**: never run this project's backend test suite twice at once
+against the shared local Postgres test DB — the resulting failures look
+exactly like a real regression (specific, reproducible, deterministic) but
+are actually pure lock-contention noise; the tell is that every failure
+clusters in files unrelated to whatever was just changed.
+
+Committed and pushed per Maro's own explicit request (heading out for two
+days) once the clean single-session suite confirmed nothing was broken.
