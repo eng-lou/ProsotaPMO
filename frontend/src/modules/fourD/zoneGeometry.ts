@@ -68,20 +68,47 @@ export function buildZoneShapeGeometry(
   if (shape === 'circle') {
     if (points.length < 1) return null
     const [cx, cy] = toLocal2D(points[0], upAxis)
-    const isWedge = sweepAngle < Math.PI * 2
+    // Snap a near-complete sweep to an exact full circle (2026-08-03, per
+    // Maro: "the full sweep is not ideal") — a live reveal's `progress`
+    // rarely lands on EXACTLY 1 (frame timing, easing, loop wraparound),
+    // so `sweepAngle` rarely lands on EXACTLY 2π either. Without this, a
+    // "finished" sweep sat forever just short of a full circle: the two
+    // straight center→arc "spoke" border edges never disappeared (a
+    // persistent seam/notch instead of a clean ring), and ShapeGeometry's
+    // own earcut triangulation of an almost-but-not-quite-closed wedge is
+    // a known source of stray sliver triangles for near-degenerate
+    // polygons — exactly the jagged artifacts seen right at the end of a
+    // real sweep. Below this threshold, behaviour is unchanged.
+    const FULL_CIRCLE_EPSILON = 0.01
+    const effectiveSweep = sweepAngle >= Math.PI * 2 - FULL_CIRCLE_EPSILON ? Math.PI * 2 : sweepAngle
+    const isWedge = effectiveSweep < Math.PI * 2
     const circleShape = new THREE.Shape()
-    if (isWedge) circleShape.moveTo(cx, cy)
-    circleShape.absarc(cx, cy, radius, 0, sweepAngle, false)
+    // A real pie *sector* (arc + two straight radii to center), not a
+    // *segment* (arc + a single chord) — per Maro: "per slice the fill
+    // exist with the center of the circle as the focal point." absarc()
+    // only auto-inserts a connecting line from the *previous curve's own
+    // endpoint* — a bare moveTo() with no curve pushed yet doesn't count
+    // (Path.absellipse's own "if (this.curves.length > 0)" guard), so
+    // moveTo(center) alone was silently discarded and the shape's fill
+    // ended up built purely from the arc's own sampled points, closed by
+    // a straight chord between its two ends — exactly a lens/segment, not
+    // a slice. The explicit lineTo to the arc's own start point (angle 0)
+    // is what actually links the center into the path as a real vertex.
+    if (isWedge) {
+      circleShape.moveTo(cx, cy)
+      circleShape.lineTo(cx + radius, cy)
+    }
+    circleShape.absarc(cx, cy, radius, 0, effectiveSweep, false)
     if (isWedge) circleShape.closePath()
     const geometry = new THREE.ShapeGeometry(circleShape, CIRCLE_SEGMENTS)
     if (upAxis === 'y') geometry.rotateX(Math.PI / 2)
 
     const toVec3 = (x: number, y: number) => (upAxis === 'z' ? new THREE.Vector3(x, y, 0) : new THREE.Vector3(x, 0, y))
-    const arcSegments = isWedge ? Math.max(2, Math.round(CIRCLE_SEGMENTS * (sweepAngle / (Math.PI * 2)))) : CIRCLE_SEGMENTS
+    const arcSegments = isWedge ? Math.max(2, Math.round(CIRCLE_SEGMENTS * (effectiveSweep / (Math.PI * 2)))) : CIRCLE_SEGMENTS
     const borderPoints: THREE.Vector3[] = []
     if (isWedge) borderPoints.push(toVec3(cx, cy))
     for (let i = 0; i <= arcSegments; i++) {
-      const angle = (i / arcSegments) * sweepAngle
+      const angle = (i / arcSegments) * effectiveSweep
       borderPoints.push(toVec3(cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)))
     }
     if (isWedge) borderPoints.push(toVec3(cx, cy))

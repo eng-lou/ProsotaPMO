@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { Html, Line } from '@react-three/drei'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
-import type { Line2 } from 'three-stdlib'
+import { LineGeometry, type Line2 } from 'three-stdlib'
 import type { Zone, ZonePoint } from './zones'
 import { buildZoneShapeGeometry, densifyBorderForReveal, sliceRevealVectors, zonePlane } from './zoneGeometry'
 import type { UpAxis } from './upAxis'
@@ -71,8 +71,27 @@ function ZoneGizmo({
   // cleanup effect below already established, just per-frame instead of
   // per-unmount.
   const sweepGeometryRef = useRef<THREE.BufferGeometry | null>(null)
+  // The border's own per-frame geometry during 'sweep' (2026-08-03, per
+  // Maro: reported mismatch between the fill wedge and its border — one
+  // spoke edge staying stuck at a stale, much larger sweep angle instead
+  // of tracking the current one). Line2's own setPositions()+
+  // resetLine2InstanceCap() mutate-in-place approach (used by 'draw'/
+  // 'flash' above, and originally by this mode too) relies on three.js's
+  // WebGLBindingStates re-caching geometry._maxInstanceCount on the very
+  // next render after the reset — correct for 'draw''s always-growing
+  // reveal, but a sweep's border swings both up AND down as the timeline
+  // gets scrubbed back and forth, a pattern that never got proven against
+  // that caching path. Sidestepping it entirely: a genuinely fresh
+  // LineGeometry every frame (same "replace the whole object, dispose the
+  // previous one" approach the fill mesh's own sweepGeometryRef already
+  // uses above) can never carry a stale cached instance count, since it's
+  // never been rendered before this frame.
+  const sweepBorderGeometryRef = useRef<InstanceType<typeof LineGeometry> | null>(null)
   useEffect(() => {
-    return () => { sweepGeometryRef.current?.dispose() }
+    return () => {
+      sweepGeometryRef.current?.dispose()
+      sweepBorderGeometryRef.current?.dispose()
+    }
   }, [])
 
   const shapeResult = useMemo(
@@ -149,8 +168,24 @@ function ZoneGizmo({
       if (wasAnimatingRef.current) {
         wasAnimatingRef.current = false
         if (lineRef.current && shapeResult) {
-          lineRef.current.geometry.setPositions(shapeResult.borderPoints.flatMap(p => [p.x, p.y, p.z]))
-          resetLine2InstanceCap(lineRef.current.geometry)
+          const fullBorderPositions = shapeResult.borderPoints.flatMap(p => [p.x, p.y, p.z])
+          if (sweepBorderGeometryRef.current) {
+            // Recovering from 'sweep' — lineRef.current.geometry currently
+            // points at our own per-frame object (see the sweep branch
+            // below), not drei's originally-managed one, so this builds one
+            // more fresh instance rather than mutating-then-disposing
+            // whatever's still actively assigned (which would leave
+            // lineRef.current.geometry pointing at a disposed object).
+            const restored = new LineGeometry()
+            restored.setPositions(fullBorderPositions)
+            const previous = sweepBorderGeometryRef.current
+            lineRef.current.geometry = restored
+            sweepBorderGeometryRef.current = null
+            previous.dispose()
+          } else {
+            lineRef.current.geometry.setPositions(fullBorderPositions)
+            resetLine2InstanceCap(lineRef.current.geometry)
+          }
           lineRef.current.computeLineDistances()
           lineRef.current.visible = true
         }
@@ -202,9 +237,21 @@ function ZoneGizmo({
         sweepGeometryRef.current?.dispose()
         sweepGeometryRef.current = sweepResult.geometry
         if (lineRef.current) {
+          // A genuinely fresh LineGeometry every frame, not an in-place
+          // setPositions() mutation of whatever's already there — see
+          // sweepBorderGeometryRef's own header above for why: this
+          // deliberately avoids relying on resetLine2InstanceCap's
+          // "correct again on the very next render" caching behaviour,
+          // which 'draw'/'flash' lean on safely (a reveal that only ever
+          // grows) but a sweep's border — which can grow *or* shrink as
+          // the timeline gets scrubbed in either direction — never had
+          // proven against.
+          const borderGeom = new LineGeometry()
+          borderGeom.setPositions(sweepResult.borderPoints.flatMap(p => [p.x, p.y, p.z]))
+          sweepBorderGeometryRef.current?.dispose()
+          sweepBorderGeometryRef.current = borderGeom
+          lineRef.current.geometry = borderGeom
           lineRef.current.visible = true
-          lineRef.current.geometry.setPositions(sweepResult.borderPoints.flatMap(p => [p.x, p.y, p.z]))
-          resetLine2InstanceCap(lineRef.current.geometry)
           lineRef.current.computeLineDistances()
         }
       }
