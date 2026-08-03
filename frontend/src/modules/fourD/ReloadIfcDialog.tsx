@@ -29,10 +29,10 @@ export function ReloadIfcDialog({ fileName, unloadedElements, onReload, onCancel
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
-      <div className="w-[420px] max-h-[80vh] flex flex-col bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-bold text-gray-800">Reload "{fileName}"</h3>
-          <p className="text-[11px] text-gray-400 mt-1">
+      <div className="w-[420px] max-h-[80vh] flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line">
+          <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Reload "{fileName}"</h3>
+          <p className="text-[11px] text-gray-400 dark:text-prosota-muted mt-1">
             Re-downloads and re-parses this file fresh, then keeps everything unchecked below still unloaded.
             Check the elements you want brought back.
           </p>
@@ -41,32 +41,32 @@ export function ReloadIfcDialog({ fileName, unloadedElements, onReload, onCancel
           <div className="flex justify-end gap-2 px-2 pb-1">
             <button
               onClick={() => setCheckedGuids(new Set(unloadedElements.map(e => e.guid)))}
-              className="text-[11px] text-blue-600 hover:underline"
+              className="text-[11px] text-blue-600 dark:text-prosota-azure hover:underline"
             >
               Check All
             </button>
-            <button onClick={() => setCheckedGuids(new Set())} className="text-[11px] text-blue-600 hover:underline">
+            <button onClick={() => setCheckedGuids(new Set())} className="text-[11px] text-blue-600 dark:text-prosota-azure hover:underline">
               Check None
             </button>
           </div>
           {unloadedElements.map(el => (
-            <label key={el.guid} className="flex items-center gap-2 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 rounded cursor-pointer">
+            <label key={el.guid} className="flex items-center gap-2 px-2 py-1 text-xs text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 rounded cursor-pointer">
               <input type="checkbox" checked={checkedGuids.has(el.guid)} onChange={() => toggle(el.guid)} />
               <span className="truncate flex-1" title={el.name || el.type_name}>{el.name || '(unnamed)'}</span>
-              <span className="text-gray-400 shrink-0">{el.type_name}</span>
+              <span className="text-gray-400 dark:text-prosota-muted shrink-0">{el.type_name}</span>
             </label>
           ))}
         </div>
-        <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-2">
-          <span className="text-[11px] text-gray-400">{checkedGuids.size} of {unloadedElements.length} selected</span>
+        <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex items-center justify-between gap-2">
+          <span className="text-[11px] text-gray-400 dark:text-prosota-muted">{checkedGuids.size} of {unloadedElements.length} selected</span>
           <div className="flex gap-2">
-            <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+            <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
               Cancel
             </button>
             <button
               onClick={() => onReload([...checkedGuids])}
               disabled={checkedGuids.size === 0}
-              className="text-xs px-3 py-1.5 rounded-md border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-xs px-3 py-1.5 rounded-md border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reload Selected
             </button>

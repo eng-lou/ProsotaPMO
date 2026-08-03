@@ -155,26 +155,26 @@ export function ProjectSelector() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <span className="text-gray-400 text-sm">Loading projects…</span>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink">
+        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading projects…</span>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-prosota-ink flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-2xl">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">Select a project</h1>
-          <p className="text-gray-500 text-sm mt-1">Choose a project to continue into Prosota</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Select a project</h1>
+          <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota</p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center justify-between gap-3">
+          <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm flex items-center justify-between gap-3">
             {error}
             <button
               onClick={() => { setError(null); setLoading(true); refresh() }}
-              className="shrink-0 text-red-700 hover:text-red-800 font-medium underline"
+              className="shrink-0 text-red-700 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium underline"
             >
               Retry
             </button>
@@ -182,8 +182,8 @@ export function ProjectSelector() {
         )}
 
         {selectedIds.size > 0 && (
-          <div className="mb-3 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
-            <span className="text-xs font-medium text-blue-800">{selectedIds.size} selected</span>
+          <div className="mb-3 flex items-center gap-3 bg-blue-50 dark:bg-prosota-azure/10 border border-blue-200 dark:border-prosota-azure/30 rounded-lg px-4 py-2.5">
+            <span className="text-xs font-medium text-blue-800 dark:text-prosota-azure">{selectedIds.size} selected</span>
             <button
               onClick={() => handleSetStatus('active')}
               disabled={working}
@@ -194,20 +194,20 @@ export function ProjectSelector() {
             <button
               onClick={() => handleSetStatus('archived')}
               disabled={working}
-              className="text-xs text-gray-600 hover:text-gray-800 font-medium disabled:opacity-50"
+              className="text-xs text-gray-600 dark:text-prosota-muted hover:text-gray-800 font-medium disabled:opacity-50"
             >
               Archive
             </button>
             <button
               onClick={handleDelete}
               disabled={working}
-              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+              className="text-xs text-red-600 dark:text-red-400 hover:text-red-700 font-medium disabled:opacity-50"
             >
               Delete
             </button>
             <button
               onClick={() => setSelectedIds(new Set())}
-              className="text-xs text-gray-400 hover:text-gray-600 ml-auto"
+              className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper ml-auto"
             >
               Clear
             </button>
@@ -220,7 +220,7 @@ export function ProjectSelector() {
             return (
               <div
                 key={project.id}
-                className="w-full flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
+                className="w-full flex items-center gap-3 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg px-5 py-4 hover:border-blue-400 hover:shadow-sm transition-all group"
               >
                 {activeAction ? (
                   <div className="flex-1 flex items-center gap-2 min-w-0">
@@ -229,7 +229,7 @@ export function ProjectSelector() {
                       value={activeAction.value}
                       onChange={e => setRowAction({ ...activeAction, value: e.target.value })}
                       onKeyDown={e => { if (e.key === 'Enter') confirmRowAction(); if (e.key === 'Escape') cancelRowAction() }}
-                      className="flex-1 min-w-0 border border-blue-400 rounded-md px-3 py-1.5 text-sm focus:outline-none"
+                      className="flex-1 min-w-0 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm focus:outline-none"
                     />
                     <button
                       onClick={confirmRowAction}
@@ -241,11 +241,11 @@ export function ProjectSelector() {
                     <button
                       onClick={cancelRowAction}
                       disabled={rowActionBusy}
-                      className="shrink-0 text-xs px-3 py-1.5 rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-md text-gray-500 dark:text-prosota-muted hover:bg-gray-100 dark:hover:bg-prosota-panel2 disabled:opacity-50"
                     >
                       Cancel
                     </button>
-                    {rowActionError && <span className="shrink-0 text-xs text-red-600">{rowActionError}</span>}
+                    {rowActionError && <span className="shrink-0 text-xs text-red-600 dark:text-red-400">{rowActionError}</span>}
                   </div>
                 ) : (
                   <>
@@ -258,15 +258,15 @@ export function ProjectSelector() {
                     />
                     <button onClick={() => handleSelect(project)} className="flex-1 text-left flex items-center justify-between min-w-0">
                       <div className="min-w-0">
-                        <p className="font-medium text-gray-900 group-hover:text-blue-600 truncate">{project.name}</p>
+                        <p className="font-medium text-gray-900 dark:text-prosota-paper group-hover:text-blue-600 truncate">{project.name}</p>
                         {project.client_name && (
-                          <p className="text-sm text-gray-500 mt-0.5 truncate">{project.client_name}</p>
+                          <p className="text-sm text-gray-500 dark:text-prosota-muted mt-0.5 truncate">{project.client_name}</p>
                         )}
                       </div>
                       <span className={`shrink-0 ml-3 text-xs px-2 py-1 rounded-full font-medium ${
                         project.status === 'active'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-500'
+                          ? 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400'
+                          : 'bg-gray-100 dark:bg-prosota-panel2 text-gray-500 dark:text-prosota-muted'
                       }`}>
                         {project.status}
                       </span>
@@ -274,13 +274,13 @@ export function ProjectSelector() {
                     <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={e => { e.stopPropagation(); startRename(project) }}
-                        className="text-xs text-gray-400 hover:text-blue-600 font-medium"
+                        className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 font-medium"
                       >
                         Rename
                       </button>
                       <button
                         onClick={e => { e.stopPropagation(); startDuplicate(project) }}
-                        className="text-xs text-gray-400 hover:text-blue-600 font-medium"
+                        className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 font-medium"
                       >
                         Duplicate
                       </button>
@@ -292,29 +292,29 @@ export function ProjectSelector() {
           })}
 
           {projects.length === 0 && !creating && !error && (
-            <p className="text-gray-400 text-sm text-center py-8">
+            <p className="text-gray-400 dark:text-prosota-muted text-sm text-center py-8">
               No projects yet. Create your first one below.
             </p>
           )}
         </div>
 
         {creating ? (
-          <form onSubmit={handleCreate} className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
-            <h2 className="font-medium text-gray-900 text-sm">New project</h2>
+          <form onSubmit={handleCreate} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 space-y-3">
+            <h2 className="font-medium text-gray-900 dark:text-prosota-paper text-sm">New project</h2>
             <input
               autoFocus
               type="text"
               placeholder="Project name"
               value={newName}
               onChange={e => setNewName(e.target.value)}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <input
               type="text"
               placeholder="Client name (optional)"
               value={newClient}
               onChange={e => setNewClient(e.target.value)}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <div className="flex gap-2">
               <button
@@ -326,7 +326,7 @@ export function ProjectSelector() {
               <button
                 type="button"
                 onClick={() => setCreating(false)}
-                className="text-gray-500 px-4 py-2 rounded-md text-sm hover:bg-gray-100"
+                className="text-gray-500 dark:text-prosota-muted px-4 py-2 rounded-md text-sm hover:bg-gray-100 dark:hover:bg-prosota-panel2"
               >
                 Cancel
               </button>
@@ -335,7 +335,7 @@ export function ProjectSelector() {
         ) : (
           <button
             onClick={() => setCreating(true)}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
           >
             + New project
           </button>

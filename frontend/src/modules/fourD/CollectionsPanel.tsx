@@ -92,7 +92,7 @@ function CollectionNode({
       <div className="px-3 py-2" style={{ paddingLeft: `${12 + depth * 16}px` }}>
         <div className="flex items-center gap-1.5">
           {children.length > 0 || collection.members.length > 0 ? (
-            <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 w-3 shrink-0" title={expanded ? 'Collapse' : 'Expand'}>
+            <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 dark:text-prosota-muted w-3 shrink-0" title={expanded ? 'Collapse' : 'Expand'}>
               {expanded ? '▾' : '▸'}
             </button>
           ) : (
@@ -108,31 +108,31 @@ function CollectionNode({
                 if (e.key === 'Enter') commitRename()
                 if (e.key === 'Escape') { setDraftName(collection.name); setEditing(false) }
               }}
-              className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+              className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
             />
           ) : (
             <span
               onDoubleClick={() => setEditing(true)}
-              className="flex-1 text-xs text-gray-700 truncate cursor-text"
+              className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text"
               title="Double-click to rename"
             >
               {collection.name}
-              <span className="text-gray-400 ml-1">({collection.members.length})</span>
+              <span className="text-gray-400 dark:text-prosota-muted ml-1">({collection.members.length})</span>
             </span>
           )}
           <select
             value={collection.parent_collection_id ?? ''}
             onChange={e => onReparent(collection.id, e.target.value || null)}
             title="Move to another collection"
-            className="text-xs border border-gray-300 rounded px-1 py-0.5 max-w-[90px] shrink-0"
+            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 max-w-[90px] shrink-0"
           >
             <option value="">— top level —</option>
             {moveTargets.map(c => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          <button onClick={() => onCreate(collection.id)} title="Add sub-collection" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">+</button>
-          <button onClick={() => onDelete(collection.id)} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+          <button onClick={() => onCreate(collection.id)} title="Add sub-collection" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">+</button>
+          <button onClick={() => onDelete(collection.id)} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
         </div>
         {/* Second row: acting on the collection's *contents* (including
             nested sub-collections' contents — see FourD.tsx's own
@@ -143,7 +143,7 @@ function CollectionNode({
             onClick={() => onSelect(collection.id)}
             disabled={!hasAnyMembers}
             title="Select every element in this collection"
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             Select
           </button>
@@ -151,7 +151,7 @@ function CollectionNode({
             onClick={() => onHide(collection.id)}
             disabled={!hasAnyMembers}
             title="Hide every element in this collection"
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             Hide
           </button>
@@ -159,7 +159,7 @@ function CollectionNode({
             onClick={() => onUnhide(collection.id)}
             disabled={!hasAnyMembers}
             title="Unhide every element in this collection"
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             Unhide
           </button>
@@ -167,7 +167,7 @@ function CollectionNode({
             onClick={() => onIsolate(collection.id)}
             disabled={!hasAnyMembers}
             title="Isolate — show only this collection's elements"
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             Isolate
           </button>
@@ -175,7 +175,7 @@ function CollectionNode({
             onClick={() => onAddSelected(collection.id)}
             disabled={!canAddSelected}
             title={canAddSelected ? 'Add the current viewport selection to this collection' : 'Select something in the viewport first'}
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             ⊕ Add Selected
           </button>
@@ -183,7 +183,7 @@ function CollectionNode({
             onClick={() => onRemoveSelected(collection.id)}
             disabled={!canAddSelected || collection.members.length === 0}
             title={canAddSelected ? 'Remove the current viewport selection from this collection' : 'Select something in the viewport first'}
-            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:hover:bg-transparent"
           >
             ⊖ Remove Selected
           </button>
@@ -203,7 +203,7 @@ function CollectionNode({
                 key={member.id}
                 onClick={() => onSelectMember(member)}
                 title={`Select ${member.element_label}`}
-                className="block w-full text-left text-[11px] text-gray-500 hover:text-blue-700 hover:bg-gray-50 rounded px-1 py-0.5 truncate"
+                className="block w-full text-left text-[11px] text-gray-500 dark:text-prosota-muted hover:text-blue-700 dark:hover:text-prosota-cyan hover:bg-gray-50 dark:hover:bg-prosota-panel2 rounded px-1 py-0.5 truncate"
               >
                 {member.element_label}
               </button>
@@ -249,19 +249,19 @@ export function CollectionsPanel({
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Collections</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Collections</span>
         <button
           onClick={() => onCreate(null)}
           title="Add a new top-level collection"
-          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+          className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           + Add
         </button>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {roots.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           "+ Add" to create a collection, then group elements into it however you like — independent of the model's own import hierarchy.
         </p>
       ) : (

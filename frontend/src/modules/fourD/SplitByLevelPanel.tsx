@@ -379,37 +379,37 @@ export function SplitByLevelPanel({
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Split by Level</span>
-        <button onClick={onClose} title="Close" className="text-xs text-gray-400 hover:text-gray-700">✕</button>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Split by Level</span>
+        <button onClick={onClose} title="Close" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper">✕</button>
       </div>
       {!handle || selectedExpressIds.size === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">Select one or more IFC elements in the viewport first.</p>
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">Select one or more IFC elements in the viewport first.</p>
       ) : storeys === null ? (
-        <p className="px-3 py-3 text-xs text-gray-400">Loading storeys…</p>
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">Loading storeys…</p>
       ) : storeys.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           No storey sits strictly within the selected element(s)' own height — nothing to cut.
         </p>
       ) : (
         <>
-          <p className="px-3 py-2 text-xs text-gray-500">
+          <p className="px-3 py-2 text-xs text-gray-500 dark:text-prosota-muted">
             {selectedExpressIds.size} element{selectedExpressIds.size === 1 ? '' : 's'} selected. Pick which levels to cut at:
           </p>
           <div className="px-3 space-y-1 pb-2">
             {storeys.map(s => (
-              <label key={s.expressID} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+              <label key={s.expressID} className="flex items-center gap-2 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer">
                 <input type="checkbox" checked={checkedElevations.has(s.worldElevation)} onChange={() => toggleElevation(s.worldElevation)} />
                 {s.name}
               </label>
             ))}
           </div>
-          {error && <p className="px-3 pb-2 text-xs text-red-600">{error}</p>}
+          {error && <p className="px-3 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
           <div className="px-3 pb-3">
             <button
               onClick={handleCommit}
               disabled={busy || checkedElevations.size === 0}
-              className="text-xs px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy ? 'Splitting…' : `Split at ${checkedElevations.size} level${checkedElevations.size === 1 ? '' : 's'}`}
             </button>
@@ -427,20 +427,20 @@ export function SplitByLevelPanel({
           mesh becomes visible/selectable again with no separate restore
           step. */}
       {elementSplits.length > 0 && (
-        <div className="border-t border-gray-100 mt-2 pt-2">
-          <p className="px-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide">Existing Splits</p>
+        <div className="border-t border-gray-100 dark:border-prosota-line mt-2 pt-2">
+          <p className="px-3 pb-1 text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Existing Splits</p>
           <div className="px-3 space-y-1 pb-3">
             {elementSplits.map(split => (
-              <div key={split.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
+              <div key={split.id} className="flex items-center justify-between gap-2 text-xs text-gray-700 dark:text-prosota-muted">
                 <span className="truncate" title={split.element_ref}>
                   {splitLabels[split.id] ?? `${split.element_ref.slice(0, 12)}…`}
-                  <span className="text-gray-400 ml-1">({split.cut_elevations_m.length} cuts)</span>
+                  <span className="text-gray-400 dark:text-prosota-muted ml-1">({split.cut_elevations_m.length} cuts)</span>
                 </span>
                 <button
                   onClick={() => handleUnsplit(split.id)}
                   disabled={removingSplitId === split.id}
                   title="Remove this split — restores the original whole element"
-                  className="text-gray-400 hover:text-red-600 shrink-0 disabled:opacity-40"
+                  className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0 disabled:opacity-40"
                 >
                   {removingSplitId === split.id ? '…' : '✕'}
                 </button>

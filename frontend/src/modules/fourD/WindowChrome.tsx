@@ -26,19 +26,19 @@ interface Props {
 // which dock it's currently in beyond which icon to show.
 export function WindowChrome({ title, subtitle, headerActions, dock, onToggleDock, onClose, children }: Props) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 bg-gray-50 shrink-0">
-        <span className="text-xs font-bold text-gray-700">{title}</span>
-        {subtitle && <span className="text-xs text-gray-400">{subtitle}</span>}
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col h-full overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0">
+        <span className="text-xs font-bold text-gray-700 dark:text-prosota-muted">{title}</span>
+        {subtitle && <span className="text-xs text-gray-400 dark:text-prosota-muted">{subtitle}</span>}
         {headerActions}
         <button
           onClick={onToggleDock}
           title={dock === 'top' ? 'Move to bottom' : 'Move to top'}
-          className="ml-auto text-gray-400 hover:text-gray-600"
+          className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
         >
           {dock === 'top' ? '▾' : '▴'}
         </button>
-        <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-600">✕</button>
+        <button onClick={onClose} title="Close" className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">✕</button>
       </div>
       <div className="flex-1 min-h-0 overflow-auto">{children}</div>
     </div>

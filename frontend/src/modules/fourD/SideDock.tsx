@@ -43,32 +43,32 @@ export function SideDock({ side, panels }: Props) {
   const active = panels.find(p => p.id === activeId) ?? panels[0]
 
   return (
-    <div className={`w-72 shrink-0 bg-white flex flex-col overflow-hidden ${side === 'left' ? 'border-r' : 'border-l'} border-gray-200`}>
+    <div className={`w-72 shrink-0 bg-white dark:bg-prosota-panel flex flex-col overflow-hidden ${side === 'left' ? 'border-r' : 'border-l'} border-gray-200 dark:border-prosota-line`}>
       {panels.length > 1 ? (
-        <div className="flex items-center border-b border-gray-200 shrink-0">
+        <div className="flex items-center border-b border-gray-200 dark:border-prosota-line shrink-0">
           {panels.map(p => (
             <button
               key={p.id}
               onClick={() => setActiveId(p.id)}
               className={`flex-1 text-xs font-bold px-3 py-2 border-b-2 ${
-                p.id === active.id ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+                p.id === active.id ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
               }`}
             >
               {p.label}
             </button>
           ))}
-          <button onClick={active.onToggleDock} title={side === 'left' ? 'Move to right' : 'Move to left'} className="px-1.5 text-gray-400 hover:text-gray-600 shrink-0">
+          <button onClick={active.onToggleDock} title={side === 'left' ? 'Move to right' : 'Move to left'} className="px-1.5 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">
             {side === 'left' ? '▸' : '◂'}
           </button>
-          <button onClick={active.onClose} title="Hide" className="px-1.5 text-gray-400 hover:text-gray-600 shrink-0">✕</button>
+          <button onClick={active.onClose} title="Hide" className="px-1.5 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">✕</button>
         </div>
       ) : (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 shrink-0">
-          <span className="text-sm font-bold text-gray-700">{active.label}</span>
-          <button onClick={active.onToggleDock} title={side === 'left' ? 'Move to right' : 'Move to left'} className="ml-auto text-gray-400 hover:text-gray-600">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-prosota-line shrink-0">
+          <span className="text-sm font-bold text-gray-700 dark:text-prosota-muted">{active.label}</span>
+          <button onClick={active.onToggleDock} title={side === 'left' ? 'Move to right' : 'Move to left'} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
             {side === 'left' ? '▸' : '◂'}
           </button>
-          <button onClick={active.onClose} title="Hide" className="text-gray-400 hover:text-gray-600">✕</button>
+          <button onClick={active.onClose} title="Hide" className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">✕</button>
         </div>
       )}
       <div className="flex-1 overflow-y-auto">

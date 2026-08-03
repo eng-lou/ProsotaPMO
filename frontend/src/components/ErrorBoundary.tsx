@@ -27,19 +27,19 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-8">
-          <div className="max-w-lg w-full bg-white border border-red-200 rounded-lg shadow-sm p-6">
-            <h1 className="text-lg font-bold text-red-700 mb-2">Something went wrong</h1>
-            <p className="text-sm text-gray-600 mb-4">
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink p-8">
+          <div className="max-w-lg w-full bg-white dark:bg-prosota-panel border border-red-200 dark:border-red-500/30 rounded-lg shadow-sm p-6">
+            <h1 className="text-lg font-bold text-red-700 dark:text-red-400 mb-2">Something went wrong</h1>
+            <p className="text-sm text-gray-600 dark:text-prosota-muted mb-4">
               This screen hit an unexpected error and couldn't continue. Reloading usually fixes it — if it keeps
               happening, screenshot the details below.
             </p>
-            <pre className="text-xs bg-gray-50 border border-gray-200 rounded p-3 overflow-auto max-h-48 mb-4 whitespace-pre-wrap">
+            <pre className="text-xs bg-gray-50 dark:bg-prosota-panel2 border border-gray-200 dark:border-prosota-line dark:text-prosota-paper rounded p-3 overflow-auto max-h-48 mb-4 whitespace-pre-wrap">
               {this.state.error.message}
             </pre>
             <button
               onClick={() => window.location.reload()}
-              className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+              className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80"
             >
               Reload
             </button>

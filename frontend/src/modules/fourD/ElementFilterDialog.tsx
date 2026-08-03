@@ -133,15 +133,15 @@ export function ElementFilterDialog({ handle, expressIds, onApply, onClose }: Pr
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
-      <div className="w-[640px] max-h-[80vh] flex flex-col bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-800">Filter Selection</h3>
-          <div className="text-xs text-gray-400">{expressIds.length} elements selected</div>
+      <div className="w-[640px] max-h-[80vh] flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Filter Selection</h3>
+          <div className="text-xs text-gray-400 dark:text-prosota-muted">{expressIds.length} elements selected</div>
         </div>
 
         <div className="px-4 py-3 flex-1 overflow-y-auto">
           {loading ? (
-            <div className="text-xs text-gray-400 py-8 text-center">Scanning selection…</div>
+            <div className="text-xs text-gray-400 dark:text-prosota-muted py-8 text-center">Scanning selection…</div>
           ) : (
             <div className="grid grid-cols-2 gap-4">
               <FilterSection
@@ -164,10 +164,10 @@ export function ElementFilterDialog({ handle, expressIds, onApply, onClose }: Pr
           )}
         </div>
 
-        <div className="px-4 py-3 border-t border-gray-100 flex justify-between items-center">
-          <div className="text-xs text-gray-500">Total Selected Items: <span className="font-bold text-gray-800">{totalSelected}</span></div>
+        <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-between items-center">
+          <div className="text-xs text-gray-500 dark:text-prosota-muted">Total Selected Items: <span className="font-bold text-gray-800 dark:text-prosota-paper">{totalSelected}</span></div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+            <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
               Cancel
             </button>
             <button
@@ -193,21 +193,21 @@ function FilterSection({ title, counts, checked, onToggle, onCheckAll, onCheckNo
   onCheckNone: () => void
 }) {
   return (
-    <div className="border border-gray-200 rounded-md flex flex-col">
-      <div className="px-2.5 py-2 border-b border-gray-100 flex items-center justify-between">
-        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">{title}</span>
+    <div className="border border-gray-200 dark:border-prosota-line rounded-md flex flex-col">
+      <div className="px-2.5 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between">
+        <span className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">{title}</span>
         <div className="flex gap-1">
-          <button onClick={onCheckAll} className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-50">All</button>
-          <button onClick={onCheckNone} className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-50">None</button>
+          <button onClick={onCheckAll} className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">All</button>
+          <button onClick={onCheckNone} className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">None</button>
         </div>
       </div>
       <div className="max-h-64 overflow-y-auto">
-        {counts.length === 0 && <div className="px-2.5 py-2 text-[11px] text-gray-400">Nothing to filter.</div>}
+        {counts.length === 0 && <div className="px-2.5 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">Nothing to filter.</div>}
         {counts.map(([name, count]) => (
-          <label key={name} className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer">
+          <label key={name} className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer">
             <input type="checkbox" checked={checked.has(name)} onChange={() => onToggle(name)} />
             <span className="flex-1 truncate">{name}</span>
-            <span className="text-gray-400">{count}</span>
+            <span className="text-gray-400 dark:text-prosota-muted">{count}</span>
           </label>
         ))}
       </div>

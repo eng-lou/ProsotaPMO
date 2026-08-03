@@ -75,8 +75,8 @@ interface CostFormProps {
 }
 
 const inputClass =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
-const labelClass = 'block text-xs font-medium text-gray-600 mb-1'
+  'w-full border border-gray-300 dark:border-prosota-line rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+const labelClass = 'block text-xs font-medium text-gray-600 dark:text-prosota-muted mb-1'
 
 export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
   const [values, setValues] = useState<CostFormValues>(() => toFormValues(costElement))
@@ -131,19 +131,19 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="bg-white border border-gray-200 rounded-lg p-5 space-y-4 mb-6"
+      className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 space-y-4 mb-6"
     >
-      <h2 className="font-medium text-gray-900 text-sm">{costElement ? 'Edit cost element' : 'New cost element'}</h2>
+      <h2 className="font-medium text-gray-900 dark:text-prosota-paper text-sm">{costElement ? 'Edit cost element' : 'New cost element'}</h2>
 
       {isScheduleLinked && (
-        <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-800">
+        <div className="p-2.5 bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md text-xs text-blue-800">
           🔗 This line is managed automatically from Scheduling resource assignments (see the linked activity's
           Resources tab). Editing Budget below will unlink it permanently — resource changes won't update it anymore.
         </div>
       )}
 
       {error && (
-        <div className="p-2 bg-red-50 border border-red-200 rounded-md text-red-700 text-xs">
+        <div className="p-2 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-xs">
           {error}
         </div>
       )}
@@ -193,7 +193,7 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
             <option value="">—</option>
             {COST_ELEMENT_STATUSES.map(s => <option key={s} value={s}>{COST_ELEMENT_STATUS_LABELS[s]}</option>)}
           </select>
-          <p className="text-xs text-gray-400 mt-1">Over Budget/Monitor/Saving are shown automatically from variance, not set here.</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Over Budget/Monitor/Saving are shown automatically from variance, not set here.</p>
         </div>
       </div>
 
@@ -206,7 +206,7 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
         >
           {ELEMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">
           Percentage elements (e.g. Prelims, Contingency) compute their value from the sum of all fixed elements — they don't get their own budget figure.
         </p>
       </div>
@@ -242,13 +242,13 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
               className={inputClass}
             />
             {isScheduleLinked && (
-              <p className="text-xs text-gray-400 mt-1">Can also be entered from the activity's Resources tab in Scheduling — same figure, either place.</p>
+              <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Can also be entered from the activity's Resources tab in Scheduling — same figure, either place.</p>
             )}
           </div>
         </div>
       )}
       {!isPercentage && (
-        <p className="text-xs text-gray-400 -mt-2">
+        <p className="text-xs text-gray-400 dark:text-prosota-muted -mt-2">
           Forecast isn't entered here — it's the computed EAC (Estimate at Completion) once % complete is set below, or the budget itself before then.
           {!costElement && ' The budget entered here also becomes the Rev A baseline, since there\'s no prior revision yet — it stays fixed after this, even if budget changes later.'}
         </p>
@@ -262,7 +262,7 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
           onChange={e => set('comparison_cost', e.target.value)}
           className={inputClass}
         />
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">
           An independent benchmark figure — another project's equivalent line, a tender return, or a prior cost plan revision. Shows as its own Variance (Budget − Comparison), separate from Forecast/EAC.
         </p>
       </div>
@@ -278,7 +278,7 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
             className={`${inputClass} disabled:bg-gray-50 disabled:text-gray-400`}
             placeholder="e.g. 70"
           />
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">
             {isScheduleLinked
               ? 'Synced automatically from the linked activity\'s % Complete in Scheduling — edit it there, not here, so this line\'s EVM always matches Scheduling\'s.'
               : 'Physical progress — drives Earned Value (CV/CPI/EAC/ETC/VAC/TCPI), shown read-only once saved.'}
@@ -337,11 +337,11 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
           onChange={e => set('last_reviewed_date', e.target.value)}
           className={inputClass}
         />
-        <p className="text-xs text-gray-400 mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
       </div>
 
       {hasTriggerChanges && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+        <div className="p-3 bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md">
           <label className={labelClass}>
             Status, budget, actuals, or rate changed — what changed and why? (optional, logged with today's date)
           </label>
@@ -366,7 +366,7 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
         <button
           type="button"
           onClick={onCancel}
-          className="text-gray-500 px-4 py-2 rounded-md text-sm hover:bg-gray-100"
+          className="text-gray-500 dark:text-prosota-muted px-4 py-2 rounded-md text-sm hover:bg-gray-100 dark:hover:bg-prosota-panel2"
         >
           Cancel
         </button>

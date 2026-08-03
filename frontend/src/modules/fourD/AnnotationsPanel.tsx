@@ -63,9 +63,9 @@ interface Props {
 // row shape repeated four times in the Style section below.
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
       <span className="w-16 shrink-0">{label}</span>
-      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 rounded shrink-0" />
+      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded shrink-0" />
     </label>
   )
 }
@@ -74,14 +74,14 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 // limit" (null on the wire), matching annotation.py's own convention.
 function DistanceField({ label, value, onChange }: { label: string; value: number | null; onChange: (v: number | null) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
       <span className="w-28 shrink-0">{label}</span>
       <input
         type="number" min={0} step={0.1}
         value={value ?? ''}
         onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="no limit"
-        className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+        className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
       />
     </label>
   )
@@ -125,7 +125,7 @@ function Item({
         <select
           value={annotation.icon}
           onChange={e => onUpdate({ icon: e.target.value as AnnotationIcon })}
-          className="text-xs border border-gray-300 rounded px-1 py-0.5"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
         >
           {ICON_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -139,32 +139,32 @@ function Item({
               if (e.key === 'Enter') commitText()
               if (e.key === 'Escape') { setDraftText(annotation.text); setEditingText(false) }
             }}
-            className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+            className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
           />
         ) : (
           <span
             onDoubleClick={() => setEditingText(true)}
-            className="flex-1 text-xs text-gray-700 truncate cursor-text"
+            className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text"
             title="Double-click to edit note"
           >
-            {annotation.text || <span className="text-gray-300">(no note)</span>}
+            {annotation.text || <span className="text-gray-300 dark:text-prosota-line">(no note)</span>}
           </span>
         )}
-        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
 
       {hasLeader && (
         annotation.element_ref ? (
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-sky-50 border border-sky-100 rounded px-2 py-1">
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted bg-sky-50 border border-sky-100 rounded px-2 py-1">
             <span className="flex-1 truncate">Pointing at: {annotation.element_ref}</span>
-            <button onClick={onUnbindLeader} className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+            <button onClick={onUnbindLeader} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
           </div>
         ) : (
           <button
             onClick={onBindLeader}
             disabled={!bindTarget}
             title={!bindTarget ? 'Select a mesh element first' : `Point this ${annotation.kind} at ${bindTarget.label}`}
-            className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
           >
             Point at selected {bindTarget ? `(${bindTarget.label})` : ''}
           </button>
@@ -190,14 +190,14 @@ function Item({
         // property grid field-for-field — see annotation.py's own
         // docstring for the mapping and AnnotationMarker.tsx for how each
         // one actually renders.
-        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+        <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <input type="checkbox" checked={annotation.has_background} onChange={e => onUpdate({ has_background: e.target.checked })} />
             Background fill
           </label>
           <ColorField label="Background" value={annotation.background_color} onChange={v => onUpdate({ background_color: v })} />
           {annotation.has_background && (
-            <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
               <span className="w-16 shrink-0">Opacity</span>
               <input
                 type="range" min={0} max={1} step={0.05}
@@ -209,17 +209,17 @@ function Item({
             </label>
           )}
           <ColorField label="Border" value={annotation.border_color} onChange={v => onUpdate({ border_color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <input type="checkbox" checked={annotation.thick_border} onChange={e => onUpdate({ thick_border: e.target.checked })} />
             Thick border
           </label>
           {hasLeader && (
-            <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
               <span className="w-16 shrink-0">Shape</span>
               <select
                 value={annotation.box_shape}
                 onChange={e => onUpdate({ box_shape: e.target.value as Annotation['box_shape'] })}
-                className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
               >
                 <option value="rounded">Rounded</option>
                 <option value="rectangle">Rectangle</option>
@@ -233,34 +233,34 @@ function Item({
             // AnnotationMarker.tsx's own placemark transform comment for
             // the corner-pivot math.
             <>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Scales the balloon around its own tip">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Scales the balloon around its own tip">
                 <span className="w-16 shrink-0">Scale</span>
                 <input
                   type="number" min={0.01} step={0.1}
                   value={annotation.placemark_scale}
                   onChange={e => onUpdate({ placemark_scale: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Rotates the balloon around its own tip, on top of its fixed tilt">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Rotates the balloon around its own tip, on top of its fixed tilt">
                 <span className="w-16 shrink-0">Rotation</span>
                 <input
                   type="number" step={1}
                   value={annotation.placemark_rotation}
                   onChange={e => onUpdate({ placemark_rotation: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
             </>
           )}
           <ColorField label="Text" value={annotation.text_color} onChange={v => onUpdate({ text_color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Font size</span>
             <input
               type="number" min={8} max={72}
               value={annotation.font_size}
               onChange={e => onUpdate({ font_size: Number(e.target.value) })}
-              className="w-16 border border-gray-200 rounded px-1.5 py-0.5"
+              className="w-16 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <DistanceField label="Hide if closer than" value={annotation.hide_closer_than} onChange={v => onUpdate({ hide_closer_than: v })} />
@@ -287,9 +287,9 @@ function Item({
         // "everything") mirror that modifier's own Ball Radius/Color Stem/
         // Rotate Callout/Scale Callout controls — see annotation.py's own
         // leader_dot_radius header for the full mapping.
-        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+        <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="Height of the leader's elbow above its target — drag the callout box in the viewport to move it sideways"
           >
             <span className="w-16 shrink-0">Elevation</span>
@@ -297,7 +297,7 @@ function Item({
               type="number" step={0.1}
               value={annotation.leader_offset_y}
               onChange={e => onUpdate({ leader_offset_y: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           {/* Offset X/Z (2026-07-30, per Maro: "i'd like to be able to move
@@ -306,61 +306,61 @@ function Item({
               always could) — same semantic-axis fields the drag handle
               itself writes to (AnnotationMarker.tsx's own leader_offset_x/z
               header), just also editable here. */}
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Sideways offset of the callout — world X axis">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Sideways offset of the callout — world X axis">
             <span className="w-16 shrink-0">Offset X</span>
             <input
               type="number" step={0.1}
               value={annotation.leader_offset_x}
               onChange={e => onUpdate({ leader_offset_x: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Sideways offset of the callout — the other horizontal axis">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Sideways offset of the callout — the other horizontal axis">
             <span className="w-16 shrink-0">Offset Z</span>
             <input
               type="number" step={0.1}
               value={annotation.leader_offset_z}
               onChange={e => onUpdate({ leader_offset_z: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="Hides just the connecting line — the callout box and target dot stay visible either way"
           >
             <input type="checkbox" checked={annotation.leader_visible} onChange={e => onUpdate({ leader_visible: e.target.checked })} />
             Show leader line
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Radius of the small dot at the leader's target">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Radius of the small dot at the leader's target">
             <span className="w-16 shrink-0">Dot radius</span>
             <input
               type="number" min={0} step={0.01}
               value={annotation.leader_dot_radius}
               onChange={e => onUpdate({ leader_dot_radius: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <ColorField label="Line colour" value={annotation.leader_color} onChange={v => onUpdate({ leader_color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Rotates the callout box around the point where the leader touches it">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Rotates the callout box around the point where the leader touches it">
             <span className="w-16 shrink-0">Rotation</span>
             <input
               type="number" step={1}
               value={annotation.leader_rotation}
               onChange={e => onUpdate({ leader_rotation: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Scales the callout box around the point where the leader touches it">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Scales the callout box around the point where the leader touches it">
             <span className="w-16 shrink-0">Scale</span>
             <input
               type="number" min={0.01} step={0.1}
               value={annotation.leader_scale}
               onChange={e => onUpdate({ leader_scale: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="Hides the whole annotation (box, dot, and line) until Start, then draws the line in and shows the box over the Start/End window below"
           >
             <input type="checkbox" checked={annotation.animate} onChange={e => onUpdate({ animate: e.target.checked })} />
@@ -368,7 +368,7 @@ function Item({
           </label>
           {annotation.animate && (
             <>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Start</span>
                 <span className="flex-1 truncate" title={animWindow?.start ? animWindow.start.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.start && format ? formatTimelineValue(animWindow.start, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -376,12 +376,12 @@ function Item({
                 <button
                   onClick={onKeyAnimStart}
                   title="Key the current playhead as this annotation's reveal Start"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">End</span>
                 <span className="flex-1 truncate" title={animWindow?.end ? animWindow.end.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.end && format ? formatTimelineValue(animWindow.end, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -389,13 +389,13 @@ function Item({
                 <button
                   onClick={onKeyAnimEnd}
                   title="Key the current playhead as this annotation's reveal End"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
               <label
-                className="flex items-center gap-1.5 text-[11px] text-gray-500"
+                className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
                 title="Repeats the reveal every time the playhead passes End, instead of holding fully shown"
               >
                 <input type="checkbox" checked={annotation.animation_loop} onChange={e => onUpdate({ animation_loop: e.target.checked })} />
@@ -450,23 +450,23 @@ export function AnnotationsPanel({
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white gap-1.5 flex-wrap">
-        <span className="text-xs text-gray-500 shrink-0">3D Notations</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel gap-1.5 flex-wrap">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted shrink-0">3D Notations</span>
         <div className="flex items-center gap-1">
           {KIND_OPTIONS.map(({ value, label }) => (
             <button
               key={value}
               onClick={() => onStartAdding(value)}
-              className={`text-xs px-2 py-1 rounded border font-medium ${addingKind === value ? 'bg-sky-600 text-white border-sky-600' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+              className={`text-xs px-2 py-1 rounded border font-medium ${addingKind === value ? 'bg-sky-600 text-white border-sky-600' : 'border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
             >
               {addingKind === value ? 'Click viewport…' : label}
             </button>
           ))}
         </div>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {annotations.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           "+ Placemark" or "+ Comment", then click in the viewport to drop it there.
         </p>
       ) : (

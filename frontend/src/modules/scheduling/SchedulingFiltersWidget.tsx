@@ -68,14 +68,14 @@ function ConditionRow({ condition, onChange, onRemove }: {
           const nextDef = FILTER_FIELD_DEFS.find(d => d.key === e.target.value as FilterFieldKey)!
           onChange({ field: nextDef.key, operator: nextDef.operators[0], value: nextDef.type === 'enum' ? (nextDef.options?.[0]?.value ?? '') : '' })
         }}
-        className="text-xs border border-gray-300 rounded px-1.5 py-1"
+        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
       >
         {FILTER_FIELD_DEFS.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
       </select>
       <select
         value={condition.operator}
         onChange={e => onChange({ ...condition, operator: e.target.value as FilterOperator })}
-        className="text-xs border border-gray-300 rounded px-1.5 py-1"
+        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
       >
         {def.operators.map(op => <option key={op} value={op}>{FILTER_OPERATOR_LABELS[op]}</option>)}
       </select>
@@ -83,7 +83,7 @@ function ConditionRow({ condition, onChange, onRemove }: {
         <input
           type="number" value={condition.value}
           onChange={e => onChange({ ...condition, value: e.target.value })}
-          className="w-20 text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="w-20 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         />
       )}
       {def.type === 'text' && (
@@ -91,27 +91,27 @@ function ConditionRow({ condition, onChange, onRemove }: {
           type="text" value={condition.value}
           onChange={e => onChange({ ...condition, value: e.target.value })}
           placeholder={def.key === 'wbs_path' ? 'e.g. 1.2' : 'Text…'}
-          className="w-32 text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="w-32 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         />
       )}
       {def.type === 'date' && (
         <input
           type="date" value={condition.value}
           onChange={e => onChange({ ...condition, value: e.target.value })}
-          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         />
       )}
       {def.type === 'enum' && (
         <select
           value={condition.value}
           onChange={e => onChange({ ...condition, value: e.target.value })}
-          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         >
           {def.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       )}
       {/* boolean fields have no value input — is_true/is_false already says it all */}
-      <button onClick={onRemove} className="text-gray-400 hover:text-red-600 text-xs">✕</button>
+      <button onClick={onRemove} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs">✕</button>
     </div>
   )
 }
@@ -211,15 +211,15 @@ export function SchedulingFiltersWidget({
   const anyEnabled = filterCritical || filterDelayed || filterAtRisk || Object.keys(customFilterModes).length > 0
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">⚙</span>
-        <div className="font-bold text-sm">Filters</div>
-        <div className="text-xs text-gray-400">Built-in presets, plus your own saved filters</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Filters</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Built-in presets, plus your own saved filters</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
-      <div className="flex items-center gap-4 text-xs text-gray-600 mb-3">
+      <div className="flex items-center gap-4 text-xs text-gray-600 dark:text-prosota-muted mb-3">
         Show activities that match
         <label className="flex items-center gap-1">
           <input type="radio" checked={matchMode === 'all'} onChange={() => onMatchModeChange('all')} />
@@ -229,87 +229,87 @@ export function SchedulingFiltersWidget({
           <input type="radio" checked={matchMode === 'any'} onChange={() => onMatchModeChange('any')} />
           Any selected filter
         </label>
-        {anyEnabled && <button onClick={onClearAll} className="ml-auto text-gray-400 hover:text-red-600">Clear all</button>}
+        {anyEnabled && <button onClick={onClearAll} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Clear all</button>}
       </div>
 
-      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Built-in</div>
+      <div className="text-[10px] font-semibold text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1.5">Built-in</div>
       <div className="flex gap-6 flex-wrap mb-4">
-        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
           <input type="checkbox" checked={filterCritical} onChange={e => onFilterCriticalChange(e.target.checked)} />
           Critical only
         </label>
-        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
           <input type="checkbox" checked={filterDelayed} onChange={e => onFilterDelayedChange(e.target.checked)} />
           Delayed (finish later than baseline)
         </label>
-        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
           <input type="checkbox" checked={filterAtRisk} onChange={e => onFilterAtRiskChange(e.target.checked)} />
           At risk (float ≤ 40h, ~1–5 working days)
         </label>
       </div>
 
-      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">User Defined</div>
+      <div className="text-[10px] font-semibold text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1.5">User Defined</div>
       <table className="w-full text-xs border-collapse mb-3">
         <thead>
-          <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200 w-24">Mode</th>
-            <th className="px-2 py-1.5 border border-gray-200">Name</th>
-            <th className="px-2 py-1.5 border border-gray-200">Conditions</th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
+          <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line w-24">Mode</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Name</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Conditions</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
           </tr>
         </thead>
         <tbody>
           {filters.map(f => (
             <tr key={f.id}>
-              <td className="px-2 py-1.5 border border-gray-200">
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">
                 <select
                   value={customFilterModes[f.id] ?? 'off'}
                   onChange={e => onCustomFilterModeChange(f.id, e.target.value as 'off' | 'show' | 'hide')}
-                  className="text-xs border border-gray-300 rounded px-1 py-0.5 w-full"
+                  className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 w-full"
                 >
                   <option value="off">Off</option>
                   <option value="show">Show matches</option>
                   <option value="hide">Hide matches</option>
                 </select>
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 font-medium">{f.name}</td>
-              <td className="px-2 py-1.5 border border-gray-200 text-gray-500">
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">{f.name}</td>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">
                 {f.conditions.length} condition{f.conditions.length === 1 ? '' : 's'} (match {f.match_mode === 'all' ? 'ALL' : 'ANY'})
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
-                <button onClick={() => startEditing(f)} disabled={busyId === f.id} className="text-gray-500 hover:text-blue-600 disabled:opacity-40">Edit</button>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line whitespace-nowrap">
+                <button onClick={() => startEditing(f)} disabled={busyId === f.id} className="text-gray-500 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-40">Edit</button>
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
-                <button onClick={() => handleExport(f)} className="text-blue-600 hover:text-blue-700">Export</button>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line whitespace-nowrap">
+                <button onClick={() => handleExport(f)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan">Export</button>
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 text-right">
-                <button onClick={() => handleDelete(f)} disabled={busyId === f.id} className="text-gray-400 hover:text-red-600 disabled:opacity-40">Delete</button>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">
+                <button onClick={() => handleDelete(f)} disabled={busyId === f.id} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 disabled:opacity-40">Delete</button>
               </td>
             </tr>
           ))}
           {filters.length === 0 && !creating && (
-            <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No custom filters saved yet</td></tr>
+            <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">No custom filters saved yet</td></tr>
           )}
         </tbody>
       </table>
 
       {creating ? (
-        <div className="border border-gray-200 rounded-lg p-3">
+        <div className="border border-gray-200 dark:border-prosota-line rounded-lg p-3">
           <div className="flex items-center gap-4 mb-3">
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Name
               <input
                 value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Phase 3 milestones" autoFocus
-                className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-56"
+                className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-56"
               />
             </label>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Match
               <select
                 value={conditionMatchMode} onChange={e => setConditionMatchMode(e.target.value as 'all' | 'any')}
-                className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+                className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5"
               >
                 <option value="all">ALL of these conditions</option>
                 <option value="any">ANY of these conditions</option>
@@ -328,23 +328,23 @@ export function SchedulingFiltersWidget({
           </div>
           <button
             onClick={() => setConditions(cs => [...cs, defaultCondition()])}
-            className="text-xs text-blue-600 hover:text-blue-700 font-medium mb-3"
+            className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium mb-3"
           >
             + Add condition
           </button>
 
-          {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+          {error && <p className="text-xs text-red-600 dark:text-red-400 mb-2">{error}</p>}
           <div className="flex items-center gap-2">
-            <button onClick={handleSave} disabled={saving || !name.trim()} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
+            <button onClick={handleSave} disabled={saving || !name.trim()} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40">
               {saving ? 'Saving…' : editingId ? 'Update Filter' : 'Save Filter'}
             </button>
-            <button onClick={closeForm} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
+            <button onClick={closeForm} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper px-1 py-1.5">Cancel</button>
           </div>
         </div>
       ) : (
         <div className="flex items-center gap-3">
-          <button onClick={startCreating} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ New Filter</button>
-          <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+          <button onClick={startCreating} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ New Filter</button>
+          <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             ⇧ Import Filter
           </button>
           <input
@@ -358,7 +358,7 @@ export function SchedulingFiltersWidget({
         </div>
       )}
 
-      {!creating && error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+      {!creating && error && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{error}</p>}
     </div>
   )
 }

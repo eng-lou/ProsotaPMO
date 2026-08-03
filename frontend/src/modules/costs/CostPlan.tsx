@@ -67,10 +67,10 @@ function formatRatio(value: string | null) {
 }
 
 const VARIANCE_BAND_STYLES: Record<string, string> = {
-  Saving: 'bg-green-100 text-green-700',
-  'On Budget': 'bg-gray-100 text-gray-600',
-  Monitor: 'bg-amber-100 text-amber-700',
-  'Over Budget': 'bg-red-100 text-red-700',
+  Saving: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400',
+  'On Budget': 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted',
+  Monitor: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+  'Over Budget': 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
 }
 
 // forecast (EAC) vs budget — not vs the frozen Rev A baseline, which only
@@ -436,25 +436,25 @@ export function CostPlan() {
     return (
       <tr key={label || 'all'} className={opts.className}>
         <td className="px-3 py-2.5"></td>
-        <td className="px-2 py-2.5 text-gray-400 text-xs cursor-pointer" onClick={opts.onClick}>
+        <td className="px-2 py-2.5 text-gray-400 dark:text-prosota-muted text-xs cursor-pointer" onClick={opts.onClick}>
           {opts.onClick ? (opts.expanded ? '▾' : '▸') : ''}
         </td>
         {visibleColumns.has('code') && <td className="px-4 py-2.5"></td>}
         <td
-          className={`px-4 py-2.5 ${opts.bold ? 'font-bold' : 'font-medium'} text-gray-900 ${opts.indent ? 'pl-8' : ''} ${opts.onClick ? 'cursor-pointer' : ''}`}
+          className={`px-4 py-2.5 ${opts.bold ? 'font-bold' : 'font-medium'} text-gray-900 dark:text-prosota-paper ${opts.indent ? 'pl-8' : ''} ${opts.onClick ? 'cursor-pointer' : ''}`}
           onClick={opts.onClick}
         >
-          {label}{opts.count !== undefined && <span className="font-normal text-gray-400 text-xs"> ({opts.count})</span>}
+          {label}{opts.count !== undefined && <span className="font-normal text-gray-400 dark:text-prosota-muted text-xs"> ({opts.count})</span>}
         </td>
         {visibleColumns.has('element_group') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('element_type') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('status') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('variance_band') && <td className="px-4 py-2.5"></td>}
-        <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.budget.toString())}</td>
-        {visibleColumns.has('forecast') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.forecast.toString())}</td>}
-        {visibleColumns.has('actuals') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency(totals.actuals.toString())}</td>}
-        {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
+        <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.budget.toString())}</td>
+        {visibleColumns.has('forecast') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.forecast.toString())}</td>}
+        {visibleColumns.has('actuals') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.actuals.toString())}</td>}
+        {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
         {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('cpi') && <td className="px-4 py-2.5"></td>}
         {udfDefinitions.map(d => (
@@ -582,7 +582,7 @@ export function CostPlan() {
     const actuals = isPct ? el.computed_actuals : el.actuals
     return (
       <Fragment key={el.id}>
-        <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+        <tr className="border-b border-gray-100 dark:border-prosota-line last:border-0 hover:bg-gray-50 dark:hover:bg-prosota-panel2">
           <td className="px-3 py-2.5">
             <input
               type="checkbox"
@@ -591,58 +591,58 @@ export function CostPlan() {
             />
           </td>
           <td className="px-2 py-2.5"></td>
-          {visibleColumns.has('code') && <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{el.code}</td>}
+          {visibleColumns.has('code') && <td className="px-4 py-2.5 text-gray-500 dark:text-prosota-muted font-mono text-xs">{el.code}</td>}
           <td className="px-4 py-2.5">
             <button
               onClick={() => setExpandedId(expandedId === el.id ? null : el.id)}
-              className="text-left font-medium text-gray-900 hover:text-blue-600"
+              className="text-left font-medium text-gray-900 dark:text-prosota-paper hover:text-blue-600"
             >
               {el.description}
             </button>
           </td>
-          {visibleColumns.has('element_group') && <td className="px-4 py-2.5 text-gray-600">{el.element_group ?? '—'}</td>}
+          {visibleColumns.has('element_group') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.element_group ?? '—'}</td>}
           {visibleColumns.has('element_type') && (
             <td className="px-4 py-2.5">
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPct ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPct ? 'bg-purple-100 dark:bg-purple-500/15 text-purple-700 dark:text-purple-400' : 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'}`}>
                 {isPct ? `${el.rate ? Math.round(Number(el.rate) * 100) : 0}%` : 'fixed'}
               </span>
             </td>
           )}
-          {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5 text-gray-600">{el.cost_owner ?? '—'}</td>}
-          {visibleColumns.has('status') && <td className="px-4 py-2.5 text-gray-600">{el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'}</td>}
+          {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.cost_owner ?? '—'}</td>}
+          {visibleColumns.has('status') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'}</td>}
           {visibleColumns.has('variance_band') && (
             <td className="px-4 py-2.5">
               {(() => {
                 const band = varianceBand(el, criteria)
                 return band ? (
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${VARIANCE_BAND_STYLES[band.label] ?? 'bg-gray-100 text-gray-600'}`}>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${VARIANCE_BAND_STYLES[band.label] ?? 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'}`}>
                     {band.label}
                   </span>
-                ) : <span className="text-gray-400">—</span>
+                ) : <span className="text-gray-400 dark:text-prosota-muted">—</span>
               })()}
             </td>
           )}
-          <td className="px-4 py-2.5 text-gray-600">{formatCurrency(budget)}</td>
-          {visibleColumns.has('forecast') && <td className="px-4 py-2.5 text-gray-600">{formatCurrency(forecast)}</td>}
-          {visibleColumns.has('actuals') && <td className="px-4 py-2.5 text-gray-600">{formatCurrency(actuals)}</td>}
+          <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(budget)}</td>
+          {visibleColumns.has('forecast') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(forecast)}</td>}
+          {visibleColumns.has('actuals') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(actuals)}</td>}
           {visibleColumns.has('variance') && (
-            <td className="px-4 py-2.5 text-gray-600" title="Forecast vs Budget">
+            <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted" title="Forecast vs Budget">
               {(() => {
                 const fv = elementForecastVariance(el)
                 return fv === null ? '—' : formatCurrency(fv.amount.toString())
               })()}
             </td>
           )}
-          {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5 text-gray-600">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>}
-          {visibleColumns.has('cpi') && <td className="px-4 py-2.5 text-gray-600">{formatRatio(el.cpi)}</td>}
+          {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>}
+          {visibleColumns.has('cpi') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatRatio(el.cpi)}</td>}
           {udfDefinitions.map(d => (
             <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, el.id)} onSave={payload => setUdfValue(d.id, el.id, payload)} />
           ))}
           <td className="px-4 py-2.5 text-right whitespace-nowrap">
-            <button onClick={() => setEditingElement(el)} className="text-xs text-blue-600 hover:text-blue-700 mr-3">
+            <button onClick={() => setEditingElement(el)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-3">
               Edit
             </button>
-            <button onClick={() => handleDelete(el)} className="text-xs text-gray-400 hover:text-red-600">
+            <button onClick={() => handleDelete(el)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">
               Delete
             </button>
           </td>
@@ -651,57 +651,57 @@ export function CostPlan() {
           <tr>
             <td colSpan={totalColumnCount} className="p-0">
               {el.last_reviewed_date && (
-                <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex gap-6 flex-wrap text-xs text-gray-500">
-                  <span>Last reviewed: <span className="text-gray-700">{el.last_reviewed_date}</span></span>
+                <div className="px-4 py-2.5 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line flex gap-6 flex-wrap text-xs text-gray-500 dark:text-prosota-muted">
+                  <span>Last reviewed: <span className="text-gray-700 dark:text-prosota-muted">{el.last_reviewed_date}</span></span>
                 </div>
               )}
               {(el.pct_complete !== null || el.pv !== null) && (
-                <div className="px-4 py-3 bg-blue-50 border-t border-blue-100">
-                  <div className="text-xs font-semibold text-blue-700 mb-2">Earned Value</div>
+                <div className="px-4 py-3 bg-blue-50 dark:bg-prosota-azure/10 border-t border-blue-100 dark:border-prosota-azure/30">
+                  <div className="text-xs font-semibold text-blue-700 dark:text-prosota-azure mb-2">Earned Value</div>
                   {el.pv !== null && (
-                    <div className="grid grid-cols-4 gap-3 text-xs mb-3 pb-3 border-b border-blue-100">
+                    <div className="grid grid-cols-4 gap-3 text-xs mb-3 pb-3 border-b border-blue-100 dark:border-prosota-azure/30">
                       <div title="Planned Value — how much of BAC should be earned by today, per this line's linked activity's own schedule position. Set in Scheduling, not here.">
-                        <div className="text-gray-500">PV</div><div className="font-semibold text-gray-800">{formatCurrency(el.pv)}</div>
+                        <div className="text-gray-500 dark:text-prosota-muted">PV</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.pv)}</div>
                       </div>
-                      <div><div className="text-gray-500">EV</div><div className="font-semibold text-gray-800">{formatCurrency(el.ev)}</div></div>
-                      <div title="Schedule Variance — EV minus PV"><div className="text-gray-500">SV</div><div className="font-semibold text-gray-800">{formatCurrency(el.sv)}</div></div>
-                      <div title="Schedule Performance Index — EV ÷ PV"><div className="text-gray-500">SPI</div><div className="font-semibold text-gray-800">{formatRatio(el.spi)}</div></div>
+                      <div><div className="text-gray-500 dark:text-prosota-muted">EV</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.ev)}</div></div>
+                      <div title="Schedule Variance — EV minus PV"><div className="text-gray-500 dark:text-prosota-muted">SV</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.sv)}</div></div>
+                      <div title="Schedule Performance Index — EV ÷ PV"><div className="text-gray-500 dark:text-prosota-muted">SPI</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatRatio(el.spi)}</div></div>
                     </div>
                   )}
                   <div className="grid grid-cols-4 gap-3 text-xs">
-                    <div><div className="text-gray-500">CV</div><div className="font-semibold text-gray-800">{formatCurrency(el.cv)}</div></div>
-                    <div><div className="text-gray-500">EAC</div><div className="font-semibold text-gray-800">{formatCurrency(el.eac)}</div></div>
-                    <div><div className="text-gray-500">ETC</div><div className="font-semibold text-gray-800">{formatCurrency(el.etc)}</div></div>
-                    <div><div className="text-gray-500">VAC</div><div className="font-semibold text-gray-800">{formatCurrency(el.vac)}</div></div>
-                    <div><div className="text-gray-500">TCPI</div><div className="font-semibold text-gray-800">{formatRatio(el.tcpi)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">CV</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.cv)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">EAC</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.eac)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">ETC</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.etc)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">VAC</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.vac)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">TCPI</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatRatio(el.tcpi)}</div></div>
                     {el.cost_per_m2 && (
-                      <div><div className="text-gray-500">£/m²</div><div className="font-semibold text-gray-800">{formatCurrency(el.cost_per_m2)}</div></div>
+                      <div><div className="text-gray-500 dark:text-prosota-muted">£/m²</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.cost_per_m2)}</div></div>
                     )}
                   </div>
                 </div>
               )}
               {el.comparison_cost !== null && (
-                <div className="px-4 py-3 bg-amber-50 border-t border-amber-100">
-                  <div className="text-xs font-semibold text-amber-700 mb-2" title="An independent benchmark figure — another project's equivalent line, a tender return, or a prior cost plan revision. Not the same as Forecast/EAC.">
+                <div className="px-4 py-3 bg-amber-50 dark:bg-amber-500/10 border-t border-amber-100 dark:border-amber-500/30">
+                  <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-2" title="An independent benchmark figure — another project's equivalent line, a tender return, or a prior cost plan revision. Not the same as Forecast/EAC.">
                     Comparison
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-xs">
-                    <div><div className="text-gray-500">Comparison Cost</div><div className="font-semibold text-gray-800">{formatCurrency(el.comparison_cost)}</div></div>
-                    <div><div className="text-gray-500">Budget</div><div className="font-semibold text-gray-800">{formatCurrency(el.element_type === 'percentage' ? el.computed_budget : el.budget)}</div></div>
-                    <div title="Budget minus Comparison Cost"><div className="text-gray-500">Variance</div><div className="font-semibold text-gray-800">{formatCurrency(el.comparison_variance)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">Comparison Cost</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.comparison_cost)}</div></div>
+                    <div><div className="text-gray-500 dark:text-prosota-muted">Budget</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.element_type === 'percentage' ? el.computed_budget : el.budget)}</div></div>
+                    <div title="Budget minus Comparison Cost"><div className="text-gray-500 dark:text-prosota-muted">Variance</div><div className="font-semibold text-gray-800 dark:text-prosota-paper">{formatCurrency(el.comparison_variance)}</div></div>
                   </div>
                 </div>
               )}
               {(el.scope_note || el.variance_commentary || el.qs_signoff_name) && (
-                <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 space-y-1.5 text-xs">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line space-y-1.5 text-xs">
                   {el.scope_note && (
-                    <div><span className="font-semibold text-gray-600">Scope note: </span><span className="text-gray-600">{el.scope_note}</span></div>
+                    <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Scope note: </span><span className="text-gray-600 dark:text-prosota-muted">{el.scope_note}</span></div>
                   )}
                   {el.variance_commentary && (
-                    <div><span className="font-semibold text-gray-600">Variance commentary: </span><span className="text-gray-600">{el.variance_commentary}</span></div>
+                    <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Variance commentary: </span><span className="text-gray-600 dark:text-prosota-muted">{el.variance_commentary}</span></div>
                   )}
                   {el.qs_signoff_name && (
-                    <div><span className="font-semibold text-gray-600">QS sign-off: </span><span className="text-gray-600">{el.qs_signoff_name}{el.qs_signoff_date ? ` · ${el.qs_signoff_date}` : ''}</span></div>
+                    <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">QS sign-off: </span><span className="text-gray-600 dark:text-prosota-muted">{el.qs_signoff_name}{el.qs_signoff_date ? ` · ${el.qs_signoff_date}` : ''}</span></div>
                   )}
                 </div>
               )}
@@ -727,18 +727,18 @@ export function CostPlan() {
   }
 
   if (loading || periodLoading) {
-    return <div className="p-8 text-sm text-gray-400">Loading cost plan…</div>
+    return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading cost plan…</div>
   }
 
   const costTabSwitcher = (
-    <div className="flex items-center gap-1 mb-4 border-b border-gray-200">
+    <div className="flex items-center gap-1 mb-4 border-b border-gray-200 dark:border-prosota-line">
       <button
         onClick={() => setCostTab('plan')}
-        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'plan' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'plan' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'}`}
       >Cost Plan</button>
       <button
         onClick={() => setCostTab('boq')}
-        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'boq' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${costTab === 'boq' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'}`}
       >BOQ</button>
     </div>
   )
@@ -748,14 +748,14 @@ export function CostPlan() {
       <>
       <div className="p-8 no-print">
         <div className="flex items-center justify-between mb-1">
-          <h1 className="text-2xl font-bold text-gray-900">Bill of Quantities</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Bill of Quantities</h1>
           {period && (
-            <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">
+            <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
               {period.period_label} · {period.freeze_status}
             </span>
           )}
         </div>
-        <p className="text-gray-500 text-sm mb-4">
+        <p className="text-gray-500 dark:text-prosota-muted text-sm mb-4">
           Measured-works breakdown for {selectedProject.name} — quantity and rate derived from the committed schedule's own duration and resourced cost.
         </p>
         {costTabSwitcher}
@@ -876,20 +876,20 @@ export function CostPlan() {
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900">Cost Plan</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Cost Plan</h1>
         {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">
+          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
             {period.period_label} · {period.freeze_status}
           </span>
         )}
       </div>
-      <p className="text-gray-500 text-sm mb-6">
+      <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">
         Cost elements for {selectedProject.name}. Percentage elements (Prelims, Contingency, etc.) compute automatically from the fixed subtotal.
       </p>
       {costTabSwitcher}
 
       {(error || periodError) && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
       )}
 
       <CostVarianceThresholds
@@ -908,7 +908,7 @@ export function CostPlan() {
         <div className="mb-4 flex items-center gap-3 flex-wrap">
           <button
             onClick={() => setFormOpen(true)}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
           >
             + New cost element
           </button>
@@ -916,29 +916,29 @@ export function CostPlan() {
             onClick={handleGenerateCostPlan}
             disabled={generatingCostPlan}
             title="Adds the standard Prelims/Design Fees/Overhead/Inflation on-cost lines — resource-loaded costs already flow in automatically as resources get assigned in Scheduling"
-            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {generatingCostPlan ? 'Generating…' : 'Generate Cost Plan'}
           </button>
-          {generateMessage && <span className="text-xs text-gray-500">{generateMessage}</span>}
+          {generateMessage && <span className="text-xs text-gray-500 dark:text-prosota-muted">{generateMessage}</span>}
         </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="relative max-w-xs w-full">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-prosota-muted text-xs">🔍</span>
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search cost elements…"
-            className="w-full border border-gray-300 rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <button
           onClick={() => setFiltersOpen(prev => !prev)}
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            filtersOpen || activeFilterCount > 0 ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            filtersOpen || activeFilterCount > 0 ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           ⚙ Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
@@ -947,15 +947,15 @@ export function CostPlan() {
           <button
             onClick={() => setColumnsPickerOpen(prev => !prev)}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              columnsPickerOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              columnsPickerOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             ☰ Columns
           </button>
           {columnsPickerOpen && (
-            <div className="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg p-2 z-30 text-xs w-48 space-y-1">
+            <div className="absolute left-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg p-2 z-30 text-xs w-48 space-y-1">
               {TOGGLEABLE_COLUMNS.map(c => (
-                <label key={c.key} className="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                <label key={c.key} className="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer">
                   <input type="checkbox" checked={visibleColumns.has(c.key)} onChange={() => toggleColumn(c.key)} />
                   {c.label}
                 </label>
@@ -966,20 +966,20 @@ export function CostPlan() {
         <select
           value={groupBy}
           onChange={e => setGroupBy(e.target.value as GroupByField)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted"
         >
           {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
         </select>
         <button
           onClick={() => downloadCostElementsCsv(visibleElements, selectedProject.name)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Exports the cost elements currently shown (respecting search/filters) as a CSV file, opens directly in Excel."
         >
           ⇩ Export ({visibleElements.length})
         </button>
         <button
           onClick={handlePrintList}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Print the cost plan exactly as currently shown (respecting search/filters/grouping)."
         >
           🖨️ Print as shown
@@ -987,7 +987,7 @@ export function CostPlan() {
         <button
           onClick={handlePrintSelectedDetail}
           disabled={selectedForPrint.size === 0}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           title="Print a full-detail report for the elements checked in the table below."
         >
           🖨️ Print selected, full detail ({selectedForPrint.size})
@@ -996,7 +996,7 @@ export function CostPlan() {
           onClick={() => setLetterheadWidgetOpen(o => !o)}
           title="Edit the shared logo/header/footer used on every module's printed reports for this project"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           📄 Page Setup
@@ -1004,7 +1004,7 @@ export function CostPlan() {
         <button
           onClick={() => setUdfWidgetOpen(o => !o)}
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           🏷️ Fields
@@ -1013,7 +1013,7 @@ export function CostPlan() {
           onClick={() => setBaselineWidgetOpen(o => !o)}
           title="Capture a named, dated baseline snapshot of the cost plan"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           🎯 Baseline
@@ -1059,12 +1059,12 @@ export function CostPlan() {
       )}
 
       {filtersOpen && (
-        <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-8 flex-wrap">
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4 mb-4 flex gap-8 flex-wrap">
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Status</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Status</div>
             <div className="flex flex-col gap-1">
               {COST_ELEMENT_STATUSES.map(s => (
-                <label key={s} className="flex items-center gap-1.5 text-xs text-gray-600">
+                <label key={s} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
                   <input
                     type="checkbox"
                     checked={filterStatuses.has(s)}
@@ -1076,10 +1076,10 @@ export function CostPlan() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Type</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Type</div>
             <div className="flex flex-col gap-1">
               {ELEMENT_TYPES.map(t => (
-                <label key={t} className="flex items-center gap-1.5 text-xs text-gray-600">
+                <label key={t} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
                   <input
                     type="checkbox"
                     checked={filterTypes.has(t)}
@@ -1091,8 +1091,8 @@ export function CostPlan() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Group</div>
-            <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)} className="text-xs border border-gray-300 rounded-md px-2 py-1">
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Group</div>
+            <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1">
               <option value="">All</option>
               {uniqueGroups(elements).map(g => <option key={g} value={g}>{g}</option>)}
             </select>
@@ -1100,7 +1100,7 @@ export function CostPlan() {
           {activeFilterCount > 0 && (
             <button
               onClick={() => { setFilterStatuses(new Set()); setFilterTypes(new Set()); setFilterGroup('') }}
-              className="text-xs text-gray-400 hover:text-red-600 self-end"
+              className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 self-end"
             >
               Clear filters
             </button>
@@ -1109,10 +1109,10 @@ export function CostPlan() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '16px', alignItems: 'start' }}>
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden overflow-x-auto">
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide">
+              <tr className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-xs text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide">
                 <th className="px-3 py-2.5">
                   <input
                     type="checkbox"
@@ -1148,7 +1148,7 @@ export function CostPlan() {
                     'Construction', groupTotals(constructionView.disciplines.flatMap(([, els]) => els)),
                     {
                       bold: true, expanded: !constructionCollapsed, onClick: () => setConstructionCollapsed(c => !c),
-                      className: 'bg-gray-100 border-b border-gray-200',
+                      className: 'bg-gray-100 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line',
                     },
                   )}
                   {!constructionCollapsed && constructionView.disciplines.map(([discipline, els]) => {
@@ -1158,7 +1158,7 @@ export function CostPlan() {
                         {renderSummaryRow(discipline, groupTotals(els), {
                           count: els.length, indent: true, expanded,
                           onClick: () => toggleDiscipline(discipline),
-                          className: 'border-b border-gray-100 hover:bg-gray-50 cursor-pointer',
+                          className: 'border-b border-gray-100 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer',
                         })}
                         {expanded && els.map(renderRow)}
                       </Fragment>
@@ -1168,7 +1168,7 @@ export function CostPlan() {
                   {(constructionView.disciplines.length > 0 || constructionView.topLevel.length > 0) && renderSummaryRow(
                     'Total',
                     groupTotals([...constructionView.disciplines.flatMap(([, els]) => els), ...constructionView.topLevel]),
-                    { bold: true, className: 'bg-gray-50 border-t-2 border-gray-300' },
+                    { bold: true, className: 'bg-gray-50 dark:bg-prosota-panel2 border-t-2 border-gray-300 dark:border-prosota-line' },
                   )}
                 </>
               ) : (
@@ -1179,7 +1179,7 @@ export function CostPlan() {
                     <Fragment key={groupKey || 'all'}>
                       {renderSummaryRow(groupKey, groupTotals(groupElements), {
                         count: groupElements.length, expanded, onClick: () => toggleDiscipline(groupKey),
-                        className: 'border-b border-gray-100 hover:bg-gray-50 cursor-pointer',
+                        className: 'border-b border-gray-100 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer',
                       })}
                       {expanded && groupElements.map(renderRow)}
                     </Fragment>
@@ -1189,7 +1189,7 @@ export function CostPlan() {
 
               {visibleElements.length === 0 && (
                 <tr>
-                  <td colSpan={totalColumnCount} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <td colSpan={totalColumnCount} className="px-4 py-10 text-center text-gray-400 dark:text-prosota-muted text-sm">
                     {elements.length === 0 ? 'No cost elements yet for this period. Add the first one above.' : 'No cost elements match your search/filters.'}
                   </td>
                 </tr>

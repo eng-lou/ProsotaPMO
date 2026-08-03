@@ -23,20 +23,20 @@ export function ImportErrorsBadge({ errors, onDismissOne, onDismissAll }: Props)
       <button
         onClick={() => setExpanded(v => !v)}
         title="Click for details"
-        className="text-xs px-2 py-1 rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+        className="text-xs px-2 py-1 rounded-md border border-red-200 bg-red-50 text-red-600 dark:text-red-400 hover:bg-red-100"
       >
         ⚠ {errors.length} save issue{errors.length === 1 ? '' : 's'}
       </button>
       {expanded && (
-        <div className="absolute z-20 top-full left-0 mt-1 w-96 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg p-2 space-y-1">
+        <div className="absolute z-20 top-full left-0 mt-1 w-96 max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg p-2 space-y-1">
           {errors.map((message, i) => (
-            <div key={i} className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-2 py-1">
+            <div key={i} className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400 bg-red-50 border border-red-100 rounded px-2 py-1">
               <span className="flex-1">{message}</span>
               <button onClick={() => onDismissOne(i)} title="Dismiss" className="text-red-400 hover:text-red-700 shrink-0">✕</button>
             </div>
           ))}
           {errors.length > 1 && (
-            <button onClick={onDismissAll} className="text-xs text-gray-400 hover:text-gray-600">
+            <button onClick={onDismissAll} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
               Dismiss all {errors.length}
             </button>
           )}

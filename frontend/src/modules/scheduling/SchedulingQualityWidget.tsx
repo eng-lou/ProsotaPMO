@@ -24,10 +24,10 @@ interface Props {
 }
 
 const STATUS_STYLES: Record<QualityCheckStatus, string> = {
-  pass: 'text-green-700 bg-green-50',
-  warn: 'text-amber-700 bg-amber-50',
-  fail: 'text-red-700 bg-red-50',
-  na: 'text-gray-400 bg-gray-50',
+  pass: 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-500/10',
+  warn: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10',
+  fail: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-500/10',
+  na: 'text-gray-400 dark:text-prosota-muted bg-gray-50 dark:bg-prosota-panel2',
 }
 
 const STATUS_LABELS: Record<QualityCheckStatus, string> = {
@@ -158,20 +158,20 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <span className="text-lg">🔬</span>
-        <div className="font-bold text-sm">Schedule Quality Analysis</div>
-        <div className="text-xs text-gray-400">DCMA 14-Point checks 1–12</div>
+        <div className="font-bold text-sm dark:text-prosota-paper">Schedule Quality Analysis</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">DCMA 14-Point checks 1–12</div>
 
-        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
           Scope
           <select
             value={scopeSubprojectId}
             disabled={!!viewingRun}
             onChange={e => handleScopeChange(e.target.value)}
             title="Restrict this analysis to one tagged sub-project's own subtree, reading its scoped float/critical fields for checks 6/7/12"
-            className="border border-gray-300 rounded px-1.5 py-1 text-xs disabled:opacity-40"
+            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 text-xs disabled:opacity-40"
           >
             <option value="">Whole Schedule</option>
             {subprojects.map(sp => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
@@ -183,35 +183,35 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
             onClick={() => setEditingThresholds(o => !o)}
             disabled={!!viewingRun}
             className={`text-xs px-2 py-1 rounded border font-medium disabled:opacity-40 ${
-              editingThresholds ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              editingThresholds ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             ✏️ Edit Thresholds
           </button>
-          <button onClick={handleReset} disabled={resetting || !!viewingRun} className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40">
+          <button onClick={handleReset} disabled={resetting || !!viewingRun} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-40">
             {resetting ? 'Resetting…' : '↺ Reset'}
           </button>
-          <button onClick={onPrint} disabled={!report} className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40">
+          <button onClick={onPrint} disabled={!report} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-40">
             🖨️ Print
           </button>
-          <button onClick={handleExport} disabled={!report} className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40">
+          <button onClick={handleExport} disabled={!report} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-40">
             ⇩ Export
           </button>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+          <button onClick={onClose} className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
         </div>
       </div>
 
-      <label className="flex items-center gap-1.5 text-xs text-gray-500 mb-3">
+      <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-prosota-muted mb-3">
         <input type="checkbox" checked={includeDetailsInExport} onChange={e => setIncludeDetailsInExport(e.target.checked)} />
         Include failing-activity details in export
       </label>
 
       {/* Saved Analyses */}
-      <div className="border border-gray-200 rounded-lg p-3 mb-4">
+      <div className="border border-gray-200 dark:border-prosota-line rounded-lg p-3 mb-4">
         <div className="flex items-center gap-2 mb-2">
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Saved Analyses</div>
+          <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide">Saved Analyses</div>
           {!showSaveForm && (
-            <button onClick={() => setShowSaveForm(true)} className="ml-auto text-xs text-blue-600 hover:text-blue-700 font-medium">
+            <button onClick={() => setShowSaveForm(true)} className="ml-auto text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
               + Save this analysis
             </button>
           )}
@@ -220,30 +220,30 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
           <div className="flex items-center gap-2 mb-2">
             <input
               value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="e.g. Baseline sign-off review" autoFocus
-              className="text-xs border border-gray-300 rounded px-2 py-1 w-64"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 w-64"
             />
-            <button onClick={handleSaveRun} disabled={saving || !saveName.trim()} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
+            <button onClick={handleSaveRun} disabled={saving || !saveName.trim()} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40">
               {saving ? 'Saving…' : 'Save'}
             </button>
-            <button onClick={() => { setShowSaveForm(false); setSaveName('') }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+            <button onClick={() => { setShowSaveForm(false); setSaveName('') }} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
           </div>
         )}
         {runs.length === 0 ? (
-          <div className="text-xs text-gray-400">No saved analyses yet.</div>
+          <div className="text-xs text-gray-400 dark:text-prosota-muted">No saved analyses yet.</div>
         ) : (
           <table className="w-full text-xs border-collapse">
             <tbody>
               {runs.map(r => (
-                <tr key={r.id} className={viewingRun?.id === r.id ? 'bg-blue-50/50' : undefined}>
+                <tr key={r.id} className={viewingRun?.id === r.id ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : undefined}>
                   <td className="py-1 pr-2 font-medium">{r.name}</td>
-                  <td className="py-1 pr-2 text-gray-400 whitespace-nowrap">{new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</td>
-                  <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">{r.scope_name ?? 'Whole Schedule'}</td>
-                  <td className="py-1 pr-2 text-gray-500">{r.logic_score ?? '—'}% score</td>
-                  <td className="py-1 pr-2 text-red-600">{r.failing_count} fail</td>
+                  <td className="py-1 pr-2 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  <td className="py-1 pr-2 text-gray-500 dark:text-prosota-muted whitespace-nowrap">{r.scope_name ?? 'Whole Schedule'}</td>
+                  <td className="py-1 pr-2 text-gray-500 dark:text-prosota-muted">{r.logic_score ?? '—'}% score</td>
+                  <td className="py-1 pr-2 text-red-600 dark:text-red-400">{r.failing_count} fail</td>
                   <td className="py-1 pr-2 text-amber-600">{r.warning_count} warn</td>
                   <td className="py-1 pr-2 text-right whitespace-nowrap">
-                    <button onClick={() => handleViewRun(r)} className="text-blue-600 hover:text-blue-700 mr-2">View</button>
-                    <button onClick={() => handleDeleteRun(r)} className="text-gray-400 hover:text-red-600">Delete</button>
+                    <button onClick={() => handleViewRun(r)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">View</button>
+                    <button onClick={() => handleDeleteRun(r)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
                   </td>
                 </tr>
               ))}
@@ -253,42 +253,42 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
       </div>
 
       {viewingRun && (
-        <div className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-3">
+        <div className="flex items-center gap-2 text-xs bg-blue-50 dark:bg-prosota-azure/10 border border-blue-100 dark:border-prosota-azure/30 rounded-lg px-3 py-2 mb-3">
           <span>
             Viewing saved analysis <strong>{viewingRun.name}</strong> from {new Date(viewingRun.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
             {viewingRun.scope_name && <> — scoped to <strong>{viewingRun.scope_name}</strong></>}
           </span>
-          <button onClick={handleBackToLive} className="ml-auto text-blue-600 hover:text-blue-700 font-medium">← Back to live</button>
+          <button onClick={handleBackToLive} className="ml-auto text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">← Back to live</button>
         </div>
       )}
 
       {loading || !report ? (
-        <div className="text-sm text-gray-400">Loading…</div>
+        <div className="text-sm text-gray-400 dark:text-prosota-muted">Loading…</div>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-3 mb-4">
-            <div className="text-center bg-blue-50 border border-blue-100 rounded-lg p-2.5">
-              <div className="text-lg font-extrabold text-blue-600">{report.logic_score ?? 'N/A'}{report.logic_score !== null ? '%' : ''}</div>
-              <div className="text-[10px] font-semibold text-blue-800">Logic Score</div>
+            <div className="text-center bg-blue-50 dark:bg-prosota-azure/10 border border-blue-100 dark:border-prosota-azure/30 rounded-lg p-2.5">
+              <div className="text-lg font-extrabold text-blue-600 dark:text-prosota-azure">{report.logic_score ?? 'N/A'}{report.logic_score !== null ? '%' : ''}</div>
+              <div className="text-[10px] font-semibold text-blue-800 dark:text-prosota-azure">Logic Score</div>
             </div>
-            <div className={`text-center rounded-lg p-2.5 border ${failCount > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
-              <div className={`text-lg font-extrabold ${failCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{failCount}</div>
-              <div className={`text-[10px] font-semibold ${failCount > 0 ? 'text-red-800' : 'text-green-800'}`}>Failing Checks</div>
+            <div className={`text-center rounded-lg p-2.5 border ${failCount > 0 ? 'bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/30' : 'bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/30'}`}>
+              <div className={`text-lg font-extrabold ${failCount > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>{failCount}</div>
+              <div className={`text-[10px] font-semibold ${failCount > 0 ? 'text-red-800 dark:text-red-400' : 'text-green-800 dark:text-green-400'}`}>Failing Checks</div>
             </div>
-            <div className={`text-center rounded-lg p-2.5 border ${warnCount > 0 ? 'bg-amber-50 border-amber-100' : 'bg-green-50 border-green-100'}`}>
-              <div className={`text-lg font-extrabold ${warnCount > 0 ? 'text-amber-600' : 'text-green-600'}`}>{warnCount}</div>
-              <div className={`text-[10px] font-semibold ${warnCount > 0 ? 'text-amber-800' : 'text-green-800'}`}>Warning Checks</div>
+            <div className={`text-center rounded-lg p-2.5 border ${warnCount > 0 ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-100 dark:border-amber-500/30' : 'bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/30'}`}>
+              <div className={`text-lg font-extrabold ${warnCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>{warnCount}</div>
+              <div className={`text-[10px] font-semibold ${warnCount > 0 ? 'text-amber-800 dark:text-amber-400' : 'text-green-800 dark:text-green-400'}`}>Warning Checks</div>
             </div>
           </div>
 
           <table className="w-full text-xs border-collapse">
             <thead>
-              <tr className="bg-gray-50 text-left text-gray-500">
-                <th className="px-2 py-1.5 border border-gray-200">Check</th>
-                <th className="px-2 py-1.5 border border-gray-200">Standard</th>
-                <th className="px-2 py-1.5 border border-gray-200 text-right">Threshold</th>
-                <th className="px-2 py-1.5 border border-gray-200 text-right">Actual</th>
-                <th className="px-2 py-1.5 border border-gray-200">Result</th>
+              <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Check</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Standard</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">Threshold</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">Actual</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Result</th>
               </tr>
             </thead>
             <tbody>
@@ -296,24 +296,24 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
                 const criterion = criteriaByCheck.get(c.number)
                 return (
                   <tr key={c.number}>
-                    <td className="px-2 py-1.5 border border-gray-200" title={c.failing_activity_codes.length > 0 ? `Failing: ${c.failing_activity_codes.join(', ')}` : undefined}>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" title={c.failing_activity_codes.length > 0 ? `Failing: ${c.failing_activity_codes.join(', ')}` : undefined}>
                       {c.name}
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{c.standard}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">{c.standard}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right text-gray-500 dark:text-prosota-muted">
                       {editingThresholds && criterion ? (
                         <input
                           type="number" min={0} max={100} step={0.5}
                           defaultValue={criterion.threshold}
                           onBlur={e => handleThresholdChange(criterion, e.target.value)}
-                          className="w-16 border border-blue-400 rounded px-1 py-0.5 text-right text-xs"
+                          className="w-16 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-right text-xs"
                         />
                       ) : c.threshold_label}
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">
                       {typeof c.actual === 'number' ? `${c.actual}%` : c.actual ?? '—'}
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">
                       <span className={`px-1.5 py-0.5 rounded font-semibold ${STATUS_STYLES[c.status]}`}>
                         {STATUS_LABELS[c.status]}
                       </span>
@@ -324,7 +324,7 @@ export function SchedulingQualityWidget({ projectId, periodId, subprojects, onCl
             </tbody>
           </table>
           {report.activity_count === 0 && (
-            <div className="text-xs text-gray-400 mt-3">No activities yet — add some to see real quality metrics.</div>
+            <div className="text-xs text-gray-400 dark:text-prosota-muted mt-3">No activities yet — add some to see real quality metrics.</div>
           )}
         </>
       )}

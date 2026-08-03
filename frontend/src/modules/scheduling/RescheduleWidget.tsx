@@ -125,18 +125,18 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">🔄</span>
-        <div className="font-bold text-sm">Reschedule</div>
-        <div className="text-xs text-gray-400">Shift the whole programme forward or backward</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Reschedule</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Shift the whole programme forward or backward</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
-      <div className="flex items-center gap-2 mb-3 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Date</span>
-        <span className="text-sm font-bold text-gray-900">{formatDataDate(currentDataDate, currentDataTime)}</span>
-        <span className="text-xs text-gray-400 ml-1">
+      <div className="flex items-center gap-2 mb-3 bg-gray-50 dark:bg-prosota-panel2 border border-gray-200 dark:border-prosota-line rounded-md px-3 py-2">
+        <span className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide">Data Date</span>
+        <span className="text-sm font-bold text-gray-900 dark:text-prosota-paper">{formatDataDate(currentDataDate, currentDataTime)}</span>
+        <span className="text-xs text-gray-400 dark:text-prosota-muted ml-1">
           — the anchor unconstrained, not-yet-started activities can't start earlier than; this is what Reschedule
           actually moves. No time set means the default calendar's day start.
         </span>
@@ -156,30 +156,30 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
       {mode === 'shift' ? (
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">Direction</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Direction</div>
             <select
               value={direction}
               onChange={e => setDirection(e.target.value as 'forward' | 'backward')}
-              className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+              className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
             >
               <option value="forward">Forward (+)</option>
               <option value="backward">Backward (–)</option>
             </select>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">Shift By</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Shift By</div>
             <div className="flex gap-2">
               <input
                 type="number"
                 min={1}
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
-                className="w-16 border border-gray-300 rounded-md px-2 py-1.5 text-sm"
+                className="w-16 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-sm"
               />
               <select
                 value={unit}
                 onChange={e => setUnit(e.target.value as 'days' | 'weeks' | 'months')}
-                className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm"
+                className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-sm"
               >
                 <option value="days">Days</option>
                 <option value="weeks">Weeks</option>
@@ -188,8 +188,8 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">Apply To</div>
-            <div className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm bg-gray-50 text-gray-500">
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Apply To</div>
+            <div className="w-full border border-gray-200 dark:border-prosota-line rounded-md px-3 py-1.5 text-sm bg-gray-50 dark:bg-prosota-panel2 text-gray-500 dark:text-prosota-muted">
               All unconstrained activities
             </div>
           </div>
@@ -197,34 +197,34 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
       ) : (
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">New Data Date</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">New Data Date</div>
             <input
               type="date"
               value={targetDate}
               onChange={e => setTargetDate(e.target.value)}
-              className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+              className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
             />
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">Time (optional)</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Time (optional)</div>
             <input
               type="time"
               value={targetTime}
               onChange={e => setTargetTime(e.target.value)}
               title="Leave blank to use the default calendar's day start"
-              className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+              className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
             />
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1">Apply To</div>
-            <div className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm bg-gray-50 text-gray-500">
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Apply To</div>
+            <div className="w-full border border-gray-200 dark:border-prosota-line rounded-md px-3 py-1.5 text-sm bg-gray-50 dark:bg-prosota-panel2 text-gray-500 dark:text-prosota-muted">
               All unconstrained activities
             </div>
           </div>
         </div>
       )}
 
-      <div className="bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-xs text-amber-800 mb-3">
+      <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-md px-3 py-2 text-xs text-amber-800 dark:text-amber-400 mb-3">
         Moves the data date {describeShift()} and re-runs the critical path engine. Activities already in progress
         (% Complete &gt; 0) keep their Start — only their Finish updates, from remaining duration. Activities with a
         hard constraint (Mandatory Start / Finish On or Before) don't move either — dates are computed from
@@ -232,11 +232,11 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md px-3 py-2 text-xs text-red-800 mb-3">{error}</div>
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md px-3 py-2 text-xs text-red-800 dark:text-red-400 mb-3">{error}</div>
       )}
 
       {result && (
-        <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-xs text-blue-800 mb-3 space-y-1">
+        <div className="bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md px-3 py-2 text-xs text-blue-800 mb-3 space-y-1">
           <div>Data date: <strong>{formatDataDate(previousDataDate, previousDataTime)}</strong> → <strong>{formatDataDate(result.new_anchor_date, result.new_anchor_time)}</strong></div>
           <div>Project finish: <strong>{formatDateTime(result.old_project_finish)}</strong> → <strong>{formatDateTime(result.new_project_finish)}</strong></div>
         </div>
@@ -246,11 +246,11 @@ export function RescheduleWidget({ period, onApplied, onClose }: Props) {
         <button
           onClick={handleApply}
           disabled={applying || !canApply}
-          className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50"
         >
           {applying ? 'Applying…' : '✓ Apply Reschedule'}
         </button>
-        <button onClick={onClose} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50">
+        <button onClick={onClose} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
           Close
         </button>
       </div>

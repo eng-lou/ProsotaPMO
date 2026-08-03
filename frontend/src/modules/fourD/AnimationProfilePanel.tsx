@@ -86,38 +86,38 @@ export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, o
         />
       ) : (
         <>
-          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide px-1 pt-1">Built-in</div>
+          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide px-1 pt-1">Built-in</div>
           {BUILTIN_PRESETS.map(preset => (
             <div key={preset.name} className="flex items-center gap-1.5 py-1 px-1">
-              <span className="flex-1 min-w-0 truncate text-xs text-gray-500" title={preset.name}>{preset.name}</span>
+              <span className="flex-1 min-w-0 truncate text-xs text-gray-500 dark:text-prosota-muted" title={preset.name}>{preset.name}</span>
               <button
                 onClick={() => setDraft({ id: null, name: preset.name, config: preset.config })}
                 title="Duplicate to customise and save"
-                className="text-xs text-gray-400 hover:text-gray-700 shrink-0"
+                className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0"
               >
                 + Save
               </button>
             </div>
           ))}
 
-          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide px-1 pt-2">Your profiles</div>
-          {loading && <p className="px-1 py-2 text-xs text-gray-400">Loading…</p>}
-          {!loading && profiles.length === 0 && <p className="px-1 py-2 text-xs text-gray-400">None saved yet.</p>}
+          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide px-1 pt-2">Your profiles</div>
+          {loading && <p className="px-1 py-2 text-xs text-gray-400 dark:text-prosota-muted">Loading…</p>}
+          {!loading && profiles.length === 0 && <p className="px-1 py-2 text-xs text-gray-400 dark:text-prosota-muted">None saved yet.</p>}
           {profiles.map(profile => (
             <div key={profile.id} className="flex items-center gap-1.5 py-1 px-1">
-              <span className="flex-1 min-w-0 truncate text-xs text-gray-700" title={profile.name}>{profile.name}</span>
-              <button onClick={() => downloadJson(`${profile.name}.json`, { name: profile.name, config: profile.config })} title="Export" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">⇩</button>
-              <button onClick={() => setDraft({ id: profile.id, name: profile.name, config: profile.config })} title="Edit" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">✎</button>
-              <button onClick={() => handleDelete(profile)} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+              <span className="flex-1 min-w-0 truncate text-xs text-gray-700 dark:text-prosota-muted" title={profile.name}>{profile.name}</span>
+              <button onClick={() => downloadJson(`${profile.name}.json`, { name: profile.name, config: profile.config })} title="Export" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">⇩</button>
+              <button onClick={() => setDraft({ id: profile.id, name: profile.name, config: profile.config })} title="Edit" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">✎</button>
+              <button onClick={() => handleDelete(profile)} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
             </div>
           ))}
 
-          {error && <p className="px-1 pt-1 text-[11px] text-red-600">{error}</p>}
+          {error && <p className="px-1 pt-1 text-[11px] text-red-600 dark:text-red-400">{error}</p>}
 
-          <div className="border-t border-gray-100 mt-1 pt-1.5 flex items-center gap-1.5">
+          <div className="border-t border-gray-100 dark:border-prosota-line mt-1 pt-1.5 flex items-center gap-1.5">
             <button
               onClick={() => setDraft({ id: null, name: '', config: DEFAULT_ANIMATION_CONFIG })}
-              className="flex-1 text-left text-xs text-gray-600 hover:text-gray-900 px-1"
+              className="flex-1 text-left text-xs text-gray-600 dark:text-prosota-muted hover:text-gray-900 px-1"
             >
               + New profile
             </button>
@@ -126,7 +126,7 @@ export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, o
               e.target.value = ''
               if (file) handleImport(file)
             }} />
-            <button onClick={() => importInputRef.current?.click()} className="text-xs text-gray-400 hover:text-gray-700 px-1">⇧ Import</button>
+            <button onClick={() => importInputRef.current?.click()} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper px-1">⇧ Import</button>
           </div>
         </>
       )}

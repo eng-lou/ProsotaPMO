@@ -25,18 +25,18 @@ interface Props {
 export function LinkedActivitiesWidget({ activities, selectedActivityIds, onSelectActivity }: Props) {
   if (activities.length === 0) return null
   return (
-    <div className="w-56 max-h-40 overflow-y-auto rounded-md border border-gray-300 bg-white/95 shadow-sm text-xs">
-      <div className="px-2 py-1 border-b border-gray-100 font-bold text-gray-500 sticky top-0 bg-white/95">
+    <div className="w-56 max-h-40 overflow-y-auto rounded-md border border-gray-300 dark:border-prosota-line bg-white/95 shadow-sm text-xs">
+      <div className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line font-bold text-gray-500 dark:text-prosota-muted sticky top-0 bg-white/95">
         Linked Activities ({activities.length})
       </div>
       {activities.map(a => (
         <div
           key={a.id}
           onClick={e => onSelectActivity(a.id, e.ctrlKey || e.metaKey)}
-          className={`px-2 py-1 cursor-pointer hover:bg-gray-50 truncate ${selectedActivityIds.has(a.id) ? 'bg-blue-50 text-blue-700' : 'text-gray-600'}`}
+          className={`px-2 py-1 cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 truncate ${selectedActivityIds.has(a.id) ? 'bg-blue-50 text-blue-700' : 'text-gray-600 dark:text-prosota-muted'}`}
           title={`${a.code}: ${a.task_name}`}
         >
-          <span className="font-mono text-gray-400 mr-1">{a.code}</span>
+          <span className="font-mono text-gray-400 dark:text-prosota-muted mr-1">{a.code}</span>
           {a.task_name}
         </div>
       ))}

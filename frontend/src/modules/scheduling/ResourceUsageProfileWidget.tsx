@@ -272,21 +272,21 @@ function ResourceUsageProfileWidgetImpl({
   if (trackedResources.length === 0) return null
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4 no-print">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <div className="font-bold text-sm">Resource Usage Profile</div>
-        <div className="text-xs text-gray-400">Budgeted {unit} per period vs capacity (Limit)</div>
+        <div className="font-bold text-sm dark:text-prosota-paper">Resource Usage Profile</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Budgeted {unit} per period vs capacity (Limit)</div>
         <div className="relative ml-auto">
           <button
             onClick={() => setColumnsMenuOpen(o => !o)}
-            className={`text-xs px-2 py-1 rounded border ${columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+            className={`text-xs px-2 py-1 rounded border ${columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
           >
             ☰ Columns
           </button>
           {columnsMenuOpen && (
-            <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-2 z-30 text-xs w-44">
+            <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-2 z-30 text-xs w-44">
               {OPTIONAL_COLUMNS.map(c => (
-                <label key={c.key} className="flex items-center gap-1.5 py-0.5 text-gray-600">
+                <label key={c.key} className="flex items-center gap-1.5 py-0.5 text-gray-600 dark:text-prosota-muted">
                   <input type="checkbox" checked={visibleCols.has(c.key)} onChange={() => toggleColumn(c.key)} />
                   {c.label}
                 </label>
@@ -297,11 +297,11 @@ function ResourceUsageProfileWidgetImpl({
       </div>
 
       {loading ? (
-        <div className="text-xs text-gray-400 p-4">Loading resource usage profile…</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted p-4">Loading resource usage profile…</div>
       ) : (
-        <div className="border border-gray-200 rounded overflow-hidden text-xs" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
+        <div className="border border-gray-200 dark:border-prosota-line rounded overflow-hidden text-xs" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
         <div className="flex">
-          <div className="flex-shrink-0 border-r border-gray-200 flex flex-col" style={{ width: leftPaneWidth - RESOURCE_CHART_Y_AXIS_WIDTH }}>
+          <div className="flex-shrink-0 border-r border-gray-200 dark:border-prosota-line flex flex-col" style={{ width: leftPaneWidth - RESOURCE_CHART_Y_AXIS_WIDTH }}>
             {/* Table header sits outside the bounded/scrollable body below,
                 roughly matching the legend row's own height on the chart
                 side. The body itself is capped to chartHeight and scrolls
@@ -315,13 +315,13 @@ function ResourceUsageProfileWidgetImpl({
                 are not aligned"). Both sides now share the same height. */}
             <table className="w-full border-collapse">
               <thead>
-                <tr className="bg-gray-50 text-left text-gray-500">
-                  <th className="px-1.5 py-1.5 border-b border-gray-200" />
-                  <th className="px-2 py-1.5 border-b border-gray-200">Resource</th>
-                  {visibleCols.has('role') && <th className="px-2 py-1.5 border-b border-gray-200">Role</th>}
-                  {visibleCols.has('utilisation') && <th className="px-2 py-1.5 border-b border-gray-200 text-right">Utilisation</th>}
-                  {visibleCols.has('calendar') && <th className="px-2 py-1.5 border-b border-gray-200">Calendar</th>}
-                  {visibleCols.has('default_units') && <th className="px-2 py-1.5 border-b border-gray-200 text-right">Default Units/Time</th>}
+                <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+                  <th className="px-1.5 py-1.5 border-b border-gray-200 dark:border-prosota-line" />
+                  <th className="px-2 py-1.5 border-b border-gray-200 dark:border-prosota-line">Resource</th>
+                  {visibleCols.has('role') && <th className="px-2 py-1.5 border-b border-gray-200 dark:border-prosota-line">Role</th>}
+                  {visibleCols.has('utilisation') && <th className="px-2 py-1.5 border-b border-gray-200 dark:border-prosota-line text-right">Utilisation</th>}
+                  {visibleCols.has('calendar') && <th className="px-2 py-1.5 border-b border-gray-200 dark:border-prosota-line">Calendar</th>}
+                  {visibleCols.has('default_units') && <th className="px-2 py-1.5 border-b border-gray-200 dark:border-prosota-line text-right">Default Units/Time</th>}
                 </tr>
               </thead>
             </table>
@@ -335,19 +335,19 @@ function ResourceUsageProfileWidgetImpl({
                     const utilisations = rows.map(r => r.assignment.utilisation_pct !== null ? Number(r.assignment.utilisation_pct) : null).filter((v): v is number => v !== null)
                     const avgUtilisation = utilisations.length ? Math.round(utilisations.reduce((a, b) => a + b, 0) / utilisations.length) : null
                     return (
-                      <tr key={resource.id} className="hover:bg-gray-50" style={{ height: RESOURCE_ROW_HEIGHT }}>
-                        <td className="px-1.5 border-b border-gray-100">
+                      <tr key={resource.id} className="hover:bg-gray-50 dark:hover:bg-prosota-panel2" style={{ height: RESOURCE_ROW_HEIGHT }}>
+                        <td className="px-1.5 border-b border-gray-100 dark:border-prosota-line">
                           <input type="checkbox" checked={selectedResourceIds.has(resource.id)} onChange={() => onToggleResourceSelected(resource.id)} />
                         </td>
-                        <td className="px-2 py-1 border-b border-gray-100 font-medium text-gray-700">{resource.name}</td>
-                        {visibleCols.has('role') && <td className="px-2 py-1 border-b border-gray-100 text-gray-500">{resource.role ?? '—'}</td>}
-                        {visibleCols.has('utilisation') && <td className="px-2 py-1 border-b border-gray-100 text-right text-gray-500">{avgUtilisation !== null ? `${avgUtilisation}%` : '—'}</td>}
+                        <td className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line font-medium text-gray-700 dark:text-prosota-muted">{resource.name}</td>
+                        {visibleCols.has('role') && <td className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">{resource.role ?? '—'}</td>}
+                        {visibleCols.has('utilisation') && <td className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line text-right text-gray-500 dark:text-prosota-muted">{avgUtilisation !== null ? `${avgUtilisation}%` : '—'}</td>}
                         {visibleCols.has('calendar') && (
-                          <td className="px-2 py-1 border-b border-gray-100 text-gray-500">
+                          <td className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">
                             {resource.calendar_id ? (calendarLookup.byId.get(resource.calendar_id)?.name ?? '—') : '—'}
                           </td>
                         )}
-                        {visibleCols.has('default_units') && <td className="px-2 py-1 border-b border-gray-100 text-right text-gray-500">{resource.max_hours_per_day}h/d</td>}
+                        {visibleCols.has('default_units') && <td className="px-2 py-1 border-b border-gray-100 dark:border-prosota-line text-right text-gray-500 dark:text-prosota-muted">{resource.max_hours_per_day}h/d</td>}
                       </tr>
                     )
                   })}
@@ -358,7 +358,7 @@ function ResourceUsageProfileWidgetImpl({
           </div>
 
           <div ref={chartWrapRef} className="flex-1 flex flex-col">
-            <div className="flex items-center gap-3 mb-2 px-3 pt-3 text-gray-500">
+            <div className="flex items-center gap-3 mb-2 px-3 pt-3 text-gray-500 dark:text-prosota-muted">
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
@@ -386,7 +386,7 @@ function ResourceUsageProfileWidgetImpl({
                     writing-mode lays the text out vertically as a normal
                     box, so it can't overflow its container that way. */}
                 <div className="flex items-center justify-center overflow-hidden" style={{ width: 14 }}>
-                  <span className="text-gray-500 whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{axisLabel}</span>
+                  <span className="text-gray-500 dark:text-prosota-muted whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{axisLabel}</span>
                 </div>
                 <div className="relative flex-1">
                   {Array.from({ length: gridlineCount + 1 }, (_, i) => {
@@ -408,7 +408,7 @@ function ResourceUsageProfileWidgetImpl({
                     return (
                       <span
                         key={i}
-                        className={`absolute right-1 text-gray-400 ${isTopLabel ? '' : '-translate-y-1/2'}`}
+                        className={`absolute right-1 text-gray-400 dark:text-prosota-muted ${isTopLabel ? '' : '-translate-y-1/2'}`}
                         style={isTopLabel ? { top: 0 } : { bottom }}
                       >
                         {formatAxisValue(value)}
@@ -426,7 +426,7 @@ function ResourceUsageProfileWidgetImpl({
                   {Array.from({ length: gridlineCount + 1 }, (_, i) => {
                     const value = (maxValue / gridlineCount) * i
                     const bottom = (value / maxValue) * chartHeight
-                    return <div key={i} className="absolute left-0 right-0 border-t border-gray-100" style={{ bottom }} />
+                    return <div key={i} className="absolute left-0 right-0 border-t border-gray-100 dark:border-prosota-line" style={{ bottom }} />
                   })}
                   {limitValue > 0 && (
                     <div
@@ -459,7 +459,7 @@ function ResourceUsageProfileWidgetImpl({
                     at its real bucket position, since flex has no concept
                     of "skipped" siblings the way an explicit left offset
                     does. */}
-                <div className="relative text-gray-400 mt-1" style={{ width: buckets.length * PERIOD_COL_WIDTH, height: 16 }}>
+                <div className="relative text-gray-400 dark:text-prosota-muted mt-1" style={{ width: buckets.length * PERIOD_COL_WIDTH, height: 16 }}>
                   {visibleBucketIndices.map(i => (
                     <div key={i} className="absolute text-center" style={{ left: i * PERIOD_COL_WIDTH, width: PERIOD_COL_WIDTH }}>{buckets[i].label}</div>
                   ))}
@@ -478,7 +478,7 @@ function ResourceUsageProfileWidgetImpl({
             see this widget's own Props), so the blank spacer below needs
             no further adjustment to line up with where the chart bars
             actually start. */}
-        <div className="flex border-t border-gray-200">
+        <div className="flex border-t border-gray-200 dark:border-prosota-line">
           <div style={{ width: leftPaneWidth, flexShrink: 0 }} />
           <div ref={footerScrollRef} onScroll={() => syncChartScroll('footer')} className="flex-1" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
             <div style={{ width: buckets.length * PERIOD_COL_WIDTH, height: 14 }} />

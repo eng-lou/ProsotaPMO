@@ -21,9 +21,9 @@ interface Props {
 // duplicates locally (ZonesPanel.tsx/RadialChartsPanel.tsx's own ColorField).
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
       <span className="w-20 shrink-0">{label}</span>
-      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 rounded shrink-0" />
+      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded shrink-0" />
     </label>
   )
 }
@@ -37,17 +37,17 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 export function TimelineStripPanel({ strip, error, udfDefinitions, activities, getUdfValue, onUpdate, onUpdateScope }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Timeline Strip</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Timeline Strip</span>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       <div className="px-3 py-2 space-y-1.5">
-        <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+        <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
           <input type="checkbox" checked={strip.visible} onChange={e => onUpdate({ visible: e.target.checked })} />
           Visible
         </label>
-        <p className="text-[11px] text-gray-400">Drag the strip itself in the 3D viewport to reposition it.</p>
-        <div className="bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+        <p className="text-[11px] text-gray-400 dark:text-prosota-muted">Drag the strip itself in the 3D viewport to reposition it.</p>
+        <div className="bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           <ScopeFilterFields
             scope={strip}
             activities={activities}
@@ -56,32 +56,32 @@ export function TimelineStripPanel({ strip, error, udfDefinitions, activities, g
             onChange={onUpdateScope}
           />
         </div>
-        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+        <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-20 shrink-0">Width</span>
             <input
               type="number" min={100} step={20}
               value={strip.width_px}
               onChange={e => onUpdate({ width_px: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-20 shrink-0">Height</span>
             <input
               type="number" min={20} step={4}
               value={strip.height_px}
               onChange={e => onUpdate({ height_px: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-20 shrink-0">Font size</span>
             <input
               type="number" min={6} step={1}
               value={strip.font_size}
               onChange={e => onUpdate({ font_size: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <ColorField label="Background" value={strip.background_color} onChange={v => onUpdate({ background_color: v })} />

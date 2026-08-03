@@ -25,9 +25,9 @@ interface RiskSummary { id: string; code: string; title: string }
 interface CostElementSummary { id: string; code: string; description: string }
 
 const TYPE_STYLES: Record<ItemType, string> = {
-  issue: 'bg-red-100 text-red-700',
-  change: 'bg-amber-100 text-amber-700',
-  decision: 'bg-blue-100 text-blue-700',
+  issue: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
+  change: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+  decision: 'bg-blue-100 text-blue-700 dark:bg-prosota-azure/15 dark:text-prosota-azure',
 }
 
 const GROUP_OPTIONS = [
@@ -267,7 +267,7 @@ export function IcdTracker() {
 
   const renderRow = (item: IcdItem) => (
     <Fragment key={item.id}>
-      <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+      <tr className="border-b border-gray-100 dark:border-prosota-line last:border-0 hover:bg-gray-50 dark:hover:bg-prosota-panel2">
         <td className="px-3 py-2.5">
           <input
             type="checkbox"
@@ -275,11 +275,11 @@ export function IcdTracker() {
             onChange={() => toggleInSet(selectedForPrint, setSelectedForPrint, item.id)}
           />
         </td>
-        <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{item.code}</td>
+        <td className="px-4 py-2.5 text-gray-500 dark:text-prosota-muted font-mono text-xs">{item.code}</td>
         <td className="px-4 py-2.5">
           <button
             onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
-            className="text-left font-medium text-gray-900 hover:text-blue-600"
+            className="text-left font-medium text-gray-900 dark:text-prosota-paper hover:text-blue-600"
           >
             {item.title}
           </button>
@@ -289,24 +289,24 @@ export function IcdTracker() {
             {ITEM_TYPE_LABELS[item.item_type]}
           </span>
         </td>
-        <td className="px-4 py-2.5 text-gray-600">
+        <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">
           {STATUS_LABELS[item.status] ?? item.status}
           {item.item_type === 'change' && item.ccb_decision && (
             <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-medium ${
-              item.ccb_decision === 'approved' ? 'bg-green-100 text-green-700'
-                : item.ccb_decision === 'rejected' ? 'bg-red-100 text-red-700'
-                : 'bg-gray-100 text-gray-600'
+              item.ccb_decision === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400'
+                : item.ccb_decision === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400'
+                : 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'
             }`}>
               CCB: {item.ccb_decision}
             </span>
           )}
         </td>
-        <td className="px-4 py-2.5 text-gray-600 capitalize">{item.priority ?? '—'}</td>
-        <td className="px-4 py-2.5 text-gray-600">{item.owner ?? '—'}</td>
-        <td className="px-4 py-2.5 text-gray-600">
+        <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted capitalize">{item.priority ?? '—'}</td>
+        <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{item.owner ?? '—'}</td>
+        <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">
           {item.item_type === 'decision' ? (item.required_by ?? '—') : (item.due_date ?? '—')}
         </td>
-        <td className="px-4 py-2.5 text-gray-600">
+        <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">
           {item.item_type === 'change' && (
             <>{formatCurrency(item.cost_impact)}{item.schedule_impact_days ? ` · +${item.schedule_impact_days}d` : ''}</>
           )}
@@ -314,10 +314,10 @@ export function IcdTracker() {
           {item.item_type === 'decision' && (item.decision_maker ?? '—')}
         </td>
         <td className="px-4 py-2.5 text-right whitespace-nowrap">
-          <button onClick={() => setEditingItem(item)} className="text-xs text-blue-600 hover:text-blue-700 mr-3">
+          <button onClick={() => setEditingItem(item)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-3">
             Edit
           </button>
-          <button onClick={() => handleDelete(item)} className="text-xs text-gray-400 hover:text-red-600">
+          <button onClick={() => handleDelete(item)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">
             Delete
           </button>
         </td>
@@ -326,44 +326,44 @@ export function IcdTracker() {
         <tr>
           <td colSpan={10} className="p-0">
             {(item.raised_date || item.due_date || item.last_reviewed_date || item.closed_date) && (
-              <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex gap-6 flex-wrap text-xs text-gray-500">
-                {item.raised_date && <span>Raised: <span className="text-gray-700">{item.raised_date}</span></span>}
-                {item.due_date && <span>Due: <span className="text-gray-700">{item.due_date}</span></span>}
-                {item.last_reviewed_date && <span>Last reviewed: <span className="text-gray-700">{item.last_reviewed_date}</span></span>}
-                {item.closed_date && <span>Closed: <span className="text-gray-700">{item.closed_date}</span></span>}
+              <div className="px-4 py-2.5 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line flex gap-6 flex-wrap text-xs text-gray-500 dark:text-prosota-muted">
+                {item.raised_date && <span>Raised: <span className="text-gray-700 dark:text-prosota-muted">{item.raised_date}</span></span>}
+                {item.due_date && <span>Due: <span className="text-gray-700 dark:text-prosota-muted">{item.due_date}</span></span>}
+                {item.last_reviewed_date && <span>Last reviewed: <span className="text-gray-700 dark:text-prosota-muted">{item.last_reviewed_date}</span></span>}
+                {item.closed_date && <span>Closed: <span className="text-gray-700 dark:text-prosota-muted">{item.closed_date}</span></span>}
               </div>
             )}
             {(item.description || item.raised_by || item.resolution || item.contract_reference || item.change_type || item.cost_claim || item.eot_claim_days || item.quality_impact || item.rejection_reason || item.if_late_consequence) && (
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 space-y-1.5 text-xs">
+              <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line space-y-1.5 text-xs">
                 {item.raised_by && (
-                  <div><span className="font-semibold text-gray-600">Raised by: </span><span className="text-gray-600">{item.raised_by}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Raised by: </span><span className="text-gray-600 dark:text-prosota-muted">{item.raised_by}</span></div>
                 )}
                 {item.description && (
-                  <div><span className="font-semibold text-gray-600">Description: </span><span className="text-gray-600">{item.description}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Description: </span><span className="text-gray-600 dark:text-prosota-muted">{item.description}</span></div>
                 )}
                 {item.change_type && (
-                  <div><span className="font-semibold text-gray-600">Change type: </span><span className="text-gray-600">{item.change_type}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Change type: </span><span className="text-gray-600 dark:text-prosota-muted">{item.change_type}</span></div>
                 )}
                 {item.contract_reference && (
-                  <div><span className="font-semibold text-gray-600">Contract reference: </span><span className="text-gray-600">{item.contract_reference}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Contract reference: </span><span className="text-gray-600 dark:text-prosota-muted">{item.contract_reference}</span></div>
                 )}
                 {(item.cost_claim || item.eot_claim_days) && (
                   <div>
-                    <span className="font-semibold text-gray-600">Claim: </span>
-                    <span className="text-gray-600">{formatCurrency(item.cost_claim)}{item.eot_claim_days ? ` · ${item.eot_claim_days}d EOT` : ''}</span>
+                    <span className="font-semibold text-gray-600 dark:text-prosota-muted">Claim: </span>
+                    <span className="text-gray-600 dark:text-prosota-muted">{formatCurrency(item.cost_claim)}{item.eot_claim_days ? ` · ${item.eot_claim_days}d EOT` : ''}</span>
                   </div>
                 )}
                 {item.quality_impact && (
-                  <div><span className="font-semibold text-gray-600">Quality impact: </span><span className="text-gray-600">{item.quality_impact}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Quality impact: </span><span className="text-gray-600 dark:text-prosota-muted">{item.quality_impact}</span></div>
                 )}
                 {item.rejection_reason && (
-                  <div><span className="font-semibold text-gray-600">Rejection reason: </span><span className="text-gray-600">{item.rejection_reason}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Rejection reason: </span><span className="text-gray-600 dark:text-prosota-muted">{item.rejection_reason}</span></div>
                 )}
                 {item.if_late_consequence && (
-                  <div><span className="font-semibold text-gray-600">Consequence if late: </span><span className="text-gray-600">{item.if_late_consequence}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Consequence if late: </span><span className="text-gray-600 dark:text-prosota-muted">{item.if_late_consequence}</span></div>
                 )}
                 {item.resolution && (
-                  <div><span className="font-semibold text-gray-600">Resolution: </span><span className="text-gray-600">{item.resolution}</span></div>
+                  <div><span className="font-semibold text-gray-600 dark:text-prosota-muted">Resolution: </span><span className="text-gray-600 dark:text-prosota-muted">{item.resolution}</span></div>
                 )}
               </div>
             )}
@@ -383,24 +383,24 @@ export function IcdTracker() {
   )
 
   if (loading || periodLoading) {
-    return <div className="p-8 text-sm text-gray-400">Loading ICD tracker…</div>
+    return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading ICD tracker…</div>
   }
 
   return (
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900">ICD Tracker</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">ICD Tracker</h1>
         {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">
+          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
             {period.period_label} · {period.freeze_status}
           </span>
         )}
       </div>
-      <p className="text-gray-500 text-sm mb-6">Issues, changes, and decisions for {selectedProject.name}.</p>
+      <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">Issues, changes, and decisions for {selectedProject.name}.</p>
 
       {(error || periodError) && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
       )}
 
       <IcdKpiStrip items={items} />
@@ -413,7 +413,7 @@ export function IcdTracker() {
             key={t}
             onClick={() => setTypeFilter(t)}
             className={`text-xs px-3 py-1.5 rounded-full font-medium ${
-              typeFilter === t ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              typeFilter === t ? 'bg-gray-900 text-white' : 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted hover:bg-gray-200 dark:hover:bg-prosota-line'
             }`}
           >
             {t === 'all' ? 'All' : ITEM_TYPE_LABELS[t]}
@@ -432,7 +432,7 @@ export function IcdTracker() {
         <div className="mb-4 flex items-center gap-3 flex-wrap">
           <button
             onClick={() => setFormOpen(true)}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
           >
             + New issue / change / decision
           </button>
@@ -440,29 +440,29 @@ export function IcdTracker() {
             onClick={handleGenerateIcd}
             disabled={generatingIcd}
             title="Drafts decisions needed from the committed, resourced schedule — one per discipline actually present, due before that discipline's own work starts. Re-running later only refreshes decisions whose discipline has actually moved. Review and tune before relying on it."
-            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {generatingIcd ? 'Generating…' : 'Generate ICD'}
           </button>
-          {generateIcdMessage && <span className="text-xs text-gray-500">{generateIcdMessage}</span>}
+          {generateIcdMessage && <span className="text-xs text-gray-500 dark:text-prosota-muted">{generateIcdMessage}</span>}
         </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="relative max-w-xs w-full">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-prosota-muted text-xs">🔍</span>
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search issues, changes, decisions…"
-            className="w-full border border-gray-300 rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <button
           onClick={() => setFiltersOpen(prev => !prev)}
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            filtersOpen || activeFilterCount > 0 ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            filtersOpen || activeFilterCount > 0 ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           ⚙ Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
@@ -470,20 +470,20 @@ export function IcdTracker() {
         <select
           value={groupBy}
           onChange={e => setGroupBy(e.target.value as GroupByField)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted"
         >
           {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
         </select>
         <button
           onClick={() => downloadIcdItemsCsv(visibleItems, selectedProject.name)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Exports the items currently shown (respecting search/filters) as a CSV file, opens directly in Excel."
         >
           ⇩ Export ({visibleItems.length})
         </button>
         <button
           onClick={handlePrintList}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Print the tracker exactly as currently shown (respecting search/filters/grouping)."
         >
           🖨️ Print as shown
@@ -491,7 +491,7 @@ export function IcdTracker() {
         <button
           onClick={handlePrintSelectedDetail}
           disabled={selectedForPrint.size === 0}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           title="Print a full-detail report for the items checked in the table below."
         >
           🖨️ Print selected, full detail ({selectedForPrint.size})
@@ -500,7 +500,7 @@ export function IcdTracker() {
           onClick={() => setLetterheadWidgetOpen(o => !o)}
           title="Edit the shared logo/header/footer used on every module's printed reports for this project"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           📄 Page Setup
@@ -509,7 +509,7 @@ export function IcdTracker() {
           onClick={() => setBaselineWidgetOpen(o => !o)}
           title="Capture a named, dated baseline snapshot of the ICD tracker"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           🎯 Baseline
@@ -541,12 +541,12 @@ export function IcdTracker() {
       )}
 
       {filtersOpen && (
-        <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4 flex gap-8 flex-wrap">
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4 mb-4 flex gap-8 flex-wrap">
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Status</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Status</div>
             <div className="flex flex-col gap-1">
               {uniqueValues(items, 'status').map(s => (
-                <label key={s} className="flex items-center gap-1.5 text-xs text-gray-600">
+                <label key={s} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
                   <input
                     type="checkbox"
                     checked={filterStatuses.has(s)}
@@ -558,10 +558,10 @@ export function IcdTracker() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Priority</div>
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Priority</div>
             <div className="flex flex-col gap-1">
               {PRIORITIES.map(p => (
-                <label key={p} className="flex items-center gap-1.5 text-xs text-gray-600">
+                <label key={p} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
                   <input
                     type="checkbox"
                     checked={filterPriorities.has(p)}
@@ -573,8 +573,8 @@ export function IcdTracker() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-1.5">Owner</div>
-            <select value={filterOwner} onChange={e => setFilterOwner(e.target.value)} className="text-xs border border-gray-300 rounded-md px-2 py-1">
+            <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1.5">Owner</div>
+            <select value={filterOwner} onChange={e => setFilterOwner(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1">
               <option value="">All</option>
               {uniqueValues(items, 'owner').map(o => <option key={o} value={o}>{o}</option>)}
             </select>
@@ -582,7 +582,7 @@ export function IcdTracker() {
           {activeFilterCount > 0 && (
             <button
               onClick={() => { setFilterStatuses(new Set()); setFilterPriorities(new Set()); setFilterOwner('') }}
-              className="text-xs text-gray-400 hover:text-red-600 self-end"
+              className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 self-end"
             >
               Clear filters
             </button>
@@ -590,10 +590,10 @@ export function IcdTracker() {
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 font-medium uppercase tracking-wide">
+            <tr className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-xs text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide">
               <th className="px-3 py-2.5">
                 <input
                   type="checkbox"
@@ -618,8 +618,8 @@ export function IcdTracker() {
               <Fragment key={groupKey || 'all'}>
                 {groupBy !== 'none' && (
                   <tr>
-                    <td colSpan={10} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      {groupKey} <span className="font-normal normal-case text-gray-400">({groupItems.length})</span>
+                    <td colSpan={10} className="px-4 py-1.5 bg-gray-100 dark:bg-prosota-panel2 text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide">
+                      {groupKey} <span className="font-normal normal-case text-gray-400 dark:text-prosota-muted">({groupItems.length})</span>
                     </td>
                   </tr>
                 )}
@@ -629,7 +629,7 @@ export function IcdTracker() {
 
             {visibleItems.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-10 text-center text-gray-400 text-sm">
+                <td colSpan={10} className="px-4 py-10 text-center text-gray-400 dark:text-prosota-muted text-sm">
                   {items.length === 0 ? 'No items yet for this period. Add the first one above.' : 'No items match your search/filters.'}
                 </td>
               </tr>

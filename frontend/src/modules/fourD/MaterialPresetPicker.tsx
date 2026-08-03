@@ -50,14 +50,14 @@ function EditorSlotRow({ label, name, onUpload, onClear }: {
           if (file) onUpload(file)
         }}
       />
-      <span className="w-14 text-[10px] text-gray-400 shrink-0">{label}</span>
+      <span className="w-14 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{label}</span>
       <button
         onClick={() => inputRef.current?.click()}
-        className="flex-1 min-w-0 text-left text-[11px] text-gray-600 truncate border border-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-50"
+        className="flex-1 min-w-0 text-left text-[11px] text-gray-600 dark:text-prosota-muted truncate border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2"
       >
         {name ?? 'None'}
       </button>
-      {name && <button onClick={onClear} title="Clear" className="text-gray-400 hover:text-red-600 text-xs shrink-0">✕</button>}
+      {name && <button onClick={onClear} title="Clear" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs shrink-0">✕</button>}
     </div>
   )
 }
@@ -169,12 +169,12 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
 
   if (editingId !== null) {
     return (
-      <div className="px-3 py-1.5 space-y-1.5 bg-gray-50 rounded-md mx-3">
+      <div className="px-3 py-1.5 space-y-1.5 bg-gray-50 dark:bg-prosota-panel2 rounded-md mx-3">
         <input
           value={draftName}
           onChange={e => setDraftName(e.target.value)}
           placeholder="Preset name"
-          className="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5"
+          className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         />
         {SLOTS.map(slot => (
           <EditorSlotRow
@@ -185,7 +185,7 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
             onClear={() => handleClearSlot(slot.key)}
           />
         ))}
-        {error && <p className="text-[11px] text-red-600">{error}</p>}
+        {error && <p className="text-[11px] text-red-600 dark:text-red-400">{error}</p>}
         <div className="flex items-center gap-1.5 pt-0.5">
           <button
             onClick={handleSave}
@@ -194,7 +194,7 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
-          <button onClick={cancelEdit} className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+          <button onClick={cancelEdit} className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
             Cancel
           </button>
         </div>
@@ -214,7 +214,7 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
             else if (value) onApply(presets.find(p => p.id === value)!)
             e.target.value = ''
           }}
-          className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5"
+          className="flex-1 min-w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         >
           <option value="" disabled>{loading ? 'Loading presets…' : 'Material preset…'}</option>
           {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -223,7 +223,7 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
         <button
           onClick={() => startNew(currentTextures)}
           title="Save the currently applied materials as a new preset"
-          className="text-xs px-1.5 py-0.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+          className="text-xs px-1.5 py-0.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
         >
           💾
         </button>
@@ -235,10 +235,10 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
       {presets.length > 0 && (
         <div className="px-3 pb-1.5 space-y-0.5">
           {presets.map(p => (
-            <div key={p.id} className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <div key={p.id} className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
               <span className="flex-1 truncate">{p.name}</span>
-              <button onClick={() => startEdit(p)} title="Edit" className="text-gray-400 hover:text-gray-700 shrink-0">✎</button>
-              <button onClick={() => handleDelete(p)} title="Delete" className="text-gray-400 hover:text-red-600 shrink-0">🗑</button>
+              <button onClick={() => startEdit(p)} title="Edit" className="text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">✎</button>
+              <button onClick={() => handleDelete(p)} title="Delete" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">🗑</button>
             </div>
           ))}
         </div>

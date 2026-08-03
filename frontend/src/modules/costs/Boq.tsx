@@ -188,7 +188,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
   const total = lines.reduce((sum, l) => sum + Number(l.total), 0)
 
   if (boqElement === undefined) {
-    return <div className="text-sm text-gray-400">Loading BOQ…</div>
+    return <div className="text-sm text-gray-400 dark:text-prosota-muted">Loading BOQ…</div>
   }
 
   return (
@@ -199,14 +199,14 @@ export function Boq({ projectId, periodId, projectName }: Props) {
           onClick={handleGenerate}
           disabled={generating}
           title="Derives BOQ lines from the committed schedule — quantity from each activity's own duration, rate from its already-resourced cost. Review and tune before relying on it."
-          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {generating ? 'Generating…' : 'Generate BOQ'}
         </button>
         {!addForm && (
           <button
             onClick={() => setAddForm({ description: '', qty: '', unit: '', rate: '' })}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
           >
             + Add line
           </button>
@@ -215,7 +215,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
           onClick={handleDeleteAll}
           disabled={lines.length === 0 || deletingAll}
           title="Delete every BOQ line — the container element stays, so Generate BOQ can repopulate it afterward."
-          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-red-50 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {deletingAll ? 'Deleting…' : 'Delete All'}
         </button>
@@ -223,44 +223,44 @@ export function Boq({ projectId, periodId, projectName }: Props) {
           onClick={handlePrint}
           disabled={lines.length === 0}
           title="Print the BOQ exactly as currently shown."
-          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           🖨️ Print
         </button>
-        {message && <span className="text-xs text-gray-500">{message}</span>}
+        {message && <span className="text-xs text-gray-500 dark:text-prosota-muted">{message}</span>}
       </div>
 
       {addForm && (
-        <div className="mb-4 p-3 border border-gray-200 rounded-md bg-gray-50 flex items-end gap-2 flex-wrap">
-          <label className="text-xs text-gray-500">Item
+        <div className="mb-4 p-3 border border-gray-200 dark:border-prosota-line rounded-md bg-gray-50 dark:bg-prosota-panel2 flex items-end gap-2 flex-wrap">
+          <label className="text-xs text-gray-500 dark:text-prosota-muted">Item
             <input value={addForm.description} onChange={e => setAddForm({ ...addForm, description: e.target.value })}
-              className="block border border-gray-300 rounded px-2 py-1 text-sm w-64" autoFocus />
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-64" autoFocus />
           </label>
-          <label className="text-xs text-gray-500">Qty
+          <label className="text-xs text-gray-500 dark:text-prosota-muted">Qty
             <input value={addForm.qty} onChange={e => setAddForm({ ...addForm, qty: e.target.value })}
-              className="block border border-gray-300 rounded px-2 py-1 text-sm w-24" />
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-24" />
           </label>
-          <label className="text-xs text-gray-500">Unit
+          <label className="text-xs text-gray-500 dark:text-prosota-muted">Unit
             <input value={addForm.unit} onChange={e => setAddForm({ ...addForm, unit: e.target.value })}
-              className="block border border-gray-300 rounded px-2 py-1 text-sm w-20" />
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-20" />
           </label>
-          <label className="text-xs text-gray-500">Rate
+          <label className="text-xs text-gray-500 dark:text-prosota-muted">Rate
             <input value={addForm.rate} onChange={e => setAddForm({ ...addForm, rate: e.target.value })}
-              className="block border border-gray-300 rounded px-2 py-1 text-sm w-24" />
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-24" />
           </label>
           <button onClick={handleAddLine} className="text-xs px-2.5 py-1.5 rounded-md bg-gray-900 text-white">Save</button>
-          <button onClick={() => setAddForm(null)} className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 text-gray-600">Cancel</button>
+          <button onClick={() => setAddForm(null)} className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted">Cancel</button>
         </div>
       )}
 
       {lines.length === 0 && !addForm ? (
-        <div className="text-sm text-gray-400 py-8 text-center border border-dashed border-gray-200 rounded-md">
+        <div className="text-sm text-gray-400 dark:text-prosota-muted py-8 text-center border border-dashed border-gray-200 dark:border-prosota-line rounded-md">
           No BOQ lines yet — click Generate BOQ to draft one from the committed schedule, or + Add line to start manually.
         </div>
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left text-xs text-gray-400 uppercase tracking-wide border-b border-gray-200">
+            <tr className="text-left text-xs text-gray-400 dark:text-prosota-muted uppercase tracking-wide border-b border-gray-200 dark:border-prosota-line">
               <th className="py-2 pr-2 w-12">Sr.</th>
               <th className="py-2 pr-2">Name of Item</th>
               <th className="py-2 pr-2 w-32">Cost Code</th>
@@ -279,48 +279,48 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                 if (showSr) sr++
                 const isEditing = editingLineId === line.id && editValues
                 return (
-                  <tr key={line.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr key={line.id} className="border-b border-gray-100 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2">
                     {isEditing ? (
                       <>
-                        <td className="py-1.5 pr-2 text-gray-400">{showSr ? sr : '—'}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted">{showSr ? sr : '—'}</td>
                         <td className="py-1.5 pr-2" style={{ paddingLeft: 8 + indent * 16 }}>
                           <input value={editValues!.description} onChange={e => setEditValues({ ...editValues!, description: e.target.value })}
-                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
+                            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full" />
                         </td>
-                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{line.cost_code ?? '—'}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{line.cost_code ?? '—'}</td>
                         <td className="py-1.5 pr-2">
                           <input value={editValues!.qty} onChange={e => setEditValues({ ...editValues!, qty: e.target.value })}
-                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
+                            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full text-right" />
                         </td>
                         <td className="py-1.5 pr-2">
                           <input value={editValues!.unit} onChange={e => setEditValues({ ...editValues!, unit: e.target.value })}
-                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full" />
+                            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full" />
                         </td>
                         <td className="py-1.5 pr-2">
                           <input value={editValues!.rate} onChange={e => setEditValues({ ...editValues!, rate: e.target.value })}
-                            className="border border-gray-300 rounded px-1.5 py-0.5 text-sm w-full text-right" />
+                            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full text-right" />
                         </td>
-                        <td className="py-1.5 pr-2 text-right text-gray-400">—</td>
+                        <td className="py-1.5 pr-2 text-right text-gray-400 dark:text-prosota-muted">—</td>
                         <td className="py-1.5 pr-2 whitespace-nowrap">
-                          <button onClick={() => handleSaveEdit(line.id)} className="text-xs text-blue-600 hover:text-blue-700 mr-2">Save</button>
-                          <button onClick={() => { setEditingLineId(null); setEditValues(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                          <button onClick={() => handleSaveEdit(line.id)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Save</button>
+                          <button onClick={() => { setEditingLineId(null); setEditValues(null) }} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
                         </td>
                       </>
                     ) : (
                       <>
-                        <td className="py-1.5 pr-2 text-gray-400">{showSr ? sr : '—'}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted">{showSr ? sr : '—'}</td>
                         <td className="py-1.5 pr-2" style={{ paddingLeft: 8 + indent * 16 }}>{label}</td>
-                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{line.cost_code ?? '—'}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{line.cost_code ?? '—'}</td>
                         <td className="py-1.5 pr-2 text-right">{Number(line.qty).toLocaleString()}</td>
-                        <td className="py-1.5 pr-2 text-gray-500">{line.unit ?? '—'}</td>
+                        <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{line.unit ?? '—'}</td>
                         <td className="py-1.5 pr-2 text-right">{formatCurrency(Number(line.rate))}</td>
                         <td className="py-1.5 pr-2 text-right font-medium">{formatCurrency(Number(line.total))}</td>
                         <td className="py-1.5 pr-2 whitespace-nowrap">
                           <button
                             onClick={() => { setEditingLineId(line.id); setEditValues({ description: line.description, qty: line.qty, unit: line.unit ?? '', rate: line.rate }) }}
-                            className="text-xs text-gray-400 hover:text-gray-600 mr-2"
+                            className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper mr-2"
                           >Edit</button>
-                          <button onClick={() => handleDeleteLine(line)} className="text-xs text-gray-400 hover:text-red-600">Delete</button>
+                          <button onClick={() => handleDeleteLine(line)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
                         </td>
                       </>
                     )}
@@ -331,22 +331,22 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                 <>
                   {tree.sections.map(section => (
                     <Fragment key={section.key}>
-                      <tr className="bg-gray-50 border-b border-gray-200">
+                      <tr className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line">
                         <td className="py-1.5 pr-2"></td>
                         <td className="py-1.5 pr-2 font-bold">{section.label}</td>
-                        <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{section.key}</td>
+                        <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{section.key}</td>
                         <td colSpan={3}></td>
                         <td className="py-1.5 pr-2 text-right font-bold">{formatCurrency(section.subtotal)}</td>
                         <td></td>
                       </tr>
                       {section.elements.map(element => (
                         <Fragment key={element.key}>
-                          <tr className="border-b border-gray-100">
+                          <tr className="border-b border-gray-100 dark:border-prosota-line">
                             <td className="py-1.5 pr-2"></td>
-                            <td className="py-1.5 pr-2 font-semibold text-gray-600" style={{ paddingLeft: 8 + 16 }}>{element.label}</td>
-                            <td className="py-1.5 pr-2 text-gray-400 font-mono text-[10px]">{element.key}</td>
+                            <td className="py-1.5 pr-2 font-semibold text-gray-600 dark:text-prosota-muted" style={{ paddingLeft: 8 + 16 }}>{element.label}</td>
+                            <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{element.key}</td>
                             <td colSpan={3}></td>
-                            <td className="py-1.5 pr-2 text-right font-semibold text-gray-600">{formatCurrency(element.subtotal)}</td>
+                            <td className="py-1.5 pr-2 text-right font-semibold text-gray-600 dark:text-prosota-muted">{formatCurrency(element.subtotal)}</td>
                             <td></td>
                           </tr>
                           {element.activities.map(activity => (
@@ -365,7 +365,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
             })()}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-gray-300 font-bold">
+            <tr className="border-t-2 border-gray-300 dark:border-prosota-line font-bold">
               <td colSpan={6} className="py-2 pr-2 text-right">Total Cost</td>
               <td className="py-2 pr-2 text-right">{formatCurrency(total)}</td>
               <td></td>

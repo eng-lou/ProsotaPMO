@@ -66,7 +66,7 @@ export function UdfCell({ definition, value, onSave }: Props) {
 
   if (!editing) {
     return (
-      <td className="px-3 py-1 whitespace-nowrap text-gray-600" onDoubleClick={startEdit} title="Double-click to edit">
+      <td className="px-3 py-1 whitespace-nowrap text-gray-600 dark:text-prosota-paper" onDoubleClick={startEdit} title="Double-click to edit">
         {displayValue(definition, value)}
       </td>
     )
@@ -81,7 +81,7 @@ export function UdfCell({ definition, value, onSave }: Props) {
           onChange={e => setDraft(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
         >
           {INDICATOR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.icon} {o.label}</option>)}
         </select>
@@ -99,7 +99,7 @@ export function UdfCell({ definition, value, onSave }: Props) {
           onChange={e => setDraft(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
         />
       </td>
     )
@@ -116,7 +116,7 @@ export function UdfCell({ definition, value, onSave }: Props) {
           onChange={e => setDraft(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-          className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs"
+          className="w-20 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
         />
       </td>
     )
@@ -130,7 +130,7 @@ export function UdfCell({ definition, value, onSave }: Props) {
         onChange={e => setDraft(e.target.value)}
         onBlur={commitEdit}
         onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-        className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+        className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
       />
     </td>
   )

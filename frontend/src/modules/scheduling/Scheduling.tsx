@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
+import { useTheme } from '@/lib/ThemeContext'
 import { groupAssignmentsByActivityId, resourceLabelForActivity } from '@/lib/resourceLabel'
 import { activityRowBackground, FONT_FAMILY_CSS, useActiveGanttStyle, useGanttLayouts, type GanttFontFamily, type GanttStyle } from '@/lib/ganttLayout'
 import { useProjectLetterhead } from '@/lib/letterhead'
@@ -437,6 +438,8 @@ const PASTE_FIELD_OPTIONS: PasteFieldOption[] = [
 
 export function Scheduling() {
   const { selectedProject } = useProject()
+  const { theme } = useTheme()
+  const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
   const {
     variant: activeVariant, variants: scheduleVariants, period, loading: periodLoading, error: periodError,
     refetch: refetchPeriod, refetchVariants, selectVariant, createVariant, renameVariant, deleteVariant, promoteVariant,
@@ -2328,30 +2331,30 @@ export function Scheduling() {
   }
 
   if (loading || periodLoading) {
-    return <div className="p-8 text-sm text-gray-400">Loading schedule…</div>
+    return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading schedule…</div>
   }
 
   return (
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900">Scheduling</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Scheduling</h1>
         {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">
+          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
             {period.period_label} · {period.freeze_status}
           </span>
         )}
       </div>
 
       {(error || periodError) && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error ?? periodError}</div>
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
       )}
 
-      <div className="mb-5 flex items-center gap-1 border-b border-gray-200 no-print">
+      <div className="mb-5 flex items-center gap-1 border-b border-gray-200 dark:border-prosota-line no-print">
         <button
           onClick={() => setActiveTab('schedule')}
           className={`text-sm px-4 py-2 font-medium border-b-2 -mb-px ${
-            activeTab === 'schedule' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+            activeTab === 'schedule' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
           }`}
         >
           Activities
@@ -2359,7 +2362,7 @@ export function Scheduling() {
         <button
           onClick={() => setActiveTab('resources')}
           className={`text-sm px-4 py-2 font-medium border-b-2 -mb-px ${
-            activeTab === 'resources' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+            activeTab === 'resources' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
           }`}
         >
           Resources
@@ -2376,84 +2379,84 @@ export function Scheduling() {
             <button
               onClick={handleCollapseAllResources}
               title="Collapse every resource's activity list"
-              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+              className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
             ><CollapseIcon expanded={false} /> Collapse All</button>
             <button
               onClick={handleExpandAllResources}
               title="Expand every resource's activity list"
-              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+              className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
             ><CollapseIcon expanded /> Expand All</button>
             <div className="w-px h-4 bg-gray-200 mx-1" />
-            <label className="text-xs text-gray-500 flex items-center gap-1">
+            <label className="text-xs text-gray-500 dark:text-prosota-muted flex items-center gap-1">
               From
               <input
                 type="date"
                 value={toDatetimeLocalValue(resourcesTabData.rangeStart.toISOString()).slice(0, 10)}
                 onChange={e => setResourcesRangeStartOverride(e.target.value ? new Date(e.target.value) : null)}
-                className="border border-gray-300 rounded px-1.5 py-1 text-xs"
+                className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 text-xs"
               />
             </label>
-            <label className="text-xs text-gray-500 flex items-center gap-1">
+            <label className="text-xs text-gray-500 dark:text-prosota-muted flex items-center gap-1">
               To
               <input
                 type="date"
                 value={toDatetimeLocalValue(resourcesTabData.rangeEnd.toISOString()).slice(0, 10)}
                 onChange={e => setResourcesRangeEndOverride(e.target.value ? new Date(e.target.value) : null)}
-                className="border border-gray-300 rounded px-1.5 py-1 text-xs"
+                className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 text-xs"
               />
             </label>
             {(resourcesRangeStartOverride || resourcesRangeEndOverride) && (
               <button
                 onClick={() => { setResourcesRangeStartOverride(null); setResourcesRangeEndOverride(null) }}
-                className="text-[10px] text-gray-400 hover:text-gray-600"
+                className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
               >Reset</button>
             )}
             <select
               value={resourcesZoom}
               onChange={e => setResourcesZoom(e.target.value as GanttZoom)}
-              className="text-xs border border-gray-300 rounded px-2 py-1"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
             >
               {ZOOM_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-            <div className="flex items-center border border-gray-300 rounded overflow-hidden text-xs">
+            <div className="flex items-center border border-gray-300 dark:border-prosota-line rounded overflow-hidden text-xs">
               <button
                 onClick={() => setResourcesUnit('hours')}
-                className={`px-2 py-1 ${resourcesUnit === 'hours' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`px-2 py-1 ${resourcesUnit === 'hours' ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
               >Hours</button>
               <button
                 onClick={() => setResourcesUnit('days')}
-                className={`px-2 py-1 ${resourcesUnit === 'days' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`px-2 py-1 ${resourcesUnit === 'days' ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
               >Days</button>
               <button
                 onClick={() => setResourcesUnit('cost')}
                 title="Shows £ — resource.rate/max_hours_per_day, so make sure rates are populated in Resource Pool"
-                className={`px-2 py-1 ${resourcesUnit === 'cost' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`px-2 py-1 ${resourcesUnit === 'cost' ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
               >Cost</button>
             </div>
             <div className="ml-auto flex items-center gap-1">
               {resourceGenMessage && (
-                <div className="text-[11px] text-gray-500 max-w-xs truncate" title={resourceGenMessage}>{resourceGenMessage}</div>
+                <div className="text-[11px] text-gray-500 dark:text-prosota-muted max-w-xs truncate" title={resourceGenMessage}>{resourceGenMessage}</div>
               )}
               <button
                 onClick={handleGenerateResources}
                 disabled={resourceGenBusy !== null}
                 title="Populates the Resource Pool below from every IFC-generated activity's own crew/equipment recipe — no assignments yet, review/edit the pool first"
-                className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >{resourceGenBusy === 'generate' ? 'Generating…' : 'Generate Resources'}</button>
               <button
                 onClick={handleAutoAssignResources}
                 disabled={resourceGenBusy !== null}
                 title="Links the Resource Pool below to every IFC-generated activity — run after Generate Resources, once the pool looks right"
-                className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >{resourceGenBusy === 'assign' ? 'Assigning…' : 'Auto Assign Resources'}</button>
               <div className="w-px h-4 bg-gray-200 mx-1" />
               <div className="relative">
                 <button
                   onClick={() => setLevelPanelOpen(o => !o)}
-                  className={`text-xs px-2 py-1 rounded border ${levelPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                  className={`text-xs px-2 py-1 rounded border ${levelPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
                 >Level Resources</button>
                 {levelPanelOpen && (
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-80 space-y-2.5">
+                  <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-3 z-30 text-xs w-80 space-y-2.5">
                     <label className="flex items-center gap-1.5">
                       <input
                         type="checkbox" checked={levelAllAtOnce}
@@ -2462,20 +2465,20 @@ export function Scheduling() {
                       Level all resources at once
                     </label>
                     {!levelAllAtOnce && (
-                      <div className="text-[10px] text-gray-400 -mt-1">
+                      <div className="text-[10px] text-gray-400 dark:text-prosota-muted -mt-1">
                         Uses whatever's checked in Resource Pool, Tracking, or Profile below.
                       </div>
                     )}
                     <div className="flex items-center justify-between gap-2">
                       <span>Find by</span>
-                      <div className="flex items-center border border-gray-300 rounded overflow-hidden">
+                      <div className="flex items-center border border-gray-300 dark:border-prosota-line rounded overflow-hidden">
                         <button
                           onClick={() => { setLevelGranularity('resource'); resetLevelSearch() }}
-                          className={`px-2 py-1 ${levelGranularity === 'resource' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                          className={`px-2 py-1 ${levelGranularity === 'resource' ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
                         >Resource</button>
                         <button
                           onClick={() => { setLevelGranularity('activity'); resetLevelSearch() }}
-                          className={`px-2 py-1 ${levelGranularity === 'activity' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                          className={`px-2 py-1 ${levelGranularity === 'activity' ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
                         >Activity</button>
                       </div>
                     </div>
@@ -2486,28 +2489,28 @@ export function Scheduling() {
                       />
                       Apply resource smoothing
                     </label>
-                    <div className="text-[10px] text-gray-400 leading-snug border-t border-gray-100 pt-2">
+                    <div className="text-[10px] text-gray-400 dark:text-prosota-muted leading-snug border-t border-gray-100 dark:border-prosota-line pt-2">
                       {levelMode === 'smooth'
                         ? 'Smoothing redistributes work within each activity\'s own float — the project end date and critical path stay fixed. Overallocation may not fully resolve if float runs out.'
                         : 'Leveling delays overallocated activities to resolve the conflict — it can push out the project end date and change the critical path.'}
                     </div>
-                    <div className="border-t border-gray-100 pt-2 space-y-1.5">
+                    <div className="border-t border-gray-100 dark:border-prosota-line pt-2 space-y-1.5">
                       <button
                         onClick={handleFindNextOverallocated}
                         disabled={levelSearching || levelExhausted}
-                        className="w-full text-xs px-2 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="w-full text-xs px-2 py-1.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
                       >{levelExhausted ? 'No more overallocation in scope' : levelSearching ? 'Searching…' : 'Find Next Overallocated'}</button>
                       {levelFoundTarget && (
-                        <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                        <div className="text-[11px] text-gray-600 dark:text-prosota-muted bg-gray-50 dark:bg-prosota-panel2 border border-gray-200 dark:border-prosota-line rounded px-2 py-1">
                           Found: {levelFoundTarget.label}
                         </div>
                       )}
                       <button
                         onClick={handleLevelFoundTarget}
                         disabled={!levelFoundTarget || leveling}
-                        className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40 disabled:cursor-not-allowed"
                       >{leveling ? 'Applying…' : levelMode === 'smooth' ? 'Smooth' : 'Level'}</button>
-                      {levelResultMessage && <div className="text-[11px] text-gray-500">{levelResultMessage}</div>}
+                      {levelResultMessage && <div className="text-[11px] text-gray-500 dark:text-prosota-muted">{levelResultMessage}</div>}
                     </div>
                   </div>
                 )}
@@ -2515,17 +2518,17 @@ export function Scheduling() {
               <div className="relative">
                 <button
                   onClick={() => setResourcesLayoutOpen(o => !o)}
-                  className={`text-xs px-2 py-1 rounded border ${resourcesLayoutOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                  className={`text-xs px-2 py-1 rounded border ${resourcesLayoutOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
                 >Layout</button>
                 {resourcesLayoutOpen && (
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-56 space-y-2">
-                    <div className="text-[10px] text-gray-400">Applies to Resource Pool, Tracking, and Usage Profile on screen.</div>
+                  <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-3 z-30 text-xs w-56 space-y-2">
+                    <div className="text-[10px] text-gray-400 dark:text-prosota-muted">Applies to Resource Pool, Tracking, and Usage Profile on screen.</div>
                     <label className="flex items-center justify-between gap-2">
                       Font
                       <select
                         value={resourcesLayoutPrefs.fontFamily}
                         onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, fontFamily: e.target.value as GanttFontFamily })}
-                        className="border border-gray-300 rounded px-1.5 py-0.5"
+                        className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
                       >
                         <option value="sans">Sans-serif</option>
                         <option value="serif">Serif</option>
@@ -2537,7 +2540,7 @@ export function Scheduling() {
                       <input
                         type="number" min={9} max={16} value={resourcesLayoutPrefs.fontSize}
                         onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, fontSize: Number(e.target.value) || DEFAULT_RESOURCES_LAYOUT.fontSize })}
-                        className="w-14 border border-gray-300 rounded px-1.5 py-0.5"
+                        className="w-14 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
                       />
                     </label>
                     <label className="flex items-center justify-between gap-2">
@@ -2545,10 +2548,10 @@ export function Scheduling() {
                       <input
                         type="color" value={resourcesLayoutPrefs.headerColor}
                         onChange={e => saveResourcesLayoutPrefs({ ...resourcesLayoutPrefs, headerColor: e.target.value })}
-                        className="w-10 h-6 border border-gray-300 rounded"
+                        className="w-10 h-6 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded"
                       />
                     </label>
-                    <button onClick={() => saveResourcesLayoutPrefs(DEFAULT_RESOURCES_LAYOUT)} className="text-[10px] text-gray-400 hover:text-gray-600">
+                    <button onClick={() => saveResourcesLayoutPrefs(DEFAULT_RESOURCES_LAYOUT)} className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
                       Reset to defaults
                     </button>
                   </div>
@@ -2557,7 +2560,7 @@ export function Scheduling() {
               <button
                 onClick={() => setResourcesPageSetupOpen(o => !o)}
                 title="Shared logo/header/footer, print font, and which table(s) to include when printing/exporting"
-                className={`text-xs px-2 py-1 rounded border ${resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                className={`text-xs px-2 py-1 rounded border ${resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
               >Page Setup</button>
               <div className="relative">
                 <button
@@ -2565,18 +2568,18 @@ export function Scheduling() {
                   title="Choose which tables to include, then download"
                   className={`text-xs px-2 py-1 rounded border ${
                     resourcesExportOpen ? 'bg-gray-900 text-white border-gray-900'
-                    : resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
-                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    : resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/20'
+                    : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
                   }`}
                 >
                   ⇩ Export{resourcesPrintTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? ` (${resourcesPrintTables.size}/${ALL_RESOURCES_PRINT_TABLES.length})` : ''}
                 </button>
                 {resourcesExportOpen && (
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-3 z-30 text-xs w-64 space-y-2">
-                    <div className="text-[10px] text-gray-400">Which tables to include in the downloaded .xlsx (also used by Print).</div>
+                  <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-3 z-30 text-xs w-64 space-y-2">
+                    <div className="text-[10px] text-gray-400 dark:text-prosota-muted">Which tables to include in the downloaded .xlsx (also used by Print).</div>
                     <div className="flex flex-col gap-1.5">
                       {ALL_RESOURCES_PRINT_TABLES.map(table => (
-                        <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600">
+                        <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
                           <input type="checkbox" checked={resourcesPrintTables.has(table)} onChange={() => toggleResourcesPrintTable(table)} />
                           {RESOURCES_PRINT_TABLE_LABELS[table]}
                         </label>
@@ -2589,14 +2592,14 @@ export function Scheduling() {
                           setResourcesPrintTablesState(all)
                           saveResourcesPrintTables(all)
                         }}
-                        className="text-[11px] text-blue-600 hover:text-blue-700"
+                        className="text-[11px] text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan"
                       >
                         Select all
                       </button>
                     )}
                     <button
                       onClick={() => { handleResourcesExport(); setResourcesExportOpen(false) }}
-                      className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      className="w-full text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80"
                     >
                       ⇩ Download .xlsx
                     </button>
@@ -2619,9 +2622,9 @@ export function Scheduling() {
                 onClose={() => setResourcesPageSetupOpen(false)}
                 onPrint={() => setResourcesPrintTrigger(t => t + 1)}
               />
-              <div className="bg-white border border-gray-200 rounded-lg p-4">
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Print Options</div>
-                <div className="text-[11px] text-gray-500 mb-3">
+              <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4">
+                <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">Print Options</div>
+                <div className="text-[11px] text-gray-500 dark:text-prosota-muted mb-3">
                   {selectedResourceIds.size === 0 && selectedActivityIds.size === 0
                     ? 'No resources/activities checked — printing/exporting all resources.'
                     : selectedActivityIds.size > 0
@@ -2635,13 +2638,13 @@ export function Scheduling() {
                     font); Print reads the exact same shared selection, just
                     summarized read-only here instead of a second editable
                     copy of the same checkboxes. */}
-                <div className="text-[11px] text-gray-500 mb-3">
+                <div className="text-[11px] text-gray-500 dark:text-prosota-muted mb-3">
                   Tables: {ALL_RESOURCES_PRINT_TABLES.filter(t => resourcesPrintTables.has(t)).map(t => RESOURCES_PRINT_TABLE_LABELS[t]).join(', ') || 'none checked'}
-                  {' '}— change via the <span className="font-medium text-gray-600">Export ▾</span> button above.
+                  {' '}— change via the <span className="font-medium text-gray-600 dark:text-prosota-muted">Export ▾</span> button above.
                 </div>
                 {resourcesPrintTables.has('profile') && (
-                  <div className="flex items-center gap-3 flex-wrap mb-3 text-[11px] text-gray-500">
-                    <span className="text-gray-400">Usage Profile legend:</span>
+                  <div className="flex items-center gap-3 flex-wrap mb-3 text-[11px] text-gray-500 dark:text-prosota-muted">
+                    <span className="text-gray-400 dark:text-prosota-muted">Usage Profile legend:</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
@@ -2649,33 +2652,33 @@ export function Scheduling() {
                   </div>
                 )}
                 <div className="flex items-center gap-4 flex-wrap mb-3">
-                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-prosota-muted">
                     Print font
                     <select
                       value={resourcesPrintFonts.fontFamily}
                       onChange={e => saveResourcesPrintFontsPrefs({ ...resourcesPrintFonts, fontFamily: e.target.value as GanttFontFamily })}
-                      className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                      className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
                     >
                       <option value="sans">Sans-serif</option>
                       <option value="serif">Serif</option>
                       <option value="mono">Monospace</option>
                     </select>
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-prosota-muted">
                     Print font size
                     <input
                       type="number" min={6} max={14} value={resourcesPrintFonts.fontSize}
                       onChange={e => saveResourcesPrintFontsPrefs({ ...resourcesPrintFonts, fontSize: Number(e.target.value) || DEFAULT_RESOURCES_PRINT_FONTS.fontSize })}
-                      className="w-14 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                      className="w-14 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
                     />
                   </label>
-                  <button onClick={() => saveResourcesPrintFontsPrefs(DEFAULT_RESOURCES_PRINT_FONTS)} className="text-[10px] text-gray-400 hover:text-gray-600">
+                  <button onClick={() => saveResourcesPrintFontsPrefs(DEFAULT_RESOURCES_PRINT_FONTS)} className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
                     Reset to defaults
                   </button>
                 </div>
                 <button
                   onClick={() => setResourcesPrintTrigger(t => t + 1)}
-                  className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                  className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80"
                 >
                   🖨️ Print selected table(s)
                 </button>
@@ -2821,14 +2824,14 @@ export function Scheduling() {
       )}
 
       <div className="mb-4 flex items-center gap-3 no-print">
-          <button onClick={handleQuickAdd} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+          <button onClick={handleQuickAdd} className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             + Add Activity
           </button>
           <button
             onClick={() => setScheduleVariantWidgetOpen(o => !o)}
             title="More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ..."
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              scheduleVariantWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              scheduleVariantWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🗂️ {activeVariant ? activeVariant.name : 'Schedules'}
@@ -2836,7 +2839,7 @@ export function Scheduling() {
           <button
             onClick={() => setCalendarWidgetOpen(o => !o)}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              calendarWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              calendarWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             📆 Calendar
@@ -2845,7 +2848,7 @@ export function Scheduling() {
             onClick={() => setUdfWidgetOpen(o => !o)}
             title="Define custom fields, then add them as columns from the Columns menu"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              udfWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🏷️ Custom Fields
@@ -2855,7 +2858,7 @@ export function Scheduling() {
             disabled={activities.length === 0}
             title="Give a WBS branch its own scoped critical path, independent of the master schedule"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
-              subProjectsWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              subProjectsWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🏗️ Sub-Projects
@@ -2865,7 +2868,7 @@ export function Scheduling() {
             disabled={activities.length === 0}
             title="Capture a named, dated baseline snapshot, or assign a previously saved one"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
-              baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              baselineWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🎯 Baseline
@@ -2873,7 +2876,7 @@ export function Scheduling() {
           <button
             onClick={() => setQualityWidgetOpen(o => !o)}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              qualityWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              qualityWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🔬 Quality Check
@@ -2882,7 +2885,7 @@ export function Scheduling() {
             onClick={() => setHideArchived(!hideArchived)}
             title="Archived activities are visible by default in the table, Gantt, export, and print — toggle to hide them"
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              hideArchived ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              hideArchived ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🗄 {hideArchived ? 'Show Archived' : 'Hide Archived'}
@@ -2891,7 +2894,7 @@ export function Scheduling() {
             onClick={() => setRescheduleWidgetOpen(o => !o)}
             disabled={activities.length === 0}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
-              rescheduleWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              rescheduleWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🔄 Reschedule
@@ -2900,13 +2903,13 @@ export function Scheduling() {
 
       <div className="flex items-center gap-2 mb-3 flex-wrap no-print">
         <div className="relative max-w-xs w-full">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-prosota-muted text-xs">🔍</span>
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search activities…"
-            className="w-full border border-gray-300 rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md pl-7 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <button
@@ -2914,7 +2917,7 @@ export function Scheduling() {
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
             filtersOpen || filterCritical || filterDelayed || filterAtRisk || Object.keys(customFilterModes).length > 0
               ? 'bg-gray-900 text-white border-gray-900'
-              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           ⚙ Filters{[filterCritical, filterDelayed, filterAtRisk].filter(Boolean).length + Object.keys(customFilterModes).length > 0
@@ -2925,7 +2928,7 @@ export function Scheduling() {
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
             highlightsWidgetOpen || highlightCritical || enabledHighlightIds.size > 0
               ? 'bg-gray-900 text-white border-gray-900'
-              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           🖍 Highlight{(highlightCritical ? 1 : 0) + enabledHighlightIds.size > 0
@@ -2935,24 +2938,24 @@ export function Scheduling() {
           <button
             onClick={() => setColumnsMenuOpen(o => !o)}
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-              columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             ☰ Columns
           </button>
           {columnsMenuOpen && (
-            <div className="absolute z-10 top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-52">
+            <div className="absolute z-10 top-full mt-1 left-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-52">
               {ALL_COLUMNS.map(col => (
-                <label key={col.key} className="flex items-center gap-1.5 text-xs text-gray-600 py-1" title={col.title}>
+                <label key={col.key} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted py-1" title={col.title}>
                   <input type="checkbox" checked={isColumnVisible(col.key)} onChange={() => toggleColumn(col.key)} />
                   {col.label}
                 </label>
               ))}
               {udfDefinitions.length > 0 && (
                 <>
-                  <div className="border-t border-gray-100 my-1.5 pt-1.5 text-[10px] uppercase tracking-wide text-gray-400">Custom Fields</div>
+                  <div className="border-t border-gray-100 dark:border-prosota-line my-1.5 pt-1.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-prosota-muted">Custom Fields</div>
                   {udfDefinitions.map(d => (
-                    <label key={d.id} className="flex items-center gap-1.5 text-xs text-gray-600 py-1">
+                    <label key={d.id} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted py-1">
                       <input type="checkbox" checked={isUdfColumnVisible(d.id)} onChange={() => toggleUdfColumn(d.id)} />
                       {d.name} (UDF)
                     </label>
@@ -2964,7 +2967,7 @@ export function Scheduling() {
         </div>
         <button
           onClick={() => downloadActivitiesCsv(visibleActivities, selectedProject.name)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Exports the activities currently shown (respecting search/filters) as a CSV file, opens directly in Excel."
         >
           ⇩ Export ({visibleActivities.length})
@@ -2973,20 +2976,20 @@ export function Scheduling() {
           onClick={handleP6Export}
           disabled={p6Exporting}
           title="Download this schedule as a Primavera P6-importable PMXML file"
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
         >
           {p6Exporting ? 'Generating…' : '⇩ Export to P6'}
         </button>
         <button
           onClick={() => setP6ImportOpen(true)}
           title="Import a Primavera P6 PMXML (.xml) export into a brand new Schedule Variant"
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           ⇧ Import from P6
         </button>
         <button
           onClick={() => setPrintPreviewOpen(true)}
-          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Review column widths/layout before printing the activity list (respecting search/filters)."
         >
           🖨️ Print
@@ -2995,7 +2998,7 @@ export function Scheduling() {
           onClick={() => setLetterheadWidgetOpen(o => !o)}
           title="Edit the shared logo/header/footer and print timescale used for this project's printed reports"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            letterheadWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           📄 Page Setup
@@ -3004,7 +3007,7 @@ export function Scheduling() {
           onClick={() => setLayoutWidgetOpen(o => !o)}
           title="Save/apply named colour + font themes for the Gantt and activity table"
           className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
-            layoutWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            layoutWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           🖼️ Layout
@@ -3012,56 +3015,56 @@ export function Scheduling() {
 
         {/* Bulk actions — act on whichever rows are checked in the leftmost column.
             Replaces the old per-row copy/paste/move/indent/outdent/delete icons. */}
-        <div className="flex items-center gap-0.5 border-l border-gray-200 pl-2 ml-1">
-          <span className="text-xs text-gray-400 mr-1">
+        <div className="flex items-center gap-0.5 border-l border-gray-200 dark:border-prosota-line pl-2 ml-1">
+          <span className="text-xs text-gray-400 dark:text-prosota-muted mr-1">
             {selectedActivities.length > 0 ? `${selectedActivities.length} selected` : 'Select rows for bulk actions'}
           </span>
           <button
             onClick={handleBulkCopy} disabled={selectedActivities.length !== 1}
             title="Copy row settings (select exactly one)"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >⧉</button>
           <button
             onClick={handleBulkPaste} disabled={!rowClipboard || selectedActivities.length === 0}
             title="Paste copied settings onto all selected"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >📋</button>
           <button
             onClick={handleBulkMoveUp} disabled={!soleSelected || isFirstSibling(soleSelected)}
             title="Move up (select exactly one)"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >▲</button>
           <button
             onClick={handleBulkMoveDown} disabled={!soleSelected || isLastSibling(soleSelected)}
             title="Move down (select exactly one)"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >▼</button>
           <button
             onClick={handleBulkOutdent} disabled={!selectedActivities.some(a => a.parent_id)}
             title="Outdent all selected"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >⇤</button>
           <button
             onClick={handleBulkIndent} disabled={!bulkIndentTarget()}
             title="Indent all selected (they become siblings under whichever row sits above the topmost one)"
-            className="text-sm text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
+            className="text-sm text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1"
           >⇥</button>
           <button
             onClick={handleBulkDuplicate} disabled={selectedActivities.length === 0}
             title="Duplicate all selected"
-            className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+            className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Duplicate</button>
           <div className="relative">
             <button
               onClick={() => setBulkAssignMenuOpen(o => !o)}
               disabled={selectedActivities.length === 0}
               title="Assign a common predecessor/successor/calendar/resource to all selected, or move them to a new parent"
-              className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+              className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
             >
               🔗 Assign ▾
             </button>
             {bulkAssignMenuOpen && (
-              <div className="absolute z-10 top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-40">
+              <div className="absolute z-10 top-full mt-1 left-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg py-1 w-40">
                 {([
                   ['predecessor', 'Predecessor…'], ['successor', 'Successor…'],
                   ['calendar', 'Calendar…'], ['resource', 'Resource…'],
@@ -3071,7 +3074,7 @@ export function Scheduling() {
                   <button
                     key={m}
                     onClick={() => { setBulkAssignMode(m); setBulkAssignMenuOpen(false) }}
-                    className="block w-full text-left text-xs text-gray-600 hover:bg-gray-50 px-3 py-1.5"
+                    className="block w-full text-left text-xs text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 px-3 py-1.5"
                   >
                     {label}
                   </button>
@@ -3082,43 +3085,43 @@ export function Scheduling() {
           <button
             onClick={handleBulkArchive} disabled={selectedActivities.length === 0 || selectedActivities.every(a => a.is_archive_container)}
             title="Archive all selected — actualise to 100% complete and move under the Archived WBS, instead of deleting"
-            className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+            className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Archive</button>
           <button
             onClick={handleBulkDelete} disabled={selectedActivities.length === 0 || selectedActivities.every(a => a.is_archive_container)}
             title="Delete all selected"
-            className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
+            className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 disabled:opacity-20 disabled:hover:text-gray-400 px-1.5"
           >Delete</button>
           <div className="w-px h-4 bg-gray-200 mx-1" />
           <button
             onClick={handleCollapseAll}
             title="Collapse every WBS summary"
-            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
           ><CollapseIcon expanded={false} /> Collapse All</button>
           <button
             onClick={handleExpandAll}
             title="Expand every WBS summary"
-            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-1.5"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
           ><CollapseIcon expanded /> Expand All</button>
           <select
             value={groupBy}
             onChange={e => { setGroupBy(e.target.value as GroupByField); setCollapsedGroups(new Set()) }}
             title="Group activities into a flat list by this field, instead of the WBS tree — hides the Gantt while grouped"
-            className="text-xs border border-gray-300 rounded-md px-2 py-1 ml-1"
+            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1 ml-1"
           >
             {groupOptions.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
           </select>
         </div>
 
         <div className="flex items-center gap-1 ml-auto">
-          <span className="text-xs text-gray-400 mr-1">Zoom</span>
+          <span className="text-xs text-gray-400 dark:text-prosota-muted mr-1">Zoom</span>
           {ZOOM_OPTIONS.map(opt => (
             <button
               key={opt.value}
               onClick={() => handleZoomChange(opt.value)}
               title={`Show the Gantt timescale by ${opt.label.toLowerCase()}`}
               className={`text-xs px-2 py-1 rounded-md font-medium border ${
-                ganttZoom === opt.value ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                ganttZoom === opt.value ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
               }`}
             >
               {opt.label}
@@ -3238,7 +3241,7 @@ export function Scheduling() {
       )}
 
       {groupBy === 'none' && (
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex">
+      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
           onScroll={e => handleGridScroll(e.currentTarget.scrollTop)}
@@ -3296,7 +3299,7 @@ export function Scheduling() {
             <thead>
               <tr
                 style={{ height: 36, fontSize: ganttStyle.header_font_size, fontFamily: FONT_FAMILY_CSS[ganttStyle.header_font_family] }}
-                className="bg-gray-50 border-b border-gray-200 text-left text-gray-500 font-medium uppercase tracking-wide sticky top-0"
+                className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide sticky top-0"
               >
                 <th className="px-2 py-2.5 no-print">
                   <input
@@ -3374,13 +3377,13 @@ export function Scheduling() {
                     // matching accumulated drift rather than a one-off offset).
                     boxShadow: rowIndex === visibleActivities.length - 1 ? undefined : 'inset 0 -1px 0 #f3f4f6',
                   }}
-                  className={`hover:bg-gray-50 ${expandedId === a.id ? 'bg-blue-50/50' : ''}`}
+                  className={`hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${expandedId === a.id ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : ''}`}
                 >
                   <td className="px-2 py-1 no-print">
                     <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
                   </td>
                   {isColumnVisible('code') && (
-                    <td className="px-3 py-1 text-gray-500 whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
+                    <td className="px-3 py-1 text-gray-500 dark:text-prosota-muted whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
                       {editingField === 'code' ? (
                         <input
                           autoFocus
@@ -3388,12 +3391,12 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-20 border border-blue-400 rounded px-1 py-0.5 text-xs"
+                          className="w-20 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                         />
                       ) : a.code}
                     </td>
                   )}
-                  {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
+                  {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
                   <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
                     {editingField === 'task_name' ? (
                       <input
@@ -3402,7 +3405,7 @@ export function Scheduling() {
                         onChange={e => setEditingValue(e.target.value)}
                         onBlur={() => commitEdit()}
                         onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                        className="w-full border border-blue-400 rounded px-1 py-0.5 text-sm"
+                        className="w-full border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-sm"
                       />
                     ) : (
                       <div className="flex items-center gap-1 min-w-0">
@@ -3410,7 +3413,7 @@ export function Scheduling() {
                           <button
                             onClick={e => { e.stopPropagation(); toggleCollapsed(a.id) }}
                             title={collapsedIds.has(a.id) ? 'Expand' : 'Collapse'}
-                            className="text-blue-600 hover:text-blue-700 shrink-0 w-3"
+                            className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan shrink-0 w-3"
                           >
                             <CollapseIcon expanded={!collapsedIds.has(a.id)} />
                           </button>
@@ -3418,14 +3421,14 @@ export function Scheduling() {
                         <button
                           onClick={() => handleNameClick(a)}
                           onDoubleClick={() => handleNameDoubleClick(a)}
-                          className="text-left font-medium text-gray-900 hover:text-blue-600 truncate block min-w-0"
+                          className="text-left font-medium text-gray-900 dark:text-prosota-paper hover:text-blue-600 truncate block min-w-0"
                           title="Click to open, double-click to rename in place"
                         >
                           {a.task_name}
                         </button>
                         {(a.is_archived || a.is_archive_container) && (
                           <span
-                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-500 bg-gray-200 rounded px-1 py-0.5"
+                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-prosota-muted bg-gray-200 rounded px-1 py-0.5"
                             title={a.is_archive_container
                               ? 'Reserved container for archived activities — audit/reference only'
                               : 'Archived — actualised to 100% complete, no longer part of the live schedule'}
@@ -3438,7 +3441,7 @@ export function Scheduling() {
                   </td>
                   {isColumnVisible('type') && (
                     <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap overflow-hidden text-ellipsis"
+                      className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap overflow-hidden text-ellipsis"
                       onDoubleClick={() => startEdit(a, 'activity_type')}
                       title={a.activity_type === 'wbs_summary' ? 'Computed automatically from its children — remove/outdent them to change this' : undefined}
                     >
@@ -3449,7 +3452,7 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                         >
                           {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ').toUpperCase()}</option>)}
                         </select>
@@ -3458,7 +3461,7 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('duration') && (
                     <td
-                      className="px-3 py-1 text-gray-600"
+                      className="px-3 py-1 text-gray-600 dark:text-prosota-muted"
                       onDoubleClick={() => startEdit(a, 'duration_hours')}
                       title={a.activity_type === 'wbs_summary'
                         ? 'Computed from its children — remove or outdent them to edit directly'
@@ -3474,14 +3477,14 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
+                          className="w-16 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-sm"
                         />
                       ) : formatDuration(a.duration_days)}
                     </td>
                   )}
                   {isColumnVisible('start') && (
                     <td
-                      className="px-3 py-1 whitespace-nowrap text-gray-600"
+                      className="px-3 py-1 whitespace-nowrap text-gray-600 dark:text-prosota-muted"
                       onDoubleClick={() => startEdit(a, 'start')}
                       title={a.activity_type === 'wbs_summary'
                         ? 'Computed from its children — remove or outdent them to edit directly'
@@ -3497,15 +3500,15 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                         />
                       ) : a.activity_type === 'finish_milestone' ? '—' : formatDateTime(a.start, ganttStyle.show_time_of_day)}
                     </td>
                   )}
-                  {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_start, ganttStyle.show_time_of_day)}</td>}
+                  {isColumnVisible('bl_start') && <td className="px-3 py-1 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{formatDateTime(a.bl_start, ganttStyle.show_time_of_day)}</td>}
                   {isColumnVisible('finish') && (
                     <td
-                      className="px-3 py-1 whitespace-nowrap text-gray-600"
+                      className="px-3 py-1 whitespace-nowrap text-gray-600 dark:text-prosota-muted"
                       onDoubleClick={() => startEdit(a, 'finish')}
                       title={a.activity_type === 'wbs_summary'
                         ? 'Computed from its children — remove or outdent them to edit directly'
@@ -3521,45 +3524,45 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                         />
                       ) : a.activity_type === 'start_milestone' ? '—' : formatDateTime(a.finish, ganttStyle.show_time_of_day)}
                     </td>
                   )}
-                  {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 whitespace-nowrap">{formatDateTime(a.bl_finish, ganttStyle.show_time_of_day)}</td>}
+                  {isColumnVisible('bl_finish') && <td className="px-3 py-1 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{formatDateTime(a.bl_finish, ganttStyle.show_time_of_day)}</td>}
                   {isColumnVisible('variance') && (
-                    <td className={`px-3 py-1 ${(a.variance_days ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                    <td className={`px-3 py-1 ${(a.variance_days ?? 0) > 0 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>
                       {a.variance_days ?? '—'}
                     </td>
                   )}
                   {isColumnVisible('float') && (
-                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>
                       {formatFloatDays(a.total_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('critical') && (
-                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                    <td className={`px-3 py-1 ${a.is_critical ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>
                       {a.is_critical === null ? '—' : a.is_critical ? 'Yes' : 'No'}
                     </td>
                   )}
                   {isColumnVisible('free_float') && (
-                    <td className="px-3 py-1 text-gray-600">
+                    <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted">
                       {formatFloatDays(a.free_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('sub_float') && (
-                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
+                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>
                       {formatFloatDays(a.sub_total_float_hours, a, calendarLookup)}
                     </td>
                   )}
                   {isColumnVisible('sub_critical') && (
-                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
+                    <td className={`px-3 py-1 ${a.sub_is_critical ? 'text-orange-600 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>
                       {a.sub_is_critical === null ? '—' : a.sub_is_critical ? 'Yes' : 'No'}
                     </td>
                   )}
                   {isColumnVisible('pct_complete') && (
                     <td
-                      className="px-3 py-1 text-gray-600"
+                      className="px-3 py-1 text-gray-600 dark:text-prosota-muted"
                       onDoubleClick={() => startEdit(a, 'pct_complete')}
                       title={a.activity_type === 'wbs_summary' ? 'Computed (duration-weighted average of its children) — not directly editable' : undefined}
                     >
@@ -3573,7 +3576,7 @@ export function Scheduling() {
                           onChange={e => setEditingValue(e.target.value)}
                           onBlur={() => commitEdit()}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
-                          className="w-16 border border-blue-400 rounded px-1 py-0.5 text-sm"
+                          className="w-16 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-sm"
                         />
                       ) : `${a.pct_complete ?? 0}%`}
                     </td>
@@ -3583,11 +3586,11 @@ export function Scheduling() {
                     const names = assigned.map(ra => ra.resource_name).join(', ')
                     return (
                       <td
-                        className="px-3 py-1 text-gray-600 cursor-pointer"
+                        className="px-3 py-1 text-gray-600 dark:text-prosota-muted cursor-pointer"
                         onClick={() => setExpandedId(id => id === a.id ? null : a.id)}
                         title={assigned.length > 0 ? `${names} — click to view/edit` : 'Click to assign resources'}
                       >
-                        {assigned.length === 0 ? <span className="text-gray-300">—</span> : (
+                        {assigned.length === 0 ? <span className="text-gray-300 dark:text-prosota-line">—</span> : (
                           <span className="truncate block max-w-[8rem]">{names}</span>
                         )}
                       </td>
@@ -3596,15 +3599,15 @@ export function Scheduling() {
                   {isColumnVisible('element_count') && (() => {
                     const count = elementLinksByActivityId.get(a.id)?.length ?? 0
                     return (
-                      <td className="px-3 py-1 text-gray-600 text-right tabular-nums">
-                        {count === 0 ? <span className="text-gray-300">—</span> : count.toLocaleString()}
+                      <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted text-right tabular-nums">
+                        {count === 0 ? <span className="text-gray-300 dark:text-prosota-line">—</span> : count.toLocaleString()}
                       </td>
                     )
                   })()}
                   {isColumnVisible('elements') && (() => {
                     const links = elementLinksByActivityId.get(a.id) ?? []
                     return (
-                      <td className="px-3 py-1 text-gray-600">
+                      <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted">
                         <button
                           onClick={e => {
                             if (elementsBrowse?.activityId === a.id) { setElementsBrowse(null); return }
@@ -3622,7 +3625,7 @@ export function Scheduling() {
                   })()}
                   {isColumnVisible('animation_profile') && (
                     <td
-                      className="px-3 py-1 text-gray-600 whitespace-nowrap overflow-hidden text-ellipsis"
+                      className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap overflow-hidden text-ellipsis"
                       onDoubleClick={() => startEdit(a, 'animation_profile_id')}
                       title="Double-click to change which animation profile every 3D element linked to this activity uses"
                     >
@@ -3648,7 +3651,7 @@ export function Scheduling() {
                           onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
                           onBlur={cancelEdit}
                           onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                         >
                           <option value="">Default</option>
                           {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -3656,20 +3659,20 @@ export function Scheduling() {
                       ) : (
                         a.animation_profile_id
                           ? (profileNameById.get(a.animation_profile_id) ?? 'Default')
-                          : <span className="text-gray-400">Default</span>
+                          : <span className="text-gray-400 dark:text-prosota-muted">Default</span>
                       )}
                     </td>
                   )}
-                  {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.bac)}</td>}
-                  {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.pv)}</td>}
-                  {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ev)}</td>}
-                  {isColumnVisible('ac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.ac)}</td>}
-                  {isColumnVisible('cv') && <td className={`px-3 py-1 whitespace-nowrap ${a.cv !== null && Number(a.cv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.cv)}</td>}
-                  {isColumnVisible('sv') && <td className={`px-3 py-1 whitespace-nowrap ${a.sv !== null && Number(a.sv) < 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatMoney(a.sv)}</td>}
-                  {isColumnVisible('cpi') && <td className={`px-3 py-1 ${a.cpi !== null && Number(a.cpi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.cpi)}</td>}
-                  {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{formatRatio(a.spi)}</td>}
-                  {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.eac)}</td>}
-                  {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 whitespace-nowrap">{formatMoney(a.etc)}</td>}
+                  {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.bac)}</td>}
+                  {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.pv)}</td>}
+                  {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.ev)}</td>}
+                  {isColumnVisible('ac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.ac)}</td>}
+                  {isColumnVisible('cv') && <td className={`px-3 py-1 whitespace-nowrap ${a.cv !== null && Number(a.cv) < 0 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>{formatMoney(a.cv)}</td>}
+                  {isColumnVisible('sv') && <td className={`px-3 py-1 whitespace-nowrap ${a.sv !== null && Number(a.sv) < 0 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>{formatMoney(a.sv)}</td>}
+                  {isColumnVisible('cpi') && <td className={`px-3 py-1 ${a.cpi !== null && Number(a.cpi) < 1 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>{formatRatio(a.cpi)}</td>}
+                  {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>{formatRatio(a.spi)}</td>}
+                  {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.eac)}</td>}
+                  {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.etc)}</td>}
                   {visibleUdfDefinitions.map(d => (
                     <UdfCell
                       key={d.id}
@@ -3688,7 +3691,7 @@ export function Scheduling() {
                 <tr>
                   <td
                     colSpan={visibleColumns.size + visibleUdfDefinitions.length + 2}
-                    className="px-4 py-10 text-center text-gray-400 text-sm"
+                    className="px-4 py-10 text-center text-gray-400 dark:text-prosota-muted text-sm"
                     // Overrides .scheduling-grid tbody td's row-height cap (index.css)
                     // — that's sized for a real activity row, not this placeholder message.
                     style={{ height: 'auto', overflow: 'visible' }}
@@ -3705,7 +3708,7 @@ export function Scheduling() {
         <div
           onMouseDown={startPaneResize}
           title="Drag to resize"
-          className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 no-print"
+          className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-blue-300 dark:hover:bg-prosota-azure/40 active:bg-blue-400 dark:active:bg-prosota-azure/60 no-print"
         />
         <div
           // No vertical scroll here at all (overflow-y hidden, not auto) — the
@@ -3732,20 +3735,20 @@ export function Scheduling() {
           the tree view uses for that). "No grouping" restores the block
           above, untouched. */}
       {groupBy !== 'none' && (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden">
           <div ref={groupScrollRef} onScroll={handleGroupScroll} className="rt-hide-scrollbar" style={{ maxHeight: 500, overflow: 'auto' }}>
           <table className="w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50 text-left text-gray-500 border-b border-gray-200">
-                <th className="px-2 py-1.5 w-8" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}></th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Code</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Activity</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Type</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Start</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Finish</th>
-                <th className="px-3 py-1.5 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Dur (d)</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Resources</th>
-                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Critical</th>
+              <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted border-b border-gray-200 dark:border-prosota-line">
+                <th className="px-2 py-1.5 w-8" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}></th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Code</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Activity</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Type</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Start</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Finish</th>
+                <th className="px-3 py-1.5 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Dur (d)</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Resources</th>
+                <th className="px-3 py-1.5" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Critical</th>
               </tr>
             </thead>
             <tbody>
@@ -3757,11 +3760,11 @@ export function Scheduling() {
                 if (flat.type === 'header') {
                   const collapsed = collapsedGroups.has(flat.key)
                   return (
-                    <tr key={flat.key || '(none)'} style={{ height: GANTT_ROW_HEIGHT }} className="bg-gray-100 border-b border-gray-200 cursor-pointer" onClick={() => toggleGroupCollapsed(flat.key)}>
+                    <tr key={flat.key || '(none)'} style={{ height: GANTT_ROW_HEIGHT }} className="bg-gray-100 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line cursor-pointer" onClick={() => toggleGroupCollapsed(flat.key)}>
                       <td className="px-2 py-1.5" colSpan={9}>
-                        <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700 text-xs">
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700 dark:text-prosota-muted text-xs">
                           <CollapseIcon expanded={!collapsed} /> {flat.key || '(none)'}
-                          <span className="text-gray-400 font-normal">({flat.count})</span>
+                          <span className="text-gray-400 dark:text-prosota-muted font-normal">({flat.count})</span>
                         </span>
                       </td>
                     </tr>
@@ -3772,29 +3775,29 @@ export function Scheduling() {
                   <tr
                     key={a.id}
                     style={{ height: GANTT_ROW_HEIGHT, backgroundColor: rowBackground(a) }}
-                    className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                    className="border-b border-gray-100 dark:border-prosota-line last:border-0 hover:bg-gray-50 dark:hover:bg-prosota-panel2"
                   >
                     <td className="px-2 py-1.5">
                       <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
                     </td>
-                    <td className="px-3 py-1.5 text-gray-500 font-mono text-xs">{a.code}</td>
+                    <td className="px-3 py-1.5 text-gray-500 dark:text-prosota-muted font-mono text-xs">{a.code}</td>
                     <td className="px-3 py-1.5">
                       <button
                         onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
-                        className="text-left font-medium text-gray-900 hover:text-blue-600"
+                        className="text-left font-medium text-gray-900 dark:text-prosota-paper hover:text-blue-600"
                       >
                         {a.task_name}
                       </button>
                     </td>
-                    <td className="px-3 py-1.5 text-gray-500">{GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type}</td>
-                    <td className="px-3 py-1.5 text-gray-500">{a.start ? formatDateTime(a.start, false) : '—'}</td>
-                    <td className="px-3 py-1.5 text-gray-500">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
-                    <td className="px-3 py-1.5 text-right text-gray-500">{formatDuration(a.duration_days)}</td>
-                    <td className="px-3 py-1.5 text-gray-500">{resourceLabelForActivity(a.id, assignmentsByActivityId)}</td>
+                    <td className="px-3 py-1.5 text-gray-500 dark:text-prosota-muted">{GROUP_TYPE_LABELS[a.activity_type] ?? a.activity_type}</td>
+                    <td className="px-3 py-1.5 text-gray-500 dark:text-prosota-muted">{a.start ? formatDateTime(a.start, false) : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-500 dark:text-prosota-muted">{a.finish ? formatDateTime(a.finish, false) : '—'}</td>
+                    <td className="px-3 py-1.5 text-right text-gray-500 dark:text-prosota-muted">{formatDuration(a.duration_days)}</td>
+                    <td className="px-3 py-1.5 text-gray-500 dark:text-prosota-muted">{resourceLabelForActivity(a.id, assignmentsByActivityId)}</td>
                     <td className="px-3 py-1.5">
-                      {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Critical</span>}
-                      {a.is_critical === false && <span className="text-gray-300 text-xs">—</span>}
-                      {a.is_critical === null && <span className="text-gray-300 text-xs">—</span>}
+                      {a.is_critical === true && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400">Critical</span>}
+                      {a.is_critical === false && <span className="text-gray-300 dark:text-prosota-line text-xs">—</span>}
+                      {a.is_critical === null && <span className="text-gray-300 dark:text-prosota-line text-xs">—</span>}
                     </td>
                   </tr>
                 )
@@ -3803,7 +3806,7 @@ export function Scheduling() {
                 <tr><td colSpan={9} style={{ height: trailingGroupRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
               )}
               {groupedActivities.length === 0 && (
-                <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">No activities match the current filters</td></tr>
+                <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400 dark:text-prosota-muted">No activities match the current filters</td></tr>
               )}
             </tbody>
           </table>
@@ -3815,25 +3818,25 @@ export function Scheduling() {
         <div
           onMouseDown={startTopPaneResize}
           title="Drag to resize"
-          className="h-1.5 shrink-0 cursor-row-resize bg-gray-100 hover:bg-blue-300 active:bg-blue-400 rounded-full my-1 no-print"
+          className="h-1.5 shrink-0 cursor-row-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-blue-300 dark:hover:bg-prosota-azure/40 active:bg-blue-400 dark:active:bg-prosota-azure/60 rounded-full my-1 no-print"
         />
       )}
 
       {(expandedActivity || panelPinned) && (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden no-print">
-          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-            <div className="text-sm font-semibold text-gray-700">
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden no-print">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line">
+            <div className="text-sm font-semibold text-gray-700 dark:text-prosota-muted">
               {expandedActivity ? `${expandedActivity.code}: ${expandedActivity.task_name}` : 'No activity selected'}
             </div>
             <div className="flex items-center gap-3">
               <button
                 onClick={togglePanelPinned}
                 title={panelPinned ? 'Unpin — panel will hide again when nothing is selected' : 'Pin — keep this panel visible permanently'}
-                className={`text-sm ${panelPinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                className={`text-sm ${panelPinned ? 'text-blue-600 dark:text-prosota-azure' : 'text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'}`}
               >
                 📌
               </button>
-              {expandedActivity && <button onClick={() => setExpandedId(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>}
+              {expandedActivity && <button onClick={() => setExpandedId(null)} className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>}
             </div>
           </div>
           {expandedActivity ? (
@@ -3863,7 +3866,7 @@ export function Scheduling() {
               </div>
             </div>
           ) : (
-            <div className="p-8 text-center text-sm text-gray-400">Click an activity's name in the table to view/edit its details here.</div>
+            <div className="p-8 text-center text-sm text-gray-400 dark:text-prosota-muted">Click an activity's name in the table to view/edit its details here.</div>
           )}
         </div>
       )}
@@ -3917,28 +3920,28 @@ export function Scheduling() {
         onClick={() => setPrintPreviewOpen(false)}
       >
         <div
-          className="bg-gray-100 rounded-lg shadow-2xl w-full h-full max-w-[96vw] max-h-[94vh] flex overflow-hidden"
+          className="bg-gray-100 dark:bg-prosota-ink rounded-lg shadow-2xl w-full h-full max-w-[96vw] max-h-[94vh] flex overflow-hidden"
           onClick={e => e.stopPropagation()}
         >
-          <div className="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col">
-            <div className="px-4 py-3 border-b border-gray-200 font-bold text-sm">Print Preview</div>
-            <div className="flex-1 overflow-y-auto p-3 text-xs text-gray-500">
+          <div className="w-60 shrink-0 bg-white dark:bg-prosota-panel border-r border-gray-200 dark:border-prosota-line flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-prosota-line font-bold text-sm">Print Preview</div>
+            <div className="flex-1 overflow-y-auto p-3 text-xs text-gray-500 dark:text-prosota-muted">
               This is exactly what will print, at the column widths currently set in Page Setup. Not quite right? Adjust them there — this preview updates the moment you save.
             </div>
-            <div className="p-3 border-t border-gray-200 flex flex-col gap-2">
+            <div className="p-3 border-t border-gray-200 dark:border-prosota-line flex flex-col gap-2">
               <button
                 onClick={() => { setPrintPreviewOpen(false); setLetterheadWidgetOpen(true) }}
-                className="text-xs text-blue-600 hover:text-blue-700 font-medium text-left"
+                className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium text-left"
               >
                 ⚙ Edit column widths in Page Setup
               </button>
               <button
                 onClick={() => { setPrintPreviewOpen(false); printSchedule() }}
-                className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 font-medium"
+                className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 font-medium"
               >
                 🖨️ Print
               </button>
-              <button onClick={() => setPrintPreviewOpen(false)} className="text-xs text-gray-400 hover:text-gray-600">
+              <button onClick={() => setPrintPreviewOpen(false)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
                 Close
               </button>
             </div>
@@ -3979,13 +3982,13 @@ export function Scheduling() {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setElementsBrowse(null)} />
           <div
-            className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg py-1"
+            className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg py-1"
             style={{ left: elementsBrowse.x, top: elementsBrowse.y + 4 }}
           >
             {links.map(link => (
               <div
                 key={link.id}
-                className="px-2.5 py-1 text-xs text-gray-700 truncate border-b border-gray-50 last:border-b-0"
+                className="px-2.5 py-1 text-xs text-gray-700 dark:text-prosota-muted truncate border-b border-gray-50 last:border-b-0"
                 title={`${link.element_label} (${link.element_ref})`}
               >
                 {link.element_label}

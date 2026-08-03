@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dark-mode default text color (2026-08-03, full page-content dark mode
+   pass) — Tailwind's Preflight never sets a `color` on body, so every
+   element across this app that has no explicit text-* class (plain
+   font-medium/font-semibold value/label text, not just headings) has always
+   relied on the browser's own default black. That's invisible/near-
+   invisible against a dark prosota-panel background. Rather than hunting
+   down every bare-text span across 100+ components (a whack-a-mole that
+   can never be proven complete), this sets the correct *default* once —
+   any element with its own explicit text-gray-.../dark:text-... class still
+   wins (a class selector on the element itself is more specific than this
+   inherited body color), so already-themed muted/secondary text is
+   unaffected; this only fixes text that was never explicitly colored at
+   all. */
+html.dark body {
+  color: #E6EDF7;
+}
+
 /* Print support: .no-print hides app chrome (sidebar, buttons); .print-only
    renders a dedicated printable view that's invisible on screen. */
 .print-only {

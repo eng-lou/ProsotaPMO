@@ -49,7 +49,7 @@ export function Overview() {
   }, [selectedProject?.id, period?.id, schedulePeriod?.id, subprojectId, criticalOnly])
 
   if (periodLoading || scheduleLoading || loading || !data) {
-    return <div className="p-8 text-gray-400 text-sm">Loading…</div>
+    return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
 
   return (
@@ -57,7 +57,7 @@ export function Overview() {
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-3 text-sm">
           <select
-            className="border border-gray-300 rounded-md px-2 py-1.5"
+            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5"
             value={subprojectId}
             onChange={e => setSubprojectId(e.target.value)}
           >
@@ -66,7 +66,7 @@ export function Overview() {
               <option key={sp.id} value={sp.id}>{sp.name}</option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-gray-600">
+          <label className="flex items-center gap-1.5 text-gray-600 dark:text-prosota-muted">
             <input type="checkbox" checked={criticalOnly} onChange={e => setCriticalOnly(e.target.checked)} />
             Critical path only
           </label>

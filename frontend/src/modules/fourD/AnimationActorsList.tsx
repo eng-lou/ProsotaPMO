@@ -2,6 +2,7 @@ import { memo, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
 import type { AnimationProfile } from './animationProfiles'
+import type { Camera } from './cameras'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
 import type { Path } from './paths'
@@ -9,7 +10,7 @@ import type { PathFollower } from './pathFollowers'
 import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
 import type { Zone } from './zones'
 
-type ActorSourceKind = 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone'
+type ActorSourceKind = 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone' | 'camera'
 
 interface Actor {
   sourceKind: ActorSourceKind
@@ -56,6 +57,12 @@ const LOCATION_FIELDS = ['pos_x', 'pos_y', 'pos_z'] as const
 const ROTATION_FIELDS = ['rot_x', 'rot_y', 'rot_z'] as const
 const SCALE_FIELDS = ['scale_x', 'scale_y', 'scale_z'] as const
 const PATH_FIELDS = ['path_progress'] as const
+// A Camera's own aim/lens fields (2026-08-03) — only ever keyed for
+// source_kind 'camera' (see cameras.ts's own header), so these groups are
+// naturally always empty for every other actor kind; no per-kind branching
+// needed in ActorRow below, same as every other field group here.
+const TARGET_FIELDS = ['target_x', 'target_y', 'target_z'] as const
+const LENS_FIELDS = ['focal_length', 'clip_start', 'clip_end'] as const
 // A Path/Zone's own line-draw/border-draw reveal window (2026-07-30, per
 // Maro: "if i keyframe i should see the path actor in the timeline with
 // both keyframes so i can drag, delete etc") — reuses KeyframeTrack
@@ -302,6 +309,8 @@ function ActorRow({
   const rotationGroups = useMemo(() => groupByDay(keyframes, ROTATION_FIELDS), [keyframes])
   const scaleGroups = useMemo(() => groupByDay(keyframes, SCALE_FIELDS), [keyframes])
   const animGroups = useMemo(() => groupByDay(keyframes, ANIM_FIELDS), [keyframes])
+  const targetGroups = useMemo(() => groupByDay(keyframes, TARGET_FIELDS), [keyframes])
+  const lensGroups = useMemo(() => groupByDay(keyframes, LENS_FIELDS), [keyframes])
   // A PathFollower binding (2026-07-12 fix, per Maro: "where's my
   // keyframes?" — a path-bound object sitting right on its curve in the
   // viewport, with no "3D Path" row at all) shows this sub-track even
@@ -340,16 +349,22 @@ function ActorRow({
   if (scaleGroups.length > 0) {
     subTracks.push({ label: 'Scale', content: <KeyframeTrack dayGroups={scaleGroups} {...trackProps} /> })
   }
+  if (targetGroups.length > 0) {
+    subTracks.push({ label: 'Target', content: <KeyframeTrack dayGroups={targetGroups} {...trackProps} /> })
+  }
+  if (lensGroups.length > 0) {
+    subTracks.push({ label: 'Lens', content: <KeyframeTrack dayGroups={lensGroups} {...trackProps} /> })
+  }
 
   return (
-    <div className="border-b border-gray-100">
-      <div className="flex items-center gap-1 px-2 py-1 bg-gray-50">
-        <button onClick={() => setCollapsed(c => !c)} className="text-[10px] text-gray-400 w-3 shrink-0">
+    <div className="border-b border-gray-100 dark:border-prosota-line">
+      <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 dark:bg-prosota-panel2">
+        <button onClick={() => setCollapsed(c => !c)} className="text-[10px] text-gray-400 dark:text-prosota-muted w-3 shrink-0">
           {collapsed ? '▸' : '▾'}
         </button>
         <span
           onClick={onSelect ?? undefined}
-          className={`text-xs text-gray-700 truncate ${onSelect ? 'cursor-pointer hover:text-sky-600' : ''}`}
+          className={`text-xs text-gray-700 dark:text-prosota-muted truncate ${onSelect ? 'cursor-pointer hover:text-sky-600' : ''}`}
           title={onSelect ? 'Click to select in viewport' : undefined}
         >
           {actor.label}
@@ -359,7 +374,7 @@ function ActorRow({
         <div className="flex gap-2 pl-4 pr-2 py-1">
           <div className="w-14 shrink-0 space-y-1">
             {subTracks.map(t => (
-              <div key={t.label} className="h-3 flex items-center text-[10px] text-gray-400">{t.label}</div>
+              <div key={t.label} className="h-3 flex items-center text-[10px] text-gray-400 dark:text-prosota-muted">{t.label}</div>
             ))}
           </div>
           {/* Box-select's own container (2026-07-23) — spans just the
@@ -414,7 +429,7 @@ function ActorRow({
 // list, occasionally unblocking just long enough to paint whichever date
 // the (still-advancing, wall-clock-driven) playhead had reached by then.
 export const AnimationActorsList = memo(function AnimationActorsList({
-  scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones,
+  scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras,
   timeDisplayMode, speedDaysPerSecond, fps,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onCreateKeyframes, onReverseKeyframes, onSelectActor,
 }: {
@@ -431,6 +446,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   animationProfiles: AnimationProfile[]
   paths: Path[]
   zones: Zone[]
+  cameras: Camera[]
   timeDisplayMode: TimeDisplayMode
   speedDaysPerSecond: number
   fps: number
@@ -519,6 +535,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
     const annotationById = new Map(annotations.map(a => [a.id, a]))
     const pathById = new Map(paths.map(p => [p.id, p]))
     const zoneById = new Map(zones.map(z => [z.id, z]))
+    const cameraById = new Map(cameras.map(c => [c.id, c]))
     const linksByActor_ = new Map<string, ModelElementLink[]>()
     const keyframesByActor_ = new Map<string, ElementKeyframe[]>()
     const pathBoundActors_ = new Set<string>()
@@ -528,6 +545,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       if (sourceKind === 'mesh') return elementRef
       if (sourceKind === 'path') return pathById.get(elementRef)?.name ?? elementRef
       if (sourceKind === 'zone') return zoneById.get(elementRef)?.name ?? elementRef
+      if (sourceKind === 'camera') return cameraById.get(elementRef)?.name ?? elementRef
       const a = annotationById.get(elementRef)
       return a ? `[${a.kind}] ${a.text || '(no note)'}` : elementRef
     }
@@ -560,7 +578,12 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       if (group) group.push(link); else linksByActor_.set(key, [link])
     }
     for (const k of elementKeyframes) {
-      if (k.source_kind !== 'mesh' && k.source_kind !== 'annotation' && k.source_kind !== 'path' && k.source_kind !== 'zone') continue
+      if (k.source_kind !== 'mesh' && k.source_kind !== 'annotation' && k.source_kind !== 'path' && k.source_kind !== 'zone' && k.source_kind !== 'camera') continue
+      // source_kind 'camera' with element_ref === "" is the *other*,
+      // pre-existing sentinel usage (a mesh camera-follows-a-path binding —
+      // see element_keyframe.py's own header on the two) — never a real
+      // Camera id, so it must not surface as its own bogus actor row here.
+      if (k.source_kind === 'camera' && k.element_ref === '') continue
       const key = add(k.source_kind, k.element_ref)
       const group = keyframesByActor_.get(key)
       if (group) group.push(k); else keyframesByActor_.set(key, [k])
@@ -599,7 +622,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       actors: [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label)),
       linksByActor: linksByActor_, keyframesByActor: keyframesByActor_, pathBoundActors: pathBoundActors_, animatableActors: animatableActors_,
     }
-  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations, paths, zones])
+  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations, paths, zones, cameras])
 
   // Built once here, not per PresetTrack render (2026-07-21 perf fix) —
   // PresetTrack used to build these same two Maps itself, from the full
@@ -611,11 +634,11 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   const profileById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p])), [animationProfiles])
 
   if (actors.length === 0) {
-    return <p className="px-3 py-3 text-xs text-gray-400">No animated actors yet — link an object to an Activity+Profile, bind it to a Path, or keyframe its Transform to see it here.</p>
+    return <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">No animated actors yet — link an object to an Activity+Profile, bind it to a Path, or keyframe its Transform to see it here.</p>
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-t border-gray-100">
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-t border-gray-100 dark:border-prosota-line">
       {/* selectedKeyframes.length, not selectedIds.size (2026-07-23 fix,
           found while cleaning up test data during this same feature's own
           verification) — a selection made before its object gets unloaded
@@ -629,25 +652,25 @@ export const AnimationActorsList = memo(function AnimationActorsList({
           Delete/Copy/Reverse would actually act on, and disappears on its
           own the moment that's empty — no separate cleanup effect needed. */}
       {selectedKeyframes.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1 bg-sky-50 border-b border-sky-100 text-xs shrink-0">
-          <span className="text-gray-600">{selectedKeyframes.length} keyframe{selectedKeyframes.length === 1 ? '' : 's'} selected</span>
-          <button onClick={handleCopySelected} className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">Copy</button>
-          <button onClick={handleReverseSelected} className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">Reverse</button>
-          <button onClick={handleDeleteSelected} className="px-1.5 py-0.5 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50">Delete</button>
-          <button onClick={clearSelection} className="ml-auto text-gray-400 hover:text-gray-600">Clear</button>
+        <div className="flex items-center gap-2 px-3 py-1 bg-sky-50 dark:bg-prosota-azure/10 border-b border-sky-100 dark:border-prosota-azure/30 text-xs shrink-0">
+          <span className="text-gray-600 dark:text-prosota-muted">{selectedKeyframes.length} keyframe{selectedKeyframes.length === 1 ? '' : 's'} selected</span>
+          <button onClick={handleCopySelected} className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">Copy</button>
+          <button onClick={handleReverseSelected} className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">Reverse</button>
+          <button onClick={handleDeleteSelected} className="px-1.5 py-0.5 rounded border border-red-300 bg-white dark:bg-prosota-panel text-red-600 dark:text-red-400 hover:bg-red-50">Delete</button>
+          <button onClick={clearSelection} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Clear</button>
         </div>
       )}
       {clipboard && (
-        <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 border-b border-amber-100 text-xs shrink-0">
-          <span className="text-gray-600">{clipboard.length} keyframe{clipboard.length === 1 ? '' : 's'} copied</span>
+        <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 dark:bg-amber-500/10 border-b border-amber-100 dark:border-amber-500/30 text-xs shrink-0">
+          <span className="text-gray-600 dark:text-prosota-muted">{clipboard.length} keyframe{clipboard.length === 1 ? '' : 's'} copied</span>
           <button
             onClick={handlePaste}
             title="Pastes at the current playhead date, keeping every copied keyframe's own offset from the earliest one"
-            className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           >
             Paste at playhead
           </button>
-          <button onClick={() => { setClipboard(null); setClipboardActorKey(null) }} className="ml-auto text-gray-400 hover:text-gray-600">Clear</button>
+          <button onClick={() => { setClipboard(null); setClipboardActorKey(null) }} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Clear</button>
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto">

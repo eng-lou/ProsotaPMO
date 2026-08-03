@@ -33,20 +33,36 @@ from pydantic import BaseModel, ConfigDict
 # computeKeyframeRange (timelinePlayback.ts) — already unioned with the
 # schedule range for exactly this "no Activity required" reason — extend
 # the scrubbable range the moment either one is keyed, with zero extra code.
+#
+# target_x/y/z, focal_length, clip_start, clip_end (2026-08-03, per Maro:
+# "add separate cameras... keyframe the positions of this camera") — the
+# new named Camera entity (camera.py), always source_kind="camera" with
+# element_ref=str(camera.id) (NOT the "" sentinel — see source_kind's own
+# comment below on the pre-existing, unrelated "camera follows a path"
+# usage). pos_x/y/z is reused as-is for a Camera's own position; target_x/
+# y/z is its look-at point (same convention CameraView already uses);
+# focal_length/clip_start/clip_end are its lens settings. Falls back to
+# the owning Camera row's own base_* column whenever a given field has no
+# keyframe yet, same "base value until overridden" convention every other
+# animated target already uses.
 KeyframeField = Literal[
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "path_progress", "visible",
-    "anim_start", "anim_end",
+    "anim_start", "anim_end", "target_x", "target_y", "target_z", "focal_length", "clip_start", "clip_end",
 ]
 
 
 class ElementKeyframeUpsert(BaseModel):
     project_id: uuid.UUID
     # "camera" (2026-07-11) — the first ElementKeyframe target that isn't a
-    # mesh/IFC element at all, for keyframing path_progress (or someday
-    # position directly) on the viewport's own camera, which finally has a
-    # first-class identity via PathFollower's target_kind. element_ref is
-    # "" for a camera row, same empty-string-not-null convention
-    # PathFollower's own docstring explains.
+    # mesh/IFC element at all. Two distinct uses share this source_kind,
+    # told apart by element_ref:
+    #  - element_ref="" (2026-07-11) — the *main viewport's own* orbit
+    #    camera, only ever for field="path_progress" (PathFollower's
+    #    target_kind="camera"), same empty-string-not-null convention
+    #    PathFollower's own docstring explains.
+    #  - element_ref=str(camera.id) (2026-08-03) — a specific named Camera
+    #    (camera.py), for pos_x/y/z/target_x/y/z/focal_length/clip_start/
+    #    clip_end — see KeyframeField's own comment above.
     # "annotation" (2026-07-12) — element_ref is the Annotation row's own id
     # (annotation.py), for pos_x/y/z and visible keyframes on a Placemark/
     # Comment, plus (2026-08-06) field="anim_start"/"anim_end" for its own

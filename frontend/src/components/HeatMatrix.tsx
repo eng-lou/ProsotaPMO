@@ -9,11 +9,11 @@ function bandOf(value: number): number {
 // Severity 0 (safe, bottom-left) to 8 (severe, top-right) -> a red/amber/green cell colour,
 // matching the prototype's heat matrix palette.
 function cellColor(severity: number): string {
-  if (severity <= 1) return 'bg-green-100 text-green-800'
-  if (severity <= 3) return 'bg-yellow-100 text-yellow-800'
-  if (severity <= 5) return 'bg-orange-200 text-orange-900'
-  if (severity <= 6) return 'bg-red-300 text-red-900'
-  return 'bg-red-600 text-white'
+  if (severity <= 1) return 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400'
+  if (severity <= 3) return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-400'
+  if (severity <= 5) return 'bg-orange-200 text-orange-900 dark:bg-orange-500/25 dark:text-orange-300'
+  if (severity <= 6) return 'bg-red-300 text-red-900 dark:bg-red-500/30 dark:text-red-300'
+  return 'bg-red-600 text-white dark:bg-red-500'
 }
 
 interface HeatMatrixProps {
@@ -31,9 +31,9 @@ export function HeatMatrix({ probability, impact, label }: HeatMatrixProps) {
 
   return (
     <div>
-      <div className="text-xs font-semibold text-gray-600 mb-2">{label}</div>
+      <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">{label}</div>
       <div className="flex gap-1">
-        <div className="flex flex-col justify-between text-[9px] font-semibold text-gray-400 py-0.5">
+        <div className="flex flex-col justify-between text-[9px] font-semibold text-gray-400 dark:text-prosota-muted py-0.5">
           {[...PROBABILITY_LABELS].reverse().map(l => <div key={l} className="h-7 flex items-center">{l}</div>)}
         </div>
         <div className="grid grid-cols-5 gap-0.5">
@@ -55,14 +55,14 @@ export function HeatMatrix({ probability, impact, label }: HeatMatrixProps) {
         </div>
       </div>
       <div className="flex gap-1 mt-1 ml-4">
-        {IMPACT_LABELS.map(l => <div key={l} className="h-3 w-7 flex items-center justify-center text-[9px] font-semibold text-gray-400">{l}</div>)}
+        {IMPACT_LABELS.map(l => <div key={l} className="h-3 w-7 flex items-center justify-center text-[9px] font-semibold text-gray-400 dark:text-prosota-muted">{l}</div>)}
       </div>
       {hasPosition ? (
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-500 dark:text-prosota-muted mt-1">
           Probability {PROBABILITY_LABELS[probBand!]} x Impact {IMPACT_LABELS[impactBand!]} = rating {(probability! * impact!).toFixed(2)}
         </p>
       ) : (
-        <p className="text-xs text-gray-400 mt-1">Not assessed yet.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Not assessed yet.</p>
       )}
     </div>
   )

@@ -40,12 +40,12 @@ export function ScopeFilterFields({
 
   return (
     <div className="space-y-1">
-      <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Which Activities this widget tracks — leave as 'All Activities' to show the whole project">
+      <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="Which Activities this widget tracks — leave as 'All Activities' to show the whole project">
         <span className="w-16 shrink-0">Scope</span>
         <select
           value={scope.scope_mode}
           onChange={e => onChange({ ...emptyScope, scope_mode: e.target.value as ScopeFilter['scope_mode'] })}
-          className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+          className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
         >
           <option value="all">All Activities</option>
           <option value="udf">UDF Value</option>
@@ -54,12 +54,12 @@ export function ScopeFilterFields({
       </label>
       {scope.scope_mode === 'udf' && (
         <>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Field</span>
             <select
               value={scope.udf_field_definition_id ?? ''}
               onChange={e => onChange({ ...scope, udf_field_definition_id: e.target.value || null, udf_value: null })}
-              className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             >
               <option value="">Choose a field…</option>
               {udfDefinitions.map(d => (
@@ -68,12 +68,12 @@ export function ScopeFilterFields({
             </select>
           </label>
           {scope.udf_field_definition_id && (
-            <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
               <span className="w-16 shrink-0">Value</span>
               <select
                 value={scope.udf_value ?? ''}
                 onChange={e => onChange({ ...scope, udf_value: e.target.value || null })}
-                className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+                className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
               >
                 <option value="">Choose a value…</option>
                 {valueOptions.map(v => (
@@ -85,7 +85,7 @@ export function ScopeFilterFields({
         </>
       )}
       {scope.scope_mode === 'wbs' && (
-        <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+        <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
           <span className="w-16 shrink-0">WBS Node</span>
           <ActivityPicker
             activities={wbsNodes}

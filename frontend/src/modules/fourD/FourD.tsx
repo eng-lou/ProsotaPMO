@@ -19,7 +19,7 @@ import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from 
 import { findLinkedExpressIds } from './linkedMaterials'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
-import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind, type SourceKind } from './modelElementLinks'
+import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind } from './modelElementLinks'
 import {
   deleteModel3DFile, downloadModel3DFile, listModel3DFiles, updateUnloadedElements, uploadModel3DFile,
   type Model3DKind, type UnloadedElementInfo,
@@ -30,10 +30,12 @@ import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
+import { createCamera, deleteCamera, listCameras, updateCamera, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { uploadFourDVideo } from './fourDVideos'
 import { CameraViewPanel } from './CameraViewPanel'
+import { CamerasPanel } from './CamerasPanel'
 import {
-  addCollectionMember, createCollection, deleteCollection, listCollections, removeCollectionMember, updateCollection,
+  addCollectionMember, createCollection, deleteCollection, flattenCollectionMemberRefs, listCollections, removeCollectionMember, updateCollection,
   type Collection as CollectionType, type CollectionMember,
 } from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
@@ -100,7 +102,8 @@ import type { MeasurementHit } from './MeasurementGizmo'
 // (see resolveToMetresForHit below, which still dynamic-imports that one).
 import { distanceMetres, measureFacePatch } from './measurementGeometry'
 import { Viewport3D, type CameraSyncState, type ImportedObject, type ResolvedSectionBox, type VarianceEntry } from './Viewport3D'
-import { BaselineViewportPane } from './BaselineViewportPane'
+import { ComparisonViewportPane } from './ComparisonViewportPane'
+import { DEFAULT_PANE_CONFIG, useResolvedPaneIsolation, type PaneConfig } from './comparisonPane'
 import { ImportErrorsBadge } from './ImportErrorsBadge'
 import { ImportModelDialog } from './ImportModelDialog'
 import { IfcScheduleWizard } from './IfcScheduleWizard'
@@ -146,6 +149,8 @@ const SECTION_PANEL_OPEN_KEY = 'prosota_4d_section_panel_open'
 const SECTION_PANEL_DOCK_KEY = 'prosota_4d_section_panel_dock'
 const CAMERA_PANEL_OPEN_KEY = 'prosota_4d_camera_panel_open'
 const CAMERA_PANEL_DOCK_KEY = 'prosota_4d_camera_panel_dock'
+const CAMERAS_PANEL_OPEN_KEY = 'prosota_4d_cinematic_cameras_panel_open'
+const CAMERAS_PANEL_DOCK_KEY = 'prosota_4d_cinematic_cameras_panel_dock'
 const COLLECTIONS_PANEL_OPEN_KEY = 'prosota_4d_collections_panel_open'
 const COLLECTIONS_PANEL_DOCK_KEY = 'prosota_4d_collections_panel_dock'
 const SPLIT_PANEL_OPEN_KEY = 'prosota_4d_split_panel_open'
@@ -726,31 +731,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  // Select/Hide/Isolate by collection (2026-07-11) — recurse into nested
-  // sub-collections, same as Blender's own outliner (right-click "Select
-  // Objects" on a collection selects its sub-collections' contents too) —
-  // matches the "Doors" example from Maro's own request: a parent
-  // collection with per-floor sub-collections should still isolate every
-  // door at once, not just whichever happen to be direct members.
-  const flattenCollectionMemberRefs = (collectionId: string): { source_kind: SourceKind | 'ifc_split'; element_ref: string }[] => {
-    const subtreeIds = new Set<string>([collectionId])
-    const stack = [collectionId]
-    while (stack.length > 0) {
-      const current = stack.pop() as string
-      for (const c of collections) {
-        if (c.parent_collection_id === current && !subtreeIds.has(c.id)) {
-          subtreeIds.add(c.id)
-          stack.push(c.id)
-        }
-      }
-    }
-    return collections
-      .filter(c => subtreeIds.has(c.id))
-      .flatMap(c => c.members.map(m => ({ source_kind: m.source_kind, element_ref: m.element_ref })))
-  }
-
   const handleSelectCollection = async (collectionId: string) => {
-    const refs = flattenCollectionMemberRefs(collectionId)
+    const refs = flattenCollectionMemberRefs(collectionId, collections)
     const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     if (objectIds.size === 0 && expressIds.size === 0) return
     setSelectedObjectIds(objectIds)
@@ -780,7 +762,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleHideCollection = async (collectionId: string) => {
-    const refs = flattenCollectionMemberRefs(collectionId)
+    const refs = flattenCollectionMemberRefs(collectionId, collections)
     const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     // objectIds mixes genuine mesh-kind whole-object members with the
     // owning IFC model's own bookkeeping entry (added for isolate's "parent
@@ -800,7 +782,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Show All's "clear everything" — a collection someone else hid stays
   // hidden if it isn't part of what got unhidden.
   const handleUnhideCollection = async (collectionId: string) => {
-    const refs = flattenCollectionMemberRefs(collectionId)
+    const refs = flattenCollectionMemberRefs(collectionId, collections)
     const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     const meshObjectIds = [...objectIds].filter(id => !id.startsWith('ifc-'))
     if (meshObjectIds.length > 0) {
@@ -857,7 +839,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleIsolateCollection = async (collectionId: string) => {
-    const refs = flattenCollectionMemberRefs(collectionId)
+    const refs = flattenCollectionMemberRefs(collectionId, collections)
     const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     if (objectIds.size === 0) return
     setIsolatedObjectIds(objectIds)
@@ -1514,6 +1496,114 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Cinematic Cameras (2026-08-03, per Maro: "add separate cameras and
+  // play the animation and see the transitions") — same project-scoped,
+  // server-persisted shape as Camera Views just above, but a Camera is a
+  // standing, keyframeable actor the viewport can lock onto (activeCameraId),
+  // not a one-shot "jump to" bookmark — see camera.py's own docstring on
+  // how the two features differ.
+  const [cameras, setCameras] = useState<CinematicCamera[]>([])
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [activeCameraId, setActiveCameraId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    listCameras(selectedProject.id).then(list => { if (!cancelled) setCameras(list) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  const handleAddCamera = async (pose: CameraPose) => {
+    if (!selectedProject) return
+    try {
+      setCameraError(null)
+      const camera = await createCamera({ project_id: selectedProject.id, ...pose })
+      setCameras(prev => [...prev, camera])
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Failed to create camera')
+    }
+  }
+  const handleLookThroughCamera = (camera: CinematicCamera) => setActiveCameraId(camera.id)
+  const handleExitCameraView = () => setActiveCameraId(null)
+  const handleRenameCamera = async (id: string, name: string) => {
+    try {
+      setCameraError(null)
+      const updated = await updateCamera(id, { name })
+      setCameras(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Failed to rename camera')
+    }
+  }
+  const handleDeleteCamera = async (id: string) => {
+    try {
+      setCameraError(null)
+      await deleteCamera(id)
+      setCameras(prev => prev.filter(c => c.id !== id))
+      // Deleting the camera you're currently looking through would leave
+      // the viewport locked with nothing to keep re-applying its pose —
+      // same "can't reference something that no longer exists" guard as
+      // FourD.tsx's own model-unload cleanups elsewhere.
+      setActiveCameraId(prev => (prev === id ? null : prev))
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Failed to delete camera')
+    }
+  }
+  // Lens field edits (Focal Length/Clip Start/Clip End, CamerasPanel.tsx's
+  // own expanded detail) — plain base-value updates, independent of
+  // keyframing (unlike Position/Target, these aren't driven by orbiting
+  // the live camera, so there's no "capture the live value" step needed).
+  const handleUpdateCameraBase = async (id: string, patch: Partial<CameraPose>) => {
+    try {
+      setCameraError(null)
+      const updated = await updateCamera(id, patch)
+      setCameras(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Failed to update camera')
+    }
+  }
+  // Keyframing (2026-08-03, per Maro: "keyframe the positions of this
+  // camera") — Viewport3D.tsx's own handleKeyCameraPose reads the live
+  // camera/controls (only it can) and hands the resolved pose up here;
+  // this is where the actual ElementKeyframe persistence happens, same
+  // "callback up, parent does the actual writes" split as every other
+  // camera handler above. All 9 of a Camera's own fields are always keyed
+  // together at the same date — see CamerasPanel.tsx's own
+  // keyframeDatesFor header on why this isn't 9 separate per-field dots.
+  const handleKeyCameraPose = async (cameraId: string, date: Date, pose: CameraPose) => {
+    await Promise.all([
+      elementKeyframes.upsert('camera', cameraId, 'pos_x', date, pose.base_position_x),
+      elementKeyframes.upsert('camera', cameraId, 'pos_y', date, pose.base_position_y),
+      elementKeyframes.upsert('camera', cameraId, 'pos_z', date, pose.base_position_z),
+      elementKeyframes.upsert('camera', cameraId, 'target_x', date, pose.base_target_x),
+      elementKeyframes.upsert('camera', cameraId, 'target_y', date, pose.base_target_y),
+      elementKeyframes.upsert('camera', cameraId, 'target_z', date, pose.base_target_z),
+      elementKeyframes.upsert('camera', cameraId, 'focal_length', date, pose.base_focal_length),
+      elementKeyframes.upsert('camera', cameraId, 'clip_start', date, pose.base_clip_start),
+      elementKeyframes.upsert('camera', cameraId, 'clip_end', date, pose.base_clip_end),
+    ])
+  }
+  const handleDeleteCameraKeyframeDate = async (cameraId: string, dateIso: string) => {
+    const matching = elementKeyframes.keyframes.filter(
+      k => k.source_kind === 'camera' && k.element_ref === cameraId && k.date === dateIso
+    )
+    await Promise.all(matching.map(k => elementKeyframes.remove(k.id)))
+  }
+  // Keyframe-click-to-seek (2026-08-03, per Maro: "clicking it doesnt take
+  // me to the time/frame, just able to delete it") — CamerasPanel.tsx is a
+  // sibling of TimelineWindow.tsx (both live under FourD.tsx's own
+  // SideDock/dockable-window registration), with no direct access to
+  // TimelineWindow's own internal scrubber state, so this is the same
+  // "lift shared state up, prop-drill back down" pattern already used for
+  // speedDaysPerSecond/timeDisplayMode/fps above. token is a fresh value
+  // per request (not just the date) so re-seeking to the exact same
+  // already-current date — e.g. clicking the same keyframe twice — still
+  // fires TimelineWindow's own consuming effect; see that effect's own
+  // comment for why a raw Date dependency wouldn't reliably do this.
+  const [timelineSeekRequest, setTimelineSeekRequest] = useState<{ date: Date; token: number } | null>(null)
+  const handleSeekTimelineTo = (date: Date) => {
+    timelineDateRef.current = date
+    setTimelineSeekRequest({ date, token: Date.now() })
+  }
+
   // Reusable animation recipes (2026-07-11, per Maro — see
   // animationProfiles.ts's own header for the Bonsai/Blender-add-on
   // reference) — a library, not a per-link fetch, so it's loaded once here
@@ -1547,20 +1637,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // frame; forcing a React re-render for that would be its own
   // performance problem).
   const cameraSyncRef = useRef<CameraSyncState | null>(null)
-  // Include Baseline (2026-07-24, per Maro: "an option to include the
-  // baseline 3d while capturing still and video. so side by side") —
-  // baselineCanvasRef is a plain ref (not state — same reasoning as
-  // cameraSyncRef just above: this is a stable DOM node reference, not
-  // something that should trigger a re-render when it's set), written by
-  // BaselineViewportPane.tsx's own CaptureCanvas the moment its Canvas
-  // mounts, and read by Viewport3D.tsx's own handleCaptureImage/
-  // handleExportVideo to composite the two panes together.
-  // baselineDprMultiplier IS state (unlike the ref above) because it needs
-  // to actually change BaselineViewportPane's own Canvas `dpr` prop when a
-  // capture starts/ends — mirrors Viewport3D.tsx's own internal
+  // Multi-viewport Compare Baseline (2026-08-03, generalizing the original
+  // single "Include Baseline" pane per Maro: "compare baseline goes beyond
+  // just the one baseline view") — up to MAX_COMPARISON_PANES extra
+  // ComparisonViewportPane.tsx docks can be open at once, each with its
+  // own real WebGL canvas; a fixed-size array of plain refs (not state —
+  // same reasoning cameraSyncRef above already documents: stable DOM node
+  // references, not something that should trigger a re-render when set),
+  // one per pane *slot* (not per active pane — React's rules of hooks mean
+  // this can't be created dynamically), written by each active pane's own
+  // CaptureCanvas the moment its Canvas mounts, read by Viewport3D.tsx's
+  // own handleCaptureImage/handleExportVideo to composite every active
+  // pane alongside the main one.
+  // baselineDprMultiplier IS state (unlike the refs above) because it
+  // needs to actually change every active pane's own Canvas `dpr` prop
+  // when a capture starts/ends — mirrors Viewport3D.tsx's own internal
   // captureDprMultiplier out via its onCaptureQualityChange callback prop,
-  // so both panes render at the same boosted resolution during a capture.
-  const baselineCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // so every pane renders at the same boosted resolution during a
+  // capture, same "boost every pane together" convention as before.
+  const MAX_COMPARISON_PANES = 3
+  const comparisonCanvasRefs = [
+    useRef<HTMLCanvasElement | null>(null),
+    useRef<HTMLCanvasElement | null>(null),
+    useRef<HTMLCanvasElement | null>(null),
+  ]
   const [baselineDprMultiplier, setBaselineDprMultiplier] = useState<number | null>(null)
   // Mirrors Viewport3D.tsx's own captureBackgroundOverride the same way
   // baselineDprMultiplier just above mirrors captureDprMultiplier
@@ -1832,6 +1932,33 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setCameraPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(CAMERA_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Cameras panel (2026-08-03, per Maro: "add separate cameras
+  // and play the animation and see the transitions") — same shared-
+  // side-dock treatment as Camera Views/Section Box/Animation Profiles
+  // above; a distinct id/label from Camera Views' own 'cameras' since
+  // they're two different features (see camera.py's own docstring).
+  const [camerasPanelOpen, setCamerasPanelOpen] = useState(() => loadPanelOpen(CAMERAS_PANEL_OPEN_KEY, false))
+  const toggleCamerasPanel = () => {
+    setCamerasPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(CAMERAS_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [camerasPanelDock, setCamerasPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(CAMERAS_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleCamerasPanelDock = () => {
+    setCamerasPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(CAMERAS_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -2248,25 +2375,54 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // SplitRow's own count-mismatch effect first populates them.
   const [topSplitRatios, setTopSplitRatios] = useState<number[]>([])
   const [bottomSplitRatios, setBottomSplitRatios] = useState<number[]>([])
-  // Baseline vs Actual compare (2026-07-12, per Maro's "advanced 4D"
-  // baselining/variance request) — a second, read-only BaselineViewportPane
-  // docked alongside the real Viewport3D via the same SplitRow used for
-  // the top/bottom window docks above. Deliberately plain localStorage,
-  // not folded into the backend DockLayoutConfig system those two ratios
-  // belong to — this is a per-browser view preference, not part of a named,
-  // shareable dock arrangement, and doesn't warrant its own backend schema
-  // change for a first pass.
-  const [compareBaselineOpen, setCompareBaselineOpen] = useState(() => {
-    try { return localStorage.getItem('prosota_4d_compare_baseline_open') === 'true' } catch { return false }
+  // Compare Baseline, generalized (2026-08-03, per Maro: "compare baseline
+  // goes beyond just the one baseline view") — up to MAX_COMPARISON_PANES
+  // read-only ComparisonViewportPane.tsx docks alongside the real
+  // Viewport3D via the same SplitRow used for the top/bottom window docks
+  // above (nesting a second, column-oriented SplitRow for the stacked
+  // slot once more than one extra pane is open — see the render JSX
+  // below). Deliberately plain localStorage, not folded into the backend
+  // DockLayoutConfig system those two window-dock ratios belong to — this
+  // is a per-browser view preference, not part of a named, shareable dock
+  // arrangement, and doesn't warrant its own backend schema change for a
+  // first pass (confirmed with Maro).
+  const COMPARISON_PANES_KEY = 'prosota_4d_comparison_panes'
+  const [paneConfigs, setPaneConfigs] = useState<PaneConfig[]>(() => {
+    try {
+      const raw = localStorage.getItem(COMPARISON_PANES_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.slice(0, MAX_COMPARISON_PANES) : []
+    } catch {
+      return []
+    }
   })
+  const savePaneConfigs = (next: PaneConfig[]) => {
+    setPaneConfigs(next)
+    try { localStorage.setItem(COMPARISON_PANES_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+  }
+  // Keeps the original single-click toggle's exact muscle memory: off ->
+  // exactly one pane, defaulting to Baseline mode; on (with any number of
+  // panes open) -> closes all of them. Adding a 2nd/3rd pane afterward is
+  // the separate "+" control below.
   const toggleCompareBaseline = () => {
-    setCompareBaselineOpen(prev => {
-      const next = !prev
-      try { localStorage.setItem('prosota_4d_compare_baseline_open', String(next)) } catch { /* ignore */ }
-      return next
-    })
+    savePaneConfigs(paneConfigs.length > 0 ? [] : [DEFAULT_PANE_CONFIG])
+  }
+  const addComparisonPane = () => {
+    if (paneConfigs.length >= MAX_COMPARISON_PANES) return
+    savePaneConfigs([...paneConfigs, DEFAULT_PANE_CONFIG])
+  }
+  const removeComparisonPane = (index: number) => {
+    savePaneConfigs(paneConfigs.filter((_, i) => i !== index))
+  }
+  const updatePaneConfig = (index: number, config: PaneConfig) => {
+    savePaneConfigs(paneConfigs.map((c, i) => (i === index ? config : c)))
   }
   const [compareSplitRatios, setCompareSplitRatios] = useState<number[]>([])
+  // Top/bottom (or middle) split ratios *within* the stacked slot, only
+  // meaningful once 2+ extra panes are open — same SplitRow ratio-state
+  // convention as compareSplitRatios above, just for the nested column
+  // split instead of the outer row one.
+  const [paneColumnRatios, setPaneColumnRatios] = useState<number[]>([])
 
   // Named, saved dock-window arrangements (2026-07-11, per Maro: "at the
   // top, allow me to save layout, edit, delete") — same active-config-on-
@@ -2444,6 +2600,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [ifcHandles, setIfcHandles] = useState<IfcModelHandle[]>([])
   const getIfcHandleFor = (objectId: string | null | undefined): IfcModelHandle | null =>
     ifcHandles.find(h => `ifc-${h.modelID}` === objectId) ?? null
+
+  // One useResolvedPaneIsolation call per comparison-pane *slot* (2026-08-03,
+  // not per active pane — React's rules of hooks mean this can't be a
+  // variable-length loop). Each pane's own config, or DEFAULT_PANE_CONFIG
+  // ('baseline' mode, resolves to null/no-op) for an inactive slot — see
+  // comparisonPane.ts's own header for exactly what each contentMode
+  // resolves to.
+  const paneIsolations = [
+    useResolvedPaneIsolation(paneConfigs[0] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
+    useResolvedPaneIsolation(paneConfigs[1] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
+    useResolvedPaneIsolation(paneConfigs[2] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
+  ]
 
   // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i refresh, i
   // expect the elements i unloaded to stay unloaded... give me an option to
@@ -3601,12 +3769,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // either yet (PathsPanel.tsx/ZonesPanel.tsx have no selected-row
   // highlight), so this is a deliberate no-op for now rather than a gap —
   // same treatment as 'ifc' above, just for a different reason.
-  const handleSelectActor = (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone', elementRef: string) => {
+  const handleSelectActor = (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone' | 'camera', elementRef: string) => {
     if (sourceKind === 'mesh') {
       const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === elementRef)
       if (match) handleSelectObject(match.id)
     } else if (sourceKind === 'annotation') {
       setSelectedAnnotationId(elementRef)
+    } else if (sourceKind === 'camera') {
+      const camera = cameras.find(c => c.id === elementRef)
+      if (camera) handleLookThroughCamera(camera)
     }
   }
 
@@ -5367,7 +5538,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             animationProfiles={animationProfiles.profiles}
             paths={paths}
             zones={zones}
+            cameras={cameras}
             onSelectActor={handleSelectActor}
+            seekRequest={timelineSeekRequest}
             speedDaysPerSecond={speedDaysPerSecond}
             onSpeedChange={setSpeedDaysPerSecond}
             timeDisplayMode={timeDisplayMode}
@@ -5407,7 +5580,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                 onClick={() => { refetchPeriod(); refreshSchedule() }}
                 disabled={scheduleLoading}
                 title="Refresh schedule data from the server"
-                className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-50"
               >
                 {scheduleLoading ? '…' : '⟳'}
               </button>
@@ -5423,7 +5596,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                 onClick={handleIsolateLinkedElements}
                 disabled={isolatingLinked}
                 title="Isolate the 3D/IFC elements linked to the selected activit(y/ies)"
-                className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
               >
                 {isolatingLinked ? 'Isolating…' : 'Isolate Linked'}
               </button>
@@ -5436,6 +5609,52 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       >
         {renderWindowContent(key)}
       </WindowChrome>
+    )
+  }
+
+  // One ComparisonViewportPane per active slot (2026-08-03) — see
+  // paneConfigs' own header for the "why", and comparisonPane.ts for what
+  // each contentMode actually resolves to. `active`/props mirrored from
+  // the main Viewport3D's own render call just below in the JSX.
+  function renderComparisonPane(index: number) {
+    const config = paneConfigs[index]
+    return (
+      <ComparisonViewportPane
+        key={index}
+        importedObjects={viewportObjects}
+        timelineSceneObjects={sceneObjects}
+        ifcHandles={ifcHandles}
+        upAxis={settings.upAxis}
+        fieldOfView={settings.fieldOfView}
+        clipStart={settings.clipStart}
+        clipEnd={settings.clipEnd}
+        environmentUrl={customEnvironment?.url ?? null}
+        environmentBackground={settings.environmentBackground}
+        whiteBackground={settings.whiteBackground}
+        shadows={settings.shadows}
+        sunAzimuth={settings.sunAzimuth}
+        sunElevation={settings.sunElevation}
+        captureBackgroundOverride={baselineBackgroundOverride}
+        timelineDateRef={timelineDateRef}
+        cameraSyncRef={cameraSyncRef}
+        canvasRef={comparisonCanvasRefs[index]}
+        dprMultiplier={baselineDprMultiplier}
+        activities={activities}
+        links={modelElementLinks}
+        profiles={animationProfiles.profiles}
+        elementKeyframes={elementKeyframes.keyframes}
+        paths={resolvedPaths}
+        pathFollowers={pathFollowers}
+        active={active}
+        isolation={config.contentMode === 'baseline' ? null : paneIsolations[index]}
+        dateField={config.contentMode === 'baseline' ? 'baseline' : 'live'}
+        config={config}
+        onConfigChange={next => updatePaneConfig(index, next)}
+        onClose={() => removeComparisonPane(index)}
+        collections={collections}
+        udfDefinitions={activityUdfDefinitions.definitions}
+        getUdfValue={activityUdfValues.getValue}
+      />
     )
   }
 
@@ -5494,6 +5713,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onApply={handleApplyCameraView}
           onRename={handleRenameCameraView}
           onDelete={handleDeleteCameraView}
+        />
+      ),
+    })
+  }
+  if (camerasPanelOpen) {
+    dockablePanels.push({
+      id: 'cinematic-cameras', label: 'Cameras', dock: camerasPanelDock,
+      onToggleDock: toggleCamerasPanelDock, onClose: toggleCamerasPanel,
+      content: (
+        <CamerasPanel
+          cameras={cameras}
+          activeCameraId={activeCameraId}
+          error={cameraError}
+          elementKeyframes={elementKeyframes.keyframes}
+          format={timelineRange ? { scheduleStart: timelineRange.start, timeDisplayMode, speedDaysPerSecond, fps } : null}
+          onLookThrough={handleLookThroughCamera}
+          onExitLookThrough={handleExitCameraView}
+          onRename={handleRenameCamera}
+          onDelete={handleDeleteCamera}
+          onUpdateBase={handleUpdateCameraBase}
+          onDeleteKeyframeDate={handleDeleteCameraKeyframeDate}
+          onSeekTo={handleSeekTimelineTo}
         />
       ),
     })
@@ -5728,9 +5969,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Pulled out to a plain variable (2026-07-12, per the Compare Baseline
   // feature below) rather than inlined in the JSX — needs to render in one
-  // of two different structural positions (standalone, or as SplitRow's
-  // first child alongside BaselineViewportPane) depending on
-  // compareBaselineOpen, and JSX itself can't express "reuse this exact
+  // of several different structural positions (standalone, or as
+  // SplitRow's first child alongside one or more ComparisonViewportPane
+  // panes) depending on how many comparison panes are open
+  // (paneConfigs.length), and JSX itself can't express "reuse this exact
   // element in two different spots" without either a variable or
   // duplicating the entire prop list.
   const viewport3DElement = (
@@ -5778,8 +6020,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       customTextures={customTextures}
       customOpacity={customOpacity}
       cameraSyncRef={cameraSyncRef}
-      compareBaselineOpen={compareBaselineOpen}
-      baselineCanvasRef={baselineCanvasRef}
+      comparisonCanvasRefs={comparisonCanvasRefs.slice(0, paneConfigs.length)}
       onCaptureQualityChange={setBaselineDprMultiplier}
       onCaptureBackgroundChange={setBaselineBackgroundOverride}
       costProfileBuckets={costProfileBuckets}
@@ -5803,6 +6044,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       sectionBoxTool={sectionBoxTool}
       onSaveCameraView={handleSaveCameraView}
       applyCameraViewRequest={applyCameraViewRequest}
+      cameras={cameras}
+      activeCameraId={activeCameraId}
+      onAddCamera={handleAddCamera}
+      onExitCameraView={handleExitCameraView}
+      onKeyCameraPose={handleKeyCameraPose}
       onExportVideo={handleExportVideoUpload}
       paths={resolvedPaths}
       pathAnimWindows={pathAnimWindows}
@@ -5856,14 +6102,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   return (
     <div className="h-screen flex flex-col">
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-white shrink-0 flex-wrap">
-        <h1 className="text-sm font-bold text-gray-900 mr-2">4D</h1>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel shrink-0 flex-wrap">
+        <h1 className="text-sm font-bold text-gray-900 dark:text-prosota-paper mr-2">4D</h1>
         {ALL_WINDOW_KEYS.map(key => (
           <button
             key={key}
             onClick={() => toggleWindow(key)}
             className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-              openWindows.has(key) ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              openWindows.has(key) ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             {WINDOW_LABELS[key]}
@@ -5882,7 +6128,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={toggleProfilePanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            profilePanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            profilePanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Profiles
@@ -5890,7 +6136,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={toggleSectionPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            sectionPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            sectionPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Sections
@@ -5898,15 +6144,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={toggleCameraPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            cameraPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            cameraPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Camera Views
         </button>
         <button
+          onClick={toggleCamerasPanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            camerasPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
+          }`}
+        >
+          Cameras
+        </button>
+        <button
           onClick={toggleCollectionsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            collectionsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            collectionsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Collections
@@ -5915,7 +6169,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClick={toggleSplitPanel}
           title="Split a selected element by level — cut a tall vertical element into independently-linkable, independently-animating per-storey pieces"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            splitPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            splitPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Split by Level
@@ -5923,7 +6177,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={togglePathsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            pathsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            pathsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Paths
@@ -5932,7 +6186,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClick={toggleZonesPanel}
           title="Filled, labeled ground-plane areas — project boundary, laydown/exclusion zones"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            zonesPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            zonesPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Zones
@@ -5941,7 +6195,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClick={toggleRadialChartsPanel}
           title="Draggable radial progress-ring HUD overlays, e.g. one per discipline, filterable by a User Defined Field"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            radialChartsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            radialChartsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Radial Charts
@@ -5951,7 +6205,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           disabled={!timelineStrip}
           title="A draggable year/month timeline HUD strip with a live playhead"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
-            timelineStripPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            timelineStripPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Timeline Strip
@@ -5959,7 +6213,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={toggleAnnotationsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            annotationsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            annotationsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           3D Notations
@@ -5967,7 +6221,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <button
           onClick={toggleClashPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            clashPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            clashPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Clash Detective
@@ -5976,7 +6230,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClick={toggleRigPanel}
           title="Rig one part as the child of another (crane base -> jib -> trolley -> hook) — rotating/moving the parent carries the child along"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            rigPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            rigPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Rigging
@@ -5985,31 +6239,40 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onClick={toggleMeasurementsPanel}
           title="Measure a length between 2 points, an area across several, or an area straight off a clicked element surface"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            measurementsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            measurementsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Measure
         </button>
         <button
           onClick={toggleCompareBaseline}
-          title="Dock a second, read-only viewport showing the same model animated from the currently-assigned baseline's dates, alongside this one"
+          title="Dock a second, read-only viewport alongside this one — Baseline by default, or set it to isolate a Collection/UDF/WBS scope instead (see the pane's own header controls)"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
-            compareBaselineOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            paneConfigs.length > 0 ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Compare Baseline
         </button>
+        {paneConfigs.length > 0 && paneConfigs.length < MAX_COMPARISON_PANES && (
+          <button
+            onClick={addComparisonPane}
+            title="Add another comparison viewport (up to 3 total, stacked on the right)"
+            className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 font-medium"
+          >
+            +
+          </button>
+        )}
         <div className="w-px h-4 bg-gray-200 mx-1" />
         <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" multiple onChange={handleFileSelected} className="hidden" />
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}
           title="Import a GLTF/GLB, OBJ, FBX, or IFC model into the viewport. Exporting from Revit? File type IFC (not IfcXML/zip) — turn on Export base quantities (Property Sets tab) and Keep Tessellated Geometry as Triangulation (Advanced tab)."
-          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
         >
           ⬆ Import Model
         </button>
-        {importing && uploadProgress.size === 0 && <span className="text-xs text-gray-400">Importing…</span>}
+        {importing && uploadProgress.size === 0 && <span className="text-xs text-gray-400 dark:text-prosota-muted">Importing…</span>}
         {/* Visible counterpart to the beforeunload guard above (2026-07-17,
             per Maro: "force a save and recall ifc after every refresh") —
             the browser prompt only ever fires at the moment of an actual
@@ -6031,13 +6294,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           <button
             onClick={() => setScheduleWizardOpen(true)}
             title="Scan the loaded IFC model's structural elements and generate a first-draft, resource-loaded schedule from them"
-            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           >
             Generate Schedule
           </button>
         )}
-        {textureError && <span className="text-xs text-red-600">{textureError}</span>}
-        {linkError && <span className="text-xs text-red-600">{linkError}</span>}
+        {textureError && <span className="text-xs text-red-600 dark:text-red-400">{textureError}</span>}
+        {linkError && <span className="text-xs text-red-600 dark:text-red-400">{linkError}</span>}
         {/* A collapsed badge, not a stack of permanent full-width banners
             (2026-07-28, per Maro: "dont print that nonsense any more, its
             unsightly" — see ImportErrorsBadge.tsx's own header). Same
@@ -6117,37 +6380,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             </>
           )}
 
-          {compareBaselineOpen ? (
+          {paneConfigs.length > 0 ? (
             <SplitRow ratios={compareSplitRatios} onRatiosChange={setCompareSplitRatios}>
               {[
                 viewport3DElement,
-                <BaselineViewportPane
-                  key="baseline"
-                  importedObjects={viewportObjects}
-                  timelineSceneObjects={sceneObjects}
-                  ifcHandles={ifcHandles}
-                  upAxis={settings.upAxis}
-                  fieldOfView={settings.fieldOfView}
-                  clipStart={settings.clipStart}
-                  clipEnd={settings.clipEnd}
-                  environmentUrl={customEnvironment?.url ?? null}
-                  environmentBackground={settings.environmentBackground}
-                  whiteBackground={settings.whiteBackground}
-                  shadows={settings.shadows}
-                  sunAzimuth={settings.sunAzimuth}
-                  sunElevation={settings.sunElevation}
-                  captureBackgroundOverride={baselineBackgroundOverride}
-                  timelineDateRef={timelineDateRef}
-                  cameraSyncRef={cameraSyncRef}
-                  baselineCanvasRef={baselineCanvasRef}
-                  dprMultiplier={baselineDprMultiplier}
-                  activities={activities}
-                  links={modelElementLinks}
-                  profiles={animationProfiles.profiles}
-                  elementKeyframes={elementKeyframes.keyframes}
-                  paths={resolvedPaths}
-                  pathFollowers={pathFollowers}
-                />,
+                paneConfigs.length === 1
+                  ? renderComparisonPane(0)
+                  : (
+                    <SplitRow key="comparison-stack" orientation="column" ratios={paneColumnRatios} onRatiosChange={setPaneColumnRatios}>
+                      {paneConfigs.map((_, index) => renderComparisonPane(index))}
+                    </SplitRow>
+                  ),
               ]}
             </SplitRow>
           ) : viewport3DElement}

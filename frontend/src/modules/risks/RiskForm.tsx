@@ -118,9 +118,9 @@ interface RiskFormProps {
 }
 
 const inputClass =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
-const labelClass = 'block text-xs font-medium text-gray-600 mb-1'
-const sectionClass = 'text-xs font-semibold text-gray-500 uppercase tracking-wide pt-2 border-t border-gray-100 first:pt-0 first:border-0'
+  'w-full border border-gray-300 dark:border-prosota-line rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+const labelClass = 'block text-xs font-medium text-gray-600 dark:text-prosota-muted mb-1'
+const sectionClass = 'text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide pt-2 border-t border-gray-100 dark:border-prosota-line first:pt-0 first:border-0'
 
 export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
   const [values, setValues] = useState<RiskFormValues>(() => toFormValues(risk))
@@ -155,12 +155,12 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="bg-white border border-gray-200 rounded-lg p-5 space-y-4 mb-6"
+      className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 space-y-4 mb-6"
     >
-      <h2 className="font-medium text-gray-900 text-sm">{risk ? 'Edit risk' : 'New risk'}</h2>
+      <h2 className="font-medium text-gray-900 dark:text-prosota-paper text-sm">{risk ? 'Edit risk' : 'New risk'}</h2>
 
       {error && (
-        <div className="p-2 bg-red-50 border border-red-200 rounded-md text-red-700 text-xs">
+        <div className="p-2 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-xs">
           {error}
         </div>
       )}
@@ -197,7 +197,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             <option value="threat">Threat</option>
             <option value="opportunity">Opportunity</option>
           </select>
-          <p className="text-xs text-gray-400 mt-1">Threats cost/delay the project if realized; opportunities save money/time.</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Threats cost/delay the project if realized; opportunities save money/time.</p>
         </div>
         <div>
           <label className={labelClass}>Risk owner</label>
@@ -262,7 +262,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             onChange={e => set('expected_impact_date', e.target.value)}
             className={inputClass}
           />
-          <p className="text-xs text-gray-400 mt-1">When the risk is expected to occur/materialise, if it does.</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">When the risk is expected to occur/materialise, if it does.</p>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -274,7 +274,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             onChange={e => set('last_reviewed_date', e.target.value)}
             className={inputClass}
           />
-          <p className="text-xs text-gray-400 mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
         </div>
         <div>
           <label className={labelClass}>Date closed</label>
@@ -332,7 +332,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             className={inputClass}
             placeholder="0.65"
           />
-          <p className="text-xs text-gray-400 mt-1">Likelihood the risk occurs — used for both the heat-map rating and EMV.</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Likelihood the risk occurs — used for both the heat-map rating and EMV.</p>
         </div>
         <div>
           <label className={labelClass}>Impact rating (0–1)</label>
@@ -343,11 +343,11 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             className={inputClass}
             placeholder="0.80"
           />
-          <p className="text-xs text-gray-400 mt-1">Qualitative severity score for the heat-map only (not money/time).</p>
+          <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Qualitative severity score for the heat-map only (not money/time).</p>
         </div>
       </div>
 
-      <p className="text-xs text-gray-500 -mt-2">Inherent (pre-mitigation) position, above. Residual (post-mitigation target), below.</p>
+      <p className="text-xs text-gray-500 dark:text-prosota-muted -mt-2">Inherent (pre-mitigation) position, above. Residual (post-mitigation target), below.</p>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -436,7 +436,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
           />
         </div>
       </div>
-      <p className="text-xs text-gray-400 -mt-2">
+      <p className="text-xs text-gray-400 dark:text-prosota-muted -mt-2">
         EMV (Expected Monetary Value = Probability x Impact) is calculated automatically from the Most Likely value —
         shown read-only in the table once saved. Min/Max give the range context only.
       </p>
@@ -455,7 +455,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">
           Options depend on risk type — {values.risk_type === 'threat' ? 'Avoid/Mitigate/Transfer/Escalate/Accept' : 'Exploit/Enhance/Share/Escalate/Accept'}.
         </p>
       </div>
@@ -493,7 +493,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
       </div>
 
       {hasTriggerChanges && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+        <div className="p-3 bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md">
           <label className={labelClass}>
             Probability, impact, or status changed — what changed and why? (optional, logged with today's date)
           </label>
@@ -518,7 +518,7 @@ export function RiskForm({ risk, onCancel, onSubmit }: RiskFormProps) {
         <button
           type="button"
           onClick={onCancel}
-          className="text-gray-500 px-4 py-2 rounded-md text-sm hover:bg-gray-100"
+          className="text-gray-500 dark:text-prosota-muted px-4 py-2 rounded-md text-sm hover:bg-gray-100 dark:hover:bg-prosota-panel2"
         >
           Cancel
         </button>

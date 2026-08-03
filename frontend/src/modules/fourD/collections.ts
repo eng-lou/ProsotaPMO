@@ -67,3 +67,31 @@ export async function addCollectionMember(data: {
 export async function removeCollectionMember(id: string): Promise<void> {
   await api.delete(`/api/v1/collection-members/${id}`)
 }
+
+// Recurse into nested sub-collections, same as Blender's own outliner
+// (right-click "Select Objects" on a collection selects its sub-
+// collections' contents too) — a parent collection with per-floor sub-
+// collections should still isolate every door at once, not just whichever
+// happen to be direct members. Lifted out of FourD.tsx's own local closure
+// (2026-08-03, for the multi-viewport Compare Baseline generalization) into
+// a plain function of `collections` — no other dependency — so a
+// comparison pane's own content resolution can call it directly instead of
+// duplicating the tree-flatten logic.
+export function flattenCollectionMemberRefs(
+  collectionId: string, collections: Collection[],
+): { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string }[] {
+  const subtreeIds = new Set<string>([collectionId])
+  const stack = [collectionId]
+  while (stack.length > 0) {
+    const current = stack.pop() as string
+    for (const c of collections) {
+      if (c.parent_collection_id === current && !subtreeIds.has(c.id)) {
+        subtreeIds.add(c.id)
+        stack.push(c.id)
+      }
+    }
+  }
+  return collections
+    .filter(c => subtreeIds.has(c.id))
+    .flatMap(c => c.members.map(m => ({ source_kind: m.source_kind, element_ref: m.element_ref })))
+}

@@ -74,21 +74,21 @@ export function PasteFieldsWidget({ source, targets, options, onApplied, onClose
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">📋</span>
-        <div className="font-bold text-sm">Paste from "{source.code}: {source.task_name}"</div>
-        <div className="text-xs text-gray-400">Choose which fields to apply to {targets.length} selected</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Paste from "{source.code}: {source.task_name}"</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Choose which fields to apply to {targets.length} selected</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 mb-4">
         {options.map(o => (
-          <label key={o.key} className="flex items-start gap-1.5 text-xs text-gray-600" title={o.hint}>
+          <label key={o.key} className="flex items-start gap-1.5 text-xs text-gray-600 dark:text-prosota-muted" title={o.hint}>
             <input type="checkbox" checked={!!checked[o.key]} onChange={() => toggle(o.key)} className="mt-0.5" />
             <span>
               {o.label}
-              {o.hint && <span className="block text-[10px] text-gray-400">{o.hint}</span>}
+              {o.hint && <span className="block text-[10px] text-gray-400 dark:text-prosota-muted">{o.hint}</span>}
             </span>
           </label>
         ))}
@@ -98,11 +98,11 @@ export function PasteFieldsWidget({ source, targets, options, onApplied, onClose
         <button
           onClick={handleApply}
           disabled={!anyChecked || applying}
-          className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50"
         >
           {applying ? 'Applying…' : `Apply to ${targets.length}`}
         </button>
-        <button onClick={onClose} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50">
+        <button onClick={onClose} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
           Cancel
         </button>
       </div>

@@ -128,7 +128,7 @@ export function ColorPickerPopover({ value, onChange, onClose }: { value: string
   return (
     <div
       ref={popoverRef}
-      className="absolute z-50 top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-48"
+      className="absolute z-50 top-full left-0 mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-48"
     >
       <div
         ref={squareRef}

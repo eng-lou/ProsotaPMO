@@ -39,7 +39,7 @@ function Item({
   return (
     <div
       onClick={onSelect}
-      className={`px-3 py-2 flex items-center gap-1.5 cursor-pointer ${selected ? 'bg-sky-50' : ''}`}
+      className={`px-3 py-2 flex items-center gap-1.5 cursor-pointer ${selected ? 'bg-sky-50 dark:bg-prosota-azure/15' : ''}`}
     >
       <input type="checkbox" checked={measurement.visible} onClick={e => e.stopPropagation()} onChange={onToggleVisible} title={measurement.visible ? 'Visible — click to hide' : 'Hidden — click to show'} />
       {editing ? (
@@ -53,15 +53,15 @@ function Item({
             if (e.key === 'Enter') commitRename()
             if (e.key === 'Escape') { setDraftName(measurement.name); setEditing(false) }
           }}
-          className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+          className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
         />
       ) : (
-        <span onDoubleClick={e => { e.stopPropagation(); setEditing(true) }} className="flex-1 text-xs text-gray-700 truncate cursor-text" title="Double-click to rename">
+        <span onDoubleClick={e => { e.stopPropagation(); setEditing(true) }} className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text" title="Double-click to rename">
           {measurement.name}
         </span>
       )}
-      <span className="text-xs text-gray-500 shrink-0">{formatMeasurementValue(measurement.kind, measurement.value, unitPreference)}</span>
-      <button onClick={e => { e.stopPropagation(); onDelete() }} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+      <span className="text-xs text-gray-500 dark:text-prosota-muted shrink-0">{formatMeasurementValue(measurement.kind, measurement.value, unitPreference)}</span>
+      <button onClick={e => { e.stopPropagation(); onDelete() }} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
     </div>
   )
 }
@@ -94,7 +94,7 @@ export function MeasurementsPanel({
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 sticky top-0 bg-white space-y-1.5">
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line sticky top-0 bg-white dark:bg-prosota-panel space-y-1.5">
         <div className="flex items-center gap-1.5 flex-wrap">
           {TOOL_OPTIONS.map(opt => (
             <button
@@ -102,7 +102,7 @@ export function MeasurementsPanel({
               onClick={() => onStart(opt.value)}
               title={opt.hint}
               className={`text-xs px-2 py-1 rounded border font-medium ${
-                measuringTool === opt.value ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                measuringTool === opt.value ? 'bg-sky-600 text-white border-sky-600' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
               }`}
             >
               {opt.label}
@@ -110,15 +110,15 @@ export function MeasurementsPanel({
           ))}
         </div>
         {measuringTool === 'length' && (
-          <p className="text-xs text-gray-500">Click 2 points in the viewport… ({measuringPointCount}/2)</p>
+          <p className="text-xs text-gray-500 dark:text-prosota-muted">Click 2 points in the viewport… ({measuringPointCount}/2)</p>
         )}
         {measuringTool === 'area_face' && (
-          <p className="text-xs text-gray-500">Click a flat element surface…</p>
+          <p className="text-xs text-gray-500 dark:text-prosota-muted">Click a flat element surface…</p>
         )}
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {measurements.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">Pick a tool above, then click in the viewport to take a measurement.</p>
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">Pick a tool above, then click in the viewport to take a measurement.</p>
       ) : (
         <div className="divide-y divide-gray-100">
           {measurements.map(m => (

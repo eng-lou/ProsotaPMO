@@ -73,22 +73,22 @@ export function ImportModelDialog({ files, kind, queuePosition, onConfirm, onCan
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
-      <div className="w-80 bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-800">Import Model</h3>
+      <div className="w-80 bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Import Model</h3>
           {queuePosition && (
-            <span className="text-[10px] text-gray-400">{queuePosition.remaining} more queued</span>
+            <span className="text-[10px] text-gray-400 dark:text-prosota-muted">{queuePosition.remaining} more queued</span>
           )}
         </div>
         <div className="px-4 py-3 space-y-3">
-          <div className="text-[11px] text-gray-400">
+          <div className="text-[11px] text-gray-400 dark:text-prosota-muted">
             {isMultiFile
               ? `${files.length} files — 3D mesh (GLTF/OBJ/FBX)`
               : `${files[0].name} — ${kind === 'ifc' ? 'IFC model' : '3D mesh (GLTF/OBJ/FBX)'}`}
           </div>
           <div>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Up Axis</div>
-            <p className="text-[11px] text-gray-400 mb-1.5">
+            <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1">Up Axis</div>
+            <p className="text-[11px] text-gray-400 dark:text-prosota-muted mb-1.5">
               Which axis {isMultiFile ? 'these files' : "this file's own geometry"} treat{isMultiFile ? '' : 's'} as "up" — pick wrong and the model{isMultiFile ? 's import' : ' imports'} on its side.
               {isMultiFile && ' Applies to every file in this batch.'}
             </p>
@@ -98,7 +98,7 @@ export function ImportModelDialog({ files, kind, queuePosition, onConfirm, onCan
                   key={axis}
                   onClick={() => setUpAxis(axis)}
                   className={`flex-1 text-xs px-2 py-1.5 rounded border font-medium ${
-                    upAxis === axis ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    upAxis === axis ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
                   }`}
                 >
                   {axis === 'z' ? 'Z up (Blender/CAD)' : 'Y up (three.js/glTF)'}
@@ -107,14 +107,14 @@ export function ImportModelDialog({ files, kind, queuePosition, onConfirm, onCan
             </div>
           </div>
           {supportsAnimation && (
-            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 dark:text-prosota-muted cursor-pointer">
               <input type="checkbox" checked={includeAnimation} onChange={e => setIncludeAnimation(e.target.checked)} />
               Convert this file's animation into keyframes, if it has any
             </label>
           )}
         </div>
-        <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
-          <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+        <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-end gap-2">
+          <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
             Cancel
           </button>
           <button

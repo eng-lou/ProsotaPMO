@@ -1,4 +1,5 @@
 import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useTheme } from '@/lib/ThemeContext'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { groupAssignmentsByActivityId } from '@/lib/resourceLabel'
 import { formatDateTime } from './dateTime'
@@ -199,6 +200,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   selectedActivityIds,
   onSelectActivity,
 }, ref) {
+  const { theme } = useTheme()
   const bodyWrapperRef = useRef<HTMLDivElement>(null)
 
   // Row virtualization (2026-07-17 perf fix) — see this file's own
@@ -378,7 +380,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
 
   const header = (
     <div
-      className="relative border-b border-gray-200 bg-gray-50"
+      className="relative border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2"
       style={{ height: HEADER_HEIGHT, width, cursor: onZoomChange ? 'ew-resize' : undefined }}
       onMouseDown={handleHeaderMouseDown}
       title={onZoomChange ? 'Drag to zoom the timescale' : undefined}
@@ -386,7 +388,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
       {timeMarks.map(m => (
         <div
           key={m.offset}
-          className="absolute top-0 border-l border-gray-200 pl-1 text-gray-400"
+          className="absolute top-0 border-l border-gray-200 dark:border-prosota-line pl-1 text-gray-400 dark:text-prosota-muted"
           style={{ left: m.offset * dayWidth, height: HEADER_HEIGHT, lineHeight: `${HEADER_HEIGHT}px`, fontSize: style.gantt_font_size }}
         >
           {m.label}
@@ -402,15 +404,15 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
           return i % 2 === 1 && (
             <div
               key={`stripe-${a.id}`}
-              className="absolute bg-gray-50/70"
-              style={{ top: i * GANTT_ROW_HEIGHT, left: 0, width, height: GANTT_ROW_HEIGHT }}
+              className="absolute"
+              style={{ top: i * GANTT_ROW_HEIGHT, left: 0, width, height: GANTT_ROW_HEIGHT, backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(249,250,251,0.7)' }}
             />
           )
         })}
         <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
           <defs>
             <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
+              <path d="M0,0 L8,4 L0,8 Z" fill={theme === 'dark' ? '#64748b' : '#94a3b8'} />
             </marker>
             <marker id="gantt-arrow-critical" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0,0 L8,4 L0,8 Z" fill={style.critical_color} />
@@ -420,7 +422,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
             <line
               key={`grid-${m.offset}`}
               x1={m.offset * dayWidth} y1={0} x2={m.offset * dayWidth} y2={height}
-              stroke="#e5e7eb" strokeWidth={1}
+              stroke={theme === 'dark' ? '#1C3049' : '#e5e7eb'} strokeWidth={1}
             />
           ))}
           {todayOffset !== null && (
@@ -471,7 +473,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
             return (
               <div
                 key={`bl-${a.id}`}
-                className="absolute rotate-45 border-2 bg-white"
+                className="absolute rotate-45 border-2 bg-white dark:bg-prosota-panel"
                 style={{
                   top: bl.top + BASELINE_CENTER_Y - BASELINE_MILESTONE_SIZE / 2,
                   left: bl.left - BASELINE_MILESTONE_SIZE / 2,
@@ -531,7 +533,7 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
           // nested inside the other.
           const labelEl = label && (
             <div
-              className="absolute text-gray-500 whitespace-nowrap pointer-events-none"
+              className="absolute text-gray-500 dark:text-prosota-muted whitespace-nowrap pointer-events-none"
               style={{ top: geo.centerY - 7, left: geo.right + LABEL_GAP, fontSize: style.gantt_font_size }}
             >
               {label}

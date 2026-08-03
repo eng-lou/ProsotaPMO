@@ -42,8 +42,8 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
   const ownLinks = links.filter(l => l.source_kind === 'mesh' && l.element_ref === item.name)
   return (
     <div>
-      <div className={`flex items-center gap-1.5 px-3 py-2 ${selected ? 'bg-blue-50' : ''}`}>
-        <button onClick={() => setExpanded(v => !v)} title="Activity link" className="text-gray-400 w-3 shrink-0">
+      <div className={`flex items-center gap-1.5 px-3 py-2 ${selected ? 'bg-blue-50 dark:bg-prosota-azure/15' : ''}`}>
+        <button onClick={() => setExpanded(v => !v)} title="Activity link" className="text-gray-400 dark:text-prosota-muted w-3 shrink-0">
           {expanded ? '▾' : '▸'}
         </button>
         <input
@@ -60,7 +60,7 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
         />
         <span
           onClick={e => onSelect(e.ctrlKey || e.metaKey)}
-          className={`flex-1 text-xs truncate cursor-pointer ${hidden ? 'text-gray-300' : 'text-gray-700'}`}
+          className={`flex-1 text-xs truncate cursor-pointer ${hidden ? 'text-gray-300 dark:text-prosota-line' : 'text-gray-700 dark:text-prosota-muted'}`}
           title={item.name}
         >
           {item.name}
@@ -73,8 +73,8 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
             ⚠ unsaved
           </span>
         )}
-        {ownLinks.length > 0 && <span className="text-[10px] text-gray-400 shrink-0">{ownLinks.length} linked</span>}
-        <button onClick={onUnload} title="Unload" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        {ownLinks.length > 0 && <span className="text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{ownLinks.length} linked</span>}
+        <button onClick={onUnload} title="Unload" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
       {expanded && (
         <div className="pl-7 pr-3 pb-2">
@@ -107,7 +107,7 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
 export function MeshDataPanel({ items, hiddenIds, onToggleVisible, onUnload, selectedObjectIds, onSelectObject, unsavedObjectIds, activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile }: Props) {
   if (items.length === 0) {
     return (
-      <div className="flex-1 p-3 text-xs text-gray-400">
+      <div className="flex-1 p-3 text-xs text-gray-400 dark:text-prosota-muted">
         Use "Import 3D" to bring in a GLTF/GLB, OBJ, or FBX model and manage it here.
       </div>
     )

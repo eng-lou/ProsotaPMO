@@ -148,7 +148,7 @@ function sameDay(a: Date, b: Date): boolean {
 }
 
 function SectionLabel({ label }: { label: string }) {
-  return <div className="px-3 pt-2 pb-0.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide">{label}</div>
+  return <div className="px-3 pt-2 pb-0.5 text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">{label}</div>
 }
 
 // Three states, mirroring Blender's own diamond marker: 'exact' (a keyframe
@@ -161,20 +161,20 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 }) {
   return (
     <div className="flex items-center gap-1.5 px-3 py-0.5">
-      <span className="w-3 text-[11px] text-gray-400 shrink-0">{axisLabel}</span>
+      <span className="w-3 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">{axisLabel}</span>
       <ResettableNumberInput
         step={0.1}
         value={Number.isFinite(value) ? Number(value.toFixed(3)) : 0}
         defaultValue={resetValue}
         disabled={locked}
         onChange={onChange}
-        className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right disabled:bg-gray-50 disabled:text-gray-400"
+        className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right disabled:bg-gray-50 dark:disabled:bg-prosota-ink disabled:text-gray-400 dark:disabled:text-prosota-line"
       />
-      <span className="w-4 text-[10px] text-gray-400 shrink-0">{suffix}</span>
+      <span className="w-4 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{suffix}</span>
       <button
         onClick={onToggleLock}
         title={locked ? 'Unlock this field' : 'Lock this field'}
-        className={`shrink-0 text-xs ${locked ? 'text-gray-700' : 'text-gray-300 hover:text-gray-500'}`}
+        className={`shrink-0 text-xs ${locked ? 'text-gray-700 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line hover:text-gray-500'}`}
       >
         {locked ? '🔒' : '🔓'}
       </button>
@@ -190,8 +190,8 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
         }
         className={`shrink-0 w-2.5 h-2.5 rounded-full border disabled:cursor-not-allowed disabled:opacity-40 ${
           keyState === 'exact' ? 'bg-amber-500 border-amber-600'
-          : keyState === 'other' ? 'bg-white border-amber-500'
-          : 'border-gray-300 hover:border-gray-500'
+          : keyState === 'other' ? 'bg-white dark:bg-prosota-panel border-amber-500'
+          : 'border-gray-300 dark:border-prosota-line hover:border-gray-500'
         }`}
       />
     </div>
@@ -266,7 +266,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
             key={m}
             onClick={() => onModeChange(m)}
             className={`flex-1 text-[11px] px-1.5 py-1 rounded border font-medium ${
-              mode === m ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+              mode === m ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-500 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             {m === 'translate' ? 'Move' : m === 'rotate' ? 'Rotate' : 'Scale'}
@@ -282,7 +282,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
             onClick={() => onEditPivotChange(!editPivot)}
             title="Drag Move/Rotate to redefine the pivot itself instead of moving the object — the object stays put, only its origin (and this gizmo) moves"
             className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-              editPivot ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+              editPivot ? 'bg-amber-600 text-white border-amber-600' : 'bg-white dark:bg-prosota-panel text-gray-400 dark:text-prosota-muted border-gray-200 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             {editPivot ? '✓ Edit Pivot' : 'Edit Pivot'}
@@ -302,7 +302,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
               onClick={() => onSpaceChange(s)}
               title={s === 'local' ? "Drag along the object's own axes (including any Pivot Rotation set below)" : 'Drag along the fixed world axes'}
               className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-                space === s ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+                space === s ? 'bg-gray-700 text-white border-gray-700' : 'bg-white dark:bg-prosota-panel text-gray-400 dark:text-prosota-muted border-gray-200 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
               }`}
             >
               {s === 'world' ? 'Global' : 'Local'}
@@ -324,8 +324,8 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
             onClick={() => onSnapToSurfaceChange(!snapToSurface)}
             disabled={editPivot}
             title={editPivot ? 'Not available while Edit Pivot is on' : 'While dragging, rest this object on whatever other geometry is directly underneath it'}
-            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium disabled:opacity-40 disabled:hover:bg-white ${
-              snapToSurface ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
+            className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium disabled:opacity-40 disabled:hover:bg-white dark:disabled:hover:bg-prosota-panel ${
+              snapToSurface ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white dark:bg-prosota-panel text-gray-400 dark:text-prosota-muted border-gray-200 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             {snapToSurface ? '✓ Snap to Surface' : 'Snap to Surface'}
@@ -355,7 +355,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           Rotation/Scale since it's the thing that changes what those three
           sections actually mean, not a peer of them. */}
       <SectionLabel label="Pivot" />
-      <p className="px-3 pb-1 text-[10px] text-gray-400">
+      <p className="px-3 pb-1 text-[10px] text-gray-400 dark:text-prosota-muted">
         Where rotation/scale pivots from — moves the origin, not the geometry.
       </p>
       {AXES.map(axis => {
@@ -364,7 +364,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
         const displayValue = toDisplayLength(sign * current, lengthUnitToMetres, unitDisplay)
         return (
           <div key={`pivot-${axis}`} className="flex items-center gap-1.5 px-3 py-0.5">
-            <span className="w-3 text-[11px] text-gray-400 shrink-0">{axis.toUpperCase()}</span>
+            <span className="w-3 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">{axis.toUpperCase()}</span>
             <ResettableNumberInput
               step={0.1}
               value={Number.isFinite(displayValue) ? Number(displayValue.toFixed(3)) : 0}
@@ -374,9 +374,9 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
                 next[localAxis] = sign * fromDisplayLength(v, lengthUnitToMetres, unitDisplay)
                 pivot.onChange(next)
               }}
-              className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+              className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
             />
-            <span className="w-4 text-[10px] text-gray-400 shrink-0">{lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}</span>
+            <span className="w-4 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}</span>
           </div>
         )
       })}
@@ -385,7 +385,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           onClick={pivot.onTogglePicking}
           title="Click a point on the model in the viewport to pivot from there"
           className={`flex-1 text-[11px] px-1.5 py-1 rounded border font-medium ${
-            pivot.picking ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            pivot.picking ? 'bg-sky-600 text-white border-sky-600' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           {pivot.picking ? 'Click in viewport…' : 'Pick in Viewport'}
@@ -394,7 +394,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           onClick={pivot.onReset}
           disabled={!pivot.point}
           title="Restore the file's own original origin"
-          className="text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          className="text-[11px] px-1.5 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           Reset
         </button>
@@ -403,14 +403,14 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
         <button
           onClick={pivot.onSetToCenter}
           title="Move the pivot to this object's own bounding-box center"
-          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           Center
         </button>
         <button
           onClick={pivot.onSetToBase}
           title="Move the pivot to the bottom-center of this object's own bounding box — e.g. so Snap to Surface rests it on its base instead of sinking it in halfway"
-          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           Base
         </button>
@@ -423,7 +423,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           drag along this frame — with Move left on Global, this only
           affects the Rotate gizmo's own Local mode. */}
       <SectionLabel label="Pivot Rotation" />
-      <p className="px-3 pb-1 text-[10px] text-gray-400">
+      <p className="px-3 pb-1 text-[10px] text-gray-400 dark:text-prosota-muted">
         What Local space means for this object — e.g. align it to an adjacent element's angle, without changing how it looks.
       </p>
       {AXES.map(axis => {
@@ -432,7 +432,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
         const displayValue = sign * current * RAD_TO_DEG
         return (
           <div key={`pivot-rotation-${axis}`} className="flex items-center gap-1.5 px-3 py-0.5">
-            <span className="w-3 text-[11px] text-gray-400 shrink-0">{axis.toUpperCase()}</span>
+            <span className="w-3 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">{axis.toUpperCase()}</span>
             <ResettableNumberInput
               step={1}
               value={Number.isFinite(displayValue) ? Number(displayValue.toFixed(3)) : 0}
@@ -442,9 +442,9 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
                 next[localAxis] = sign * v * DEG_TO_RAD
                 pivotRotation.onChange(next)
               }}
-              className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+              className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
             />
-            <span className="w-4 text-[10px] text-gray-400 shrink-0">°</span>
+            <span className="w-4 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">°</span>
           </div>
         )
       })}
@@ -453,7 +453,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           onClick={pivotRotation.onReset}
           disabled={!pivotRotation.euler}
           title="Restore the file's own original orientation"
-          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           Reset
         </button>
@@ -464,7 +464,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           style) instead of three.js's native .y/.z when upAxis is 'z'. */}
       <SectionLabel label="Location" />
       {pathProgress && (
-        <p className="px-3 pb-1 text-[10px] text-gray-400">Position is driven by the bound path — edit points in the Paths panel.</p>
+        <p className="px-3 pb-1 text-[10px] text-gray-400 dark:text-prosota-muted">Position is driven by the bound path — edit points in the Paths panel.</p>
       )}
       {AXES.map(axis => {
         const { localAxis, sign } = resolveDisplayAxis(axis, upAxis, 'position')

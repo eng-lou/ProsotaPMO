@@ -84,7 +84,7 @@ export function DataPanel({
       <button
         onClick={onToggle}
         title="Show IFC/3D Data"
-        className="w-6 shrink-0 flex items-start justify-center pt-3 bg-white border-l border-gray-200 text-gray-400 hover:text-gray-600"
+        className="w-6 shrink-0 flex items-start justify-center pt-3 bg-white dark:bg-prosota-panel border-l border-gray-200 dark:border-prosota-line text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
       >
         ◂
       </button>
@@ -109,12 +109,12 @@ export function DataPanel({
   }
 
   return (
-    <div className="w-72 shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-hidden">
-      <div className="flex items-center border-b border-gray-200 shrink-0">
+    <div className="w-72 shrink-0 bg-white dark:bg-prosota-panel border-l border-gray-200 dark:border-prosota-line flex flex-col overflow-hidden">
+      <div className="flex items-center border-b border-gray-200 dark:border-prosota-line shrink-0">
         <button
           onClick={() => onTabChange('ifc')}
           className={`flex-1 text-xs font-bold px-3 py-2 border-b-2 ${
-            activeTab === 'ifc' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+            activeTab === 'ifc' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
           }`}
         >
           IFC Data{ifcHandles.length > 0 ? ` (${ifcHandles.length})` : ''}
@@ -122,12 +122,12 @@ export function DataPanel({
         <button
           onClick={() => onTabChange('3d')}
           className={`flex-1 text-xs font-bold px-3 py-2 border-b-2 ${
-            activeTab === '3d' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
+            activeTab === '3d' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
           }`}
         >
           3D Data{meshImports.length > 0 ? ` (${meshImports.length})` : ''}
         </button>
-        <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 hover:text-gray-600 shrink-0">▸</button>
+        <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
       {activeTab === 'ifc' ? (
         <IfcDataPanel

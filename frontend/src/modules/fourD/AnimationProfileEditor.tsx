@@ -13,7 +13,7 @@ interface Props {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2 py-0.5">
-      <span className="text-xs text-gray-600">{label}</span>
+      <span className="text-xs text-gray-600 dark:text-prosota-muted">{label}</span>
       {children}
     </div>
   )
@@ -28,13 +28,13 @@ function ColorField({ value, onChange }: { value: string | null; onChange: (v: s
           <button
             onClick={() => setOpen(v => !v)}
             title={value}
-            className="w-5 h-5 rounded border border-gray-300"
+            className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line"
             style={{ backgroundColor: value }}
           />
-          <button onClick={() => onChange(null)} title="Don't touch colour" className="text-gray-400 hover:text-red-600 text-xs">✕</button>
+          <button onClick={() => onChange(null)} title="Don't touch colour" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs">✕</button>
         </>
       ) : (
-        <button onClick={() => onChange('#ef4444')} className="text-xs text-gray-400 border border-dashed border-gray-300 rounded px-1.5 py-0.5">
+        <button onClick={() => onChange('#ef4444')} className="text-xs text-gray-400 dark:text-prosota-muted border border-dashed border-gray-300 dark:border-prosota-line rounded px-1.5 py-0.5">
           None
         </button>
       )}
@@ -71,16 +71,16 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
   const showTwist = NEEDS_TWIST.includes(config.transform_kind)
 
   return (
-    <div className="space-y-1 px-1 py-1.5 border border-gray-200 rounded bg-gray-50">
+    <div className="space-y-1 px-1 py-1.5 border border-gray-200 dark:border-prosota-line rounded bg-gray-50 dark:bg-prosota-panel2">
       <input
         value={name}
         onChange={e => setName(e.target.value)}
         placeholder="Profile name…"
-        className="w-full text-xs border border-gray-300 rounded px-1.5 py-1 font-medium"
+        className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 font-medium"
       />
 
       <Row label="Trigger">
-        <select value={config.trigger} onChange={e => set('trigger', e.target.value as Trigger)} className="text-xs border border-gray-300 rounded px-1.5 py-0.5">
+        <select value={config.trigger} onChange={e => set('trigger', e.target.value as Trigger)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
           <option value="over_duration">Over duration</option>
           <option value="on_start">On start</option>
           <option value="on_finish">On finish</option>
@@ -88,7 +88,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
       </Row>
 
       <Row label="Transform">
-        <select value={config.transform_kind} onChange={e => set('transform_kind', e.target.value as TransformKind)} className="text-xs border border-gray-300 rounded px-1.5 py-0.5">
+        <select value={config.transform_kind} onChange={e => set('transform_kind', e.target.value as TransformKind)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
           <option value="none">None</option>
           <option value="translate">Translate</option>
           <option value="scale">Scale</option>
@@ -102,14 +102,14 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
       {showAxis && (
         <>
           <Row label="Axis">
-            <select value={config.axis} onChange={e => set('axis', e.target.value as Axis)} className="text-xs border border-gray-300 rounded px-1.5 py-0.5">
+            <select value={config.axis} onChange={e => set('axis', e.target.value as Axis)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
               <option value="x">X</option>
               <option value="y">Y</option>
               <option value="z">Z</option>
             </select>
           </Row>
           <Row label="Direction">
-            <select value={config.direction} onChange={e => set('direction', Number(e.target.value) as Direction)} className="text-xs border border-gray-300 rounded px-1.5 py-0.5">
+            <select value={config.direction} onChange={e => set('direction', Number(e.target.value) as Direction)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
               <option value={1}>Positive</option>
               <option value={-1}>Negative</option>
             </select>
@@ -118,7 +118,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
             <input
               type="number" step={0.1} value={config.distance}
               onChange={e => set('distance', Number(e.target.value) || 0)}
-              className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+              className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
             />
           </Row>
         </>
@@ -135,10 +135,10 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
       )}
 
       <Row label="Opacity from">
-        <input type="number" min={0} max={1} step={0.1} value={config.opacity_from} onChange={e => set('opacity_from', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right" />
+        <input type="number" min={0} max={1} step={0.1} value={config.opacity_from} onChange={e => set('opacity_from', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right" />
       </Row>
       <Row label="Opacity to">
-        <input type="number" min={0} max={1} step={0.1} value={config.opacity_to} onChange={e => set('opacity_to', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right" />
+        <input type="number" min={0} max={1} step={0.1} value={config.opacity_to} onChange={e => set('opacity_to', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right" />
       </Row>
       <Row label="Colour from">
         <ColorField value={config.color_from} onChange={v => set('color_from', v)} />
@@ -148,7 +148,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
       </Row>
 
       <Row label="Interpolation">
-        <select value={config.interpolation} onChange={e => set('interpolation', e.target.value as Interpolation)} className="text-xs border border-gray-300 rounded px-1.5 py-0.5">
+        <select value={config.interpolation} onChange={e => set('interpolation', e.target.value as Interpolation)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
           <option value="linear">Linear</option>
           <option value="ease_in">Ease in</option>
           <option value="ease_out">Ease out</option>
@@ -160,7 +160,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
         <input
           type="number" min={1} value={config.duration_frames ?? ''} placeholder="Auto"
           onChange={e => set('duration_frames', e.target.value === '' ? null : Number(e.target.value))}
-          className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+          className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
         />
       </Row>
 
@@ -172,7 +172,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
         >
           {saveLabel}
         </button>
-        <button onClick={onCancel} className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+        <button onClick={onCancel} className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
           Cancel
         </button>
       </div>

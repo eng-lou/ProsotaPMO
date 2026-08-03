@@ -224,14 +224,14 @@ function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect
           : isSelected ? 'Ctrl/Cmd+click to remove from selection'
           : 'Click to select, Ctrl/Cmd+click to add to selection'
         }
-        className={`flex items-center gap-1 py-1 px-1 text-xs cursor-pointer hover:bg-gray-50 ${
-          isPrimary ? 'bg-blue-50 text-blue-700 font-medium'
-          : isSelected ? 'bg-amber-50 text-amber-700 font-medium'
-          : 'text-gray-600'
+        className={`flex items-center gap-1 py-1 px-1 text-xs cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${
+          isPrimary ? 'bg-blue-50 dark:bg-prosota-azure/15 text-blue-700 dark:text-prosota-azure font-medium'
+          : isSelected ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 font-medium'
+          : 'text-gray-600 dark:text-prosota-muted'
         }`}
       >
         {hasChildren ? (
-          <button onClick={e => { e.stopPropagation(); setExpanded(v => !v) }} className="text-gray-400 w-3 shrink-0">
+          <button onClick={e => { e.stopPropagation(); setExpanded(v => !v) }} className="text-gray-400 dark:text-prosota-muted w-3 shrink-0">
             {expanded ? '▾' : '▸'}
           </button>
         ) : <span className="w-3 shrink-0" />}
@@ -249,14 +249,14 @@ function TreeNode({ node, depth, selectedExpressId, selectedExpressIds, onSelect
 }
 
 function SectionHeader({ label }: { label: string }) {
-  return <div className="px-3 pt-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide border-t border-gray-100 first:border-t-0">{label}</div>
+  return <div className="px-3 pt-3 pb-1 text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide border-t border-gray-100 dark:border-prosota-line first:border-t-0">{label}</div>
 }
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-gray-400">{label}</span>
-      <span className="text-gray-700 truncate">{value}</span>
+      <span className="text-gray-400 dark:text-prosota-muted">{label}</span>
+      <span className="text-gray-700 dark:text-prosota-muted truncate">{value}</span>
     </div>
   )
 }
@@ -410,8 +410,8 @@ function ModelItem({
 
   return (
     <div>
-      <div className="px-3 py-2 sticky top-0 bg-white flex items-center gap-2 z-10">
-        <button onClick={onToggleExpanded} title={expanded ? 'Collapse' : 'Expand'} className="text-gray-400 w-3 shrink-0">
+      <div className="px-3 py-2 sticky top-0 bg-white dark:bg-prosota-panel flex items-center gap-2 z-10">
+        <button onClick={onToggleExpanded} title={expanded ? 'Collapse' : 'Expand'} className="text-gray-400 dark:text-prosota-muted w-3 shrink-0">
           {expanded ? '▾' : '▸'}
         </button>
         <input
@@ -420,7 +420,7 @@ function ModelItem({
           onChange={onToggleSelected}
           title={selected ? 'Selected — click to deselect' : 'Select this model'}
         />
-        <span className="text-xs text-gray-500 truncate" title={handle.object.name}>{handle.object.name || 'IFC model'}</span>
+        <span className="text-xs text-gray-500 dark:text-prosota-muted truncate" title={handle.object.name}>{handle.object.name || 'IFC model'}</span>
         {!saved && (
           <span
             title="Not saved to the server yet — refreshing now would lose this model. Wait for the upload indicator in the toolbar to clear."
@@ -433,19 +433,19 @@ function ModelItem({
           <button
             onClick={onReloadIfc}
             title={`${unloadedCount} element${unloadedCount === 1 ? '' : 's'} unloaded from this model — reload the file to bring some back`}
-            className="ml-auto text-xs text-blue-500 hover:text-blue-700 shrink-0"
+            className="ml-auto text-xs text-blue-500 hover:text-blue-700 dark:hover:text-prosota-cyan shrink-0"
           >
             Reload IFC ({unloadedCount})
           </button>
         )}
-        <button onClick={onUnload} title="Unload IFC model" className={`${unloadedCount > 0 ? '' : 'ml-auto'} text-xs text-gray-400 hover:text-red-600 shrink-0`}>
+        <button onClick={onUnload} title="Unload IFC model" className={`${unloadedCount > 0 ? '' : 'ml-auto'} text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0`}>
           Unload
         </button>
       </div>
       {expanded && (
         <div>
           <SectionHeader label="Project Overview" />
-          <div className="max-h-52 overflow-y-auto border-b border-gray-100">
+          <div className="max-h-52 overflow-y-auto border-b border-gray-100 dark:border-prosota-line">
             {tree ? (
               <TreeNode
                 node={tree} depth={0} selectedExpressId={isActiveModel ? selectedExpressId : null}
@@ -453,7 +453,7 @@ function ModelItem({
                 onSelect={onSelect} onSelectWholeModel={onSelectWholeModel}
               />
             ) : (
-              <p className="px-3 py-2 text-xs text-gray-400">Loading spatial structure…</p>
+              <p className="px-3 py-2 text-xs text-gray-400 dark:text-prosota-muted">Loading spatial structure…</p>
             )}
           </div>
 
@@ -473,11 +473,11 @@ function ModelItem({
                           ? `${s.name} is the active scope — click to clear it and show the whole model below again`
                           : `Set ${s.name} as the active scope — Class > Type > Occurrence below will only count/select elements on this storey`}
                         className={`flex items-center justify-between gap-2 px-3 py-1 text-xs cursor-pointer ${
-                          isActive ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
+                          isActive ? 'bg-blue-50 dark:bg-prosota-azure/15 text-blue-700 dark:text-prosota-azure font-medium' : 'text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'
                         }`}
                       >
                         <span className="truncate">{s.name}</span>
-                        {s.elevation !== null && <span className="text-gray-400 shrink-0">{formatElevation(s.elevation, lengthUnitToMetres, unitDisplay)}</span>}
+                        {s.elevation !== null && <span className="text-gray-400 dark:text-prosota-muted shrink-0">{formatElevation(s.elevation, lengthUnitToMetres, unitDisplay)}</span>}
                       </div>
                     )
                   })}
@@ -490,7 +490,7 @@ function ModelItem({
                       if (node) onSelectMany(collectLeafExpressIds(node), e.ctrlKey || e.metaKey)
                     }}
                     title="Select every element on this storey, Ctrl/Cmd+click to add to the current selection"
-                    className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-blue-400 hover:text-blue-700"
+                    className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 hover:border-blue-400 hover:text-blue-700 dark:hover:text-prosota-cyan"
                   >
                     Select All on This Storey
                   </button>
@@ -506,14 +506,14 @@ function ModelItem({
           />
           {activeStoreyId !== null && (
             <div className="px-3 -mt-1 pb-1">
-              <button onClick={() => setActiveStoreyId(null)} className="text-[10px] text-blue-600 hover:underline">
+              <button onClick={() => setActiveStoreyId(null)} className="text-[10px] text-blue-600 dark:text-prosota-azure hover:underline">
                 Clear storey scope — show whole model
               </button>
             </div>
           )}
           <div className="max-h-40 overflow-y-auto px-3 pb-2 space-y-0.5">
             {activeStoreyId !== null && !scopedTypeGroups && (
-              <p className="text-xs text-gray-400 py-1">Loading…</p>
+              <p className="text-xs text-gray-400 dark:text-prosota-muted py-1">Loading…</p>
             )}
             {(activeStoreyId !== null
               ? (scopedTypeGroups ?? []).map(g => ({ typeName: g.typeName, count: g.ids.length }))
@@ -531,25 +531,25 @@ function ModelItem({
                   onSelectMany(getExpressIdsForType(handle, t.typeName), e.ctrlKey || e.metaKey)
                 }}
                 title={`Select by Type — select every ${t.typeName} element (${t.count})${activeStoreyId !== null ? ' on this storey' : ''}, Ctrl/Cmd+click to add to the current selection`}
-                className="flex items-center justify-between text-xs text-gray-600 cursor-pointer hover:bg-gray-50 hover:text-blue-700 rounded px-1 -mx-1"
+                className="flex items-center justify-between text-xs text-gray-600 dark:text-prosota-muted cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 hover:text-blue-700 dark:hover:text-prosota-cyan rounded px-1 -mx-1"
               >
                 <span className="truncate">{t.typeName}</span>
-                <span className="text-gray-400">{t.count}</span>
+                <span className="text-gray-400 dark:text-prosota-muted">{t.count}</span>
               </div>
             ))}
           </div>
 
           <SectionHeader label="Object Information" />
           {(!isActiveModel || selectedExpressId === null) && (
-            <p className="px-3 py-2 text-xs text-gray-400">Click an element in the 3D view (or the tree above) to see its properties.</p>
+            <p className="px-3 py-2 text-xs text-gray-400 dark:text-prosota-muted">Click an element in the 3D view (or the tree above) to see its properties.</p>
           )}
           {isActiveModel && selectedExpressId !== null && loadingElement && (
-            <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>
+            <p className="px-3 py-2 text-xs text-gray-400 dark:text-prosota-muted">Loading…</p>
           )}
           {isActiveModel && elementInfo && !loadingElement && (
             <div className="px-3 pb-3 space-y-2">
               <div className="text-xs space-y-0.5">
-                <div className="font-medium text-gray-800 truncate">{elementInfo.type}</div>
+                <div className="font-medium text-gray-800 dark:text-prosota-paper truncate">{elementInfo.type}</div>
                 <Field label="Name" value={elementInfo.name} />
                 <Field label="GlobalId" value={elementInfo.globalId} />
                 <Field label="ObjectType" value={elementInfo.objectType} />
@@ -558,14 +558,14 @@ function ModelItem({
               </div>
               {elementInfo.propertySets.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Property Sets</div>
+                  <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Property Sets</div>
                   {elementInfo.propertySets.map((pset, i) => (
-                    <div key={`${pset.name}-${i}`} className="border border-gray-100 rounded">
-                      <div className="px-2 py-1 bg-gray-50 text-xs font-medium text-gray-700 truncate">{pset.name}</div>
+                    <div key={`${pset.name}-${i}`} className="border border-gray-100 dark:border-prosota-line rounded">
+                      <div className="px-2 py-1 bg-gray-50 dark:bg-prosota-panel2 text-xs font-medium text-gray-700 dark:text-prosota-muted truncate">{pset.name}</div>
                       {pset.properties.map((p, j) => (
                         <div key={`${p.name}-${j}`} className="flex items-center justify-between px-2 py-0.5 text-xs">
-                          <span className="text-gray-500 truncate">{p.name}</span>
-                          <span className="text-gray-700 truncate ml-2">{p.value}</span>
+                          <span className="text-gray-500 dark:text-prosota-muted truncate">{p.name}</span>
+                          <span className="text-gray-700 dark:text-prosota-muted truncate ml-2">{p.value}</span>
                         </div>
                       ))}
                     </div>
@@ -574,7 +574,7 @@ function ModelItem({
               )}
 
               <div className="space-y-1">
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Activity Link</div>
+                <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Activity Link</div>
                 {(() => {
                   // A slice's globalId here is deliberately its own split
                   // ref, not a real GlobalId (loadSplitElementInfo above) —
@@ -639,7 +639,7 @@ export function IfcDataPanel({
 
   if (handles.length === 0) {
     return (
-      <div className="flex-1 p-3 text-xs text-gray-400">
+      <div className="flex-1 p-3 text-xs text-gray-400 dark:text-prosota-muted">
         Import an IFC file to see its structure and properties.
       </div>
     )
@@ -647,25 +647,25 @@ export function IfcDataPanel({
 
   return (
     <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100">
-        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Units</span>
+      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-100 dark:border-prosota-line">
+        <span className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Units</span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setExpandedModelIds(new Set())}
             title="Collapse every loaded model's own row back down"
-            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-50"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           >
             Collapse All
           </button>
-          <div className="flex rounded border border-gray-300 overflow-hidden">
+          <div className="flex rounded border border-gray-300 dark:border-prosota-line overflow-hidden">
             {(['auto', 'imperial', 'metric'] as const).map(opt => (
               <button
                 key={opt}
                 onClick={() => onUnitDisplayChange(opt)}
                 title={opt === 'auto' ? "Match the loaded file's own declared unit" : opt === 'imperial' ? 'Always show feet-inches, regardless of the file\'s own unit' : 'Always show metres, regardless of the file\'s own unit'}
                 className={`px-2 py-0.5 text-[10px] ${
-                  unitDisplay === opt ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-                } ${opt !== 'auto' ? 'border-l border-gray-300' : ''}`}
+                  unitDisplay === opt ? 'bg-blue-600 text-white' : 'bg-white dark:bg-prosota-panel text-gray-500 dark:text-prosota-muted hover:bg-gray-100 dark:hover:bg-prosota-panel2'
+                } ${opt !== 'auto' ? 'border-l border-gray-300 dark:border-prosota-line' : ''}`}
               >
                 {opt === 'auto' ? 'Auto' : opt === 'imperial' ? 'ft' : 'm'}
               </button>

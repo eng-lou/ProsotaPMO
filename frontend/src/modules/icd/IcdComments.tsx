@@ -76,34 +76,34 @@ export function IcdComments({ icdItemId }: IcdCommentsProps) {
     load()
   }
 
-  if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading comments…</p>
+  if (loading) return <p className="text-xs text-gray-400 dark:text-prosota-muted px-4 py-3">Loading comments…</p>
 
   return (
-    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
-      <div className="text-xs font-semibold text-gray-600 mb-2">Comments</div>
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+    <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line">
+      <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">Comments</div>
+      {error && <p className="text-xs text-red-600 dark:text-red-400 mb-2">{error}</p>}
 
       {comments.length === 0 && (
-        <p className="text-xs text-gray-400 mb-2">No comments yet.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mb-2">No comments yet.</p>
       )}
 
       <ul className="space-y-1.5 mb-2">
         {comments.map(comment => (
-          <li key={comment.id} className="text-xs bg-white border border-gray-200 rounded-md px-3 py-2">
+          <li key={comment.id} className="text-xs bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md px-3 py-2">
             {editingId === comment.id ? (
               <form onSubmit={handleSaveEdit} className="space-y-2">
                 <textarea
                   autoFocus
                   value={editingBody}
                   onChange={e => setEditingBody(e.target.value)}
-                  className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+                  className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
                   rows={2}
                 />
                 <div className="flex gap-2">
                   <button type="submit" className="text-xs bg-gray-800 text-white px-3 py-1 rounded-md hover:bg-gray-900">
                     Save
                   </button>
-                  <button type="button" onClick={() => setEditingId(null)} className="text-xs text-gray-500 px-2 py-1">
+                  <button type="button" onClick={() => setEditingId(null)} className="text-xs text-gray-500 dark:text-prosota-muted px-2 py-1">
                     Cancel
                   </button>
                 </div>
@@ -111,14 +111,14 @@ export function IcdComments({ icdItemId }: IcdCommentsProps) {
             ) : (
               <>
                 <div className="flex items-center justify-between mb-0.5">
-                  <span className="font-medium text-gray-700">{comment.author_name}</span>
-                  <span className="text-gray-400">{formatDateTime(comment.created_at)}</span>
+                  <span className="font-medium text-gray-700 dark:text-prosota-muted">{comment.author_name}</span>
+                  <span className="text-gray-400 dark:text-prosota-muted">{formatDateTime(comment.created_at)}</span>
                 </div>
-                <div className="text-gray-700 mb-1">{comment.body}</div>
+                <div className="text-gray-700 dark:text-prosota-muted mb-1">{comment.body}</div>
                 {comment.author_id === currentUserId && (
                   <div className="flex gap-2">
-                    <button onClick={() => startEdit(comment)} className="text-blue-600 hover:text-blue-700">edit</button>
-                    <button onClick={() => handleDelete(comment)} className="text-gray-400 hover:text-red-600">remove</button>
+                    <button onClick={() => startEdit(comment)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan">edit</button>
+                    <button onClick={() => handleDelete(comment)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">remove</button>
                   </div>
                 )}
               </>
@@ -131,7 +131,7 @@ export function IcdComments({ icdItemId }: IcdCommentsProps) {
         <textarea
           value={body}
           onChange={e => setBody(e.target.value)}
-          className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+          className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
           rows={2}
           placeholder="Add a comment…"
         />

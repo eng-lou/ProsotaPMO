@@ -34,7 +34,7 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
   const dated = milestones.filter(m => m.finish !== null)
 
   if (dated.length === 0) {
-    return <div className="text-xs text-gray-400 py-8 text-center">No milestones yet.</div>
+    return <div className="text-xs text-gray-400 dark:text-prosota-muted py-8 text-center">No milestones yet.</div>
   }
 
   const times = dated.map(m => new Date(m.finish!).getTime())
@@ -60,7 +60,7 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
       {ticks.map((t, i) => (
         <div key={i} className="absolute top-1/2" style={{ left: `${positionOf(t)}%` }}>
           <span className="block w-px h-2.5 bg-gray-300" />
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 whitespace-nowrap">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 dark:text-prosota-muted whitespace-nowrap">
             {formatTick(t)}
           </div>
         </div>
@@ -77,8 +77,8 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
               title={m.task_name}
             />
             <div className="absolute bottom-3 w-max max-w-[140px] text-center left-1/2 -translate-x-1/2 text-xs">
-              <div className="text-gray-700 font-medium leading-tight">{m.task_name}</div>
-              <div className="text-gray-400">{formatDate(m.finish)}</div>
+              <div className="text-gray-700 dark:text-prosota-muted font-medium leading-tight">{m.task_name}</div>
+              <div className="text-gray-400 dark:text-prosota-muted">{formatDate(m.finish)}</div>
             </div>
           </div>
         )

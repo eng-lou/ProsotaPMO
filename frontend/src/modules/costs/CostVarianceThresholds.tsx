@@ -7,8 +7,8 @@ interface CostVarianceThresholdsProps {
   onUpdated: (updated: CostVarianceCriterion) => void
 }
 
-const cellInput = 'w-20 border border-gray-200 rounded px-1.5 py-1 text-xs'
-const descInput = 'w-full border border-gray-200 rounded px-1.5 py-1 text-xs'
+const cellInput = 'w-20 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-1 text-xs'
+const descInput = 'w-full border border-gray-200 dark:border-prosota-line rounded px-1.5 py-1 text-xs'
 
 // Project-level, editable definitions of what each variance band means (e.g.
 // "Over Budget = more than 5% above the Rev A baseline"). Drives the computed
@@ -26,20 +26,20 @@ export function CostVarianceThresholds({ criteria, onUpdated }: CostVarianceThre
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg mb-6">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg mb-6">
       <button
         onClick={() => setOpen(prev => !prev)}
-        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700"
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-prosota-muted"
       >
         Variance Thresholds
-        <span className="text-gray-400 text-xs">{open ? 'Hide' : 'Show'}</span>
+        <span className="text-gray-400 dark:text-prosota-muted text-xs">{open ? 'Hide' : 'Show'}</span>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-gray-100">
+        <div className="px-4 pb-4 border-t border-gray-100 dark:border-prosota-line">
           <table className="w-full text-xs mt-3">
             <thead>
-              <tr className="text-left text-gray-400">
+              <tr className="text-left text-gray-400 dark:text-prosota-muted">
                 <th className="pb-1">Band</th>
                 <th className="pb-1">Min %</th>
                 <th className="pb-1">Max %</th>

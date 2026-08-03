@@ -4,10 +4,10 @@ import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { ACTION_STATUSES, type IcdActionItem } from './types'
 
 const STATUS_STYLES: Record<string, string> = {
-  not_started: 'bg-gray-100 text-gray-600',
-  in_progress: 'bg-blue-100 text-blue-700',
-  complete: 'bg-green-100 text-green-700',
-  overdue: 'bg-red-100 text-red-700',
+  not_started: 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted',
+  in_progress: 'bg-blue-100 text-blue-700 dark:bg-prosota-azure/15 dark:text-prosota-azure',
+  complete: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400',
+  overdue: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
 }
 
 interface NewActionForm {
@@ -71,60 +71,60 @@ export function IcdActionItems({ icdItemId }: IcdActionItemsProps) {
     load()
   }
 
-  if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading action items…</p>
+  if (loading) return <p className="text-xs text-gray-400 dark:text-prosota-muted px-4 py-3">Loading action items…</p>
 
   return (
-    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
-      <div className="text-xs font-semibold text-gray-600 mb-2">Action items</div>
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+    <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line">
+      <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">Action items</div>
+      {error && <p className="text-xs text-red-600 dark:text-red-400 mb-2">{error}</p>}
 
       {actions.length === 0 && !adding && (
-        <p className="text-xs text-gray-400 mb-2">No action items yet.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mb-2">No action items yet.</p>
       )}
 
       <div className="space-y-2 mb-2">
         {actions.map(action => (
-          <div key={action.id} className="bg-white border border-gray-200 rounded-md px-3 py-2 text-xs">
+          <div key={action.id} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md px-3 py-2 text-xs">
             <div className="flex items-center justify-between mb-1">
-              <span className="font-medium text-gray-900">{action.code} · {action.description}</span>
+              <span className="font-medium text-gray-900 dark:text-prosota-paper">{action.code} · {action.description}</span>
               <div className="flex items-center gap-2">
                 <select
                   value={action.status}
                   onChange={e => updateAction(action, { status: e.target.value })}
-                  className={`text-xs rounded-full px-2 py-0.5 font-medium border-0 ${STATUS_STYLES[action.status] ?? 'bg-gray-100 text-gray-600'}`}
+                  className={`text-xs rounded-full px-2 py-0.5 font-medium border-0 ${STATUS_STYLES[action.status] ?? 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'}`}
                 >
                   {ACTION_STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
                 </select>
-                <button onClick={() => deleteAction(action)} className="text-gray-400 hover:text-red-600">remove</button>
+                <button onClick={() => deleteAction(action)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">remove</button>
               </div>
             </div>
-            <div className="text-gray-500 mb-1">
+            <div className="text-gray-500 dark:text-prosota-muted mb-1">
               {action.owner ?? 'Unassigned'}{action.due_date ? ` · Due: ${action.due_date}` : ''}
             </div>
             <div className="flex items-center gap-2">
-              <div className="flex-1 h-1 bg-gray-100 rounded-full">
+              <div className="flex-1 h-1 bg-gray-100 dark:bg-prosota-panel2 rounded-full">
                 <div className="h-1 bg-teal-500 rounded-full" style={{ width: `${action.pct_complete}%` }} />
               </div>
               <input
                 type="number" min={0} max={100}
                 value={action.pct_complete}
                 onChange={e => updateAction(action, { pct_complete: Number(e.target.value) })}
-                className="w-14 border border-gray-200 rounded px-1 py-0.5 text-xs"
+                className="w-14 border border-gray-200 dark:border-prosota-line rounded px-1 py-0.5 text-xs"
               />
-              <span className="text-gray-400">%</span>
+              <span className="text-gray-400 dark:text-prosota-muted">%</span>
             </div>
           </div>
         ))}
       </div>
 
       {adding ? (
-        <form onSubmit={handleAdd} className="bg-white border border-gray-200 rounded-md p-3 space-y-2">
+        <form onSubmit={handleAdd} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md p-3 space-y-2">
           <input
             autoFocus
             type="text"
             value={form.description}
             onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
-            className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
             placeholder="Action description"
           />
           <div className="flex gap-2">
@@ -132,27 +132,27 @@ export function IcdActionItems({ icdItemId }: IcdActionItemsProps) {
               type="text"
               value={form.owner}
               onChange={e => setForm(prev => ({ ...prev, owner: e.target.value }))}
-              className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+              className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
               placeholder="Owner"
             />
             <input
               type="date"
               value={form.due_date}
               onChange={e => setForm(prev => ({ ...prev, due_date: e.target.value }))}
-              className="border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+              className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
             />
           </div>
           <div className="flex gap-2">
             <button type="submit" className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded-md hover:bg-gray-900">
               Add action
             </button>
-            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_FORM) }} className="text-xs text-gray-500 px-3 py-1.5">
+            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_FORM) }} className="text-xs text-gray-500 dark:text-prosota-muted px-3 py-1.5">
               Cancel
             </button>
           </div>
         </form>
       ) : (
-        <button onClick={() => setAdding(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+        <button onClick={() => setAdding(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
           + Add action item
         </button>
       )}

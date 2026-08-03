@@ -216,9 +216,9 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
-      <div className="w-[640px] max-h-[80vh] flex flex-col bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-800">Generate Schedule from IFC Model</h3>
+      <div className="w-[640px] max-h-[80vh] flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Generate Schedule from IFC Model</h3>
           <div className="flex gap-1">
             {stepOrder.map(s => (
               <div key={s} className={`w-1.5 h-1.5 rounded-full ${step === s ? 'bg-gray-900' : 'bg-gray-200'}`} />
@@ -229,21 +229,21 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
         <div className="px-4 py-3 flex-1 overflow-y-auto">
           {step === 'source' && (
             <div className="space-y-2">
-              <p className="text-xs text-gray-500 mb-2">
+              <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">
                 How should the first-draft WBS be built?
               </p>
               {models.length === 0 && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1.5">
                   No IFC model is currently loaded.
                 </p>
               )}
               {models.length > 1 && (
-                <div className="border border-gray-200 rounded-md px-2.5 py-2 space-y-1">
-                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                <div className="border border-gray-200 dark:border-prosota-line rounded-md px-2.5 py-2 space-y-1">
+                  <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
                     Models to scan
                   </div>
                   {models.map(m => (
-                    <label key={m.handle.modelID} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                    <label key={m.handle.modelID} className="flex items-center gap-1.5 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer">
                       <input
                         type="checkbox"
                         checked={selectedModelIds.has(m.handle.modelID)}
@@ -258,12 +258,12 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 onClick={chooseScan}
                 disabled={selectedModels.length === 0}
                 title={selectedModels.length === 0 ? 'Check at least one model above' : undefined}
-                className="w-full text-left px-3 py-2.5 rounded-md border border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full text-left px-3 py-2.5 rounded-md border border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <div className="text-xs font-bold text-gray-800">
+                <div className="text-xs font-bold text-gray-800 dark:text-prosota-paper">
                   Scan Model{selectedModels.length > 1 ? 's' : ''} (automatic)
                 </div>
-                <div className="text-[11px] text-gray-500 mt-0.5">
+                <div className="text-[11px] text-gray-500 dark:text-prosota-muted mt-0.5">
                   Scans the {selectedModels.length > 1 ? 'checked models' : 'loaded IFC model'} for structural
                   elements (columns, beams, slabs, footings, foundation walls) and architectural elements (curtain
                   walls, doors, windows, roofs, stairs, railings, interior finishes) and groups them by storey.
@@ -276,7 +276,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
 
           {step === 'extract' && (
             <div className="space-y-3">
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-500 dark:text-prosota-muted">
                 Scans every checked model for structural, architectural, MEP, and facade-detailing elements
                 (columns, beams, slabs, footings, walls, curtain walls, facade trim, doors, windows, roofs, stairs,
                 ductwork, air terminals, piping, plumbing fixtures, electrical containment, lighting, electrical
@@ -285,18 +285,18 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
               </p>
               {extracting && progress && (
                 <div className="space-y-1">
-                  <div className="h-1.5 bg-gray-100 rounded overflow-hidden">
+                  <div className="h-1.5 bg-gray-100 dark:bg-prosota-panel2 rounded overflow-hidden">
                     <div
                       className="h-full bg-gray-900 transition-all"
                       style={{ width: progress.total > 0 ? `${(100 * progress.done) / progress.total}%` : '0%' }}
                     />
                   </div>
-                  <div className="text-[11px] text-gray-400">{progress.done} / {progress.total} elements scanned</div>
+                  <div className="text-[11px] text-gray-400 dark:text-prosota-muted">{progress.done} / {progress.total} elements scanned</div>
                 </div>
               )}
-              {extractError && <div className="text-xs text-red-600">{extractError}</div>}
+              {extractError && <div className="text-xs text-red-600 dark:text-red-400">{extractError}</div>}
               {elements && !extracting && storeys && (
-                <div className="text-xs text-gray-600">
+                <div className="text-xs text-gray-600 dark:text-prosota-muted">
                   Found {elements.length} elements across {storeys.length} storeys:
                   {' '}{categoryNames.map(c => `${elements.filter(el => el.category === c).length} ${c}`).join(', ')}.
                 </div>
@@ -307,7 +307,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
 
           {step === 'review' && storeys && (
             <div className="space-y-3">
-              <div className="text-xs text-gray-600 space-y-1">
+              <div className="text-xs text-gray-600 dark:text-prosota-muted space-y-1">
                 <div>1 root WBS ("{rootName}") + {summary.storeyCount} storey summary activities</div>
                 <div>{summary.activityCount - summary.storeyCount - 1} work activities across {categoryNames.length} categories, {phaseRows.length} construction phases</div>
                 <div>{summary.relationshipCount} sequencing links</div>
@@ -323,9 +323,9 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                     real Resource Pool rows it drives, move to a separate
                     "Generate Resources" flow in the Resources tab, off this
                     now-committed schedule. */}
-                <div className="text-gray-400">Durations use typical industry crew/productivity defaults — the Resource Pool isn't populated by this step; generate resources separately from the Resources tab afterward.</div>
+                <div className="text-gray-400 dark:text-prosota-muted">Durations use typical industry crew/productivity defaults — the Resource Pool isn't populated by this step; generate resources separately from the Resources tab afterward.</div>
               </div>
-              <label className="flex items-start gap-2 text-xs text-gray-700 border border-gray-200 rounded-md px-2.5 py-2 cursor-pointer">
+              <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line rounded-md px-2.5 py-2 cursor-pointer">
                 <input
                   type="checkbox"
                   className="mt-0.5"
@@ -333,8 +333,8 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                   onChange={e => setIncludeFullSchedule(e.target.checked)}
                 />
                 <span>
-                  <span className="font-bold text-gray-800">Full schedule generation</span>
-                  <span className="block text-[11px] text-gray-500 mt-0.5">
+                  <span className="font-bold text-gray-800 dark:text-prosota-paper">Full schedule generation</span>
+                  <span className="block text-[11px] text-gray-500 dark:text-prosota-muted mt-0.5">
                     Adds Preliminaries, Substructure Earthworks, Procurement, and Testing &amp; Commissioning —
                     real construction activities (mobilisation, excavation, long-lead procurement, commissioning)
                     that never exist as IFC geometry, so a model that doesn't contain them wouldn't otherwise be
@@ -343,36 +343,36 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 </span>
               </label>
               <div>
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Calendar</div>
+                <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1">Calendar</div>
                 <select
                   value={calendarId ?? ''}
                   onChange={e => setCalendarId(e.target.value || null)}
-                  className="w-full text-xs border border-gray-300 rounded px-2 py-1.5"
+                  className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1.5"
                 >
                   <option value="">Project default {calendars.find(c => c.is_project_default) ? `(${calendars.find(c => c.is_project_default)!.name})` : ''}</option>
                   {calendars.filter(c => !c.is_project_default).map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
-                <div className="text-[11px] text-gray-400 mt-0.5">Applied to every generated activity — editable per-activity afterward in Scheduling.</div>
+                <div className="text-[11px] text-gray-400 dark:text-prosota-muted mt-0.5">Applied to every generated activity — editable per-activity afterward in Scheduling.</div>
               </div>
-              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1.5">
                 Quantities are bounding-box estimates from the loaded geometry, not a certified takeoff — durations are a first draft, freely editable afterward in Scheduling.
               </p>
-              {generateError && <div className="text-xs text-red-600">{generateError}</div>}
+              {generateError && <div className="text-xs text-red-600 dark:text-red-400">{generateError}</div>}
             </div>
           )}
         </div>
 
-        <div className="px-4 py-3 border-t border-gray-100 flex justify-between items-center">
-          <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">
+        <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-between items-center">
+          <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
             Cancel
           </button>
           <div className="flex gap-2">
             {step === 'extract' && (
               <button
                 onClick={() => setStep('source')}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
               >
                 Back
               </button>
@@ -381,7 +381,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
               <button
                 onClick={() => setStep('extract')}
                 disabled={generating}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
               >
                 Back
               </button>

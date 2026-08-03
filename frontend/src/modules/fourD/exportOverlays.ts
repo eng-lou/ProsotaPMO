@@ -40,7 +40,13 @@ export interface ExportLayout {
   ganttRect: Rect | null
   tableRect: Rect | null
   mainViewRect: Rect
-  baselineViewRect: Rect | null
+  // Up to 3 comparison panes (2026-08-03, generalized from the old single
+  // baselineViewRect: Rect | null — see Viewport3D.tsx's own
+  // comparisonCanvasRefs header) — stacked vertically in the same column
+  // to the right of mainViewRect, mirroring the live on-screen
+  // SplitRow(row)[main, SplitRow(column)[...panes]] layout. Empty array =
+  // no comparison pane open, same meaning the old `null` had.
+  comparisonViewRects: Rect[]
   costRect: Rect | null
   titleBlockRect: Rect | null
 }
@@ -137,7 +143,7 @@ export function selectExportActivities(activities: Activity[], now: Date | null,
 export function computeExportLayout(
   resolutionWidth: number, resolutionHeight: number,
   scale: number,
-  opts: { includeGanttChart: boolean; includeActivityTable: boolean; includeBaseline: boolean; includeCostProfile: boolean },
+  opts: { includeGanttChart: boolean; includeActivityTable: boolean; comparisonPaneCount: number; includeCostProfile: boolean },
 ): ExportLayout {
   const ganttHeight = opts.includeGanttChart ? Math.round((GANTT_BAND_HEIGHT + TIME_AXIS_HEIGHT) * scale) : 0
   const tableWidth = opts.includeActivityTable ? Math.round(TABLE_COLUMN_WIDTH * scale) : 0
@@ -165,17 +171,27 @@ export function computeExportLayout(
     ? { x: 0, y: ganttHeight, width: tableWidth, height: viewportHeight }
     : null
 
-  // Split evenly between main/baseline when shown side by side — each
-  // gets cover-fit into its own half independently, so neither the 50/50
-  // split nor either source canvas's own native aspect ratio distorts the
-  // other.
-  const mainWidth = opts.includeBaseline ? Math.round(viewportWidth / 2) : viewportWidth
-  const baselineWidth = viewportWidth - mainWidth
+  // Split evenly between main and the comparison column when any
+  // comparison pane is open — same 50/50 split the old single-baseline
+  // case always used, now shared by however many panes stack in that
+  // right-hand column (2026-08-03) — each still gets cover-fit into its
+  // own rect independently, so neither the split nor any source canvas's
+  // own native aspect ratio distorts another.
+  const hasComparisonPanes = opts.comparisonPaneCount > 0
+  const mainWidth = hasComparisonPanes ? Math.round(viewportWidth / 2) : viewportWidth
+  const comparisonWidth = viewportWidth - mainWidth
 
   const mainViewRect: Rect = { x: tableWidth, y: ganttHeight, width: mainWidth, height: viewportHeight }
-  const baselineViewRect: Rect | null = opts.includeBaseline
-    ? { x: tableWidth + mainWidth, y: ganttHeight, width: baselineWidth, height: viewportHeight }
-    : null
+  // Stacked vertically within the comparison column, matching the live
+  // SplitRow(orientation="column") layout of however many panes are open.
+  const comparisonViewRects: Rect[] = hasComparisonPanes
+    ? Array.from({ length: opts.comparisonPaneCount }, (_, i) => ({
+      x: tableWidth + mainWidth,
+      y: ganttHeight + Math.round((viewportHeight / opts.comparisonPaneCount) * i),
+      width: comparisonWidth,
+      height: Math.round(viewportHeight / opts.comparisonPaneCount),
+    }))
+    : []
   // Full-width footer, below the table+viewport row entirely (not scoped
   // to just the viewport's own width the way ganttRect is) — a status-bar
   // style band makes more sense spanning everything underneath it, since
@@ -194,7 +210,7 @@ export function computeExportLayout(
     ? { x: 0, y: 0, width: tableWidth, height: ganttHeight }
     : null
 
-  return { totalWidth, totalHeight, ganttRect, tableRect, mainViewRect, baselineViewRect, costRect, titleBlockRect }
+  return { totalWidth, totalHeight, ganttRect, tableRect, mainViewRect, comparisonViewRects, costRect, titleBlockRect }
 }
 
 function formatShortDate(d: Date): string {
@@ -964,7 +980,12 @@ export function drawViewTitle(ctx: CanvasRenderingContext2D, rect: Rect, title: 
 
 export interface ComposeExportFrameOptions {
   mainCanvas: HTMLCanvasElement
-  baselineCanvas: HTMLCanvasElement | null
+  // Up to 3 comparison-pane canvases (2026-08-03, generalized from the old
+  // single baselineCanvas: HTMLCanvasElement | null) — indices line up
+  // with ExportLayout.comparisonViewRects; a `null` entry (a pane whose
+  // Canvas hasn't produced a frame yet) is simply skipped, same as the old
+  // `!opts.baselineCanvas` guard.
+  comparisonCanvases: (HTMLCanvasElement | null)[]
   activities: Activity[]
   profiles: AnimationProfile[]
   now: Date | null
@@ -1188,11 +1209,16 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   drawCoverFit(ctx, opts.mainCanvas, mv)
   if (opts.camera) drawExportLabels(ctx, mv, opts.exportLabels, opts.camera, opts.mainCanvas.width, opts.mainCanvas.height, opts.scale)
   drawViewTitle(ctx, mv, opts.mainViewTitle, opts.scale)
-  if (layout.baselineViewRect && opts.baselineCanvas) {
-    const bv = layout.baselineViewRect
-    drawCoverFit(ctx, opts.baselineCanvas, bv)
-    drawViewTitle(ctx, bv, opts.baselineViewTitle, opts.scale)
-  }
+  // Same shared baselineViewTitle for every open comparison pane
+  // (2026-08-03) — deliberately not a per-pane title field; see
+  // comparisonPane.ts's own header on keeping RenderCaptureSettings
+  // untouched by this generalization.
+  layout.comparisonViewRects.forEach((rect, i) => {
+    const canvas = opts.comparisonCanvases[i]
+    if (!canvas) return
+    drawCoverFit(ctx, canvas, rect)
+    drawViewTitle(ctx, rect, opts.baselineViewTitle, opts.scale)
+  })
 
   const padding = OVERLAY_PADDING * opts.scale
   if (opts.includeAppearanceLegend) {

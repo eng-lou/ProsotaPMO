@@ -140,39 +140,39 @@ export function BaselineWidget({ periodId, otherVariants, onChange, onPromote, o
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">🎯</span>
-        <div className="font-bold text-sm">Baseline</div>
-        <div className="text-xs text-gray-400">Capture a named, dated snapshot of the current schedule, then choose which saved one is assigned</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Baseline</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Capture a named, dated snapshot of the current schedule, then choose which saved one is assigned</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <table className="w-full text-xs border-collapse mb-3">
         <thead>
-          <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200">Name</th>
-            <th className="px-2 py-1.5 border border-gray-200">Date</th>
-            <th className="px-2 py-1.5 border border-gray-200 text-right">Activities</th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
+          <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Name</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Date</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">Activities</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
           </tr>
         </thead>
         <tbody>
           {baselines.map(b => (
-            <tr key={b.id} className={b.is_active ? 'bg-blue-50/50' : undefined}>
-              <td className="px-2 py-1.5 border border-gray-200 font-medium">{b.name}</td>
-              <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{b.baseline_date}</td>
-              <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500">{b.activity_count}</td>
-              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
+            <tr key={b.id} className={b.is_active ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : undefined}>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">{b.name}</td>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">{b.baseline_date}</td>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right text-gray-500 dark:text-prosota-muted">{b.activity_count}</td>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line whitespace-nowrap">
                 {b.is_active ? (
                   <span className="flex items-center gap-2">
-                    <span className="text-blue-600 font-medium">✓ Assigned</span>
+                    <span className="text-blue-600 dark:text-prosota-azure font-medium">✓ Assigned</span>
                     <button
                       onClick={() => handleUnassign(b)}
                       disabled={assigningId === b.id}
-                      className="text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                      className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-40"
                     >
                       Unassign
                     </button>
@@ -181,13 +181,13 @@ export function BaselineWidget({ periodId, otherVariants, onChange, onPromote, o
                   <button
                     onClick={() => handleAssign(b)}
                     disabled={assigningId === b.id}
-                    className="text-blue-600 hover:text-blue-700 disabled:opacity-40"
+                    className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan disabled:opacity-40"
                   >
                     Assign
                   </button>
                 )}
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line whitespace-nowrap">
                 {promotingId === b.id ? (
                   <span className="flex items-center gap-1">
                     <input
@@ -195,18 +195,18 @@ export function BaselineWidget({ periodId, otherVariants, onChange, onPromote, o
                       onChange={e => setPromoteName(e.target.value)}
                       placeholder="New schedule name"
                       autoFocus
-                      className="border border-gray-300 rounded px-1.5 py-0.5 text-xs w-36"
+                      className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs w-36"
                     />
                     <button
                       onClick={() => handleConfirmPromote(b)}
                       disabled={promoteBusy || !promoteName.trim()}
-                      className="text-blue-600 hover:text-blue-700 disabled:opacity-40"
+                      className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan disabled:opacity-40"
                     >
                       Go
                     </button>
                     <button
                       onClick={() => { setPromotingId(null); setPromoteName('') }}
-                      className="text-gray-400 hover:text-gray-600"
+                      className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
                     >
                       ✕
                     </button>
@@ -215,69 +215,69 @@ export function BaselineWidget({ periodId, otherVariants, onChange, onPromote, o
                   <button
                     onClick={() => { setPromotingId(b.id); setPromoteName(`${b.name} (Schedule)`) }}
                     title="Fork a brand new, editable schedule seeded from this baseline's captured snapshot"
-                    className="text-gray-500 hover:text-gray-700"
+                    className="text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper"
                   >
                     Promote to Schedule
                   </button>
                 )}
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 text-right">
-                <button onClick={() => handleDelete(b)} className="text-gray-400 hover:text-red-600">Delete</button>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right">
+                <button onClick={() => handleDelete(b)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
               </td>
             </tr>
           ))}
           {baselines.length === 0 && !loading && (
-            <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No baselines saved yet for this period</td></tr>
+            <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">No baselines saved yet for this period</td></tr>
           )}
         </tbody>
       </table>
 
       {creating ? (
-        <div className="border border-gray-200 rounded p-3 flex items-end gap-2 flex-wrap">
-          <label className="text-xs text-gray-600">
+        <div className="border border-gray-200 dark:border-prosota-line rounded p-3 flex items-end gap-2 flex-wrap">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Name
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Contract Baseline"
               autoFocus
-              className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-48"
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-48"
             />
           </label>
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Date
             <input
               type="date"
               value={date}
               onChange={e => setDate(e.target.value)}
-              className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5"
             />
           </label>
           {otherVariants.length > 0 && (
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Baseline from
               <select
                 value={sourceVariantId}
                 onChange={e => setSourceVariantId(e.target.value)}
                 title="Capture this baseline from a different schedule's current dates instead of this one's own"
-                className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+                className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5"
               >
                 <option value={CURRENT_SCHEDULE}>This schedule (current state)</option>
                 {otherVariants.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </label>
           )}
-          {error && <p className="text-xs text-red-600 w-full">{error}</p>}
-          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700">Save</button>
+          {error && <p className="text-xs text-red-600 dark:text-red-400 w-full">{error}</p>}
+          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Save</button>
           <button
             onClick={() => { setCreating(false); setName(''); setDate(today()); setSourceVariantId(CURRENT_SCHEDULE); setError(null) }}
-            className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5"
+            className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper px-1 py-1.5"
           >
             Cancel
           </button>
         </div>
       ) : (
-        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Set a new baseline</button>
+        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Set a new baseline</button>
       )}
     </div>
   )

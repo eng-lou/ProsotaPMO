@@ -3,13 +3,17 @@ import * as THREE from 'three'
 import { Canvas, useThree } from '@react-three/fiber'
 import { Environment, Grid, OrbitControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import type { Activity } from '@/modules/scheduling/types'
+import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
+import type { Collection } from './collections'
+import { applyPaneIsolationVisibility, type PaneConfig, type PaneContentMode } from './comparisonPane'
 import type { ElementKeyframe } from './elementKeyframes'
 import type { IfcModelHandle } from './ifcModel'
+import type { ResolvedIsolationTarget } from './linkedElements'
 import type { ModelElementLink } from './modelElementLinks'
 import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
+import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import {
@@ -32,51 +36,45 @@ interface Props {
   elementKeyframes: ElementKeyframe[]
   paths: Path[]
   pathFollowers: PathFollower[]
-  // Orbit camera sync with the primary Viewport3D (2026-07-24) — see
-  // Viewport3D.tsx's own CameraSync header for the full mechanism.
   cameraSyncRef: React.MutableRefObject<CameraSyncState | null>
-  // Include Baseline (2026-07-24, per Maro: "an option to include the
-  // baseline 3d while capturing still and video. so side by side") —
-  // baselineCanvasRef is written by CaptureCanvas just below (same
-  // useThree()-inside-the-Canvas idiom as CaptureCamera) so Viewport3D.tsx's
-  // own handleCaptureImage/handleExportVideo can read this pane's real
-  // rendered canvas and composite it alongside the main one.
-  // dprMultiplier mirrors Viewport3D.tsx's own captureDprMultiplier out to
-  // this pane (relayed through FourD.tsx, see its own onCaptureQualityChange
-  // prop) so a boosted-resolution capture boosts both canvases together,
-  // not just the primary one — null/undefined means "native resolution,"
-  // same as the primary viewport's own default.
-  baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
+  canvasRef: React.MutableRefObject<HTMLCanvasElement | null>
   dprMultiplier?: number | null
-  // Render/shader settings, mirrored from the main viewport's own
-  // ViewerSettings (2026-07-25, per Maro: "baseline 3d doesnt share the
-  // same render shader settings etc" — this pane used to have its own
-  // fixed ambient+directional lights and no <Environment> at all,
-  // regardless of what the live viewport was actually showing). Passed as
-  // individual fields rather than the whole ViewerSettings object, same
-  // convention this component's own upAxis/fieldOfView/clipStart/clipEnd
-  // props already use. Render *mode* (Hidden Line/Flat/Gouraud/Rendered) is
-  // deliberately not included here — that's driven by
-  // ModelObjects' own per-mesh material-swap effect, which is entangled
-  // with selection/isolate/hide logic this read-only pane doesn't have;
-  // this pane always renders in the plain PBR look regardless of the main
-  // viewport's own render mode, a known, narrower gap than the
-  // environment/lighting one this fixes.
   environmentUrl: string | null
   environmentBackground: boolean
   whiteBackground: boolean
   shadows: boolean
   sunAzimuth: number
   sunElevation: number
-  // Mirrors Viewport3D.tsx's own captureBackgroundOverride out to this
-  // pane (relayed through FourD.tsx, see its own onCaptureBackgroundChange
-  // prop) — same "boost both panes together" reasoning as dprMultiplier
-  // above, just for the HDR/white background override during a capture.
   captureBackgroundOverride: boolean | null
+  // Same "drop to frameloop='never' while the 4D tab itself is hidden"
+  // gating the primary Viewport3D already has (2026-08-03 fix — this pane
+  // used to unconditionally run frameloop="always" regardless of tab
+  // visibility, a real gap that only gets worse the more of these panes
+  // can be open at once).
+  active: boolean
+  // null = 'baseline' mode's own meaning (show the whole model, no
+  // filtering) — see comparisonPane.ts's own applyPaneIsolationVisibility
+  // header for exactly how a non-null target gets applied post-clone.
+  isolation: ResolvedIsolationTarget | null
+  // Was hardcoded "baseline" — now follows the pane's own content mode:
+  // 'live' for collection/scope modes (current dates, matching the main
+  // viewport — same 'live' literal TimelinePlayback's own dateField prop
+  // already uses), 'baseline' only for baseline mode.
+  dateField: 'live' | 'baseline'
+  // This pane's own config + the setter FourD.tsx uses to persist it
+  // (localStorage-backed, see FourD.tsx's own paneConfigs state) — the
+  // header controls below read/write this directly rather than the pane
+  // owning any config state of its own.
+  config: PaneConfig
+  onConfigChange: (config: PaneConfig) => void
+  onClose: () => void
+  collections: Collection[]
+  udfDefinitions: UserDefinedFieldDefinition[]
+  getUdfValue: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined
 }
 
 // Mirrors Viewport3D.tsx's own private CameraCapture — this pane's camera
-// object only exists once React-three-fiber's own Canvas has mounted it,
+// object only exists once react-three-fiber's own Canvas has mounted it,
 // so CameraSync (which needs a live reference, not the Canvas `camera`
 // prop's initial config) reads it out via this same useThree()-inside-the-
 // Canvas trick.
@@ -87,33 +85,37 @@ function CaptureCamera({ cameraRef }: { cameraRef: React.MutableRefObject<THREE.
 }
 
 // Same idiom as CaptureCamera just above, for this pane's own real WebGL
-// canvas element (2026-07-24) — see baselineCanvasRef's own header.
+// canvas element (2026-07-24) — see canvasRef's own header.
 function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCanvasElement | null> }) {
   const { gl } = useThree()
   useEffect(() => { canvasRef.current = gl.domElement }, [gl, canvasRef])
   return null
 }
 
-// The "planned" half of Maro's baseline-vs-actual compare request
-// (2026-07-12, "advanced 4D... baselining and variance analysis" — see
-// this session's own plan file for the full "why clone, not re-import"
-// reasoning). Docked alongside the real Viewport3D via FourD.tsx's own
-// SplitRow (already built for the top/bottom window docks, reused
-// verbatim here), sharing the same timelineDateRef so the one Animation
-// Timeline scrubs/plays both panes at once — this pane's own
-// TimelinePlayback just resolves Mode A from bl_start/bl_finish instead
-// of start/finish (dateField="baseline", see Viewport3D.tsx's own header
-// on that prop).
+// A generalized "Compare Baseline" pane (2026-08-03, per Maro: "compare
+// baseline goes beyond just the one baseline view" — up to 3 of these can
+// be docked at once, see comparisonPane.ts's own module header for the
+// full "why"). Started life as BaselineViewportPane.tsx, always showing
+// bl_start/bl_finish dates; now also supports isolating to a Collection's
+// own membership, or to every element linked to Activities matching a
+// UDF-value/WBS-node scope, via the `isolation`/`dateField` props — see
+// comparisonPane.ts's own useResolvedPaneIsolation, computed once per pane
+// by FourD.tsx and handed down here already-resolved.
+//
+// Docked alongside the real Viewport3D (and any sibling panes) via
+// FourD.tsx's own SplitRow, sharing the same timelineDateRef so the one
+// Animation Timeline scrubs/plays every pane at once.
 //
 // Deliberately minimal — no selection, gizmos, section boxes, paths, or
-// annotations. This is a read-only comparison view of "where things would
-// be if the schedule ran exactly as originally planned," not a second
-// editing surface; every interactive feature this module has stays owned
-// by the one real Viewport3D.
-export function BaselineViewportPane({
+// annotations beyond what TimelinePlayback itself needs. This is a read-
+// only comparison view, not a second editing surface; every interactive
+// feature this module has beyond the header controls below stays owned by
+// the one real Viewport3D.
+export function ComparisonViewportPane({
   importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
-  activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, baselineCanvasRef, dprMultiplier,
+  activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
+  active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
 }: Props) {
   const zUp = upAxis === 'z'
   const cameraRef = useRef<THREE.Camera | null>(null)
@@ -132,10 +134,10 @@ export function BaselineViewportPane({
   // Map keyed by the *original* Object3D, rebuilt whenever the set of
   // loaded objects changes (import/unload) or any of their own base
   // transforms move, so this pane's placement always mirrors the real
-  // scene; only Mode A's own animation timing differs at playback time
-  // (see this file's own header). cloneSceneHierarchy is the hand-written
-  // safe clone — see sceneClone.ts's own header for why not
-  // Object3D.clone().
+  // scene; only Mode A's own animation timing (and, now, isolation
+  // visibility below) differs at playback time. cloneSceneHierarchy is
+  // the hand-written safe clone — see sceneClone.ts's own header for why
+  // not Object3D.clone().
   //
   // Gated on a content string, not `importedObjects` itself (2026-07-12
   // fix, caught before it shipped) — FourD.tsx's own `viewportObjects` is
@@ -186,19 +188,72 @@ export function BaselineViewportPane({
     }
   }, [clonesByOriginal, shadows])
 
+  // Isolation visibility (2026-08-03) — re-applied whenever the clone set
+  // or the resolved isolation target itself changes; a fresh clone always
+  // starts fully visible (cloneSceneHierarchy copies the *source* object's
+  // own current `visible`, not anything isolation-aware), so this has to
+  // re-run after every re-clone, not just once.
+  useEffect(() => {
+    applyPaneIsolationVisibility(clonedImportedObjects, isolation)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clonesByOriginal, isolation])
+
+  const collectionOptions = useMemo(() => [...collections].sort((a, b) => a.name.localeCompare(b.name)), [collections])
+
   return (
     <div className="relative flex-1 min-h-0">
-      <div className="absolute top-2 left-2 z-10 text-xs font-medium bg-white/90 border border-gray-300 rounded px-2 py-1 text-gray-600 pointer-events-none">
-        Baseline (planned)
+      <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 max-w-[calc(100%-1rem)]">
+        <div className="flex items-center gap-1 text-xs font-medium bg-white/90 border border-gray-300 dark:border-prosota-line rounded px-1.5 py-1 text-gray-600 dark:text-prosota-muted">
+          <select
+            value={config.contentMode}
+            onChange={e => onConfigChange({ ...config, contentMode: e.target.value as PaneContentMode })}
+            className="text-xs border-none bg-transparent font-medium focus:outline-none"
+          >
+            <option value="baseline">Baseline (planned)</option>
+            <option value="collection">Collection</option>
+            <option value="scope">Scope (UDF / WBS / All)</option>
+          </select>
+          <button
+            onClick={() => onConfigChange({ ...config, cameraDisconnected: !config.cameraDisconnected })}
+            title={config.cameraDisconnected ? 'Camera disconnected from the group — click to reconnect' : 'Camera synced with the group — click to disconnect and orbit independently'}
+            className="px-1 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-prosota-panel2 shrink-0"
+          >
+            {config.cameraDisconnected ? '🔓' : '🔗'}
+          </button>
+          <button onClick={onClose} title="Close this view" className="px-1 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-prosota-panel2 text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
+        </div>
+        {config.contentMode === 'collection' && (
+          <select
+            value={config.collectionId ?? ''}
+            onChange={e => onConfigChange({ ...config, collectionId: e.target.value || null })}
+            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 bg-white/90 text-gray-600 dark:text-prosota-muted"
+          >
+            <option value="">Choose a collection…</option>
+            {collectionOptions.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
+        {config.contentMode === 'scope' && (
+          <div className="bg-white/90 border border-gray-300 dark:border-prosota-line rounded px-1.5 py-1">
+            <ScopeFilterFields
+              scope={config.scope}
+              activities={activities}
+              udfDefinitions={udfDefinitions}
+              getUdfValue={getUdfValue}
+              onChange={scope => onConfigChange({ ...config, scope })}
+            />
+          </div>
+        )}
       </div>
       <Canvas
-        frameloop="always"
+        frameloop={active ? 'always' : 'never'}
         dpr={dpr}
         camera={{ position: [8, 8, 8], up: [0, zUp ? 0 : 1, zUp ? 1 : 0], fov: fieldOfView, near: clipStart, far: clipEnd }}
       >
         <CaptureCamera cameraRef={cameraRef} />
-        <CaptureCanvas canvasRef={baselineCanvasRef} />
-        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
+        <CaptureCanvas canvasRef={canvasRef} />
+        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} disconnected={config.cameraDisconnected} />
         <ambientLight intensity={0.6} />
         {/* Settings-driven sun light (2026-07-25), replacing this pane's old
             fixed directionalLight — mirrors Viewport3D.tsx's own
@@ -242,7 +297,7 @@ export function BaselineViewportPane({
             onTick={() => {}}
             paths={paths}
             pathFollowers={pathFollowers}
-            dateField="baseline"
+            dateField={dateField}
             // Always null (2026-07-22) — this pane is a read-only cloned
             // snapshot with no click/selection interaction of its own, so
             // it can never trigger the live pane's own materialize-on-click

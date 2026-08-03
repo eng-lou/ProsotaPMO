@@ -32,9 +32,9 @@ interface Props {
 }
 
 const STATUS_STYLE: Record<ClashResult['status'], string> = {
-  new: 'bg-red-50 text-red-700 border-red-200',
-  reviewed: 'bg-amber-50 text-amber-700 border-amber-200',
-  approved: 'bg-gray-100 text-gray-500 border-gray-200',
+  new: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/30',
+  reviewed: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/30',
+  approved: 'bg-gray-100 dark:bg-prosota-panel2 text-gray-500 dark:text-prosota-muted border-gray-200 dark:border-prosota-line',
 }
 
 function NewTestForm({ collections, onCreate, onCancel }: {
@@ -51,19 +51,19 @@ function NewTestForm({ collections, onCreate, onCancel }: {
   const canCreate = groupA && groupB && collections.length > 0
 
   return (
-    <div className="px-3 py-2 space-y-1.5 bg-gray-50 border-b border-gray-100">
+    <div className="px-3 py-2 space-y-1.5 bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-100 dark:border-prosota-line">
       <input
         value={name}
         onChange={e => setName(e.target.value)}
         placeholder="Test name"
-        className="w-full text-xs border border-gray-300 rounded px-1.5 py-1"
+        className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
       />
       <div className="flex items-center gap-1.5">
-        <select value={groupA} onChange={e => setGroupA(e.target.value)} className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-1 py-1">
+        <select value={groupA} onChange={e => setGroupA(e.target.value)} className="flex-1 min-w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-1">
           {collections.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <span className="text-xs text-gray-400 shrink-0">vs</span>
-        <select value={groupB} onChange={e => setGroupB(e.target.value)} className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-1 py-1">
+        <span className="text-xs text-gray-400 dark:text-prosota-muted shrink-0">vs</span>
+        <select value={groupB} onChange={e => setGroupB(e.target.value)} className="flex-1 min-w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-1">
           {collections.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>
@@ -71,25 +71,25 @@ function NewTestForm({ collections, onCreate, onCancel }: {
         <select
           value={testType}
           onChange={e => setTestType(e.target.value as 'hard' | 'clearance')}
-          className="text-xs border border-gray-300 rounded px-1 py-1"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-1"
         >
           <option value="hard">Hard (touching/overlap)</option>
           <option value="clearance">Clearance (min. gap)</option>
         </select>
         {testType === 'clearance' && (
-          <label className="flex items-center gap-1 text-xs text-gray-500">
+          <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-prosota-muted">
             Tolerance
             <input
               type="number" min={0} step={1} value={toleranceMm}
               onChange={e => setToleranceMm(Number(e.target.value))}
-              className="w-16 text-xs border border-gray-300 rounded px-1 py-0.5"
+              className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
             />
             mm
           </label>
         )}
       </div>
       <div className="flex items-center justify-end gap-1.5 pt-0.5">
-        <button onClick={onCancel} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-white">
+        <button onClick={onCancel} className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel2">
           Cancel
         </button>
         <button
@@ -110,10 +110,10 @@ function ResultRow({ result, onUpdate, onSelect }: {
   onSelect: () => void
 }) {
   return (
-    <tr className="border-t border-gray-100 hover:bg-sky-50/60 cursor-pointer" onClick={onSelect}>
+    <tr className="border-t border-gray-100 dark:border-prosota-line hover:bg-sky-50/60 dark:hover:bg-prosota-azure/10 cursor-pointer" onClick={onSelect}>
       <td className="px-1.5 py-1 truncate max-w-[110px]" title={result.element_a_label}>{result.element_a_label}</td>
       <td className="px-1.5 py-1 truncate max-w-[110px]" title={result.element_b_label}>{result.element_b_label}</td>
-      <td className="px-1.5 py-1 text-right tabular-nums text-gray-500">
+      <td className="px-1.5 py-1 text-right tabular-nums text-gray-500 dark:text-prosota-muted">
         {result.distance_mm !== null ? `${result.distance_mm.toFixed(0)}mm` : '—'}
       </td>
       <td className="px-1.5 py-1" onClick={e => e.stopPropagation()}>
@@ -148,34 +148,34 @@ function TestItem({ test, collections, running, onDelete, onRun, onUpdateResult,
   return (
     <div className="px-3 py-2 space-y-1.5">
       <div className="flex items-center gap-1.5">
-        <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 w-3 shrink-0">{expanded ? '▾' : '▸'}</button>
-        <span className="flex-1 text-xs text-gray-700 truncate" title={`${groupAName} vs ${groupBName}`}>{test.name}</span>
+        <button onClick={() => setExpanded(v => !v)} className="text-xs text-gray-400 dark:text-prosota-muted w-3 shrink-0">{expanded ? '▾' : '▸'}</button>
+        <span className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate" title={`${groupAName} vs ${groupBName}`}>{test.name}</span>
         {activeCount > 0 && (
-          <span className="text-[11px] px-1.5 rounded-full bg-red-100 text-red-700 shrink-0">{activeCount}</span>
+          <span className="text-[11px] px-1.5 rounded-full bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400 shrink-0">{activeCount}</span>
         )}
-        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
       {expanded && (
         <>
-          <div className="flex items-center gap-1.5 flex-wrap text-xs text-gray-500">
+          <div className="flex items-center gap-1.5 flex-wrap text-xs text-gray-500 dark:text-prosota-muted">
             <span className="truncate">{groupAName} vs {groupBName}</span>
-            <span className="text-gray-300">·</span>
+            <span className="text-gray-300 dark:text-prosota-line">·</span>
             <span>{test.test_type === 'hard' ? 'Hard' : `Clearance ${test.tolerance_mm}mm`}</span>
           </div>
           <button
             onClick={onRun}
             disabled={running !== null}
-            className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 hover:bg-gray-50 disabled:hover:bg-transparent"
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
           >
             {running ? `Testing… ${running.done}/${running.total}` : 'Run Test'}
           </button>
           {test.last_run_at && (
-            <span className="text-[11px] text-gray-400 ml-1.5">last run {new Date(test.last_run_at).toLocaleString()}</span>
+            <span className="text-[11px] text-gray-400 dark:text-prosota-muted ml-1.5">last run {new Date(test.last_run_at).toLocaleString()}</span>
           )}
           {test.results.length > 0 && (
             <table className="w-full text-xs mt-1">
               <thead>
-                <tr className="text-[11px] text-gray-400 text-left">
+                <tr className="text-[11px] text-gray-400 dark:text-prosota-muted text-left">
                   <th className="px-1.5 py-0.5 font-normal">A</th>
                   <th className="px-1.5 py-0.5 font-normal">B</th>
                   <th className="px-1.5 py-0.5 font-normal text-right">Dist.</th>
@@ -215,18 +215,18 @@ export function ClashDetectionPanel({ collections, clashTests, error, runProgres
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Clash Detective</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Clash Detective</span>
         <button
           onClick={() => setCreating(v => !v)}
           disabled={collections.length === 0}
           title={collections.length === 0 ? 'Create at least one Collection first (Collections panel)' : undefined}
-          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:text-gray-300 disabled:hover:bg-transparent"
+          className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:text-gray-300 disabled:hover:bg-transparent"
         >
           + Add
         </button>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {creating && (
         <NewTestForm
           collections={collections}
@@ -235,7 +235,7 @@ export function ClashDetectionPanel({ collections, clashTests, error, runProgres
         />
       )}
       {clashTests.length === 0 && !creating ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           "+ Add" a test, pick two Collections to compare, then "Run Test" — clashes get listed here and tinted red in the viewport.
         </p>
       ) : (

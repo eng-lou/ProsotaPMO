@@ -23,15 +23,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-gray-50 dark:bg-prosota-ink">
       <Sidebar />
-      {/* Always light, no dark: variant (2026-07-25 fix) — page content
-          (Dashboard.tsx and everything else routed here) isn't part of this
-          pass's dark-mode scope (see this session's own plan on the scope
-          boundary) and has no dark-aware text colors of its own yet; without
-          an explicit background here, this <main> stayed transparent and
-          inherited the wrapper div's own dark:bg-prosota-ink, rendering
-          every page's already-dark text unreadably dark-on-dark instead of
-          the intended "dark chrome around still-light content." */}
-      <main className="flex-1 overflow-auto bg-gray-50">{children}</main>
+      {/* Full page-content dark-mode pass (2026-08-03) — every routed page
+          now carries its own dark: variants (see that session's plan), so
+          this can finally follow the outer wrapper's own dark:bg-prosota-ink
+          instead of the light-only bg-gray-50 the original shell-only pass
+          (2026-07-25) deliberately pinned here to avoid dark-on-dark text. */}
+      <main className="flex-1 overflow-auto bg-gray-50 dark:bg-prosota-ink">{children}</main>
     </div>
   )
 }

@@ -31,7 +31,7 @@ export function DockDivider({ onDrag }: Props) {
     <div
       onMouseDown={startDrag}
       title="Drag to resize"
-      className="h-1.5 shrink-0 cursor-row-resize bg-gray-100 hover:bg-gray-300 active:bg-gray-400 transition-colors rounded my-1"
+      className="h-1.5 shrink-0 cursor-row-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-gray-300 dark:hover:bg-prosota-line active:bg-gray-400 dark:active:bg-prosota-azure/40 transition-colors rounded my-1"
     />
   )
 }

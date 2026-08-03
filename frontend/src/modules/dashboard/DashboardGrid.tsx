@@ -307,7 +307,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   const containerHeight = Math.max(200, ...widgets.map(w => pixelRect(containerWidth, w.x, w.y, w.w, w.h).top + pixelRect(containerWidth, w.x, w.y, w.w, w.h).height)) + MARGIN
 
   if (configLoading || !seeded) {
-    return <div className="p-8 text-gray-400 text-sm">Loading…</div>
+    return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
 
   return (
@@ -315,21 +315,21 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
       <div className="flex items-center justify-end gap-2 text-sm relative">
         <div className="relative">
           <button
-            className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
             onClick={() => { setAddMenuOpen(v => !v); setLayoutMenuOpen(false) }}
           >
             + Add Widget
           </button>
           {addMenuOpen && (
-            <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-10 min-w-[220px] max-h-[70vh] overflow-y-auto py-1">
-              {availableToAdd.length === 0 && <div className="px-3 py-1.5 text-xs text-gray-400">All widgets on the board</div>}
+            <div className="absolute right-0 mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg z-10 min-w-[220px] max-h-[70vh] overflow-y-auto py-1">
+              {availableToAdd.length === 0 && <div className="px-3 py-1.5 text-xs text-gray-400 dark:text-prosota-muted">All widgets on the board</div>}
               {availableByCategory.map(([category, items]) => (
                 <div key={category}>
-                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-gray-400 uppercase">{category}</div>
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-gray-400 dark:text-prosota-muted uppercase">{category}</div>
                   {items.map(([type, def]) => (
                     <button
                       key={type}
-                      className="block w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50"
+                      className="block w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 dark:hover:bg-prosota-panel2"
                       onClick={() => addWidget(type)}
                     >
                       {def.label}
@@ -342,16 +342,16 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
         </div>
         <div className="relative">
           <button
-            className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
             onClick={() => { setLayoutMenuOpen(v => !v); setAddMenuOpen(false) }}
           >
             Layouts ▾
           </button>
           {layoutMenuOpen && (
-            <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-10 min-w-[240px] py-2 px-3 text-xs">
+            <div className="absolute right-0 mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg z-10 min-w-[240px] py-2 px-3 text-xs">
               <div className="flex items-center gap-1.5 mb-2">
                 <input
-                  className="flex-1 border border-gray-300 rounded-md px-2 py-1"
+                  className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1"
                   placeholder="Save current as…"
                   value={saveAsName}
                   onChange={e => setSaveAsName(e.target.value)}
@@ -364,18 +364,18 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                   Save
                 </button>
               </div>
-              {layouts.length > 0 && <div className="border-t border-gray-100 my-1" />}
+              {layouts.length > 0 && <div className="border-t border-gray-100 dark:border-prosota-line my-1" />}
               {layouts.map(l => (
                 <div key={l.id} className="flex items-center justify-between py-1">
-                  <button className={`text-left ${l.is_active ? 'font-semibold text-blue-600' : ''}`} onClick={() => handleApply(l.id)}>
+                  <button className={`text-left ${l.is_active ? 'font-semibold text-blue-600 dark:text-prosota-azure' : ''}`} onClick={() => handleApply(l.id)}>
                     {l.name}
                   </button>
-                  <button className="text-gray-400 hover:text-red-600" onClick={() => remove(l.id)}>✕</button>
+                  <button className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400" onClick={() => remove(l.id)}>✕</button>
                 </div>
               ))}
-              <div className="border-t border-gray-100 mt-1 pt-1 space-y-1 flex flex-col items-start">
-                <button className="text-gray-500 hover:text-gray-700" onClick={handleReset}>Reset to default</button>
-                <button className="text-gray-500 hover:text-red-600" onClick={handleClearAll}>Clear all widgets</button>
+              <div className="border-t border-gray-100 dark:border-prosota-line mt-1 pt-1 space-y-1 flex flex-col items-start">
+                <button className="text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper" onClick={handleReset}>Reset to default</button>
+                <button className="text-gray-500 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400" onClick={handleClearAll}>Clear all widgets</button>
               </div>
             </div>
           )}
@@ -384,7 +384,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
 
       <div ref={containerRef} className="relative" style={{ height: containerHeight }}>
         {widgets.length === 0 && (
-          <div className="text-xs text-gray-400 py-4">No widgets on the board — use "+ Add Widget" above.</div>
+          <div className="text-xs text-gray-400 dark:text-prosota-muted py-4">No widgets on the board — use "+ Add Widget" above.</div>
         )}
         {widgets.map(w => {
           const isDragging = drag?.id === w.id
@@ -392,19 +392,19 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
           return (
             <div
               key={w.id}
-              className={`absolute bg-white border border-gray-200 rounded-lg flex flex-col overflow-hidden ${isDragging ? 'shadow-lg z-10' : ''}`}
+              className={`absolute bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden ${isDragging ? 'shadow-lg z-10' : ''}`}
               style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, transition: isDragging ? 'none' : 'left 120ms, top 120ms' }}
             >
               <div
-                className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 bg-gray-50 shrink-0 cursor-move select-none"
+                className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0 cursor-move select-none"
                 onMouseDown={startDrag(w, 'move')}
               >
-                <span className="text-xs font-bold text-gray-700">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</span>
+                <span className="text-xs font-bold text-gray-700 dark:text-prosota-muted">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</span>
                 <button
                   onMouseDown={e => e.stopPropagation()}
                   onClick={() => removeWidget(w.id)}
                   title="Remove"
-                  className="ml-auto text-gray-400 hover:text-red-600"
+                  className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
                 >
                   ✕
                 </button>
@@ -412,14 +412,14 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
               <div className="flex-1 min-h-0 overflow-auto p-3">
                 {WIDGET_REGISTRY[w.widget_type]
                   ? <MemoWidget renderFn={WIDGET_REGISTRY[w.widget_type].render} widgetProps={widgetProps} />
-                  : <span className="text-xs text-gray-400">Unknown widget</span>}
+                  : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}
               </div>
               <div
                 className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize"
                 onMouseDown={startDrag(w, 'resize')}
                 title="Drag to resize"
               >
-                <div className="absolute bottom-0.5 right-0.5 w-2 h-2 border-r-2 border-b-2 border-gray-300" />
+                <div className="absolute bottom-0.5 right-0.5 w-2 h-2 border-r-2 border-b-2 border-gray-300 dark:border-prosota-line" />
               </div>
             </div>
           )

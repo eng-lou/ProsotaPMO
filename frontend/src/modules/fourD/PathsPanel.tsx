@@ -80,9 +80,9 @@ function pathElevation(points: PathPoint[], upAxis: UpAxis): number {
 // Same compact color-swatch row AnnotationsPanel.tsx's own ColorField uses.
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
       <span className="w-16 shrink-0">{label}</span>
-      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 rounded shrink-0" />
+      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded shrink-0" />
     </label>
   )
 }
@@ -138,20 +138,20 @@ function Item({
               if (e.key === 'Enter') commitRename()
               if (e.key === 'Escape') { setDraftName(path.name); setEditing(false) }
             }}
-            className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+            className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
           />
         ) : (
-          <span onDoubleClick={() => setEditing(true)} className="flex-1 text-xs text-gray-700 truncate cursor-text" title="Double-click to rename">
+          <span onDoubleClick={() => setEditing(true)} className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text" title="Double-click to rename">
             {path.name}
           </span>
         )}
-        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
       <div className="flex items-center gap-1.5 flex-wrap">
         <button
           onClick={onToggleAddPoints}
           className={`text-xs px-2 py-0.5 rounded border font-medium ${
-            addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
           title={addingPoints ? 'Click in the viewport to add points — click again to stop' : 'Click points in the viewport to add to this curve'}
         >
@@ -160,15 +160,15 @@ function Item({
         <button
           onClick={onRemoveLastPoint}
           disabled={path.points.length === 0}
-          className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           Undo last point
         </button>
-        <label className="flex items-center gap-1 text-xs text-gray-500">
+        <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-prosota-muted">
           <input type="checkbox" checked={path.closed} onChange={onToggleClosed} />
           Closed
         </label>
-        <span className="text-xs text-gray-400">{path.points.length} pt{path.points.length === 1 ? '' : 's'}</span>
+        <span className="text-xs text-gray-400 dark:text-prosota-muted">{path.points.length} pt{path.points.length === 1 ? '' : 's'}</span>
       </div>
       <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
         {styleOpen ? '▾' : '▸'} Style
@@ -178,14 +178,14 @@ function Item({
         // Maro's site-logistics reference — a colored, dashed, arrowed,
         // labeled route like "RIG 1"/"RIG 2") — see PathGizmo.tsx for how
         // each of these actually renders.
-        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+        <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           <ColorField label="Color" value={path.color} onChange={v => onUpdateStyle({ color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Line style</span>
             <select
               value={path.line_style}
               onChange={e => onUpdateStyle({ line_style: e.target.value as PathLineStyle })}
-              className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             >
               <option value="solid">Solid</option>
               <option value="dashed">Dashed</option>
@@ -193,45 +193,45 @@ function Item({
           </label>
           {path.line_style === 'dashed' && (
             <>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Dash size</span>
                 <input
                   type="number" min={0.05} step={0.05}
                   value={path.dash_size}
                   onChange={e => onUpdateStyle({ dash_size: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Gap size</span>
                 <input
                   type="number" min={0.05} step={0.05}
                   value={path.gap_size}
                   onChange={e => onUpdateStyle({ gap_size: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
             </>
           )}
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Line width</span>
             <input
               type="number" min={1} max={20} step={1}
               value={path.line_width}
               onChange={e => onUpdateStyle({ line_width: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <input type="checkbox" checked={path.show_arrow} onChange={e => onUpdateStyle({ show_arrow: e.target.checked })} />
             Show direction arrow
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <input type="checkbox" checked={path.show_label} onChange={e => onUpdateStyle({ show_label: e.target.checked })} />
             Show label
           </label>
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="Draws the line (and its arrow, if enabled) growing from the first point to the last over the Start/End window below, instead of always fully drawn"
           >
             <input type="checkbox" checked={path.animate} onChange={e => onUpdateStyle({ animate: e.target.checked })} />
@@ -248,7 +248,7 @@ function Item({
                   there's deliberately no way to type an exact value
                   here, matching Blender's own "keyframe the playhead"
                   workflow this whole feature is modeled on. */}
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Start</span>
                 <span className="flex-1 truncate" title={animWindow?.start ? animWindow.start.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.start && format ? formatTimelineValue(animWindow.start, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -256,12 +256,12 @@ function Item({
                 <button
                   onClick={onKeyAnimStart}
                   title="Key the current playhead as this path's reveal Start"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">End</span>
                 <span className="flex-1 truncate" title={animWindow?.end ? animWindow.end.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.end && format ? formatTimelineValue(animWindow.end, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -269,13 +269,13 @@ function Item({
                 <button
                   onClick={onKeyAnimEnd}
                   title="Key the current playhead as this path's reveal End"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
               <label
-                className="flex items-center gap-1.5 text-[11px] text-gray-500"
+                className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
                 title="Repeats the reveal every time the playhead passes End, instead of holding fully-drawn"
               >
                 <input type="checkbox" checked={path.animation_loop} onChange={e => onUpdateStyle({ animation_loop: e.target.checked })} />
@@ -284,7 +284,7 @@ function Item({
             </>
           )}
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="Shifts every point of this path up or down by the same amount — a manual failsafe for when a click didn't land exactly on the real surface. Preserves any slope; only the overall height moves."
           >
             <span className="w-16 shrink-0">Elevation</span>
@@ -293,20 +293,20 @@ function Item({
               value={pathElevation(path.points, upAxis)}
               disabled={path.points.length === 0}
               onChange={e => onSetElevation(Number(e.target.value))}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5 disabled:bg-gray-100 disabled:text-gray-400"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 disabled:bg-gray-100 dark:disabled:bg-prosota-panel2 disabled:text-gray-400 dark:disabled:text-prosota-muted"
             />
           </label>
         </div>
       )}
       {binding ? (
         <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-sky-50 border border-sky-100 rounded px-2 py-1">
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted bg-sky-50 border border-sky-100 rounded px-2 py-1">
             <span className="flex-1 truncate">Bound: {binding.target_kind} · {binding.element_ref || '(whole)'}</span>
             <label className="flex items-center gap-1 shrink-0">
               <input type="checkbox" checked={binding.orient_to_path} onChange={onToggleOrient} />
               Orient
             </label>
-            <button onClick={onUnbind} className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+            <button onClick={onUnbind} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
           </div>
           {binding.orient_to_path && (
             // Heading offset (2026-08-06, per Maro: "when i hit bind it
@@ -317,12 +317,12 @@ function Item({
             // off a model's real visual front. -90/+90 cover the common
             // case in one click; the number field is there for anything
             // else (a mirrored import, etc).
-            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 pl-1">
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted pl-1">
               <span className="w-16 shrink-0">Heading</span>
               <button
                 onClick={() => onSetHeadingOffset(binding.heading_offset_deg - 90)}
                 title="Nudge -90°"
-                className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+                className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
               >
                 -90°
               </button>
@@ -330,12 +330,12 @@ function Item({
                 type="number" step={1}
                 value={binding.heading_offset_deg}
                 onChange={e => onSetHeadingOffset(Number(e.target.value))}
-                className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
               />
               <button
                 onClick={() => onSetHeadingOffset(binding.heading_offset_deg + 90)}
                 title="Nudge +90°"
-                className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+                className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
               >
                 +90°
               </button>
@@ -347,7 +347,7 @@ function Item({
           onClick={onBind}
           disabled={!bindTarget || path.points.length < 2}
           title={!bindTarget ? 'Select a mesh or IFC element first' : path.points.length < 2 ? 'Add at least 2 points first' : `Bind ${bindTarget.label} to follow this path`}
-          className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           Bind selected {bindTarget ? `(${bindTarget.label})` : ''}
         </button>
@@ -374,15 +374,15 @@ export function PathsPanel({
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Paths</span>
-        <button onClick={onCreate} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Paths</span>
+        <button onClick={onCreate} className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
           + Add
         </button>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {paths.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           "+ Add" a path, then "+ Point" and click in the viewport to lay down its curve.
         </p>
       ) : (

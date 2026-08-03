@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
+import { useTheme } from '@/lib/ThemeContext'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import { recalculateCosts, saveSpreadRange, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { formatDateTime } from './dateTime'
@@ -124,6 +125,8 @@ function ResourceTrackingWidgetImpl({
   selectedActivityIds, onToggleActivitySelected, collapsedIds, onToggleCollapsed,
   onLeftPaneWidthChange,
 }: Props) {
+  const { theme } = useTheme()
+  const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
   const [visibleOptionalCols, setVisibleOptionalCols] = useState<Set<OptionalColKey>>(loadVisibleOptionalCols)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const [sortKey, setSortKey] = useState<ColKey | null>(null)
@@ -579,9 +582,9 @@ function ResourceTrackingWidgetImpl({
 
   if (trackedResources.length === 0) {
     return (
-      <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4 no-print">
+      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
         <div className="font-bold text-sm mb-1">Resource Tracking</div>
-        <div className="text-xs text-gray-400">
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">
           No Labour/Equipment resources with assignments yet — assign one to an activity via Logic to see it here.
         </div>
       </div>
@@ -589,22 +592,22 @@ function ResourceTrackingWidgetImpl({
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4 no-print">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <div className="font-bold text-sm">Resource Tracking</div>
-        <div className="text-xs text-gray-400">Hours per period, per activity — double-click a cell to level it manually</div>
-        {spreadFetchError && <div className="text-xs text-red-600">{spreadFetchError}</div>}
+        <div className="font-bold text-sm dark:text-prosota-paper">Resource Tracking</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Hours per period, per activity — double-click a cell to level it manually</div>
+        {spreadFetchError && <div className="text-xs text-red-600 dark:text-red-400">{spreadFetchError}</div>}
         <div className="relative ml-auto">
           <button
             onClick={() => setColumnsMenuOpen(o => !o)}
-            className={`text-xs px-2 py-1 rounded border ${columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+            className={`text-xs px-2 py-1 rounded border ${columnsMenuOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
           >
             ☰ Columns
           </button>
           {columnsMenuOpen && (
-            <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg p-2 z-30 text-xs w-44">
+            <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-2 z-30 text-xs w-44">
               {OPTIONAL_COLUMNS.map(c => (
-                <label key={c.key} className="flex items-center gap-1.5 py-0.5 text-gray-600">
+                <label key={c.key} className="flex items-center gap-1.5 py-0.5 text-gray-600 dark:text-prosota-muted">
                   <input type="checkbox" checked={visibleOptionalCols.has(c.key)} onChange={() => toggleOptionalColumn(c.key)} />
                   {c.label}
                 </label>
@@ -615,9 +618,9 @@ function ResourceTrackingWidgetImpl({
       </div>
 
       {loading ? (
-        <div className="text-xs text-gray-400 p-4">Loading resource tracking…</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted p-4">Loading resource tracking…</div>
       ) : (
-        <div className="border border-gray-200 rounded overflow-hidden text-xs">
+        <div className="border border-gray-200 dark:border-prosota-line rounded overflow-hidden text-xs">
           {/* One table, tree columns + timeline columns as cells of the same
               <tr> — see this function's own header comment for why (replaced
               a two-table design that drifted out of vertical alignment).
@@ -648,32 +651,32 @@ function ResourceTrackingWidgetImpl({
                 {trailingSpacerWidth > 0 && <col style={{ width: trailingSpacerWidth }} />}
               </colgroup>
               <thead>
-                <tr className="text-left text-gray-500">
-                  <th style={{ position: 'sticky', top: 0, left: leftOffsets[0], zIndex: 3, background: '#f9fafb' }} className="border-r border-b border-gray-200" />
+                <tr className="text-left text-gray-500 dark:text-prosota-muted">
+                  <th style={{ position: 'sticky', top: 0, left: leftOffsets[0], zIndex: 3, background: stickyHeaderBg }} className="border-r border-b border-gray-200 dark:border-prosota-line" />
                   {leftCols.map((c, i) => (
                     <th
                       key={c.key}
                       onClick={() => handleSortClick(c.key)}
                       title="Click to sort"
-                      style={{ position: 'sticky', top: 0, left: leftOffsets[i + 1], zIndex: 3, background: '#f9fafb' }}
-                      className="px-2 py-1.5 border-r border-b border-gray-200 cursor-pointer select-none hover:bg-gray-100"
+                      style={{ position: 'sticky', top: 0, left: leftOffsets[i + 1], zIndex: 3, background: stickyHeaderBg }}
+                      className="px-2 py-1.5 border-r border-b border-gray-200 dark:border-prosota-line cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-prosota-panel2"
                     >
                       {c.label}{sortIndicator(c.key)}
                     </th>
                   ))}
                   {/* Blank — matches Resource Usage Profile's y-axis gutter in the
                       same spot, so both tables' period columns line up. */}
-                  <th style={{ position: 'sticky', top: 0, left: leftOffsets[leftOffsets.length - 1], zIndex: 3, background: '#f9fafb' }} className="border-r border-b border-gray-200" />
+                  <th style={{ position: 'sticky', top: 0, left: leftOffsets[leftOffsets.length - 1], zIndex: 3, background: stickyHeaderBg }} className="border-r border-b border-gray-200 dark:border-prosota-line" />
                   {/* Column virtualization spacers — see this component's own
                       recomputeVisibleBucketRange header comment. A single
                       cell each, widths taken straight from the matching
                       <col> above, standing in for every skipped bucket so
                       the table's total scrollable width never changes. */}
-                  {leadingSpacerWidth > 0 && <th className="border-r border-b border-gray-200" />}
+                  {leadingSpacerWidth > 0 && <th className="border-r border-b border-gray-200 dark:border-prosota-line" />}
                   {visibleBucketIndices.map(i => (
-                    <th key={i} style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }} className="px-2 py-1.5 border-r border-b border-gray-200 text-right">{buckets[i].label}</th>
+                    <th key={i} style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }} className="px-2 py-1.5 border-r border-b border-gray-200 dark:border-prosota-line text-right">{buckets[i].label}</th>
                   ))}
-                  {trailingSpacerWidth > 0 && <th className="border-r border-b border-gray-200" />}
+                  {trailingSpacerWidth > 0 && <th className="border-r border-b border-gray-200 dark:border-prosota-line" />}
                 </tr>
               </thead>
               <tbody>
@@ -734,29 +737,29 @@ function ResourceTrackingWidgetImpl({
                   const { resource, row } = flat
                   return (
                     <tr key={row.assignment.id} style={{ height: RESOURCE_CHILD_ROW_HEIGHT }}>
-                      <td className="px-1.5 border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>
+                      <td className="px-1.5 border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>
                         <input type="checkbox" checked={selectedActivityIds.has(row.activity.id)} onChange={() => onToggleActivitySelected(row.activity.id)} />
                       </td>
-                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500 font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.code}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 text-gray-700 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.task_name}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.start, false)}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.finish, false)}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.code}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-700 dark:text-prosota-muted truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.task_name}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.start, false)}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.finish, false)}</td>
                       {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
-                        <td key={c.key} className="px-2 py-1 border-r border-gray-200 text-gray-500" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{renderOptionalCell(c.key, row)}</td>
+                        <td key={c.key} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{renderOptionalCell(c.key, row)}</td>
                       ))}
-                      <td className="border-r border-gray-200" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }} />
+                      <td className="border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }} />
                       {leadingSpacerWidth > 0 && <td style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />}
                       {visibleBucketIndices.map(i => {
                         const bucket = buckets[i]
                         const active = bucketOverlapsSpan(bucket, row.activity)
                         if (!active) {
-                          return <td key={i} className="px-2 py-1 border-r border-gray-200 bg-gray-50" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />
+                          return <td key={i} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />
                         }
                         const hours = bucketData.hoursByAssignment.get(row.assignment.id)?.[i] ?? 0
                         const isEditing = editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
                         if (isEditing) {
                           return (
-                            <td key={i} className="px-1 py-0.5 border-r border-gray-200" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}>
+                            <td key={i} className="px-1 py-0.5 border-r border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}>
                               <input
                                 autoFocus
                                 type="number" min={0} step={0.5}
@@ -767,7 +770,7 @@ function ResourceTrackingWidgetImpl({
                                   if (e.key === 'Enter') commitEdit(row, bucket)
                                   if (e.key === 'Escape') setEditing(null)
                                 }}
-                                className="w-14 border border-blue-400 rounded px-1 py-0.5 text-xs text-right"
+                                className="w-14 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs text-right"
                               />
                             </td>
                           )
@@ -777,7 +780,7 @@ function ResourceTrackingWidgetImpl({
                             key={i}
                             onDoubleClick={() => startEdit(row.assignment, i, hours)}
                             title="Double-click to edit — manual resource leveling"
-                            className="px-2 py-1 border-r border-gray-200 text-right text-gray-600 cursor-pointer hover:bg-blue-50"
+                            className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted cursor-pointer hover:bg-blue-50"
                             style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}
                           >
                             {toDisplay(hours, resource)}
@@ -800,7 +803,7 @@ function ResourceTrackingWidgetImpl({
               where the timeline columns do, purely a scroll control (1px-tall
               dummy content matching the real table width), synced with the
               main table above via syncFrom. */}
-          <div className="flex border-t border-gray-200">
+          <div className="flex border-t border-gray-200 dark:border-prosota-line">
             <div style={{ width: leftPaneWidth + 26 + RESOURCE_CHART_Y_AXIS_WIDTH, flexShrink: 0 }} />
             <div ref={footerScrollRef} onScroll={() => syncFrom('footer')} className="flex-1" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
               <div style={{ width: buckets.length * PERIOD_COL_WIDTH, height: 14 }} />

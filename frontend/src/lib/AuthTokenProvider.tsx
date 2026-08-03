@@ -117,8 +117,8 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <span className="text-gray-400 text-sm">Loading…</span>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink">
+        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
       </div>
     )
   }

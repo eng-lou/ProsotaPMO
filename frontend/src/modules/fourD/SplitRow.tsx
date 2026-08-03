@@ -4,6 +4,14 @@ interface Props {
   children: React.ReactNode[]
   ratios: number[]
   onRatiosChange: (ratios: number[]) => void
+  // 'row' (default, every pre-existing call site) lays children out side
+  // by side, dragging along X. 'column' (2026-08-03, for the multi-
+  // viewport Compare Baseline generalization — Maro: "split into two up
+  // and down") stacks them top to bottom, dragging along Y instead — same
+  // ratio-state/MIN_RATIO drag math otherwise, just swapping which axis
+  // the container flexes along and which mouse coordinate/container
+  // dimension the drag reads.
+  orientation?: 'row' | 'column'
 }
 
 const MIN_RATIO = 0.15
@@ -24,9 +32,10 @@ const MIN_RATIO = 0.15
 // (startRatios/startX captured once at mousedown) rather than incrementally
 // adjusting from the previous frame — avoids compounding floating-point
 // drift over a long drag.
-export function SplitRow({ children, ratios, onRatiosChange }: Props) {
+export function SplitRow({ children, ratios, onRatiosChange, orientation = 'row' }: Props) {
   const count = children.length
   const containerRef = useRef<HTMLDivElement>(null)
+  const isRow = orientation === 'row'
 
   useEffect(() => {
     if (ratios.length !== count) onRatiosChange(Array(count).fill(1 / count))
@@ -37,19 +46,21 @@ export function SplitRow({ children, ratios, onRatiosChange }: Props) {
     e.preventDefault()
     const container = containerRef.current
     if (!container) return
-    const width = container.getBoundingClientRect().width
-    const startX = e.clientX
+    const rect = container.getBoundingClientRect()
+    const extent = isRow ? rect.width : rect.height
+    const startCoord = isRow ? e.clientX : e.clientY
     const startRatios = ratios
 
     const onMove = (moveEvent: MouseEvent) => {
-      const deltaRatio = (moveEvent.clientX - startX) / width
-      let left = startRatios[index] + deltaRatio
-      let right = startRatios[index + 1] - deltaRatio
-      if (left < MIN_RATIO) { right -= (MIN_RATIO - left); left = MIN_RATIO }
-      if (right < MIN_RATIO) { left -= (MIN_RATIO - right); right = MIN_RATIO }
+      const coord = isRow ? moveEvent.clientX : moveEvent.clientY
+      const deltaRatio = (coord - startCoord) / extent
+      let before = startRatios[index] + deltaRatio
+      let after = startRatios[index + 1] - deltaRatio
+      if (before < MIN_RATIO) { after -= (MIN_RATIO - before); before = MIN_RATIO }
+      if (after < MIN_RATIO) { before -= (MIN_RATIO - after); after = MIN_RATIO }
       const next = [...startRatios]
-      next[index] = left
-      next[index + 1] = right
+      next[index] = before
+      next[index + 1] = after
       onRatiosChange(next)
     }
     const onUp = () => {
@@ -63,7 +74,7 @@ export function SplitRow({ children, ratios, onRatiosChange }: Props) {
   if (count === 0) return null
 
   return (
-    <div ref={containerRef} className="flex-1 flex min-w-0 min-h-0">
+    <div ref={containerRef} className={`flex-1 flex min-w-0 min-h-0 ${isRow ? '' : 'flex-col'}`}>
       {children.map((child, i) => (
         <Fragment key={i}>
           <div style={{ flex: `0 0 ${(ratios[i] ?? 1 / count) * 100}%` }} className="min-w-0 min-h-0 overflow-hidden flex flex-col">
@@ -73,7 +84,9 @@ export function SplitRow({ children, ratios, onRatiosChange }: Props) {
             <div
               onMouseDown={startDrag(i)}
               title="Drag to resize"
-              className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 hover:bg-gray-300 active:bg-gray-400 transition-colors"
+              className={isRow
+                ? 'w-1.5 shrink-0 cursor-col-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-gray-300 dark:hover:bg-prosota-line active:bg-gray-400 dark:active:bg-prosota-azure/40 transition-colors'
+                : 'h-1.5 shrink-0 cursor-row-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-gray-300 dark:hover:bg-prosota-line active:bg-gray-400 dark:active:bg-prosota-azure/40 transition-colors'}
             />
           )}
         </Fragment>

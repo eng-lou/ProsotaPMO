@@ -30,7 +30,7 @@ export function KpiStripWidget({ data }: WidgetProps) {
   const { kpis } = data
   const tiles: [string, React.ReactNode, React.ReactNode?][] = [
     ['Planned Finish', formatDate(kpis.planned_finish), kpis.planned_finish_status !== 'unknown' && (
-      <span className={`inline-block mt-1 text-xs px-1.5 py-0.5 rounded ${kpis.planned_finish_status === 'delayed' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+      <span className={`inline-block mt-1 text-xs px-1.5 py-0.5 rounded ${kpis.planned_finish_status === 'delayed' ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400' : 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400'}`}>
         {kpis.planned_finish_status === 'delayed' ? 'Delayed' : 'On track'}
       </span>
     )],
@@ -39,14 +39,14 @@ export function KpiStripWidget({ data }: WidgetProps) {
     ['Schedule SPI', kpis.schedule_spi !== null ? Number(kpis.schedule_spi).toFixed(2) : '—'],
     ['BAC', kpis.bac !== null ? formatCurrency(kpis.bac) : '—'],
     ['EAC', kpis.eac !== null ? formatCurrency(kpis.eac) : '—'],
-    ['Cost CPI', <span className={kpis.cpi !== null && Number(kpis.cpi) < 1 ? 'text-orange-600' : 'text-gray-900'}>{kpis.cpi !== null ? Number(kpis.cpi).toFixed(2) : '—'}</span>],
+    ['Cost CPI', <span className={kpis.cpi !== null && Number(kpis.cpi) < 1 ? 'text-orange-600' : 'text-gray-900 dark:text-prosota-paper'}>{kpis.cpi !== null ? Number(kpis.cpi).toFixed(2) : '—'}</span>],
   ]
   return (
     <div className="grid grid-cols-4 gap-3 h-full overflow-auto">
       {tiles.map(([label, value, extra]) => (
-        <div key={label} className="bg-gray-50 rounded-lg p-3">
-          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</div>
-          <div className="text-lg font-bold text-gray-900">{value}</div>
+        <div key={label} className="bg-gray-50 dark:bg-prosota-panel2 rounded-lg p-3">
+          <div className="text-xs text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1">{label}</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-prosota-paper">{value}</div>
           {extra}
         </div>
       ))}
@@ -66,10 +66,10 @@ export function SchedulePerformanceWidget({ data }: WidgetProps) {
       ] as const).map(([label, count, color]) => (
         <div key={label}>
           <div className="flex justify-between mb-0.5">
-            <span className="text-gray-600">{label}</span>
+            <span className="text-gray-600 dark:text-prosota-muted">{label}</span>
             <span className="font-medium">{count} ({bucketPct(count)}%)</span>
           </div>
-          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-2 bg-gray-100 dark:bg-prosota-panel2 rounded-full overflow-hidden">
             <div className={`h-full ${color}`} style={{ width: `${bucketPct(count)}%` }} />
           </div>
         </div>
@@ -83,20 +83,20 @@ export function RiskOverviewWidget({ data }: WidgetProps) {
   return (
     <div className="h-full overflow-auto">
       <div className="grid grid-cols-3 gap-2 text-center mb-3">
-        <div className="bg-red-50 rounded-md p-2.5">
-          <div className="text-lg font-bold text-red-700">{risk_overview.high}</div>
-          <div className="text-xs text-red-600">High</div>
+        <div className="bg-red-50 dark:bg-red-500/10 rounded-md p-2.5">
+          <div className="text-lg font-bold text-red-700 dark:text-red-400">{risk_overview.high}</div>
+          <div className="text-xs text-red-600 dark:text-red-400">High</div>
         </div>
-        <div className="bg-amber-50 rounded-md p-2.5">
-          <div className="text-lg font-bold text-amber-700">{risk_overview.medium}</div>
-          <div className="text-xs text-amber-600">Medium</div>
+        <div className="bg-amber-50 dark:bg-amber-500/10 rounded-md p-2.5">
+          <div className="text-lg font-bold text-amber-700 dark:text-amber-400">{risk_overview.medium}</div>
+          <div className="text-xs text-amber-600 dark:text-amber-400">Medium</div>
         </div>
-        <div className="bg-green-50 rounded-md p-2.5">
-          <div className="text-lg font-bold text-green-700">{risk_overview.low}</div>
-          <div className="text-xs text-green-600">Low</div>
+        <div className="bg-green-50 dark:bg-green-500/10 rounded-md p-2.5">
+          <div className="text-lg font-bold text-green-700 dark:text-green-400">{risk_overview.low}</div>
+          <div className="text-xs text-green-600 dark:text-green-400">Low</div>
         </div>
       </div>
-      <div className="flex justify-between text-xs text-gray-500 pt-2 border-t border-gray-100">
+      <div className="flex justify-between text-xs text-gray-500 dark:text-prosota-muted pt-2 border-t border-gray-100 dark:border-prosota-line">
         <span>Open: {risk_overview.open}</span>
         <span>Closed: {risk_overview.closed}</span>
       </div>
@@ -132,7 +132,7 @@ export function TopRisksWidget({ data, onNavigateToRisks }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Title</th>
           <th className="py-1.5 pr-2">Status</th>
@@ -143,17 +143,17 @@ export function TopRisksWidget({ data, onNavigateToRisks }: WidgetProps) {
       </thead>
       <tbody>
         {data.top_risks.map(r => (
-          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={onNavigateToRisks}>
-            <td className="py-1.5 pr-2 text-gray-500">{r.code}</td>
+          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer" onClick={onNavigateToRisks}>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
             <td className="py-1.5 pr-2">{r.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.status}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.status}</td>
             <td className="py-1.5 pr-2">{r.rating !== null ? Number(r.rating).toFixed(2) : '—'}</td>
             <td className="py-1.5 pr-2">{r.emv_cost !== null ? formatCurrency(r.emv_cost) : '—'}</td>
             <td className="py-1.5 pr-2">{r.emv_schedule_days !== null ? Number(r.emv_schedule_days).toFixed(1) : '—'}</td>
           </tr>
         ))}
         {data.top_risks.length === 0 && (
-          <tr><td colSpan={6} className="py-3 text-center text-gray-400">No risks yet.</td></tr>
+          <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No risks yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -228,7 +228,7 @@ export function BaselineVarianceTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Activity</th>
           <th className="py-1.5 pr-2">Baseline Finish</th>
@@ -239,17 +239,17 @@ export function BaselineVarianceTableWidget({ data }: WidgetProps) {
       <tbody>
         {ranked.map(a => (
           <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{a.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
             <td className="py-1.5 pr-2">{a.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(a.bl_finish)}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(a.finish)}</td>
-            <td className={`py-1.5 pr-2 font-medium ${a.variance_days! > 0 ? 'text-red-600' : 'text-green-600'}`}>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.bl_finish)}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
+            <td className={`py-1.5 pr-2 font-medium ${a.variance_days! > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600'}`}>
               {a.variance_days! > 0 ? `+${a.variance_days}` : a.variance_days}d
             </td>
           </tr>
         ))}
         {ranked.length === 0 && (
-          <tr><td colSpan={5} className="py-3 text-center text-gray-400">No baseline variance yet.</td></tr>
+          <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No baseline variance yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -260,7 +260,7 @@ export function MilestonesTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Milestone</th>
           <th className="py-1.5 pr-2">Baseline Finish</th>
           <th className="py-1.5 pr-2">Current Finish</th>
@@ -271,15 +271,15 @@ export function MilestonesTableWidget({ data }: WidgetProps) {
         {data.milestones.map(m => (
           <tr key={m.id} className="border-b border-gray-50">
             <td className="py-1.5 pr-2">{m.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(m.bl_finish)}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(m.finish)}</td>
-            <td className={`py-1.5 pr-2 font-medium ${m.variance_days !== null && m.variance_days > 0 ? 'text-red-600' : 'text-gray-500'}`}>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.bl_finish)}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.finish)}</td>
+            <td className={`py-1.5 pr-2 font-medium ${m.variance_days !== null && m.variance_days > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>
               {m.variance_days === null ? '—' : m.variance_days > 0 ? `+${m.variance_days}d` : `${m.variance_days}d`}
             </td>
           </tr>
         ))}
         {data.milestones.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No milestones yet.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No milestones yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -291,7 +291,7 @@ export function CriticalActivitiesTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Activity</th>
           <th className="py-1.5 pr-2">Finish</th>
@@ -301,14 +301,14 @@ export function CriticalActivitiesTableWidget({ data }: WidgetProps) {
       <tbody>
         {critical.map(a => (
           <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{a.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
             <td className="py-1.5 pr-2">{a.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(a.finish)}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
             <td className="py-1.5 pr-2">{a.pct_complete !== null ? `${Number(a.pct_complete).toFixed(0)}%` : '—'}</td>
           </tr>
         ))}
         {critical.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No critical activities.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No critical activities.</td></tr>
         )}
       </tbody>
     </table>
@@ -423,7 +423,7 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks }: WidgetProps
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Title</th>
           <th className="py-1.5 pr-2">Category</th>
@@ -434,17 +434,17 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks }: WidgetProps
       </thead>
       <tbody>
         {open.map(r => (
-          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={onNavigateToRisks}>
-            <td className="py-1.5 pr-2 text-gray-500">{r.code}</td>
+          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer" onClick={onNavigateToRisks}>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
             <td className="py-1.5 pr-2">{r.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.category ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.risk_owner ?? '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.category ?? '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.risk_owner ?? '—'}</td>
             <td className="py-1.5 pr-2">{r.rating !== null ? Number(r.rating).toFixed(2) : '—'}</td>
             <td className="py-1.5 pr-2">{r.emv_cost !== null ? formatCurrency(r.emv_cost) : '—'}</td>
           </tr>
         ))}
         {open.length === 0 && (
-          <tr><td colSpan={6} className="py-3 text-center text-gray-400">No open risks.</td></tr>
+          <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No open risks.</td></tr>
         )}
       </tbody>
     </table>
@@ -513,14 +513,14 @@ export function BudgetUtilisationWidget({ data }: WidgetProps) {
   const pct = bacTotal > 0 ? Math.round((acTotal / bacTotal) * 100) : 0
   return (
     <div className="h-full flex flex-col justify-center gap-2">
-      <div className="flex justify-between text-xs text-gray-500">
+      <div className="flex justify-between text-xs text-gray-500 dark:text-prosota-muted">
         <span>Actuals spent</span>
-        <span className="font-medium text-gray-900">{pct}%</span>
+        <span className="font-medium text-gray-900 dark:text-prosota-paper">{pct}%</span>
       </div>
-      <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+      <div className="h-3 bg-gray-100 dark:bg-prosota-panel2 rounded-full overflow-hidden">
         <div className={`h-full ${pct > 100 ? 'bg-red-500' : pct > 85 ? 'bg-amber-500' : 'bg-green-500'}`} style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
-      <div className="flex justify-between text-xs text-gray-400">
+      <div className="flex justify-between text-xs text-gray-400 dark:text-prosota-muted">
         <span>{formatCurrency(acTotal)}</span>
         <span>{formatCurrency(bacTotal)}</span>
       </div>
@@ -561,7 +561,7 @@ export function CostElementsTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Description</th>
           <th className="py-1.5 pr-2">Budget</th>
@@ -573,7 +573,7 @@ export function CostElementsTableWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(el => (
           <tr key={el.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{el.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{el.code}</td>
             <td className="py-1.5 pr-2">{el.description}</td>
             <td className="py-1.5 pr-2">{el.bac !== null ? formatCurrency(el.bac) : '—'}</td>
             <td className="py-1.5 pr-2">{el.ac !== null ? formatCurrency(el.ac) : '—'}</td>
@@ -584,7 +584,7 @@ export function CostElementsTableWidget({ data }: WidgetProps) {
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={6} className="py-3 text-center text-gray-400">No cost elements yet.</td></tr>
+          <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No cost elements yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -632,7 +632,7 @@ export function IssuesAgeingTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Issue</th>
           <th className="py-1.5 pr-2">Owner</th>
@@ -643,15 +643,15 @@ export function IssuesAgeingTableWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(i => (
           <tr key={i.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{i.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
             <td className="py-1.5 pr-2">{i.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{i.owner ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{i.severity ?? '—'}</td>
-            <td className={`py-1.5 pr-2 font-medium ${i.daysOpen > 30 ? 'text-red-600' : 'text-gray-700'}`}>{i.daysOpen}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.owner ?? '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.severity ?? '—'}</td>
+            <td className={`py-1.5 pr-2 font-medium ${i.daysOpen > 30 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{i.daysOpen}</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={5} className="py-3 text-center text-gray-400">No open issues.</td></tr>
+          <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No open issues.</td></tr>
         )}
       </tbody>
     </table>
@@ -694,7 +694,7 @@ export function DecisionsPendingTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Decision</th>
           <th className="py-1.5 pr-2">Decision Maker</th>
@@ -706,17 +706,17 @@ export function DecisionsPendingTableWidget({ data }: WidgetProps) {
           const overdue = i.required_by !== null && new Date(i.required_by) < now
           return (
             <tr key={i.id} className="border-b border-gray-50">
-              <td className="py-1.5 pr-2 text-gray-500">{i.code}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
               <td className="py-1.5 pr-2">{i.title}</td>
-              <td className="py-1.5 pr-2 text-gray-500">{i.decision_maker ?? '—'}</td>
-              <td className={`py-1.5 pr-2 font-medium ${overdue ? 'text-red-600' : 'text-gray-700'}`}>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.decision_maker ?? '—'}</td>
+              <td className={`py-1.5 pr-2 font-medium ${overdue ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>
                 {formatDate(i.required_by)}{overdue ? ' (overdue)' : ''}
               </td>
             </tr>
           )
         })}
         {rows.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No pending decisions.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No pending decisions.</td></tr>
         )}
       </tbody>
     </table>
@@ -810,7 +810,7 @@ export function ResourceAssignmentsTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Resource</th>
           <th className="py-1.5 pr-2">Role</th>
           <th className="py-1.5 pr-2">Activity</th>
@@ -821,13 +821,13 @@ export function ResourceAssignmentsTableWidget({ data }: WidgetProps) {
         {rows.map(a => (
           <tr key={a.id} className="border-b border-gray-50">
             <td className="py-1.5 pr-2">{a.resource_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{a.role ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{a.activity_task_name}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.role ?? '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.activity_task_name}</td>
             <td className="py-1.5 pr-2">{formatCurrency(a.budget)}</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No resource assignments yet.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No resource assignments yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -849,7 +849,7 @@ export function TopResourcesByBudgetWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Resource</th>
           <th className="py-1.5 pr-2">Type</th>
           <th className="py-1.5 pr-2">Activities</th>
@@ -860,13 +860,13 @@ export function TopResourcesByBudgetWidget({ data }: WidgetProps) {
         {rows.map(r => (
           <tr key={r.name} className="border-b border-gray-50">
             <td className="py-1.5 pr-2">{r.name}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.type}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.activityCount}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.type}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.activityCount}</td>
             <td className="py-1.5 pr-2 font-medium">{formatCurrency(r.budget)}</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No resource assignments yet.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No resource assignments yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -889,17 +889,17 @@ export function DcmaScoreWidget({ data }: WidgetProps) {
   return (
     <div className="h-full flex flex-col justify-center gap-2">
       <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-gray-900">
+        <span className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">
           {dcma_quality.passing_count}/{dcma_quality.total_checks}
         </span>
-        <span className="text-sm text-gray-500">Grade: {grade}</span>
+        <span className="text-sm text-gray-500 dark:text-prosota-muted">Grade: {grade}</span>
       </div>
-      <div className="text-xs text-gray-400">
+      <div className="text-xs text-gray-400 dark:text-prosota-muted">
         {dcma_quality.scope_name ? `Scope: ${dcma_quality.scope_name} · ` : ''}
         {dcma_quality.activity_count} activities analyzed
       </div>
       <div className="flex gap-3 text-xs mt-1">
-        <span className="text-red-600">{dcma_quality.failing_count} failing</span>
+        <span className="text-red-600 dark:text-red-400">{dcma_quality.failing_count} failing</span>
         <span className="text-amber-600">{dcma_quality.warning_count} warning</span>
         <span className="text-green-600">{dcma_quality.passing_count} passing</span>
       </div>
@@ -912,18 +912,18 @@ export function ClashSummaryWidget({ data }: WidgetProps) {
   return (
     <div className="h-full flex flex-col gap-2 overflow-auto">
       <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-gray-900">{clash_summary.total_clashes}</span>
-        <span className="text-xs text-gray-400">across {clash_summary.test_count} clash test{clash_summary.test_count === 1 ? '' : 's'}</span>
+        <span className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">{clash_summary.total_clashes}</span>
+        <span className="text-xs text-gray-400 dark:text-prosota-muted">across {clash_summary.test_count} clash test{clash_summary.test_count === 1 ? '' : 's'}</span>
       </div>
       <div className="flex gap-3 text-xs">
-        <span className="text-red-600">{clash_summary.new_count} new</span>
+        <span className="text-red-600 dark:text-red-400">{clash_summary.new_count} new</span>
         <span className="text-amber-600">{clash_summary.reviewed_count} reviewed</span>
         <span className="text-green-600">{clash_summary.approved_count} approved</span>
       </div>
       {clash_summary.by_test.length > 0 && (
         <table className="w-full text-xs mt-1">
           <thead>
-            <tr className="text-left text-gray-400 border-b border-gray-100">
+            <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
               <th className="py-1 pr-2">Test</th>
               <th className="py-1 pr-2">Type</th>
               <th className="py-1 pr-2">Total</th>
@@ -936,9 +936,9 @@ export function ClashSummaryWidget({ data }: WidgetProps) {
             {clash_summary.by_test.map(t => (
               <tr key={t.test_id} className="border-b border-gray-50">
                 <td className="py-1 pr-2">{t.test_name}</td>
-                <td className="py-1 pr-2 text-gray-500">{t.test_type}</td>
+                <td className="py-1 pr-2 text-gray-500 dark:text-prosota-muted">{t.test_type}</td>
                 <td className="py-1 pr-2">{t.total}</td>
-                <td className="py-1 pr-2 text-red-600">{t.new_count}</td>
+                <td className="py-1 pr-2 text-red-600 dark:text-red-400">{t.new_count}</td>
                 <td className="py-1 pr-2 text-amber-600">{t.reviewed_count}</td>
                 <td className="py-1 pr-2 text-green-600">{t.approved_count}</td>
               </tr>
@@ -961,7 +961,7 @@ export function ClashDetailTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Test</th>
           <th className="py-1.5 pr-2">Element A</th>
           <th className="py-1.5 pr-2">Element B</th>
@@ -972,13 +972,13 @@ export function ClashDetailTableWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(p => (
           <tr key={p.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{p.test_name}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{p.test_name}</td>
             <td className="py-1.5 pr-2">{p.element_a_label}</td>
             <td className="py-1.5 pr-2">{p.element_b_label}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{p.distance_mm !== null ? `${p.distance_mm.toFixed(0)}mm` : '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{p.distance_mm !== null ? `${p.distance_mm.toFixed(0)}mm` : '—'}</td>
             <td className="py-1.5 pr-2">
               <span className={`px-1.5 py-0.5 rounded text-xs ${
-                p.status === 'new' ? 'bg-red-50 text-red-700' : p.status === 'reviewed' ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+                p.status === 'new' ? 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-400' : p.status === 'reviewed' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' : 'bg-green-50 text-green-700 dark:bg-green-500/15 dark:text-green-400'
               }`}>
                 {p.status}
               </span>
@@ -986,7 +986,7 @@ export function ClashDetailTableWidget({ data }: WidgetProps) {
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={5} className="py-3 text-center text-gray-400">No clashes recorded yet.</td></tr>
+          <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No clashes recorded yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -1003,7 +1003,7 @@ export function EacForecastComparisonWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Method</th>
           <th className="py-1.5 pr-2">EAC</th>
           <th className="py-1.5 pr-2">Assumption</th>
@@ -1012,9 +1012,9 @@ export function EacForecastComparisonWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(([method, value, assumption]) => (
           <tr key={method} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 font-mono text-gray-600">{method}</td>
+            <td className="py-1.5 pr-2 font-mono text-gray-600 dark:text-prosota-muted">{method}</td>
             <td className="py-1.5 pr-2 font-medium">{value !== null ? formatCurrency(value) : '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{assumption}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{assumption}</td>
           </tr>
         ))}
       </tbody>
@@ -1035,7 +1035,7 @@ export function EarnedValueSummaryTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Metric</th>
           <th className="py-1.5 pr-2">Value</th>
           <th className="py-1.5 pr-2">Status</th>
@@ -1062,7 +1062,7 @@ export function NearCriticalWatchListWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Activity</th>
           <th className="py-1.5 pr-2">Total Float (h)</th>
@@ -1072,14 +1072,14 @@ export function NearCriticalWatchListWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(a => (
           <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{a.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
             <td className="py-1.5 pr-2">{a.task_name}</td>
             <td className="py-1.5 pr-2 font-medium text-amber-600">{Number(a.total_float_hours).toFixed(1)}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(a.finish)}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No near-critical activities.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No near-critical activities.</td></tr>
         )}
       </tbody>
     </table>
@@ -1130,8 +1130,8 @@ export function ProjectInfoWidget({ data }: WidgetProps) {
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 h-full overflow-auto">
       {rows.map(([label, value]) => (
         <div key={label}>
-          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</div>
-          <div className="text-sm font-semibold text-gray-900">{value}</div>
+          <div className="text-xs text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1">{label}</div>
+          <div className="text-sm font-semibold text-gray-900 dark:text-prosota-paper">{value}</div>
         </div>
       ))}
     </div>
@@ -1159,23 +1159,23 @@ export function CameraViewGalleryWidget({ projectId }: WidgetProps) {
 
   const selected = views.find(v => v.id === selectedId) ?? null
 
-  if (!projectId) return <span className="text-xs text-gray-400">No project selected.</span>
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
 
   return (
     <div className="h-full flex flex-col gap-2">
       <select
-        className="border border-gray-300 rounded-md px-2 py-1 text-xs"
+        className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1 text-xs"
         value={selectedId}
         onChange={e => setSelectedId(e.target.value)}
       >
         {views.length === 0 && <option value="">No saved camera views</option>}
         {views.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
       </select>
-      <div className="flex-1 min-h-0 bg-gray-50 rounded-md overflow-hidden flex items-center justify-center">
+      <div className="flex-1 min-h-0 bg-gray-50 dark:bg-prosota-panel2 rounded-md overflow-hidden flex items-center justify-center">
         {selected?.thumbnail_data_url ? (
           <img src={selected.thumbnail_data_url} alt={selected.name} className="max-w-full max-h-full object-contain" />
         ) : (
-          <span className="text-xs text-gray-400 px-4 text-center">
+          <span className="text-xs text-gray-400 dark:text-prosota-muted px-4 text-center">
             {selected ? 'No thumbnail saved — reopen the 4D module and re-save this view.' : 'Save a Camera View in the 4D module to see it here.'}
           </span>
         )}
@@ -1216,25 +1216,25 @@ export function FourDVideoGalleryWidget({ projectId }: WidgetProps) {
     return () => { if (videoUrl) URL.revokeObjectURL(videoUrl) }
   }, [videoUrl])
 
-  if (!projectId) return <span className="text-xs text-gray-400">No project selected.</span>
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
 
   return (
     <div className="h-full flex flex-col gap-2">
       <select
-        className="border border-gray-300 rounded-md px-2 py-1 text-xs"
+        className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1 text-xs"
         value={selectedId}
         onChange={e => setSelectedId(e.target.value)}
       >
         {videos.length === 0 && <option value="">No saved 4D videos</option>}
         {videos.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
       </select>
-      <div className="flex-1 min-h-0 bg-gray-50 rounded-md overflow-hidden flex items-center justify-center">
+      <div className="flex-1 min-h-0 bg-gray-50 dark:bg-prosota-panel2 rounded-md overflow-hidden flex items-center justify-center">
         {error ? (
-          <span className="text-xs text-red-600">{error}</span>
+          <span className="text-xs text-red-600 dark:text-red-400">{error}</span>
         ) : videoUrl ? (
           <video src={videoUrl} controls className="max-w-full max-h-full" />
         ) : (
-          <span className="text-xs text-gray-400 px-4 text-center">
+          <span className="text-xs text-gray-400 dark:text-prosota-muted px-4 text-center">
             {videos.length === 0 ? 'Export a 4D video from the 4D module to see it here.' : 'Loading…'}
           </span>
         )}
@@ -1262,7 +1262,7 @@ export function LookaheadPlannerWidget({ data }: WidgetProps) {
           <button
             key={w}
             onClick={() => setWindowWeeks(w)}
-            className={`text-xs px-2 py-0.5 rounded border ${windowWeeks === w ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            className={`text-xs px-2 py-0.5 rounded border ${windowWeeks === w ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
           >
             {w}-Week
           </button>
@@ -1271,7 +1271,7 @@ export function LookaheadPlannerWidget({ data }: WidgetProps) {
       <div className="flex-1 min-h-0 overflow-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-left text-gray-400 border-b border-gray-100">
+            <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
               <th className="py-1.5 pr-2">Code</th>
               <th className="py-1.5 pr-2">Activity</th>
               <th className="py-1.5 pr-2">Start</th>
@@ -1282,24 +1282,24 @@ export function LookaheadPlannerWidget({ data }: WidgetProps) {
           <tbody>
             {rows.map(i => (
               <tr key={i.id} className="border-b border-gray-50">
-                <td className="py-1.5 pr-2 text-gray-500">{i.code}</td>
+                <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
                 <td className="py-1.5 pr-2">{i.task_name}</td>
-                <td className="py-1.5 pr-2 text-gray-500">{formatDate(i.start)}</td>
+                <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(i.start)}</td>
                 <td className="py-1.5 pr-2">{i.pct_complete !== null ? `${Number(i.pct_complete).toFixed(0)}%` : '—'}</td>
                 <td className="py-1.5 pr-2">
-                  {i.has_incomplete_predecessor && <span className="text-red-600">Predecessor incomplete</span>}
+                  {i.has_incomplete_predecessor && <span className="text-red-600 dark:text-red-400">Predecessor incomplete</span>}
                   {!i.has_incomplete_predecessor && i.is_critical && <span className="text-amber-600">Critical</span>}
                   {!i.has_incomplete_predecessor && !i.is_critical && <span className="text-green-600">Ready</span>}
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={5} className="py-3 text-center text-gray-400">Nothing scheduled to start in this window.</td></tr>
+              <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">Nothing scheduled to start in this window.</td></tr>
             )}
           </tbody>
         </table>
       </div>
-      <div className="text-xs text-gray-400 border-t border-gray-100 pt-1.5 space-y-0.5">
+      <div className="text-xs text-gray-400 dark:text-prosota-muted border-t border-gray-100 dark:border-prosota-line pt-1.5 space-y-0.5">
         <div>{s.incomplete_predecessor_count} activities due to start with an incomplete predecessor</div>
         <div>{s.critical_in_window} critical activities in the {s.window_weeks}-week window</div>
         <div>{s.healthy_float_count} activities with healthy float</div>
@@ -1318,7 +1318,7 @@ export function MitigationActionsTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Risk</th>
           <th className="py-1.5 pr-2">Action</th>
           <th className="py-1.5 pr-2">Owner</th>
@@ -1330,16 +1330,16 @@ export function MitigationActionsTableWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(a => (
           <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{a.risk_code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.risk_code}</td>
             <td className="py-1.5 pr-2">{a.description}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{a.owner ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{formatDate(a.due_date)}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{a.status}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.owner ?? '—'}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.due_date)}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.status}</td>
             <td className="py-1.5 pr-2">{a.pct_complete}%</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={6} className="py-3 text-center text-gray-400">No mitigation actions logged yet.</td></tr>
+          <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No mitigation actions logged yet.</td></tr>
         )}
       </tbody>
     </table>
@@ -1356,7 +1356,7 @@ export function RiskAgeingTableWidget({ data }: WidgetProps) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-left text-gray-400 border-b border-gray-100">
+        <tr className="text-left text-gray-400 dark:text-prosota-muted border-b border-gray-100 dark:border-prosota-line">
           <th className="py-1.5 pr-2">Code</th>
           <th className="py-1.5 pr-2">Title</th>
           <th className="py-1.5 pr-2">Owner</th>
@@ -1366,14 +1366,14 @@ export function RiskAgeingTableWidget({ data }: WidgetProps) {
       <tbody>
         {rows.map(r => (
           <tr key={r.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500">{r.code}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
             <td className="py-1.5 pr-2">{r.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500">{r.risk_owner ?? '—'}</td>
-            <td className={`py-1.5 pr-2 font-medium ${r.daysOpen > 90 ? 'text-red-600' : 'text-gray-700'}`}>{r.daysOpen}</td>
+            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.risk_owner ?? '—'}</td>
+            <td className={`py-1.5 pr-2 font-medium ${r.daysOpen > 90 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{r.daysOpen}</td>
           </tr>
         ))}
         {rows.length === 0 && (
-          <tr><td colSpan={4} className="py-3 text-center text-gray-400">No open risks with a raised date.</td></tr>
+          <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No open risks with a raised date.</td></tr>
         )}
       </tbody>
     </table>
@@ -1407,7 +1407,7 @@ export function ProjectNarrativeWidget({ data }: WidgetProps) {
   if (clash_summary.total_clashes > 0) bullets.push(`${clash_summary.new_count} of ${clash_summary.total_clashes} clashes still unreviewed.`)
 
   return (
-    <ul className="text-xs text-gray-700 space-y-1.5 list-disc pl-4">
+    <ul className="text-xs text-gray-700 dark:text-prosota-muted space-y-1.5 list-disc pl-4">
       {bullets.map((b, i) => <li key={i}>{b}</li>)}
     </ul>
   )

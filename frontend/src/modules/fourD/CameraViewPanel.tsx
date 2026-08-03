@@ -37,19 +37,19 @@ function Item({ view, onApply, onRename, onDelete }: {
             if (e.key === 'Enter') commitRename()
             if (e.key === 'Escape') { setDraftName(view.name); setEditing(false) }
           }}
-          className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+          className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
         />
       ) : (
         <span
           onClick={onApply}
           onDoubleClick={e => { e.stopPropagation(); setEditing(true) }}
-          className="flex-1 text-xs text-gray-700 truncate cursor-pointer hover:text-gray-900"
+          className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-pointer hover:text-gray-900"
           title="Click to jump to this view — double-click to rename"
         >
           {view.name}
         </span>
       )}
-      <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+      <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
     </div>
   )
 }
@@ -68,12 +68,12 @@ function Item({ view, onApply, onRename, onDelete }: {
 export function CameraViewPanel({ views, error, onApply, onRename, onDelete }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Camera Views</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Camera Views</span>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {views.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           Line up the angle you want in the viewport, then click "Save View" in the toolbar above it to bookmark it — click any saved view here to jump back.
         </p>
       ) : (

@@ -39,9 +39,9 @@ interface Props {
 // Same compact color-swatch row AnnotationsPanel.tsx's own ColorField uses.
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+    <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
       <span className="w-16 shrink-0">{label}</span>
-      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 rounded shrink-0" />
+      <input type="color" value={value} onChange={e => onChange(e.target.value)} className="w-6 h-6 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded shrink-0" />
     </label>
   )
 }
@@ -87,27 +87,27 @@ function Item({
               if (e.key === 'Enter') commitRename()
               if (e.key === 'Escape') { setDraftName(zone.name); setEditing(false) }
             }}
-            className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+            className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
           />
         ) : (
-          <span onDoubleClick={() => setEditing(true)} className="flex-1 text-xs text-gray-700 truncate cursor-text" title="Double-click to rename — also the in-3D label text">
+          <span onDoubleClick={() => setEditing(true)} className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text" title="Double-click to rename — also the in-3D label text">
             {zone.name}
           </span>
         )}
-        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+        <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
       {zone.shape === 'circle' ? (
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={onToggleAddPoints}
             className={`text-xs px-2 py-0.5 rounded border font-medium ${
-              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
             title={addingPoints ? 'Click in the viewport to place the center' : 'Click in the viewport to place (or move) the center'}
           >
             {addingPoints ? 'Click viewport…' : zone.points.length === 0 ? '+ Center' : 'Move center'}
           </button>
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-gray-400 dark:text-prosota-muted">
             {zone.points.length === 0 ? 'no center yet' : 'drag the center point in the viewport, or edit Radius below'}
           </span>
         </div>
@@ -116,7 +116,7 @@ function Item({
           <button
             onClick={onToggleAddPoints}
             className={`text-xs px-2 py-0.5 rounded border font-medium ${
-              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              addingPoints ? 'bg-sky-600 text-white border-sky-600' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
             title={addingPoints ? 'Click in the viewport to add corners — click again to stop' : 'Click points in the viewport to trace this area'}
           >
@@ -125,20 +125,20 @@ function Item({
           <button
             onClick={onRemoveLastPoint}
             disabled={zone.points.length === 0}
-            className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
           >
             Undo last point
           </button>
-          <span className="text-xs text-gray-400">{zone.points.length} pt{zone.points.length === 1 ? '' : 's'}</span>
+          <span className="text-xs text-gray-400 dark:text-prosota-muted">{zone.points.length} pt{zone.points.length === 1 ? '' : 's'}</span>
         </div>
       )}
       <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
         {styleOpen ? '▾' : '▸'} Style
       </button>
       {styleOpen && (
-        <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+        <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           <ColorField label="Fill" value={zone.fill_color} onChange={v => onUpdateStyle({ fill_color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Opacity</span>
             <input
               type="range" min={0} max={1} step={0.05}
@@ -149,21 +149,21 @@ function Item({
             <span className="w-8 text-right shrink-0">{Math.round(zone.fill_opacity * 100)}%</span>
           </label>
           <ColorField label="Border" value={zone.border_color} onChange={v => onUpdateStyle({ border_color: v })} />
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Border width</span>
             <input
               type="number" min={1} max={20} step={1}
               value={zone.border_width}
               onChange={e => onUpdateStyle({ border_width: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Border style</span>
             <select
               value={zone.border_style}
               onChange={e => onUpdateStyle({ border_style: e.target.value as ZoneBorderStyle })}
-              className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             >
               <option value="solid">Solid</option>
               <option value="dashed">Dashed</option>
@@ -171,57 +171,57 @@ function Item({
           </label>
           {zone.border_style === 'dashed' && (
             <>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Dash size</span>
                 <input
                   type="number" min={0.05} step={0.05}
                   value={zone.border_dash_size}
                   onChange={e => onUpdateStyle({ border_dash_size: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Gap size</span>
                 <input
                   type="number" min={0.05} step={0.05}
                   value={zone.border_gap_size}
                   onChange={e => onUpdateStyle({ border_gap_size: Number(e.target.value) })}
-                  className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 />
               </label>
             </>
           )}
           {zone.shape === 'circle' && (
-            <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="World-unit radius of the clearance circle, e.g. a crane's swing radius">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted" title="World-unit radius of the clearance circle, e.g. a crane's swing radius">
               <span className="w-16 shrink-0">Radius</span>
               <input
                 type="number" min={0.01} step={0.5}
                 value={zone.radius}
                 onChange={e => onUpdateStyle({ radius: Number(e.target.value) })}
-                className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+                className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
               />
             </label>
           )}
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Elevation</span>
             <input
               type="number" step={0.1}
               value={zone.elevation}
               onChange={e => onUpdateStyle({ elevation: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-16 shrink-0">Font size</span>
             <input
               type="number" min={6} step={1}
               value={zone.label_font_size}
               onChange={e => onUpdateStyle({ label_font_size: Number(e.target.value) })}
-              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <label
-            className="flex items-center gap-1.5 text-[11px] text-gray-500"
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
             title="'Draw' traces the border in over the first half of the Start/End window below, then fades the fill in over the second half. 'Flash' keeps the border fixed and pulses the fill's opacity instead. 'Sweep' (circle only) grows a pie wedge from 0° to a full circle."
           >
             <input type="checkbox" checked={zone.animate} onChange={e => onUpdateStyle({ animate: e.target.checked })} />
@@ -229,12 +229,12 @@ function Item({
           </label>
           {zone.animate && (
             <>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Mode</span>
                 <select
                   value={zone.animation_mode}
                   onChange={e => onUpdateStyle({ animation_mode: e.target.value as ZoneAnimationMode })}
-                  className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
+                  className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
                 >
                   <option value="draw">Draw (border, then fill)</option>
                   <option value="flash">Flash (fill pulses)</option>
@@ -244,7 +244,7 @@ function Item({
               {/* Frames/Seconds/Date + Key button, not a raw datetime-local
                   field (2026-07-30) — see PathsPanel.tsx's own matching
                   Start/End fields for the full rationale; identical here. */}
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">Start</span>
                 <span className="flex-1 truncate" title={animWindow?.start ? animWindow.start.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.start && format ? formatTimelineValue(animWindow.start, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -252,12 +252,12 @@ function Item({
                 <button
                   onClick={onKeyAnimStart}
                   title="Key the current playhead as this zone's reveal Start"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
                 <span className="w-16 shrink-0">End</span>
                 <span className="flex-1 truncate" title={animWindow?.end ? animWindow.end.toLocaleString() : 'Not keyed yet'}>
                   {animWindow?.end && format ? formatTimelineValue(animWindow.end, format.scheduleStart, format.timeDisplayMode, format.speedDaysPerSecond, format.fps) : 'Not keyed'}
@@ -265,13 +265,13 @@ function Item({
                 <button
                   onClick={onKeyAnimEnd}
                   title="Key the current playhead as this zone's reveal End"
-                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 shrink-0"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shrink-0"
                 >
                   Key
                 </button>
               </label>
               <label
-                className="flex items-center gap-1.5 text-[11px] text-gray-500"
+                className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted"
                 title="Repeats every time the playhead passes End, instead of holding at rest (a 'flash' with Loop off plays one fade in/out and stops)"
               >
                 <input type="checkbox" checked={zone.animation_loop} onChange={e => onUpdateStyle({ animation_loop: e.target.checked })} />
@@ -300,10 +300,10 @@ export function ZonesPanel({
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white gap-1.5 flex-wrap">
-        <span className="text-xs text-gray-500 shrink-0">Zones</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel gap-1.5 flex-wrap">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted shrink-0">Zones</span>
         <div className="flex items-center gap-1">
-          <button onClick={() => onCreate('polygon')} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">
+          <button onClick={() => onCreate('polygon')} className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
             + Zone
           </button>
           {/* Radial/clearance zone (2026-07-30, per Maro: "the radial zone
@@ -311,14 +311,14 @@ export function ZonesPanel({
               creation (zone.py's own docstring), so this is a separate
               button rather than a switchable field, same "+ Placemark"/
               "+ Comment" precedent AnnotationsPanel.tsx already uses. */}
-          <button onClick={() => onCreate('circle')} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50" title="A circular clearance zone, e.g. a crane's swing radius">
+          <button onClick={() => onCreate('circle')} className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2" title="A circular clearance zone, e.g. a crane's swing radius">
             + Circle
           </button>
         </div>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {zones.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           "+ Zone" then "+ Point" to trace a boundary, or "+ Circle" then click once to place a clearance radius.
         </p>
       ) : (

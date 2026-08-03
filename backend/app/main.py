@@ -11,6 +11,7 @@ from app.api.calendar_breaks import router as calendar_breaks_router
 from app.api.calendar_exceptions import router as calendar_exceptions_router
 from app.api.calendars import router as calendars_router
 from app.api.camera_views import router as camera_views_router
+from app.api.cameras import router as cameras_router
 from app.api.clash_results import router as clash_results_router
 from app.api.clash_tests import router as clash_tests_router
 from app.api.collection_members import router as collection_members_router
@@ -143,6 +144,7 @@ app.include_router(model3d_files_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(fourd_videos_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(section_boxes_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(camera_views_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(cameras_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(collections_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(collection_members_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(element_transforms_router, prefix="/api/v1", dependencies=_auth)

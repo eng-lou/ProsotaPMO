@@ -51,9 +51,11 @@ from app.models.model3d_file import Model3DFile
 from app.models.fourd_video import FourDVideo
 from app.models.section_box import SectionBox
 from app.models.camera_view import CameraView
+from app.models.camera import Camera
 from app.models.element_transform import ElementTransform
 from app.models.path import Path
 from app.models.path_follower import PathFollower
+from app.models.zone import Zone
 from app.models.annotation import Annotation
 from app.models.clash_test import ClashTest
 from app.models.clash_result import ClashResult
@@ -126,9 +128,11 @@ __all__ = [
     "FourDVideo",
     "SectionBox",
     "CameraView",
+    "Camera",
     "ElementTransform",
     "Path",
     "PathFollower",
+    "Zone",
     "Annotation",
     "ClashTest",
     "ClashResult",

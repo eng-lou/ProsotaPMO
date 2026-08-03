@@ -53,15 +53,15 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
         return (
           <div key={link.id} className="space-y-0.5">
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="flex-1 min-w-0 truncate text-gray-700" title={activity?.task_name ?? link.activity_id}>
+              <span className="flex-1 min-w-0 truncate text-gray-700 dark:text-prosota-muted" title={activity?.task_name ?? link.activity_id}>
                 {activity ? `${activity.code}: ${activity.task_name}` : '(activity not found)'}
               </span>
-              <button onClick={() => onUnlink(link.id)} title="Unlink" className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+              <button onClick={() => onUnlink(link.id)} title="Unlink" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
             </div>
             <select
               value={link.animation_profile_id ?? ''}
               onChange={e => onAssignProfile(link.id, e.target.value || null)}
-              className="w-full text-[11px] border border-gray-200 rounded px-1.5 py-0.5 text-gray-500"
+              className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
               title={inheritedProfileName ? `Inherits "${inheritedProfileName}" from this activity unless overridden here` : undefined}
             >
               <option value="">{inheritedProfileName ? `Default (activity: ${inheritedProfileName})` : 'Default (no animation profile)'}</option>
@@ -70,7 +70,7 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
           </div>
         )
       })}
-      {links.length === 0 && <p className="text-xs text-gray-400">Not linked to any activity.</p>}
+      {links.length === 0 && <p className="text-xs text-gray-400 dark:text-prosota-muted">Not linked to any activity.</p>}
       <ActivityPicker
         activities={pickable}
         value={picking}

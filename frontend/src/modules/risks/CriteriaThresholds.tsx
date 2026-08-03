@@ -6,7 +6,7 @@ interface CriteriaThresholdsProps {
   projectId: string
 }
 
-const cellInput = 'w-20 border border-gray-200 rounded px-1.5 py-1 text-xs'
+const cellInput = 'w-20 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-1 text-xs'
 
 // Project-level, editable definitions of what each probability/impact level means
 // (e.g. "Medium probability = 25-50%"). Standardises risk ratings across the team —
@@ -45,27 +45,27 @@ export function CriteriaThresholds({ projectId }: CriteriaThresholdsProps) {
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg mb-6">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg mb-6">
       <button
         onClick={() => setOpen(prev => !prev)}
-        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700"
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-prosota-muted"
       >
         Criteria &amp; Thresholds
-        <span className="text-gray-400 text-xs">{open ? 'Hide' : 'Show'}</span>
+        <span className="text-gray-400 dark:text-prosota-muted text-xs">{open ? 'Hide' : 'Show'}</span>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-gray-100">
-          {error && <p className="text-xs text-red-600 mt-3">{error}</p>}
+        <div className="px-4 pb-4 border-t border-gray-100 dark:border-prosota-line">
+          {error && <p className="text-xs text-red-600 dark:text-red-400 mt-3">{error}</p>}
           {loading ? (
-            <p className="text-xs text-gray-400 mt-3">Loading…</p>
+            <p className="text-xs text-gray-400 dark:text-prosota-muted mt-3">Loading…</p>
           ) : (
             <div className="grid grid-cols-2 gap-6 mt-3">
               <div>
-                <div className="text-xs font-semibold text-gray-600 mb-2">Probability criteria</div>
+                <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">Probability criteria</div>
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-left text-gray-400">
+                    <tr className="text-left text-gray-400 dark:text-prosota-muted">
                       <th className="pb-1">Level</th>
                       <th className="pb-1">Min</th>
                       <th className="pb-1">Max</th>
@@ -92,7 +92,7 @@ export function CriteriaThresholds({ projectId }: CriteriaThresholdsProps) {
                             className={cellInput}
                           />
                         </td>
-                        <td className="py-1 text-gray-500">{c.description}</td>
+                        <td className="py-1 text-gray-500 dark:text-prosota-muted">{c.description}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -100,10 +100,10 @@ export function CriteriaThresholds({ projectId }: CriteriaThresholdsProps) {
               </div>
 
               <div>
-                <div className="text-xs font-semibold text-gray-600 mb-2">Impact criteria</div>
+                <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">Impact criteria</div>
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-left text-gray-400">
+                    <tr className="text-left text-gray-400 dark:text-prosota-muted">
                       <th className="pb-1">Level</th>
                       <th className="pb-1">Cost £</th>
                       <th className="pb-1">Schedule (days)</th>

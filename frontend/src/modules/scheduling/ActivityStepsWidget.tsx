@@ -67,11 +67,11 @@ export function ActivityStepsWidget({ activityId }: Props) {
 
   return (
     <div className="p-3">
-      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Steps</div>
+      <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">Steps</div>
       {steps.length > 0 && (
         <ul className="space-y-1 mb-2">
           {steps.map((step, i) => (
-            <li key={step.id} className="flex items-center gap-1.5 text-xs text-gray-600 group">
+            <li key={step.id} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted group">
               <input type="checkbox" checked={step.is_complete} onChange={() => toggleComplete(step)} />
               {editingId === step.id ? (
                 <input
@@ -80,20 +80,20 @@ export function ActivityStepsWidget({ activityId }: Props) {
                   onChange={e => setEditName(e.target.value)}
                   onBlur={() => commitEdit(step)}
                   onKeyDown={e => { if (e.key === 'Enter') commitEdit(step); if (e.key === 'Escape') setEditingId(null) }}
-                  className="flex-1 border border-blue-400 rounded px-1 py-0.5 text-xs"
+                  className="flex-1 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                 />
               ) : (
                 <span
                   onDoubleClick={() => startEdit(step)}
                   title="Double-click to rename"
-                  className={`flex-1 ${step.is_complete ? 'line-through text-gray-400' : ''}`}
+                  className={`flex-1 ${step.is_complete ? 'line-through text-gray-400 dark:text-prosota-muted' : ''}`}
                 >
                   {step.name}
                 </span>
               )}
-              <button onClick={() => move(step, 'up')} disabled={i === 0} className="text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:hover:text-gray-300">▲</button>
-              <button onClick={() => move(step, 'down')} disabled={i === steps.length - 1} className="text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:hover:text-gray-300">▼</button>
-              <button onClick={() => handleDelete(step)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100">✕</button>
+              <button onClick={() => move(step, 'up')} disabled={i === 0} className="text-gray-300 dark:text-prosota-line hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-30 disabled:hover:text-gray-300">▲</button>
+              <button onClick={() => move(step, 'down')} disabled={i === steps.length - 1} className="text-gray-300 dark:text-prosota-line hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-30 disabled:hover:text-gray-300">▼</button>
+              <button onClick={() => handleDelete(step)} className="text-gray-300 dark:text-prosota-line hover:text-red-600 dark:hover:text-red-400 opacity-0 group-hover:opacity-100">✕</button>
             </li>
           ))}
         </ul>
@@ -104,9 +104,9 @@ export function ActivityStepsWidget({ activityId }: Props) {
           onChange={e => setNewName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
           placeholder="Add step…"
-          className="flex-1 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+          className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
         />
-        <button onClick={handleAdd} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add</button>
+        <button onClick={handleAdd} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add</button>
       </div>
     </div>
   )

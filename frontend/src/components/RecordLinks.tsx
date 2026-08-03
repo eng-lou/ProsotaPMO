@@ -65,16 +65,16 @@ export function RecordLinks({ recordType, recordId, candidates }: RecordLinksPro
   const labelFor = (type: string, id: string) =>
     candidates.find(c => c.type === type && c.id === id)?.label ?? `${type} (${id.slice(0, 8)})`
 
-  if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading links…</p>
+  if (loading) return <p className="text-xs text-gray-400 dark:text-prosota-muted px-4 py-3">Loading links…</p>
 
   return (
-    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+    <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line">
+      {error && <p className="text-xs text-red-600 dark:text-red-400 mb-2">{error}</p>}
 
       {links.length === 0 ? (
-        <p className="text-xs text-gray-400 mb-3">No linked records yet.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mb-3">No linked records yet.</p>
       ) : (
-        <ul className="text-xs text-gray-700 space-y-1 mb-3">
+        <ul className="text-xs text-gray-700 dark:text-prosota-paper space-y-1 mb-3">
           {links.map(link => {
             const isSource = link.source_id === recordId
             const otherType = isSource ? link.target_type : link.source_type
@@ -86,7 +86,7 @@ export function RecordLinks({ recordType, recordId, candidates }: RecordLinksPro
                   <span className="font-medium">{link.link_type}</span>{' '}
                   {isSource ? labelFor(otherType, otherId) : 'this'}
                 </span>
-                <button onClick={() => handleDelete(link.id)} className="text-gray-400 hover:text-red-600">
+                <button onClick={() => handleDelete(link.id)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">
                   remove
                 </button>
               </li>
@@ -99,14 +99,14 @@ export function RecordLinks({ recordType, recordId, candidates }: RecordLinksPro
         <select
           value={linkType}
           onChange={e => setLinkType(e.target.value)}
-          className="border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+          className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
         >
           {LINK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select
           value={targetId}
           onChange={e => setTargetId(e.target.value)}
-          className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+          className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
         >
           <option value="">Link to another record…</option>
           {candidates.map(c => (
@@ -116,7 +116,7 @@ export function RecordLinks({ recordType, recordId, candidates }: RecordLinksPro
         <button
           type="submit"
           disabled={!targetId}
-          className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded-md hover:bg-gray-900 disabled:opacity-40"
+          className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded-md hover:bg-gray-900 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40"
         >
           Add link
         </button>

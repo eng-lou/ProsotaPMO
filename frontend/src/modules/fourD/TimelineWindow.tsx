@@ -3,6 +3,7 @@ import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
 import { AnimationActorsList } from './AnimationActorsList'
 import type { AnimationProfile } from './animationProfiles'
+import type { Camera } from './cameras'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ModelElementLink } from './modelElementLinks'
 import type { Path } from './paths'
@@ -55,7 +56,18 @@ interface Props {
   animationProfiles: AnimationProfile[]
   paths: Path[]
   zones: Zone[]
-  onSelectActor: (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone', elementRef: string) => void
+  cameras: Camera[]
+  onSelectActor: (sourceKind: 'mesh' | 'ifc' | 'annotation' | 'path' | 'zone' | 'camera', elementRef: string) => void
+  // Keyframe-click-to-seek (2026-08-03, per Maro: "clicking it doesnt take
+  // me to the time/frame") — CamerasPanel.tsx is a sibling panel with no
+  // access to this component's own setCurrent, so FourD.tsx hands it this
+  // instead: a fresh {date, token} object each time it wants the scrubber
+  // moved. token (not just date) is what the effect below actually keys
+  // off, so seeking to the *same* date twice in a row (e.g. two clicks on
+  // the same keyframe) still fires — a raw Date dependency wouldn't retrigger
+  // for an equal-but-not-identical value in some cases, and comparing by
+  // getTime() adds a footgun-prone extra step for no benefit over a counter.
+  seekRequest: { date: Date; token: number } | null
   // Lifted to FourD.tsx (2026-07-30) — see that file's own header on these
   // three for the full "why" (PathsPanel.tsx/ZonesPanel.tsx need the same
   // shared speed/mode/fps for their own Start/End keyframe fields to read
@@ -100,7 +112,7 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 export function TimelineWindow({
   scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
-  elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, onSelectActor,
+  elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
   speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -238,6 +250,17 @@ export function TimelineWindow({
     setDisplayDate(clamped)
   }, [scheduleStart, effectiveScheduleEnd, dateRef])
 
+  // Keyframe-click-to-seek (2026-08-03) — see this component's own
+  // seekRequest prop comment for why a {date, token} pair rather than a
+  // bare Date. Keyed on seekRequest?.token alone (not the whole object) so
+  // this only fires on an actual new request, not every render.
+  useEffect(() => {
+    if (!seekRequest) return
+    setIsPlaying(false)
+    setCurrent(seekRequest.date)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekRequest?.token])
+
   // Passed to AnimationActorsList as onJumpTo — has to be its own stable
   // reference too (not just an inline `date => {...}` at the JSX call
   // site below, which would be a fresh function every render regardless of
@@ -251,7 +274,7 @@ export function TimelineWindow({
   if (!scheduleStart || !scheduleEnd) {
     return (
       <div className="h-full flex items-center justify-center p-6">
-        <p className="text-sm text-gray-400 text-center max-w-xs">
+        <p className="text-sm text-gray-400 dark:text-prosota-muted text-center max-w-xs">
           No dated activities yet — the timeline needs at least one activity with a start and finish to scrub through.
         </p>
       </div>
@@ -384,7 +407,7 @@ export function TimelineWindow({
   return (
     <div className="h-full flex flex-col p-3 gap-2">
       <div className="flex items-center gap-1.5 flex-wrap">
-        <button onClick={() => step(-STEP_DAYS)} title="Step back 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">◀</button>
+        <button onClick={() => step(-STEP_DAYS)} title="Step back 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">◀</button>
         <button
           onClick={() => {
             // Auto-rewind on Play if already sitting at (or past) the end
@@ -397,20 +420,20 @@ export function TimelineWindow({
             if (!isPlaying && current.getTime() >= effectiveEnd.getTime()) setCurrent(scheduleStart)
             setIsPlaying(p => !p)
           }}
-          className="text-xs px-3 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-medium"
+          className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-700 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 font-medium"
         >
           {isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>
-        <button onClick={() => step(STEP_DAYS)} title="Step forward 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">▶</button>
-        <button onClick={jumpToToday} title="Jump to today" className="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50">Today</button>
-        <label className="flex items-center gap-1 text-xs text-gray-600 px-1">
+        <button onClick={() => step(STEP_DAYS)} title="Step forward 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">▶</button>
+        <button onClick={jumpToToday} title="Jump to today" className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">Today</button>
+        <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted px-1">
           <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} />
           Loop
         </label>
         <select
           value={speedDaysPerSecond}
           onChange={e => onSpeedChange(Number(e.target.value))}
-          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         >
           {SPEED_OPTIONS.map(o => <option key={o.daysPerSecond} value={o.daysPerSecond}>{o.label}</option>)}
         </select>
@@ -418,7 +441,7 @@ export function TimelineWindow({
           value={timeDisplayMode}
           onChange={e => changeTimeDisplayMode(e.target.value as TimeDisplayMode)}
           title="How dates are shown/entered on this timeline"
-          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
         >
           <option value="date">Date</option>
           <option value="seconds">Seconds</option>
@@ -429,14 +452,14 @@ export function TimelineWindow({
             value={fps}
             onChange={e => changeFps(Number(e.target.value))}
             title="Frames per second"
-            className="text-xs border border-gray-300 rounded px-1.5 py-1"
+            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
           >
             {FPS_OPTIONS.map(f => <option key={f} value={f}>{f} fps</option>)}
           </select>
         )}
         <div className="flex items-center gap-1 ml-auto">
           <label
-            className="text-[10px] text-gray-500"
+            className="text-[10px] text-gray-500 dark:text-prosota-muted"
             title="Manually extend the timeline's upper limit past the last activity/keyframe (e.g. to hold on the last pose for a while) — can't go below that real end"
           >
             End
@@ -446,7 +469,7 @@ export function TimelineWindow({
               type="date"
               value={toDateInputValue(effectiveEnd)}
               onChange={e => handleEndDateInput(e.target.value)}
-              className="text-xs border border-gray-300 rounded px-1.5 py-1"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
             />
           ) : (
             <input
@@ -457,7 +480,7 @@ export function TimelineWindow({
               onBlur={commitEndInputText}
               onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
               title="Manually extend the timeline's upper limit — can't go below the real computed end"
-              className="text-xs border border-gray-300 rounded px-1.5 py-1 w-20"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 w-20"
             />
           )}
           {timeDisplayMode === 'date' ? (
@@ -465,7 +488,7 @@ export function TimelineWindow({
               type="date"
               value={toDateInputValue(current)}
               onChange={e => handleDateInput(e.target.value)}
-              className="text-xs border border-gray-300 rounded px-1.5 py-1"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1"
             />
           ) : (
             <input
@@ -478,7 +501,7 @@ export function TimelineWindow({
                 setCurrent(dateFromTimelineValue(Number(e.target.value), scheduleStart, timeDisplayMode, speedDaysPerSecond, fps))
               }}
               title={timeDisplayMode === 'seconds' ? 'Elapsed seconds from schedule start, at the current speed' : 'Frame number, at the current speed and fps'}
-              className="text-xs border border-gray-300 rounded px-1.5 py-1 w-24"
+              className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 w-24"
             />
           )}
         </div>
@@ -538,9 +561,9 @@ export function TimelineWindow({
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between text-[10px] text-gray-400 select-none">
+      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-prosota-muted select-none">
         <span>{formatTimelineValue(scheduleStart, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
-        <span className="text-xs text-gray-700 font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
+        <span className="text-xs text-gray-700 dark:text-prosota-muted font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span>{formatTimelineValue(effectiveEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
       </div>
       <AnimationActorsList
@@ -555,6 +578,7 @@ export function TimelineWindow({
         animationProfiles={animationProfiles}
         paths={paths}
         zones={zones}
+        cameras={cameras}
         timeDisplayMode={timeDisplayMode}
         speedDaysPerSecond={speedDaysPerSecond}
         fps={fps}

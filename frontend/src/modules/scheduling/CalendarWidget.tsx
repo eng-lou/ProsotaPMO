@@ -23,7 +23,7 @@ function CalendarEnvelopeFields({
     <>
       <div className="flex items-center gap-3 flex-wrap">
         {WEEKDAY_FIELDS.map(w => (
-          <label key={w.key} className="flex items-center gap-1 text-xs text-gray-600">
+          <label key={w.key} className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted">
             <input
               type="checkbox"
               checked={values[w.key]}
@@ -34,26 +34,26 @@ function CalendarEnvelopeFields({
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <label className="flex items-center gap-1 text-xs text-gray-600">
+        <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted">
           Day starts
           <input
             type="time"
             value={values.day_start_time}
             onChange={e => onChange(v => ({ ...v, day_start_time: e.target.value }))}
-            className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
           />
         </label>
-        <label className="flex items-center gap-1 text-xs text-gray-600">
+        <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted">
           Day ends
           <input
             type="time"
             value={values.day_end_time}
             onChange={e => onChange(v => ({ ...v, day_end_time: e.target.value }))}
-            className="border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
           />
         </label>
       </div>
-      <p className="text-[11px] text-gray-400">
+      <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
         Every activity on this calendar starts at Day Starts and finishes at Day Ends — never mid-day.
       </p>
     </>
@@ -412,68 +412,68 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">📆</span>
-        <div className="font-bold text-sm">Project Calendar</div>
-        <div className="text-xs text-gray-400">Working day patterns, breaks &amp; non-working periods</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Project Calendar</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Working day patterns, breaks &amp; non-working periods</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Active Calendars</div>
+          <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">Active Calendars</div>
           <table className="w-full text-xs border-collapse mb-2">
             <thead>
-              <tr className="bg-gray-50 text-left text-gray-500">
-                <th className="px-2 py-1.5 border border-gray-200">Calendar</th>
-                <th className="px-2 py-1.5 border border-gray-200">Working Days</th>
-                <th className="px-2 py-1.5 border border-gray-200">Day Envelope</th>
-                <th className="px-2 py-1.5 border border-gray-200">Net Hours/Day</th>
-                <th className="px-2 py-1.5 border border-gray-200"></th>
+              <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Calendar</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Working Days</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Day Envelope</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Net Hours/Day</th>
+                <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
               </tr>
             </thead>
             <tbody>
               {calendars.map(c => (
                 <tr
                   key={c.id}
-                  className={`cursor-pointer ${selectedCalendarId === c.id ? 'bg-blue-50' : ''}`}
+                  className={`cursor-pointer ${selectedCalendarId === c.id ? 'bg-blue-50 dark:bg-prosota-azure/15' : ''}`}
                   onClick={() => setSelectedCalendarId(c.id)}
                 >
-                  <td className="px-2 py-1.5 border border-gray-200 font-medium">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">
                     {c.name}
-                    {c.is_project_default && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600">Default</span>}
+                    {c.is_project_default && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:text-prosota-azure">Default</span>}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">
                     {WEEKDAY_FIELDS.filter(w => c[w.key]).map(w => w.label).join('/') || 'None'}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap">
                     {c.day_start_time.slice(0, 5)}–{c.day_end_time.slice(0, 5)}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" title="Envelope minus this calendar's breaks — computed, not editable directly">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" title="Envelope minus this calendar's breaks — computed, not editable directly">
                     {c.hours_per_day}h
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
                     {!c.is_project_default && (
-                      <button onClick={e => { e.stopPropagation(); handleSetDefault(c.id) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                      <button onClick={e => { e.stopPropagation(); handleSetDefault(c.id) }} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">
                         Set default
                       </button>
                     )}
-                    <button onClick={e => { e.stopPropagation(); handleStartEditCalendar(c) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                    <button onClick={e => { e.stopPropagation(); handleStartEditCalendar(c) }} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">
                       Edit
                     </button>
-                    <button onClick={e => { e.stopPropagation(); handleExportCalendar(c) }} className="text-blue-600 hover:text-blue-700 mr-2">
+                    <button onClick={e => { e.stopPropagation(); handleExportCalendar(c) }} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">
                       Export
                     </button>
                     <button
                       onClick={e => { e.stopPropagation(); handleDuplicateCalendar(c) }}
                       title="Clone this calendar's pattern, breaks, and exceptions into a new, independent calendar"
-                      className="text-blue-600 hover:text-blue-700 mr-2"
+                      className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2"
                     >
                       Duplicate
                     </button>
                     {!c.is_project_default && (
-                      <button onClick={e => { e.stopPropagation(); handleDeleteCalendar(c) }} className="text-gray-400 hover:text-red-600">
+                      <button onClick={e => { e.stopPropagation(); handleDeleteCalendar(c) }} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">
                         Delete
                       </button>
                     )}
@@ -484,42 +484,42 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
           </table>
 
           {editingCalendarId ? (
-            <div className="border border-blue-200 rounded p-3 space-y-2 bg-blue-50/30">
+            <div className="border border-blue-200 dark:border-prosota-azure/30 rounded p-3 space-y-2 bg-blue-50/30 dark:bg-prosota-azure/10">
               <input
                 value={editCalendar.name}
                 onChange={e => setEditCalendar(v => ({ ...v, name: e.target.value }))}
                 placeholder="Calendar name"
-                className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
               />
               <CalendarEnvelopeFields values={editCalendar} onChange={setEditCalendar} />
-              {editCalendarError && <p className="text-xs text-red-600">{editCalendarError}</p>}
+              {editCalendarError && <p className="text-xs text-red-600 dark:text-red-400">{editCalendarError}</p>}
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setEditingCalendarId(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                <button onClick={handleSaveEditCalendar} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Save Changes</button>
+                <button onClick={() => setEditingCalendarId(null)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
+                <button onClick={handleSaveEditCalendar} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Save Changes</button>
               </div>
             </div>
           ) : creating ? (
-            <div className="border border-gray-200 rounded p-3 space-y-2">
+            <div className="border border-gray-200 dark:border-prosota-line rounded p-3 space-y-2">
               <input
                 value={newCalendar.name}
                 onChange={e => setNewCalendar(v => ({ ...v, name: e.target.value }))}
                 placeholder="Calendar name"
-                className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
               />
               <CalendarEnvelopeFields values={newCalendar} onChange={setNewCalendar} />
-              <div className="text-[10px] text-gray-400">
+              <div className="text-[10px] text-gray-400 dark:text-prosota-muted">
                 Net working hours/day is derived from this envelope minus any breaks you add after creating the
                 calendar — not typed in directly.
               </div>
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setCreating(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                <button onClick={handleCreateCalendar} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add Calendar</button>
+                <button onClick={() => setCreating(false)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
+                <button onClick={handleCreateCalendar} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Add Calendar</button>
               </div>
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Calendar</button>
-              <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+              <button onClick={() => setCreating(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add Calendar</button>
+              <button onClick={() => importInputRef.current?.click()} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
                 ⇧ Import Calendar
               </button>
               <input
@@ -532,161 +532,161 @@ export function CalendarWidget({ projectId, calendars, onChange, onClose }: Prop
               />
             </div>
           )}
-          {importError && <p className="text-xs text-red-600 mt-1">{importError}</p>}
+          {importError && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{importError}</p>}
         </div>
 
         <div className="space-y-4">
           <div>
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">
               Daily Breaks{selectedCalendarId ? '' : ' — select a calendar'}
             </div>
             {selectedCalendarId && (
               <>
                 <table className="w-full text-xs border-collapse mb-2">
                   <thead>
-                    <tr className="bg-gray-50 text-left text-gray-500">
-                      <th className="px-2 py-1.5 border border-gray-200">Break</th>
-                      <th className="px-2 py-1.5 border border-gray-200">Time</th>
-                      <th className="px-2 py-1.5 border border-gray-200"></th>
+                    <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Break</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Time</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {breaks.map(b => (
                       <tr key={b.id}>
-                        <td className="px-2 py-1.5 border border-gray-200">{b.label}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">{b.label}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap">
                           {b.start_time.slice(0, 5)}–{b.end_time.slice(0, 5)}
                         </td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
-                          <button onClick={() => handleStartEditBreak(b)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
-                          <button onClick={() => handleDeleteBreak(b.id)} className="text-gray-400 hover:text-red-600">✕</button>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                          <button onClick={() => handleStartEditBreak(b)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Edit</button>
+                          <button onClick={() => handleDeleteBreak(b.id)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
                         </td>
                       </tr>
                     ))}
                     {breaks.length === 0 && (
-                      <tr><td colSpan={3} className="px-2 py-3 text-center text-gray-400 border border-gray-200">None yet</td></tr>
+                      <tr><td colSpan={3} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">None yet</td></tr>
                     )}
                   </tbody>
                 </table>
 
                 {addingBreak ? (
-                  <div className={`border rounded p-3 space-y-2 ${editingBreakId ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200'}`}>
+                  <div className={`border rounded p-3 space-y-2 ${editingBreakId ? 'border-blue-200 dark:border-prosota-azure/30 bg-blue-50/30 dark:bg-prosota-azure/10' : 'border-gray-200 dark:border-prosota-line'}`}>
                     <input
                       value={breakLabel}
                       onChange={e => setBreakLabel(e.target.value)}
                       placeholder="Label (e.g. Lunch)"
-                      className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                      className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
                     />
                     <div className="flex items-center gap-2">
-                      <input type="time" value={breakStart} onChange={e => setBreakStart(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                      <span className="text-gray-400">–</span>
-                      <input type="time" value={breakEnd} onChange={e => setBreakEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                      <input type="time" value={breakStart} onChange={e => setBreakStart(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
+                      <span className="text-gray-400 dark:text-prosota-muted">–</span>
+                      <input type="time" value={breakEnd} onChange={e => setBreakEnd(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
                     </div>
-                    {breakError && <p className="text-xs text-red-600">{breakError}</p>}
+                    {breakError && <p className="text-xs text-red-600 dark:text-red-400">{breakError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => { setAddingBreak(false); setEditingBreakId(null); setBreakError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={() => { setAddingBreak(false); setEditingBreakId(null); setBreakError(null) }} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
                       <button
                         onClick={handleSaveBreak}
                         disabled={!breakLabel.trim() || !breakStart || !breakEnd}
                         title={!breakLabel.trim() ? 'Enter a label first' : undefined}
-                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {editingBreakId ? 'Save Break' : 'Add Break'}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <button onClick={() => setAddingBreak(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Break</button>
+                  <button onClick={() => setAddingBreak(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add Break</button>
                 )}
               </>
             )}
           </div>
 
           <div>
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">
               Non-Working Exceptions{selectedCalendarId ? '' : ' — select a calendar'}
             </div>
             {selectedCalendarId && (
               <>
                 <table className="w-full text-xs border-collapse mb-2">
                   <thead>
-                    <tr className="bg-gray-50 text-left text-gray-500">
-                      <th className="px-2 py-1.5 border border-gray-200">Exception</th>
-                      <th className="px-2 py-1.5 border border-gray-200">Dates</th>
-                      <th className="px-2 py-1.5 border border-gray-200">Type</th>
-                      <th className="px-2 py-1.5 border border-gray-200"></th>
+                    <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Exception</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Dates</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Type</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {exceptions.map(ex => (
                       <tr key={ex.id}>
-                        <td className="px-2 py-1.5 border border-gray-200">{ex.label}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-gray-500 whitespace-nowrap">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">{ex.label}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap">
                           {ex.start_date}{ex.start_date !== ex.end_date ? ` – ${ex.end_date}` : ''}
                           {ex.start_time && ex.end_time && (
-                            <span className="text-gray-400"> ({ex.start_time.slice(0, 5)}–{ex.end_time.slice(0, 5)})</span>
+                            <span className="text-gray-400 dark:text-prosota-muted"> ({ex.start_time.slice(0, 5)}–{ex.end_time.slice(0, 5)})</span>
                           )}
                         </td>
-                        <td className="px-2 py-1.5 border border-gray-200">
-                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${ex.is_working ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${ex.is_working ? 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400' : 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'}`}>
                             {ex.is_working ? 'Working' : 'Non-Working'}
                           </span>
                         </td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
-                          <button onClick={() => handleStartEditException(ex)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
-                          <button onClick={() => handleDeleteException(ex.id)} className="text-gray-400 hover:text-red-600">✕</button>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                          <button onClick={() => handleStartEditException(ex)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Edit</button>
+                          <button onClick={() => handleDeleteException(ex.id)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
                         </td>
                       </tr>
                     ))}
                     {exceptions.length === 0 && (
-                      <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400 border border-gray-200">None yet</td></tr>
+                      <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">None yet</td></tr>
                     )}
                   </tbody>
                 </table>
 
                 {addingException ? (
-                  <div className={`border rounded p-3 space-y-2 ${editingExceptionId ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200'}`}>
+                  <div className={`border rounded p-3 space-y-2 ${editingExceptionId ? 'border-blue-200 dark:border-prosota-azure/30 bg-blue-50/30 dark:bg-prosota-azure/10' : 'border-gray-200 dark:border-prosota-line'}`}>
                     <input
                       value={exceptionLabel}
                       onChange={e => setExceptionLabel(e.target.value)}
                       placeholder="Label (e.g. Christmas Shutdown)"
-                      className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+                      className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
                     />
                     <div className="flex items-center gap-2">
-                      <input type="date" value={exceptionStart} onChange={e => setExceptionStart(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                      <span className="text-gray-400">–</span>
-                      <input type="date" value={exceptionEnd} onChange={e => setExceptionEnd(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                      <label className="flex items-center gap-1 text-xs text-gray-600 ml-2">
+                      <input type="date" value={exceptionStart} onChange={e => setExceptionStart(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
+                      <span className="text-gray-400 dark:text-prosota-muted">–</span>
+                      <input type="date" value={exceptionEnd} onChange={e => setExceptionEnd(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
+                      <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted ml-2">
                         <input type="checkbox" checked={exceptionIsWorking} onChange={e => setExceptionIsWorking(e.target.checked)} />
                         Working (e.g. planned Saturday)
                       </label>
                     </div>
-                    <label className="flex items-center gap-1 text-xs text-gray-600">
+                    <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-prosota-muted">
                       <input type="checkbox" checked={exceptionPartialDay} onChange={e => setExceptionPartialDay(e.target.checked)} />
                       Only part of the day (e.g. "08:00–09:00 non-working") — leave unchecked for the whole day
                     </label>
                     {exceptionPartialDay && (
                       <div className="flex items-center gap-2">
-                        <input type="time" value={exceptionStartTime} onChange={e => setExceptionStartTime(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
-                        <span className="text-gray-400">–</span>
-                        <input type="time" value={exceptionEndTime} onChange={e => setExceptionEndTime(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1" />
+                        <input type="time" value={exceptionStartTime} onChange={e => setExceptionStartTime(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
+                        <span className="text-gray-400 dark:text-prosota-muted">–</span>
+                        <input type="time" value={exceptionEndTime} onChange={e => setExceptionEndTime(e.target.value)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1" />
                       </div>
                     )}
-                    {exceptionError && <p className="text-xs text-red-600">{exceptionError}</p>}
+                    {exceptionError && <p className="text-xs text-red-600 dark:text-red-400">{exceptionError}</p>}
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => { setAddingException(false); setEditingExceptionId(null); setExceptionError(null) }} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      <button onClick={() => { setAddingException(false); setEditingExceptionId(null); setExceptionError(null) }} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
                       <button
                         onClick={handleSaveException}
                         disabled={!exceptionLabel.trim() || !exceptionStart || !exceptionEnd}
                         title={!exceptionLabel.trim() ? 'Enter a label first' : (!exceptionStart || !exceptionEnd) ? 'Pick a start and end date first' : undefined}
-                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {editingExceptionId ? 'Save Exception' : 'Add Exception'}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <button onClick={() => setAddingException(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Exception</button>
+                  <button onClick={() => setAddingException(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add Exception</button>
                 )}
               </>
             )}

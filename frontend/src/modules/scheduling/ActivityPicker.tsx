@@ -113,12 +113,12 @@ export function ActivityPicker({
         onChange={e => { setQuery(e.target.value); if (!open) setOpen(true) }}
         onFocus={() => { setOpen(true); setQuery('') }}
         placeholder={placeholder}
-        className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+        className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
       />
       {open && (
-        <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+        <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg">
           {filtered.length === 0 && (
-            <div className="px-2 py-1.5 text-xs text-gray-400">No matches</div>
+            <div className="px-2 py-1.5 text-xs text-gray-400 dark:text-prosota-muted">No matches</div>
           )}
           {filtered.map(a => (
             <button
@@ -139,13 +139,13 @@ export function ActivityPicker({
                   depth: depthOf(a),
                 }),
               }}
-              className={`block w-full text-left px-2 py-1.5 text-xs hover:bg-blue-50 ${a.id === value ? 'bg-blue-50 font-medium' : ''}`}
+              className={`block w-full text-left px-2 py-1.5 text-xs dark:text-prosota-paper hover:bg-blue-50 dark:hover:bg-prosota-azure/10 ${a.id === value ? 'bg-blue-50 dark:bg-prosota-azure/15 font-medium' : ''}`}
             >
               <div>
-                <span className="font-mono text-gray-400 mr-1">{a.code}:</span>{a.task_name}
+                <span className="font-mono text-gray-400 dark:text-prosota-muted mr-1">{a.code}:</span>{a.task_name}
               </div>
               {showDates && (
-                <div className="text-[10px] text-gray-400">
+                <div className="text-[10px] text-gray-400 dark:text-prosota-muted">
                   {formatDateTime(a.start, false)} → {formatDateTime(a.finish, false)}
                 </div>
               )}

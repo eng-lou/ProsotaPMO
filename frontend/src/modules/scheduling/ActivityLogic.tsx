@@ -100,9 +100,9 @@ function LinkTable({
 
   return (
     <div>
-      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{title}</div>
+      <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-1.5">{title}</div>
       {rows.length === 0 ? (
-        <div className="text-xs text-gray-400 mb-2">None</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted mb-2">None</div>
       ) : (
         <table className="w-full text-xs border-collapse mb-2">
           <tbody>
@@ -112,14 +112,14 @@ function LinkTable({
               const validTypes = validRelationshipTypesFor(getSuccessorType(r))
               const restricted = validTypes.length < RELATIONSHIP_TYPES.length
               return (
-                <tr key={r.id} className="border-b border-gray-100 last:border-0">
-                  <td className="py-1 pr-2 font-mono text-gray-500 whitespace-nowrap">{other?.code ?? '—'}</td>
-                  <td className="py-1 pr-2 text-gray-700 truncate max-w-[10rem]">
+                <tr key={r.id} className="border-b border-gray-100 dark:border-prosota-line last:border-0">
+                  <td className="py-1 pr-2 font-mono text-gray-500 dark:text-prosota-muted whitespace-nowrap">{other?.code ?? '—'}</td>
+                  <td className="py-1 pr-2 text-gray-700 dark:text-prosota-muted truncate max-w-[10rem]">
                     {other ? (
                       <button
                         onClick={() => onFocusActivity(other.id)}
                         title="Select and scroll to this activity"
-                        className="text-left text-blue-600 hover:text-blue-700 hover:underline truncate"
+                        className="text-left text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan hover:underline truncate"
                       >
                         {other.task_name}
                       </button>
@@ -133,7 +133,7 @@ function LinkTable({
                           onChange={e => setEditType(e.target.value as RelationshipType)}
                           autoFocus
                           title={restricted ? `Only ${validTypes.join('/')} can drive this milestone's own meaningful date` : undefined}
-                          className="text-xs border border-blue-400 rounded px-1 py-0.5"
+                          className="text-xs border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
                         >
                           {RELATIONSHIP_TYPES.map(t => (
                             <option key={t} value={t} disabled={!validTypes.includes(t)}>{t}</option>
@@ -148,12 +148,12 @@ function LinkTable({
                           onChange={e => setEditLagDays(e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit() }}
                           title="Lag (days) — positive = lag, negative = lead"
-                          className="w-14 text-xs border border-blue-400 rounded px-1 py-0.5"
+                          className="w-14 text-xs border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
                         />
                       </td>
                       <td className="py-1 text-right whitespace-nowrap">
-                        <button onClick={saveEdit} disabled={saving} className="text-blue-600 hover:text-blue-700 disabled:opacity-40 mr-2">✓</button>
-                        <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-600">✕</button>
+                        <button onClick={saveEdit} disabled={saving} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan disabled:opacity-40 mr-2">✓</button>
+                        <button onClick={cancelEdit} className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">✕</button>
                       </td>
                     </>
                   ) : (
@@ -162,18 +162,18 @@ function LinkTable({
                         <button
                           onClick={() => startEdit(r)}
                           title="Click to edit the relationship type and lag"
-                          className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium hover:bg-blue-100"
+                          className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 dark:text-prosota-azure font-medium hover:bg-blue-100"
                         >
                           {r.relationship_type}
                         </button>
                       </td>
-                      <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">
-                        <button onClick={() => startEdit(r)} title="Click to edit the relationship type and lag" className="hover:text-gray-700">
+                      <td className="py-1 pr-2 text-gray-500 dark:text-prosota-muted whitespace-nowrap">
+                        <button onClick={() => startEdit(r)} title="Click to edit the relationship type and lag" className="hover:text-gray-700 dark:hover:text-prosota-paper">
                           {formatLagDays(r.lag_hours, hoursPerDay)}
                         </button>
                       </td>
                       <td className="py-1 text-right">
-                        <button onClick={() => onDelete(r.id)} className="text-gray-400 hover:text-red-600">✕</button>
+                        <button onClick={() => onDelete(r.id)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
                       </td>
                     </>
                   )}
@@ -183,7 +183,7 @@ function LinkTable({
           </tbody>
         </table>
       )}
-      {error && <div className="text-[11px] text-red-600 mb-2">{error}</div>}
+      {error && <div className="text-[11px] text-red-600 dark:text-red-400 mb-2">{error}</div>}
     </div>
   )
 }
@@ -276,7 +276,7 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
         value={relType}
         onChange={e => setRelType(e.target.value as RelationshipType)}
         title={restricted ? `Only ${validTypes.join('/')} can drive this milestone's own meaningful date` : undefined}
-        className="text-xs border border-gray-300 rounded px-2 py-1"
+        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
       >
         {RELATIONSHIP_TYPES.map(t => (
           <option key={t} value={t} disabled={!validTypes.includes(t)}>{t}</option>
@@ -288,17 +288,17 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
         value={lagDays}
         onChange={e => setLagDays(e.target.value)}
         title="Lag (days) — positive = lag, negative = lead"
-        className="text-xs border border-gray-300 rounded px-2 py-1 w-16"
+        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 w-16"
       />
-      <button type="submit" className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Add</button>
-      <button type="button" onClick={onCancel} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-      {addError && <div className="text-[11px] text-red-600 w-full">{addError}</div>}
+      <button type="submit" className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Add</button>
+      <button type="button" onClick={onCancel} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
+      {addError && <div className="text-[11px] text-red-600 dark:text-red-400 w-full">{addError}</div>}
     </form>
     )
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6 px-4 py-4 bg-gray-50 border-t border-gray-100 text-xs">
+    <div className="grid grid-cols-2 gap-6 px-4 py-4 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line text-xs">
       <div>
         <LinkTable
           title="Predecessors"
@@ -312,11 +312,11 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
           onFocusActivity={onFocusActivity}
         />
         {isParent ? (
-          <div className="text-[11px] text-gray-400">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
+          <div className="text-[11px] text-gray-400 dark:text-prosota-muted">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
         ) : addingPred ? (
           <AddForm mode="predecessor" onCancel={resetAddForm} />
         ) : (
-          <button onClick={() => setAddingPred(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+          <button onClick={() => setAddingPred(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             + Add Predecessor
           </button>
         )}
@@ -334,11 +334,11 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
           onFocusActivity={onFocusActivity}
         />
         {isParent ? (
-          <div className="text-[11px] text-gray-400">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
+          <div className="text-[11px] text-gray-400 dark:text-prosota-muted">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
         ) : addingSucc ? (
           <AddForm mode="successor" onCancel={resetAddForm} />
         ) : (
-          <button onClick={() => setAddingSucc(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+          <button onClick={() => setAddingSucc(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             + Add Successor
           </button>
         )}

@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { useTheme } from '@/lib/ThemeContext'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { buildCalendarLookup } from './durationDisplay'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
@@ -77,30 +78,30 @@ function isTimeBasedType(type: ResourceType): boolean {
 function ClassificationFields({ values, setter }: { values: ResourceFormValues; setter: (fn: (v: ResourceFormValues) => ResourceFormValues) => void }) {
   return (
     <>
-      <label className="text-xs text-gray-600">
+      <label className="text-xs text-gray-600 dark:text-prosota-muted">
         Discipline
-        <input value={values.discipline} onChange={e => setter(v => ({ ...v, discipline: e.target.value }))} placeholder="e.g. Structural Engineering" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-40" />
+        <input value={values.discipline} onChange={e => setter(v => ({ ...v, discipline: e.target.value }))} placeholder="e.g. Structural Engineering" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-40" />
       </label>
-      <label className="text-xs text-gray-600">
+      <label className="text-xs text-gray-600 dark:text-prosota-muted">
         Company
-        <input value={values.company} onChange={e => setter(v => ({ ...v, company: e.target.value }))} placeholder="e.g. ABC Civil Engineering Ltd" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-40" />
+        <input value={values.company} onChange={e => setter(v => ({ ...v, company: e.target.value }))} placeholder="e.g. ABC Civil Engineering Ltd" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-40" />
       </label>
       {values.resource_type === 'labour' && (
-        <label className="text-xs text-gray-600">
+        <label className="text-xs text-gray-600 dark:text-prosota-muted">
           Skill level
-          <input value={values.skill_level} onChange={e => setter(v => ({ ...v, skill_level: e.target.value }))} placeholder="e.g. Skilled" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-28" />
+          <input value={values.skill_level} onChange={e => setter(v => ({ ...v, skill_level: e.target.value }))} placeholder="e.g. Skilled" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-28" />
         </label>
       )}
       {(values.resource_type === 'material' || values.resource_type === 'equipment') && (
-        <label className="text-xs text-gray-600">
+        <label className="text-xs text-gray-600 dark:text-prosota-muted">
           Category
-          <input value={values.category} onChange={e => setter(v => ({ ...v, category: e.target.value }))} placeholder="e.g. Concrete" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-28" />
+          <input value={values.category} onChange={e => setter(v => ({ ...v, category: e.target.value }))} placeholder="e.g. Concrete" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-28" />
         </label>
       )}
       {values.resource_type === 'cost' && (
-        <label className="text-xs text-gray-600">
+        <label className="text-xs text-gray-600 dark:text-prosota-muted">
           Cost type
-          <select value={values.cost_type} onChange={e => setter(v => ({ ...v, cost_type: e.target.value }))} className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5">
+          <select value={values.cost_type} onChange={e => setter(v => ({ ...v, cost_type: e.target.value }))} className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5">
             <option value="">—</option>
             <option value="fixed">Fixed</option>
             <option value="recurring">Recurring</option>
@@ -108,9 +109,9 @@ function ClassificationFields({ values, setter }: { values: ResourceFormValues; 
         </label>
       )}
       {values.resource_type === 'crew' && (
-        <label className="text-xs text-gray-600">
+        <label className="text-xs text-gray-600 dark:text-prosota-muted">
           Members
-          <input value={values.members} onChange={e => setter(v => ({ ...v, members: e.target.value }))} placeholder="e.g. 1x Excavator, 2x Labourers" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-64" />
+          <input value={values.members} onChange={e => setter(v => ({ ...v, members: e.target.value }))} placeholder="e.g. 1x Excavator, 2x Labourers" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-64" />
         </label>
       )}
     </>
@@ -139,6 +140,8 @@ const RESOURCE_POOL_EDIT_ROW_HEIGHT = 60
 // unrelated state change there re-renders this whole widget even when none
 // of its own props changed. Safe as a pure bail-out.
 function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onClose, selectedIds, onToggleSelected, layoutPrefs }: Props) {
+  const { theme } = useTheme()
+  const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
   // Collapsible (2026-07-14, per Maro: "make the resource pool collapsible")
   // — this table alone can run to 25+ rows once a schedule's been generated,
   // pushing Resource Tracking/Profile below it well down the page. Persisted
@@ -346,28 +349,28 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={toggleCollapsed}
           title={collapsed ? 'Expand' : 'Collapse'}
-          className="text-gray-400 hover:text-gray-600 text-xs w-4 flex-shrink-0"
+          className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-xs w-4 flex-shrink-0"
         >
           {collapsed ? '▸' : '▾'}
         </button>
-        <div className="font-bold text-sm">Resource Pool</div>
-        <div className="text-xs text-gray-400">Labour, equipment, material, subcontractors, cost &amp; crew — define here, assign to activities via Logic</div>
+        <div className="font-bold text-sm dark:text-prosota-paper">Resource Pool</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Labour, equipment, material, subcontractors, cost &amp; crew — define here, assign to activities via Logic</div>
         {!collapsed && resources.length > 0 && (
           <button
             onClick={handleDeleteAll}
             disabled={bulkDeleting}
             title="Delete every resource in the pool (skips any still assigned to an activity)"
-            className="ml-auto text-xs text-gray-400 hover:text-red-600 disabled:opacity-50"
+            className="ml-auto text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
           >
             {bulkDeleting ? 'Deleting…' : 'Delete All'}
           </button>
         )}
-        {onClose && <button onClick={onClose} className={`${!collapsed && resources.length > 0 ? '' : 'ml-auto'} text-gray-400 hover:text-gray-600 text-sm`}>✕</button>}
+        {onClose && <button onClick={onClose} className={`${!collapsed && resources.length > 0 ? '' : 'ml-auto'} text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm`}>✕</button>}
       </div>
 
       {!collapsed && (
@@ -375,8 +378,8 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
       <div ref={poolScrollRef} onScroll={handlePoolScroll} className="rt-hide-scrollbar mb-2" style={{ maxHeight: 500, overflow: 'auto' }}>
       <table className="w-full border-collapse" style={{ fontFamily: FONT_FAMILY_CSS[layoutPrefs.fontFamily], fontSize: layoutPrefs.fontSize }}>
         <thead>
-          <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>
+          <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>
               <input
                 type="checkbox"
                 title="Select all — scopes Resource Tracking/Profile below to just the checked resources"
@@ -389,17 +392,17 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
                 }}
               />
             </th>
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Type</th>
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Name</th>
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Role</th>
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Unit</th>
-            <th className="px-2 py-1.5 border border-gray-200 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Rate (£)</th>
-            <th className="px-2 py-1.5 border border-gray-200 text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}>Max h/day</th>
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }} title="Optional own calendar — storage/display only for now, doesn't yet affect scheduling">Calendar</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Type</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Name</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Role</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Unit</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Rate (£)</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}>Max h/day</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }} title="Optional own calendar — storage/display only for now, doesn't yet affect scheduling">Calendar</th>
             {udfDefinitions.map(d => (
-              <th key={d.id} className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }} title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
+              <th key={d.id} className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }} title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
             ))}
-            <th className="px-2 py-1.5 border border-gray-200" style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f9fafb' }}></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }}></th>
           </tr>
         </thead>
         <tbody>
@@ -412,7 +415,7 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
               const r = flat.resource
               return (
                 <tr key={`${r.id}-edit`} style={{ height: RESOURCE_POOL_EDIT_ROW_HEIGHT }}>
-                  <td colSpan={9 + udfDefinitions.length} className="px-2 py-2 border border-gray-200 bg-gray-50" style={{ height: RESOURCE_POOL_EDIT_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td colSpan={9 + udfDefinitions.length} className="px-2 py-2 border border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2" style={{ height: RESOURCE_POOL_EDIT_ROW_HEIGHT, overflow: 'hidden' }}>
                     <div className="flex items-end gap-2">
                       <ClassificationFields values={editForm} setter={setEditForm} />
                     </div>
@@ -425,46 +428,46 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
             const editFixedUnit = editingId === r.id ? fixedUnitFor(editForm.resource_type) : null
             return (
             <tr key={r.id} style={{ height: RESOURCE_POOL_ROW_HEIGHT }}>
-              <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                 <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => onToggleSelected(r.id)} />
               </td>
               {editingId === r.id ? (
                 <>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <select
                       value={editForm.resource_type}
                       onChange={e => setType(setEditForm, e.target.value as ResourceType)}
-                      className="border border-gray-300 rounded px-1 py-0.5 text-xs"
+                      className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                     >
                       {RESOURCE_TYPES.map(t => <option key={t} value={t}>{RESOURCE_TYPE_LABELS[t]}</option>)}
                     </select>
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
-                    <input value={editForm.name} onChange={e => setEditForm(v => ({ ...v, name: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <input value={editForm.name} onChange={e => setEditForm(v => ({ ...v, name: e.target.value }))} className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
-                    <input value={editForm.role} onChange={e => setEditForm(v => ({ ...v, role: e.target.value }))} placeholder="e.g. Trades" className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <input value={editForm.role} onChange={e => setEditForm(v => ({ ...v, role: e.target.value }))} placeholder="e.g. Trades" className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     {editFixedUnit ? (
-                      <span className="text-gray-400">{editFixedUnit}</span>
+                      <span className="text-gray-400 dark:text-prosota-muted">{editFixedUnit}</span>
                     ) : (
-                      <input value={editForm.unit} onChange={e => setEditForm(v => ({ ...v, unit: e.target.value }))} placeholder="m3 / nr / each" className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs" />
+                      <input value={editForm.unit} onChange={e => setEditForm(v => ({ ...v, unit: e.target.value }))} placeholder="m3 / nr / each" className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs" />
                     )}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
-                    <input type="number" min={0} step={0.01} value={editForm.rate} onChange={e => setEditForm(v => ({ ...v, rate: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs text-right" />
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <input type="number" min={0} step={0.01} value={editForm.rate} onChange={e => setEditForm(v => ({ ...v, rate: e.target.value }))} className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs text-right" />
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     {isTimeBasedType(editForm.resource_type) ? (
-                      <input type="number" min={0} max={24} step={0.5} value={editForm.max_hours_per_day} onChange={e => setEditForm(v => ({ ...v, max_hours_per_day: e.target.value }))} className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs text-right" />
-                    ) : <span className="text-gray-300 block text-right">—</span>}
+                      <input type="number" min={0} max={24} step={0.5} value={editForm.max_hours_per_day} onChange={e => setEditForm(v => ({ ...v, max_hours_per_day: e.target.value }))} className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs text-right" />
+                    ) : <span className="text-gray-300 dark:text-prosota-line block text-right">—</span>}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     <select
                       value={editForm.calendar_id}
                       onChange={e => setEditForm(v => ({ ...v, calendar_id: e.target.value }))}
-                      className="w-full border border-gray-300 rounded px-1 py-0.5 text-xs"
+                      className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                     >
                       <option value="">None</option>
                       {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -473,28 +476,28 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
                   {udfDefinitions.map(d => (
                     <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, r.id)} onSave={payload => setUdfValue(d.id, r.id, payload)} />
                   ))}
-                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
-                    <button onClick={handleSaveEdit} className="text-blue-600 hover:text-blue-700 mr-2">Save</button>
-                    <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600">Cancel</button>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <button onClick={handleSaveEdit} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Save</button>
+                    <button onClick={() => setEditingId(null)} className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
                   </td>
                 </>
               ) : (
                 <>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{RESOURCE_TYPE_LABELS[r.resource_type]}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 font-medium" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.name}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.role ?? '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.unit}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{Number(r.rate).toLocaleString()}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{isTimeBased ? r.max_hours_per_day : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-gray-500" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{RESOURCE_TYPE_LABELS[r.resource_type]}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.name}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.role ?? '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{r.unit}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{Number(r.rate).toLocaleString()}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right text-gray-500 dark:text-prosota-muted" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>{isTimeBased ? r.max_hours_per_day : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
                     {r.calendar_id ? (calendarLookup.byId.get(r.calendar_id)?.name ?? '—') : '—'}
                   </td>
                   {udfDefinitions.map(d => (
                     <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, r.id)} onSave={payload => setUdfValue(d.id, r.id, payload)} />
                   ))}
-                  <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
-                    <button onClick={() => startEdit(r)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
-                    <button onClick={() => handleDelete(r)} className="text-gray-400 hover:text-red-600">Delete</button>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap" style={{ height: RESOURCE_POOL_ROW_HEIGHT, overflow: 'hidden' }}>
+                    <button onClick={() => startEdit(r)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Edit</button>
+                    <button onClick={() => handleDelete(r)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
                   </td>
                 </>
               )}
@@ -505,66 +508,66 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
             <tr><td colSpan={9 + udfDefinitions.length} style={{ height: trailingPoolRowSpacerHeight, padding: 0, border: 'none' }} /></tr>
           )}
           {resources.length === 0 && !creating && (
-            <tr><td colSpan={9 + udfDefinitions.length} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No resources yet</td></tr>
+            <tr><td colSpan={9 + udfDefinitions.length} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">No resources yet</td></tr>
           )}
         </tbody>
       </table>
       </div>
 
       {creating ? (
-        <div className="border border-gray-200 rounded p-3 flex items-end gap-2 flex-wrap">
-          <label className="text-xs text-gray-600">
+        <div className="border border-gray-200 dark:border-prosota-line rounded p-3 flex items-end gap-2 flex-wrap">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Type
-            <select value={form.resource_type} onChange={e => setType(setForm, e.target.value as ResourceType)} className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5">
+            <select value={form.resource_type} onChange={e => setType(setForm, e.target.value as ResourceType)} className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5">
               {RESOURCE_TYPES.map(t => <option key={t} value={t}>{RESOURCE_TYPE_LABELS[t]}</option>)}
             </select>
           </label>
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Name
-            <input value={form.name} onChange={e => setForm(v => ({ ...v, name: e.target.value }))} placeholder="e.g. J. Davies" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5" />
+            <input value={form.name} onChange={e => setForm(v => ({ ...v, name: e.target.value }))} placeholder="e.g. J. Davies" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5" />
           </label>
-          <label className="text-xs text-gray-600" title="Optional default/primary role — a specific assignment can still override this">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted" title="Optional default/primary role — a specific assignment can still override this">
             Role
-            <input value={form.role} onChange={e => setForm(v => ({ ...v, role: e.target.value }))} placeholder="e.g. Trades" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-24" />
+            <input value={form.role} onChange={e => setForm(v => ({ ...v, role: e.target.value }))} placeholder="e.g. Trades" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-24" />
           </label>
           {fixedUnitFor(form.resource_type) ? (
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-500 dark:text-prosota-muted">
               Unit
               <div className="mt-1.5">{fixedUnitFor(form.resource_type)}</div>
             </div>
           ) : (
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Unit
-              <input value={form.unit} onChange={e => setForm(v => ({ ...v, unit: e.target.value }))} placeholder="m3 / nr / each" className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-24" />
+              <input value={form.unit} onChange={e => setForm(v => ({ ...v, unit: e.target.value }))} placeholder="m3 / nr / each" className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-24" />
             </label>
           )}
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             {rateLabelFor(form.resource_type)}
-            <input type="number" min={0} step={0.01} value={form.rate} onChange={e => setForm(v => ({ ...v, rate: e.target.value }))} className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-28" />
+            <input type="number" min={0} step={0.01} value={form.rate} onChange={e => setForm(v => ({ ...v, rate: e.target.value }))} className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-28" />
           </label>
           {isTimeBasedType(form.resource_type) && (
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Max hours/day
-              <input type="number" min={0} max={24} step={0.5} value={form.max_hours_per_day} onChange={e => setForm(v => ({ ...v, max_hours_per_day: e.target.value }))} className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-20" />
+              <input type="number" min={0} max={24} step={0.5} value={form.max_hours_per_day} onChange={e => setForm(v => ({ ...v, max_hours_per_day: e.target.value }))} className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-20" />
             </label>
           )}
-          <label className="text-xs text-gray-600" title="Optional — storage/display only for now, doesn't yet affect scheduling">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted" title="Optional — storage/display only for now, doesn't yet affect scheduling">
             Calendar
             <select
               value={form.calendar_id}
               onChange={e => setForm(v => ({ ...v, calendar_id: e.target.value }))}
-              className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5"
             >
               <option value="">None</option>
               {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
           <ClassificationFields values={form} setter={setForm} />
-          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700">Add</button>
-          <button onClick={() => { setCreating(false); setForm(BLANK) }} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
+          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Add</button>
+          <button onClick={() => { setCreating(false); setForm(BLANK) }} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper px-1 py-1.5">Cancel</button>
         </div>
       ) : (
-        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Resource</button>
+        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add Resource</button>
       )}
       </>
       )}

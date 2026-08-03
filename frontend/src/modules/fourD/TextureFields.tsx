@@ -90,22 +90,22 @@ function TextureRow({ label, name, onUpload, onClear, linkedAvailable, onSelectL
             if (file) onUpload(file)
           }}
         />
-        <span className="w-16 text-[11px] text-gray-400 shrink-0">{label}</span>
+        <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">{label}</span>
         <button
           onClick={() => inputRef.current?.click()}
           title={`Upload ${label}`}
-          className="flex-1 min-w-0 text-left text-[11px] text-gray-600 truncate border border-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-50"
+          className="flex-1 min-w-0 text-left text-[11px] text-gray-600 dark:text-prosota-muted truncate border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           {name ?? 'None'}
         </button>
-        {name && <button onClick={onClear} title="Clear" className="text-gray-400 hover:text-red-600 text-xs shrink-0">✕</button>}
+        {name && <button onClick={onClear} title="Clear" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs shrink-0">✕</button>}
       </div>
       {linkedAvailable && (
         <div className="flex items-center gap-1 mt-0.5 pl-[4.5rem]">
           <button
             onClick={onSelectLinked}
             title={`Select every element sharing this element's current ${label} (map or, if none, original colour)`}
-            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           >
             Select Linked
           </button>
@@ -113,7 +113,7 @@ function TextureRow({ label, name, onUpload, onClear, linkedAvailable, onSelectL
             onClick={onApplyToLinked}
             disabled={!name}
             title={name ? `Apply this ${label} to every currently-selected element` : `Set a ${label} first`}
-            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Apply to Linked
           </button>
@@ -151,7 +151,7 @@ export function TextureFields({
   return (
     <div className="space-y-0.5">
       <div className="flex items-center gap-1.5 px-3 py-0.5">
-        <span className="w-16 text-[11px] text-gray-400 shrink-0">Opacity</span>
+        <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Opacity</span>
         <input
           type="range"
           min={0}
@@ -162,9 +162,9 @@ export function TextureFields({
           title="0 = fully transparent, 1 = fully opaque (this element's real imported look). Applies to every currently-selected element at once."
           className="flex-1 w-0"
         />
-        <span className="w-8 text-[11px] text-gray-500 text-right shrink-0">{resolvedOpacity.toFixed(2)}</span>
+        <span className="w-8 text-[11px] text-gray-500 dark:text-prosota-muted text-right shrink-0">{resolvedOpacity.toFixed(2)}</span>
         {opacity !== undefined && (
-          <button onClick={() => onOpacityChange(1)} title="Reset to fully opaque" className="text-gray-400 hover:text-red-600 text-xs shrink-0">
+          <button onClick={() => onOpacityChange(1)} title="Reset to fully opaque" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs shrink-0">
             ✕
           </button>
         )}
@@ -174,7 +174,7 @@ export function TextureFields({
           <button
             onClick={onClearAll}
             title="Clear every material slot on every currently-selected element and restore each one's original imported appearance"
-            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-red-600 hover:border-red-200"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200"
           >
             Clear Materials
           </button>
@@ -194,7 +194,7 @@ export function TextureFields({
       ))}
       {representativeTexture && (
         <div className="flex items-center gap-1.5 px-3 py-0.5">
-          <span className="w-16 text-[11px] text-gray-400 shrink-0">Tile Size</span>
+          <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Tile Size</span>
           <ResettableNumberInput
             step={0.5}
             min={0.01}
@@ -207,14 +207,14 @@ export function TextureFields({
               for (const s of SLOTS) textures?.[s.key]?.texture.repeat.set(repeat, repeat)
               onFieldChange()
             }}
-            className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+            className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />
-          <span className="w-4 text-[10px] text-gray-400 shrink-0">{lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}</span>
+          <span className="w-4 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}</span>
         </div>
       )}
       {representativeTexture && (
         <div className="flex items-center gap-1.5 px-3 py-0.5">
-          <span className="w-16 text-[11px] text-gray-400 shrink-0">Tile Rotation</span>
+          <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Tile Rotation</span>
           <ResettableNumberInput
             step={5}
             value={Number((representativeTexture.rotation * RAD_TO_DEG).toFixed(1))}
@@ -228,14 +228,14 @@ export function TextureFields({
               }
               onFieldChange()
             }}
-            className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+            className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />
-          <span className="w-4 text-[10px] text-gray-400 shrink-0">°</span>
+          <span className="w-4 text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">°</span>
         </div>
       )}
       {textures?.displacementMap && (
         <div className="flex items-center gap-1.5 px-3 py-0.5">
-          <span className="w-16 text-[11px] text-gray-400 shrink-0">Subdivision</span>
+          <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Subdivision</span>
           <ResettableNumberInput
             step={1}
             min={0}
@@ -248,7 +248,7 @@ export function TextureFields({
               if (textures?.displacementMap) textures.displacementMap.texture.userData.subdivisionLevel = clamped
               onFieldChange()
             }}
-            className="flex-1 w-0 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+            className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />
         </div>
       )}

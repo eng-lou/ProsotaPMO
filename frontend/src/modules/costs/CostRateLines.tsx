@@ -103,28 +103,28 @@ export function CostRateLines({
     })
   }
 
-  if (loading) return <p className="text-xs text-gray-400 px-4 py-3">Loading rate card…</p>
+  if (loading) return <p className="text-xs text-gray-400 dark:text-prosota-muted px-4 py-3">Loading rate card…</p>
 
   const elementTotal = lines.reduce((sum, l) => sum + Number(l.total), 0)
 
   return (
-    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100" style={indentLevel > 0 ? { paddingLeft: 16 + indentLevel * 16 } : undefined}>
-      <div className="text-xs font-semibold text-gray-600 mb-2">Rate card</div>
+    <div className="px-4 py-3 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line" style={indentLevel > 0 ? { paddingLeft: 16 + indentLevel * 16 } : undefined}>
+      <div className="text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-2">Rate card</div>
       {isScheduleLinked && (
-        <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1.5 mb-2">
+        <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md px-2 py-1.5 mb-2">
           🔗 Managed automatically from Scheduling resource assignments — editing a line directly unlinks it.
         </p>
       )}
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {error && <p className="text-xs text-red-600 dark:text-red-400 mb-2">{error}</p>}
 
       {lines.length === 0 && !adding && (
-        <p className="text-xs text-gray-400 mb-2">No rate lines yet.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mb-2">No rate lines yet.</p>
       )}
 
       {lines.length > 0 && (
         <table className="w-full text-xs mb-2">
           <thead>
-            <tr className="text-left text-gray-400">
+            <tr className="text-left text-gray-400 dark:text-prosota-muted">
               <th className="pb-1">Description</th>
               <th className="pb-1 text-right">Qty</th>
               <th className="pb-1">Unit</th>
@@ -135,18 +135,18 @@ export function CostRateLines({
           </thead>
           <tbody>
             {lines.map(line => (
-              <tr key={line.id} className="border-t border-gray-100 bg-white">
+              <tr key={line.id} className="border-t border-gray-100 dark:border-prosota-line bg-white dark:bg-prosota-panel">
                 <td className="py-1 px-1">{line.description}</td>
                 <td className="py-1 px-1 text-right">{line.qty}</td>
                 <td className="py-1 px-1">{line.unit ?? '—'}</td>
                 <td className="py-1 px-1 text-right">{formatCurrency(line.rate)}</td>
                 <td className="py-1 px-1 text-right font-medium">{formatCurrency(line.total)}</td>
                 <td className="py-1 px-1 text-right">
-                  <button onClick={() => deleteLine(line)} className="text-gray-400 hover:text-red-600">remove</button>
+                  <button onClick={() => deleteLine(line)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">remove</button>
                 </td>
               </tr>
             ))}
-            <tr className="border-t border-gray-200 font-semibold">
+            <tr className="border-t border-gray-200 dark:border-prosota-line font-semibold">
               <td className="py-1 px-1" colSpan={4}>Element total</td>
               <td className="py-1 px-1 text-right">{formatCurrency(elementTotal.toString())}</td>
               <td></td>
@@ -156,13 +156,13 @@ export function CostRateLines({
       )}
 
       {adding ? (
-        <form onSubmit={handleAdd} className="bg-white border border-gray-200 rounded-md p-3 space-y-2">
+        <form onSubmit={handleAdd} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md p-3 space-y-2">
           <input
             autoFocus
             type="text"
             value={form.description}
             onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
-            className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
             placeholder="Line description"
           />
           <div className="flex gap-2">
@@ -170,21 +170,21 @@ export function CostRateLines({
               type="number" step="0.01"
               value={form.qty}
               onChange={e => setForm(prev => ({ ...prev, qty: e.target.value }))}
-              className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+              className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
               placeholder="Qty"
             />
             <input
               type="text"
               value={form.unit}
               onChange={e => setForm(prev => ({ ...prev, unit: e.target.value }))}
-              className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+              className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
               placeholder="Unit (e.g. Nr, m2)"
             />
             <input
               type="number" step="0.01"
               value={form.rate}
               onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))}
-              className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+              className="flex-1 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5 text-xs"
               placeholder="Rate (£)"
             />
           </div>
@@ -192,29 +192,29 @@ export function CostRateLines({
             <button type="submit" className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded-md hover:bg-gray-900">
               Add line
             </button>
-            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_FORM) }} className="text-xs text-gray-500 px-3 py-1.5">
+            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_FORM) }} className="text-xs text-gray-500 dark:text-prosota-muted px-3 py-1.5">
               Cancel
             </button>
           </div>
         </form>
       ) : (
-        <button onClick={() => setAdding(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+        <button onClick={() => setAdding(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
           + Add rate line
         </button>
       )}
 
       {childRows.length > 0 && (
-        <div className="mt-3 pt-2 border-t border-gray-200 space-y-1">
-          <div className="text-xs text-gray-400 mb-1">Child activities</div>
+        <div className="mt-3 pt-2 border-t border-gray-200 dark:border-prosota-line space-y-1">
+          <div className="text-xs text-gray-400 dark:text-prosota-muted mb-1">Child activities</div>
           {childRows.map(child => {
             const expanded = expandedChildIds.has(child.activityId)
             return (
               <div key={child.activityId}>
                 <button
                   onClick={() => toggleChild(child.activityId)}
-                  className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-blue-600 py-1"
+                  className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted hover:text-blue-600 py-1"
                 >
-                  <span className="text-gray-400">{expanded ? '▾' : '▸'}</span>
+                  <span className="text-gray-400 dark:text-prosota-muted">{expanded ? '▾' : '▸'}</span>
                   {child.label}
                 </button>
                 {expanded && (

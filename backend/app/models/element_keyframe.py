@@ -51,11 +51,12 @@ class ElementKeyframe(Base, TimestampMixin):
     per-row (matching ModelElementLink) so this doesn't need a migration if
     that gap closes later.
 
-    source_kind="camera" (2026-07-11, added alongside path_follower.py) is
-    the one exception — always element_ref="", used only for the new
-    field="path_progress" (camera-path animation), never for ordinary
-    Transform fields, since the camera has no TransformPanel of its own to
-    key from in the first place.
+    source_kind="camera" (2026-07-11, added alongside path_follower.py) —
+    element_ref="" is the main viewport's own orbit camera, used only for
+    field="path_progress" (camera-path animation). element_ref=str(camera.id)
+    (2026-08-03, alongside camera.py) is a specific named Camera — see
+    schemas.element_keyframe.KeyframeField's own comment for its fields
+    (pos_x/y/z, target_x/y/z, focal_length, clip_start, clip_end).
 
     source_kind="annotation" (2026-07-12, added alongside annotation.py) —
     element_ref is the Annotation row's own id, used for pos_x/y/z (moving

@@ -102,31 +102,31 @@ export function UserDefinedFieldsWidget({
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">🏷️</span>
-        <div className="font-bold text-sm">User Defined Fields</div>
+        <div className="font-bold text-sm dark:text-prosota-paper">User Defined Fields</div>
         {availableEntityTypes.length > 1 ? (
           <select
             value={entityType}
             onChange={e => onEntityTypeChange(e.target.value as UdfEntityType)}
-            className="text-xs border border-gray-300 rounded px-2 py-1"
+            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
           >
             {availableEntityTypes.map(t => <option key={t} value={t}>{ENTITY_LABEL[t]}</option>)}
           </select>
         ) : (
-          <span className="text-xs text-gray-400">{ENTITY_LABEL[entityType]}</span>
+          <span className="text-xs text-gray-400 dark:text-prosota-muted">{ENTITY_LABEL[entityType]}</span>
         )}
-        <div className="text-xs text-gray-400">Define a custom field, then add it as a column from the grid's own Columns menu</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Define a custom field, then add it as a column from the grid's own Columns menu</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <table className="w-full text-xs border-collapse mb-3">
         <thead>
-          <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200">Title</th>
-            <th className="px-2 py-1.5 border border-gray-200">Data Type</th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
+          <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Title</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Data Type</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
           </tr>
         </thead>
         <tbody>
@@ -136,37 +136,37 @@ export function UserDefinedFieldsWidget({
               <tr key={d.id}>
                 {isEditing ? (
                   <>
-                    <td className="px-2 py-1.5 border border-gray-200">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">
                       <input
                         value={editName}
                         onChange={e => setEditName(e.target.value)}
                         autoFocus
-                        className="w-full border border-blue-400 rounded px-1 py-0.5 text-xs"
+                        className="w-full border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                       />
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">
                       <select
                         value={editDataType}
                         onChange={e => setEditDataType(e.target.value as UdfDataType)}
-                        className="border border-blue-400 rounded px-1 py-0.5 text-xs"
+                        className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
                       >
                         {UDF_DATA_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                       </select>
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
-                      <button onClick={() => saveEdit(d)} className="text-blue-600 hover:text-blue-700 mr-2">Save</button>
-                      <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-600">Cancel</button>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                      <button onClick={() => saveEdit(d)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Save</button>
+                      <button onClick={cancelEdit} className="text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
                     </td>
                   </>
                 ) : (
                   <>
-                    <td className="px-2 py-1.5 border border-gray-200 font-medium">{d.name}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-gray-500">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">{d.name}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">
                       {UDF_DATA_TYPES.find(t => t.value === d.data_type)?.label ?? d.data_type}
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
-                      <button onClick={() => startEdit(d)} className="text-blue-600 hover:text-blue-700 mr-2">Edit</button>
-                      <button onClick={() => handleDelete(d)} className="text-gray-400 hover:text-red-600">Delete</button>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                      <button onClick={() => startEdit(d)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Edit</button>
+                      <button onClick={() => handleDelete(d)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
                     </td>
                   </>
                 )}
@@ -174,40 +174,40 @@ export function UserDefinedFieldsWidget({
             )
           })}
           {definitions.length === 0 && !loading && (
-            <tr><td colSpan={3} className="px-2 py-3 text-center text-gray-400 border border-gray-200">No custom fields defined yet for {ENTITY_LABEL[entityType]}</td></tr>
+            <tr><td colSpan={3} className="px-2 py-3 text-center text-gray-400 dark:text-prosota-muted border border-gray-200 dark:border-prosota-line">No custom fields defined yet for {ENTITY_LABEL[entityType]}</td></tr>
           )}
         </tbody>
       </table>
-      {editError && <p className="text-xs text-red-600 mb-3">{editError}</p>}
+      {editError && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{editError}</p>}
 
       {creating ? (
-        <div className="border border-gray-200 rounded p-3 flex items-end gap-2 flex-wrap">
-          <label className="text-xs text-gray-600">
+        <div className="border border-gray-200 dark:border-prosota-line rounded p-3 flex items-end gap-2 flex-wrap">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Title
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Deadline"
               autoFocus
-              className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5 w-48"
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5 w-48"
             />
           </label>
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Data Type
             <select
               value={dataType}
               onChange={e => setDataType(e.target.value as UdfDataType)}
-              className="block border border-gray-300 rounded px-2 py-1 text-xs mt-0.5"
+              className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-xs mt-0.5"
             >
               {UDF_DATA_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </label>
-          {error && <p className="text-xs text-red-600 w-full">{error}</p>}
-          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700">Add</button>
-          <button onClick={resetForm} className="text-xs text-gray-400 hover:text-gray-600 px-1 py-1.5">Cancel</button>
+          {error && <p className="text-xs text-red-600 dark:text-red-400 w-full">{error}</p>}
+          <button onClick={handleCreate} className="text-xs px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Add</button>
+          <button onClick={resetForm} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper px-1 py-1.5">Cancel</button>
         </div>
       ) : (
-        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ Add Field</button>
+        <button onClick={() => setCreating(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ Add Field</button>
       )}
     </div>
   )

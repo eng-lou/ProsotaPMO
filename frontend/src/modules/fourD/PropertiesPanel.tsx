@@ -109,14 +109,14 @@ interface Props {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-1">
-      <span className="text-xs text-gray-600">{label}</span>
+      <span className="text-xs text-gray-600 dark:text-prosota-muted">{label}</span>
       {children}
     </div>
   )
 }
 
 function SectionHeader({ label }: { label: string }) {
-  return <div className="px-3 pt-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide">{label}</div>
+  return <div className="px-3 pt-3 pb-1 text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">{label}</div>
 }
 
 // Far-left, collapsible "3D View Properties" panel (2026-07-10, per Maro,
@@ -141,7 +141,7 @@ export function PropertiesPanel({
       <button
         onClick={onToggle}
         title="Show 3D View Properties"
-        className="w-6 shrink-0 flex items-start justify-center pt-3 bg-white border-r border-gray-200 text-gray-400 hover:text-gray-600"
+        className="w-6 shrink-0 flex items-start justify-center pt-3 bg-white dark:bg-prosota-panel border-r border-gray-200 dark:border-prosota-line text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
       >
         ▸
       </button>
@@ -151,10 +151,10 @@ export function PropertiesPanel({
   const set = <K extends keyof ViewerSettings>(key: K, value: ViewerSettings[K]) => onSettingsChange({ ...settings, [key]: value })
 
   return (
-    <div className="w-64 shrink-0 bg-white border-r border-gray-200 flex flex-col overflow-y-auto">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 sticky top-0 bg-white">
-        <span className="text-sm font-bold text-gray-700">3D View Properties</span>
-        <button onClick={onToggle} title="Hide" className="ml-auto text-gray-400 hover:text-gray-600">◂</button>
+    <div className="w-64 shrink-0 bg-white dark:bg-prosota-panel border-r border-gray-200 dark:border-prosota-line flex flex-col overflow-y-auto">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-prosota-line sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-sm font-bold text-gray-700 dark:text-prosota-muted">3D View Properties</span>
+        <button onClick={onToggle} title="Hide" className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">◂</button>
       </div>
 
       <SectionHeader label="General" />
@@ -162,7 +162,7 @@ export function PropertiesPanel({
         <select
           value={settings.renderMode}
           onChange={e => set('renderMode', e.target.value as ViewerSettings['renderMode'])}
-          className="text-xs border border-gray-300 rounded px-1.5 py-0.5"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         >
           <option value="hiddenLine">Hidden Line</option>
           <option value="flat">Flat Shaded</option>
@@ -174,7 +174,7 @@ export function PropertiesPanel({
         <select
           value={settings.upAxis}
           onChange={e => set('upAxis', e.target.value as ViewerSettings['upAxis'])}
-          className="text-xs border border-gray-300 rounded px-1.5 py-0.5"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         >
           <option value="z">Z up (Blender)</option>
           <option value="y">Y up (three.js)</option>
@@ -184,21 +184,21 @@ export function PropertiesPanel({
         <ResettableNumberInput
           min={10} max={120} value={settings.fieldOfView} defaultValue={DEFAULT_VIEWER_SETTINGS.fieldOfView}
           onChange={v => set('fieldOfView', v)}
-          className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+          className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
         />
       </Row>
       <Row label="Clip Start">
         <ResettableNumberInput
           min={0.001} step={0.1} value={settings.clipStart} defaultValue={DEFAULT_VIEWER_SETTINGS.clipStart}
           onChange={v => set('clipStart', v)}
-          className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+          className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
         />
       </Row>
       <Row label="Clip End">
         <ResettableNumberInput
           min={1} step={10} value={settings.clipEnd} defaultValue={DEFAULT_VIEWER_SETTINGS.clipEnd}
           onChange={v => set('clipEnd', v)}
-          className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 text-right"
+          className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
         />
       </Row>
 
@@ -223,7 +223,7 @@ export function PropertiesPanel({
                 onChange={e => set('sunAzimuth', Number(e.target.value))}
                 className="flex-1 w-0"
               />
-              <span className="text-xs text-gray-500 w-8 text-right shrink-0">{settings.sunAzimuth}°</span>
+              <span className="text-xs text-gray-500 dark:text-prosota-muted w-8 text-right shrink-0">{settings.sunAzimuth}°</span>
             </div>
           </Row>
           <Row label="Sun Elevation">
@@ -233,7 +233,7 @@ export function PropertiesPanel({
                 onChange={e => set('sunElevation', Number(e.target.value))}
                 className="flex-1 w-0"
               />
-              <span className="text-xs text-gray-500 w-8 text-right shrink-0">{settings.sunElevation}°</span>
+              <span className="text-xs text-gray-500 dark:text-prosota-muted w-8 text-right shrink-0">{settings.sunElevation}°</span>
             </div>
           </Row>
         </>
@@ -276,21 +276,21 @@ export function PropertiesPanel({
             if (file) onUploadEnvironment(file)
           }}
         />
-        <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
+        <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted">
           <span className="truncate" title={environmentName ?? 'kloofendal_48d_partly_cloudy_puresky_4k.hdr (default)'}>
             {environmentName ?? 'kloofendal (default)'}
           </span>
           {environmentName && (
-            <button onClick={onClearEnvironment} title="Revert to default" className="text-gray-400 hover:text-red-600 shrink-0">✕</button>
+            <button onClick={onClearEnvironment} title="Revert to default" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
           )}
         </div>
         <button
           onClick={() => hdrInputRef.current?.click()}
-          className="mt-1 w-full text-xs px-2 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          className="mt-1 w-full text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
           ⬆ Upload HDR/EXR
         </button>
-        {environmentError && <p className="mt-1 text-[11px] text-red-600">{environmentError}</p>}
+        {environmentError && <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{environmentError}</p>}
       </div>
       <Row label="Show as background">
         <input type="checkbox" checked={settings.environmentBackground} onChange={e => set('environmentBackground', e.target.checked)} />
@@ -328,7 +328,7 @@ export function PropertiesPanel({
                   key={axis}
                   onClick={() => onChangeSourceUpAxis(axis)}
                   className={`text-[11px] px-1.5 py-0.5 rounded border font-medium ${
-                    activeObject.sourceUpAxis === axis ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+                    activeObject.sourceUpAxis === axis ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-500 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
                   }`}
                 >
                   {axis.toUpperCase()}
@@ -357,7 +357,7 @@ export function PropertiesPanel({
                 setTimeout(() => setApplyTransformResult(null), 4000)
               }}
               title="Bake current Location/Rotation/Scale into the geometry, then reset all three to 0/0/1 — the object stays visually in place"
-              className="w-full text-xs px-2 py-1 rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+              className="w-full text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
             >
               Apply Transform
             </button>
@@ -370,7 +370,7 @@ export function PropertiesPanel({
                 0/0/1 with nothing moving on screen), which otherwise looks
                 indistinguishable from the button silently doing nothing. */}
             {applyTransformResult && (
-              <p className="mt-1 text-[11px] text-gray-500">{applyTransformResult}</p>
+              <p className="mt-1 text-[11px] text-gray-500 dark:text-prosota-muted">{applyTransformResult}</p>
             )}
           </div>
           <TransformPanel
@@ -406,7 +406,7 @@ export function PropertiesPanel({
       )}
 
       <div className="flex-1" />
-      <div className="px-3 py-2 border-t border-gray-100 text-[10px] text-gray-400">
+      <div className="px-3 py-2 border-t border-gray-100 dark:border-prosota-line text-[10px] text-gray-400 dark:text-prosota-muted">
         {activeObject
           ? 'IFC sub-element properties (GlobalId, property sets): see the IFC Data tab on the right.'
           : 'Click an object in the viewport to edit its transform and material here.'}

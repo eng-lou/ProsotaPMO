@@ -57,18 +57,18 @@ function Item({ box, onRename, onToggleActive, onToggleVisible, onDelete }: {
             if (e.key === 'Enter') commitRename()
             if (e.key === 'Escape') { setDraftName(box.name); setEditing(false) }
           }}
-          className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 min-w-0"
+          className="flex-1 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 min-w-0"
         />
       ) : (
         <span
           onDoubleClick={() => setEditing(true)}
-          className="flex-1 text-xs text-gray-700 truncate cursor-text"
+          className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-text"
           title="Double-click to rename"
         >
           {box.name}
         </span>
       )}
-      <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
+      <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
     </div>
   )
 }
@@ -89,13 +89,13 @@ function Item({ box, onRename, onToggleActive, onToggleVisible, onDelete }: {
 export function SectionBoxPanel({ boxes, canCreate, error, tool, onToolChange, onCreate, onRename, onToggleActive, onToggleVisible, onDelete }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-        <span className="text-xs text-gray-500">Section Boxes</span>
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
+        <span className="text-xs text-gray-500 dark:text-prosota-muted">Section Boxes</span>
         <button
           onClick={onCreate}
           disabled={!canCreate}
           title={canCreate ? 'Add a section box around the selected object' : 'Select an object first'}
-          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 disabled:hover:bg-transparent"
+          className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           + Add
         </button>
@@ -110,24 +110,24 @@ export function SectionBoxPanel({ boxes, canCreate, error, tool, onToolChange, o
           this whole feature is built from — defaults to resize so nothing
           about existing drag behavior changes unless you switch.) */}
       {boxes.length > 0 && (
-        <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-1">
+        <div className="px-3 py-1.5 border-b border-gray-100 dark:border-prosota-line flex items-center gap-1">
           <button
             onClick={() => onToolChange('resize')}
-            className={`text-xs px-2 py-1 rounded border ${tool === 'resize' ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            className={`text-xs px-2 py-1 rounded border ${tool === 'resize' ? 'border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper bg-blue-50 text-blue-700' : 'border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
           >
             Resize
           </button>
           <button
             onClick={() => onToolChange('rotate')}
-            className={`text-xs px-2 py-1 rounded border ${tool === 'rotate' ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            className={`text-xs px-2 py-1 rounded border ${tool === 'rotate' ? 'border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper bg-blue-50 text-blue-700' : 'border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
           >
             Rotate
           </button>
         </div>
       )}
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {boxes.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-gray-400">
+        <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">
           Select an object, then "+ Add" to create a section box you can use to cut through it.
         </p>
       ) : (

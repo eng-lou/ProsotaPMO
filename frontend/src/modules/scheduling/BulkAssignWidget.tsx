@@ -190,12 +190,12 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">{MODE_ICON[mode]}</span>
-        <div className="font-bold text-sm">{MODE_LABEL[mode]}</div>
-        <div className="text-xs text-gray-400">Applies to all {selectedActivities.length} selected activit{selectedActivities.length === 1 ? 'y' : 'ies'}</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">{MODE_LABEL[mode]}</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">Applies to all {selectedActivities.length} selected activit{selectedActivities.length === 1 ? 'y' : 'ies'}</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <form
@@ -203,7 +203,7 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
         className="flex items-end gap-2 flex-wrap"
       >
         {mode === 'move' && (
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             New parent
             <ActivityPicker
               activities={moveCandidates} value={targetActivityId} onChange={setTargetActivityId}
@@ -215,7 +215,7 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
 
         {(mode === 'predecessor' || mode === 'successor') && (
           <>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               {mode === 'predecessor' ? 'Predecessor' : 'Successor'}
               <ActivityPicker
                 activities={relationshipCandidates} value={targetActivityId} onChange={setTargetActivityId}
@@ -223,27 +223,27 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
                 className="mt-0.5 w-64"
               />
             </label>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Type
-              <select value={relType} onChange={e => setRelType(e.target.value as RelationshipType)} className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5">
+              <select value={relType} onChange={e => setRelType(e.target.value as RelationshipType)} className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5">
                 {RELATIONSHIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Lag (d)
               <input
                 type="number" step={0.5} value={lagDays} onChange={e => setLagDays(e.target.value)}
                 title="Lag (days) — positive = lag, negative = lead"
-                className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-16"
+                className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-16"
               />
             </label>
           </>
         )}
 
         {mode === 'calendar' && (
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-gray-600 dark:text-prosota-muted">
             Calendar
-            <select value={calendarId} onChange={e => setCalendarId(e.target.value)} className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-64">
+            <select value={calendarId} onChange={e => setCalendarId(e.target.value)} className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-64">
               <option value="">Project default</option>
               {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
@@ -252,53 +252,53 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
 
         {mode === 'resource' && (
           <>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Resource
-              <select value={resourceId} onChange={e => setResourceId(e.target.value)} className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-64">
+              <select value={resourceId} onChange={e => setResourceId(e.target.value)} className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-64">
                 <option value="">Select resource…</option>
                 {resources.map(r => <option key={r.id} value={r.id}>{r.name} ({RESOURCE_TYPE_LABELS[r.resource_type]}, £{r.rate}/{r.unit})</option>)}
               </select>
             </label>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Role
-              <input value={role} onChange={e => setRole(e.target.value)} placeholder="Optional" className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-32" />
+              <input value={role} onChange={e => setRole(e.target.value)} placeholder="Optional" className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-32" />
             </label>
             {selectedResource && isTimeBased(selectedResource.resource_type) && (
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-gray-600 dark:text-prosota-muted">
                 Utilisation
                 <input
                   type="number" min={1} max={100} step={1}
                   value={utilisationPct} onChange={e => setUtilisationPct(e.target.value)}
-                  className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-16"
+                  className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-16"
                 />%
               </label>
             )}
             {selectedResource && selectedResource.resource_type === 'material' && (
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-gray-600 dark:text-prosota-muted">
                 Qty ({selectedResource.unit})
                 <input
                   type="number" min={0} step={0.01}
                   value={quantity} onChange={e => setQuantity(e.target.value)}
-                  className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-24"
+                  className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-24"
                 />
               </label>
             )}
             {selectedResource && (selectedResource.resource_type === 'subcontractor' || selectedResource.resource_type === 'cost') && (
-              <span className="text-xs text-gray-400 pb-1">Flat lump sum — no quantity needed</span>
+              <span className="text-xs text-gray-400 dark:text-prosota-muted pb-1">Flat lump sum — no quantity needed</span>
             )}
           </>
         )}
 
         {mode === 'unassign-resource' && (
           <>
-            <label className="text-xs text-gray-600">
+            <label className="text-xs text-gray-600 dark:text-prosota-muted">
               Resource to remove
-              <select value={resourceId} onChange={e => setResourceId(e.target.value)} className="block text-xs border border-gray-300 rounded px-2 py-1 mt-0.5 w-64">
+              <select value={resourceId} onChange={e => setResourceId(e.target.value)} className="block text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 mt-0.5 w-64">
                 <option value="">All assigned resources</option>
                 {resources.map(r => <option key={r.id} value={r.id}>{r.name} ({RESOURCE_TYPE_LABELS[r.resource_type]})</option>)}
               </select>
             </label>
-            <span className="text-xs text-gray-400 pb-1">
+            <span className="text-xs text-gray-400 dark:text-prosota-muted pb-1">
               {matchingAssignments.length} assignment{matchingAssignments.length === 1 ? '' : 's'} will be removed
             </span>
           </>
@@ -317,7 +317,7 @@ export function BulkAssignWidget({ mode, selectedActivities, allActivities, cale
         </button>
       </form>
 
-      {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+      {error && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{error}</p>}
     </div>
   )
 }

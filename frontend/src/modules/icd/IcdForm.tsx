@@ -104,8 +104,8 @@ interface IcdFormProps {
 }
 
 const inputClass =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
-const labelClass = 'block text-xs font-medium text-gray-600 mb-1'
+  'w-full border border-gray-300 dark:border-prosota-line rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+const labelClass = 'block text-xs font-medium text-gray-600 dark:text-prosota-muted mb-1'
 
 export function IcdForm({ item, onCancel, onSubmit }: IcdFormProps) {
   const [values, setValues] = useState<IcdFormValues>(() => toFormValues(item))
@@ -140,12 +140,12 @@ export function IcdForm({ item, onCancel, onSubmit }: IcdFormProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="bg-white border border-gray-200 rounded-lg p-5 space-y-4 mb-6"
+      className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 space-y-4 mb-6"
     >
-      <h2 className="font-medium text-gray-900 text-sm">{item ? 'Edit item' : 'New issue / change / decision'}</h2>
+      <h2 className="font-medium text-gray-900 dark:text-prosota-paper text-sm">{item ? 'Edit item' : 'New issue / change / decision'}</h2>
 
       {error && (
-        <div className="p-2 bg-red-50 border border-red-200 rounded-md text-red-700 text-xs">
+        <div className="p-2 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-xs">
           {error}
         </div>
       )}
@@ -168,7 +168,7 @@ export function IcdForm({ item, onCancel, onSubmit }: IcdFormProps) {
           >
             {ITEM_TYPES.map(t => <option key={t} value={t}>{ITEM_TYPE_LABELS[t]}</option>)}
           </select>
-          {item && <p className="text-xs text-gray-400 mt-1">Type can't be changed after creation.</p>}
+          {item && <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Type can't be changed after creation.</p>}
         </div>
         <div>
           <label className={labelClass}>Status</label>
@@ -448,11 +448,11 @@ export function IcdForm({ item, onCancel, onSubmit }: IcdFormProps) {
           onChange={e => set('last_reviewed_date', e.target.value)}
           className={inputClass}
         />
-        <p className="text-xs text-gray-400 mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
+        <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Auto-updated whenever a reassessment is logged below; editable here too.</p>
       </div>
 
       {hasTriggerChanges && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+        <div className="p-3 bg-blue-50 border border-blue-200 dark:border-prosota-azure/30 rounded-md">
           <label className={labelClass}>
             Status, priority, severity, CCB decision, cost, or quality impact changed — what changed and why? (optional, logged with today's date)
           </label>
@@ -477,7 +477,7 @@ export function IcdForm({ item, onCancel, onSubmit }: IcdFormProps) {
         <button
           type="button"
           onClick={onCancel}
-          className="text-gray-500 px-4 py-2 rounded-md text-sm hover:bg-gray-100"
+          className="text-gray-500 dark:text-prosota-muted px-4 py-2 rounded-md text-sm hover:bg-gray-100 dark:hover:bg-prosota-panel2"
         >
           Cancel
         </button>

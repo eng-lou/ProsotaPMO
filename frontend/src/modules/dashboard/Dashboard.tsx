@@ -11,14 +11,14 @@ export function Dashboard() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Controls Dashboard</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Controls Dashboard</h1>
       </div>
 
-      <div className="flex gap-1 border-b border-gray-200">
+      <div className="flex gap-1 border-b border-gray-200 dark:border-prosota-line">
         {TABS.map(t => (
           <button
             key={t}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? 'border-blue-600 text-blue-600 dark:text-prosota-azure' : 'border-transparent text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper'}`}
             onClick={() => setTab(t)}
           >
             {t}

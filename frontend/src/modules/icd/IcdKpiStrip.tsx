@@ -15,8 +15,8 @@ interface Kpi {
 }
 
 const TONE_STYLES: Record<Kpi['tone'], string> = {
-  neutral: 'text-gray-900',
-  warn: 'text-red-600',
+  neutral: 'text-gray-900 dark:text-prosota-paper',
+  warn: 'text-red-600 dark:text-red-400',
   good: 'text-green-600',
 }
 
@@ -59,9 +59,9 @@ export function IcdKpiStrip({ items }: IcdKpiStripProps) {
   return (
     <div className="grid grid-cols-4 md:grid-cols-7 gap-3 mb-4">
       {kpis.map(k => (
-        <div key={k.label} className="bg-white border border-gray-200 rounded-lg px-3 py-2.5">
+        <div key={k.label} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg px-3 py-2.5">
           <div className={`text-lg font-bold ${TONE_STYLES[k.tone]}`}>{k.value}</div>
-          <div className="text-xs text-gray-500">{k.label}</div>
+          <div className="text-xs text-gray-500 dark:text-prosota-muted">{k.label}</div>
         </div>
       ))}
     </div>

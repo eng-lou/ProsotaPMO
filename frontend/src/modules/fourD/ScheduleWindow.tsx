@@ -154,15 +154,15 @@ export function ScheduleWindow({
               that had no defined relationship to the Gantt's fixed 46px
               rows/36px header, so they drifted apart by design, not by
               accident. */}
-          <thead className="sticky top-0 bg-gray-50 z-10">
-            <tr className="text-left text-gray-500" style={{ height: HEADER_HEIGHT }}>
-              <th className="px-2 border-b border-gray-200">Code</th>
-              <th className="px-2 border-b border-gray-200">Name</th>
-              <th className="px-2 border-b border-gray-200 text-right">Dur (d)</th>
-              <th className="px-2 border-b border-gray-200">Start</th>
-              <th className="px-2 border-b border-gray-200">Finish</th>
-              <th className="px-2 border-b border-gray-200" title="Animation profile every 3D element linked to this activity uses in the 4D timeline, unless one has its own override">Profile</th>
-              <th className="px-2 border-b border-gray-200" title="Click to browse the individual 3D elements linked to this activity">Browse</th>
+          <thead className="sticky top-0 bg-gray-50 dark:bg-prosota-panel2 z-10">
+            <tr className="text-left text-gray-500 dark:text-prosota-muted" style={{ height: HEADER_HEIGHT }}>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line">Code</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line">Name</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line text-right">Dur (d)</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line">Start</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line">Finish</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line" title="Animation profile every 3D element linked to this activity uses in the 4D timeline, unless one has its own override">Profile</th>
+              <th className="px-2 border-b border-gray-200 dark:border-prosota-line" title="Click to browse the individual 3D elements linked to this activity">Browse</th>
             </tr>
           </thead>
           <tbody>
@@ -178,26 +178,26 @@ export function ScheduleWindow({
                   key={a.id}
                   onClick={e => onSelectActivity(a.id, e.ctrlKey || e.metaKey)}
                   style={{ height: GANTT_ROW_HEIGHT }}
-                  className={`cursor-pointer hover:bg-gray-50 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''}`}
+                  className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''}`}
                 >
-                  <td className={`px-2 border-b border-gray-100 font-mono ${critical ? 'text-red-600' : 'text-gray-500'}`}>{a.code}</td>
-                  <td className={`px-2 border-b border-gray-100 ${isSummary ? 'font-bold text-gray-800' : critical ? 'text-red-600' : 'text-gray-700'}`}>
+                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line font-mono ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{a.code}</td>
+                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${isSummary ? 'font-bold text-gray-800 dark:text-prosota-paper' : critical ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>
                     <span style={{ paddingLeft: depth * 16 }} className="inline-flex items-center gap-1">
                       {hasChildren.has(a.id) ? (
-                        <button onClick={e => { e.stopPropagation(); onToggleCollapsed(a.id) }} className="text-gray-400 w-3 shrink-0">
+                        <button onClick={e => { e.stopPropagation(); onToggleCollapsed(a.id) }} className="text-gray-400 dark:text-prosota-muted w-3 shrink-0">
                           {isCollapsed ? '▸' : '▾'}
                         </button>
                       ) : <span className="w-3 shrink-0" />}
                       {a.task_name}
                     </span>
                   </td>
-                  <td className={`px-2 border-b border-gray-100 text-right ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDuration(a.duration_days)}</td>
-                  <td className={`px-2 border-b border-gray-100 ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDateTime(a.start, false)}</td>
-                  <td className={`px-2 border-b border-gray-100 ${critical ? 'text-red-600' : 'text-gray-500'}`}>{formatDateTime(a.finish, false)}</td>
-                  <td className="px-2 border-b border-gray-100 text-gray-500 whitespace-nowrap overflow-hidden text-ellipsis">
-                    {a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? 'Default') : <span className="text-gray-300">Default</span>}
+                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line text-right ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDuration(a.duration_days)}</td>
+                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDateTime(a.start, false)}</td>
+                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDateTime(a.finish, false)}</td>
+                  <td className="px-2 border-b border-gray-100 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap overflow-hidden text-ellipsis">
+                    {a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? 'Default') : <span className="text-gray-300 dark:text-prosota-line">Default</span>}
                   </td>
-                  <td className="px-2 border-b border-gray-100">
+                  <td className="px-2 border-b border-gray-100 dark:border-prosota-line">
                     <button
                       onClick={e => {
                         e.stopPropagation()
@@ -216,7 +216,7 @@ export function ScheduleWindow({
               )
             })}
             {activities.length === 0 && (
-              <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-400">No activities yet</td></tr>
+              <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-400 dark:text-prosota-muted">No activities yet</td></tr>
             )}
           </tbody>
         </table>
@@ -232,13 +232,13 @@ export function ScheduleWindow({
           <>
             <div className="fixed inset-0 z-40" onClick={() => setElementsBrowse(null)} />
             <div
-              className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg py-1"
+              className="fixed z-50 w-64 max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-md shadow-lg py-1"
               style={{ left: elementsBrowse.x, top: elementsBrowse.y + 4 }}
             >
               {links.map(link => (
                 <div
                   key={link.id}
-                  className="px-2.5 py-1 text-xs text-gray-700 truncate border-b border-gray-50 last:border-b-0"
+                  className="px-2.5 py-1 text-xs text-gray-700 dark:text-prosota-muted truncate border-b border-gray-50 last:border-b-0"
                   title={`${link.element_label} (${link.element_ref})`}
                 >
                   {link.element_label}

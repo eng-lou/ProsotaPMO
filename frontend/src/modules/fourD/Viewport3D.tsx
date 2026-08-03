@@ -47,6 +47,9 @@ import { SectionBoxGizmos } from './SectionBoxGizmo'
 import type { SectionBoxTool } from './SectionBoxPanel'
 import { SectionBoxCaps } from './SectionBoxCap'
 import type { CameraViewPose } from './cameraViews'
+import { CameraGizmo } from './CameraGizmo'
+import { PassepartoutOverlay } from './PassepartoutOverlay'
+import { fovFromFocalLength, focalLengthFromFov, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
@@ -143,7 +146,7 @@ export interface ResolvedSectionBox {
 export const DEFAULT_ENVIRONMENT_URL = '/hdr/kloofendal_48d_partly_cloudy_puresky_4k.hdr'
 
 // Extracted + exported (2026-07-25, per Maro: "baseline 3d doesnt share
-// the same render shader settings etc") — BaselineViewportPane.tsx calls
+// the same render shader settings etc") — ComparisonViewportPane.tsx calls
 // these same two functions now instead of using a fixed light position of
 // its own, so its own sun direction/shadow scale actually matches the main
 // viewport's for the same settings, rather than an independent guess. Pure
@@ -304,7 +307,7 @@ interface Props {
   // today's behaviour for every element that's never had this touched).
   customOpacity: Record<string, number>
   // Orbit camera sync with the Baseline pane (2026-07-24) — see
-  // CameraSync's own header. Shared with BaselineViewportPane.tsx via
+  // CameraSync's own header. Shared with ComparisonViewportPane.tsx via
   // FourD.tsx, same ref-not-state idiom as timelineDateRef just below.
   cameraSyncRef: React.MutableRefObject<CameraSyncState | null>
   // 4D timeline playback (2026-07-11) — see TimelinePlayback below and
@@ -365,6 +368,27 @@ interface Props {
   // a changing-prop-as-command needs no change to its own export shape.
   onSaveCameraView: (pose: CameraViewPose, thumbnailDataUrl: string | null) => void
   applyCameraViewRequest: { pose: CameraViewPose; nonce: number } | null
+  // Cinematic Cameras (2026-08-03, per Maro: "add separate cameras and
+  // play the animation and see the transitions") — same "callback up,
+  // parent does the actual persistence" split as onSaveCameraView above.
+  // cameras/activeCameraId are project-scoped state FourD.tsx owns
+  // (mirroring cameraViews above); onExitCameraView clears activeCameraId
+  // back to null (free orbit). No apply-request "command" prop is needed
+  // the way Camera Views has one — looking through a camera isn't a
+  // one-off instant jump, it's a standing mode this component keeps
+  // re-applying itself (ActiveCameraPose below) for as long as
+  // activeCameraId stays set, including reacting live to lens/position
+  // edits in the Cameras panel.
+  cameras: CinematicCamera[]
+  activeCameraId: string | null
+  onAddCamera: (pose: CameraPose) => void
+  onExitCameraView: () => void
+  // Keyframing (2026-08-03) — captures the active camera's current pose/
+  // lens at whatever date the Animation Timeline's own playhead is
+  // currently on (timelineDateRef, already a prop below), same "read the
+  // live refs, hand the values up, parent does the actual persistence"
+  // split as onAddCamera/onSaveCameraView.
+  onKeyCameraPose: (cameraId: string, date: Date, pose: CameraPose) => void
   // 4D Video persistence (2026-07-20, per Maro: a dashboard widget to "open
   // one of the videos 4d sequence vids we've captured") — Export Video
   // still downloads locally exactly as before (unchanged, no regression);
@@ -480,23 +504,23 @@ interface Props {
   onMeasurementHit: (hit: MeasurementHit) => void
   measurementHoverPoint: MeasurementPoint | null
   onMeasurementHoverPoint: (point: MeasurementPoint | null) => void
-  // Include Baseline (2026-07-24, per Maro: "an option to include the
-  // baseline 3d while capturing still and video. so side by side") —
-  // compareBaselineOpen mirrors FourD.tsx's own state of the same name
-  // (the Baseline pane is only ever mounted, and only ever has a live
-  // canvas to composite, while that's true); baselineCanvasRef is
-  // populated by BaselineViewportPane.tsx's own CaptureCamera-like helper,
-  // the same ref-written-by-a-sibling idiom cameraSyncRef already
-  // established for orbit sync. onCaptureQualityChange mirrors this
-  // component's own captureDprMultiplier out to FourD.tsx (which forwards
-  // it into BaselineViewportPane as a plain dprMultiplier prop) so a
-  // boosted-resolution capture boosts *both* canvases together — both
-  // state updates land in the same React commit (called back-to-back in
-  // the same handler), so the existing "wait a few rAFs" pattern below
-  // still covers the baseline canvas's own resize too, no extra delay
-  // needed.
-  compareBaselineOpen: boolean
-  baselineCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>
+  // Multi-viewport Compare Baseline (2026-08-03, generalizing the
+  // original single "Include Baseline" — per Maro: "compare baseline goes
+  // beyond just the one baseline view") — one ref per currently-*active*
+  // ComparisonViewportPane (FourD.tsx already slices its own fixed 3-slot
+  // ref array down to `paneConfigs.length` before passing it here, so this
+  // array's own `.length` is exactly "how many extra panes are open right
+  // now," with no separate boolean needed). Each ref is populated by that
+  // pane's own CaptureCamera-like helper, the same ref-written-by-a-
+  // sibling idiom cameraSyncRef already established for orbit sync.
+  // onCaptureQualityChange mirrors this component's own
+  // captureDprMultiplier out to FourD.tsx (which forwards it into every
+  // active pane as a plain dprMultiplier prop) so a boosted-resolution
+  // capture boosts every canvas together — all state updates land in the
+  // same React commit (called back-to-back in the same handler), so the
+  // existing "wait a few rAFs" pattern below still covers every pane's own
+  // resize too, no extra delay needed.
+  comparisonCanvasRefs: React.MutableRefObject<HTMLCanvasElement | null>[]
   onCaptureQualityChange?: (dprMultiplier: number | null) => void
   // Mirrors this component's own captureBackgroundOverride out to
   // FourD.tsx (2026-07-25, per Maro: "baseline 3d doesnt share the same
@@ -2328,7 +2352,7 @@ function applyPathFollow(target: ResolvedPathTarget, now: Date, upAxis: UpAxis) 
 }
 
 // Exported (2026-07-12, per Maro's "advanced 4D" baseline-vs-actual
-// compare request) so BaselineViewportPane.tsx can mount its own instance
+// compare request) so ComparisonViewportPane.tsx can mount its own instance
 // against the same imported geometry (cloned — see sceneClone.ts), reading
 // bl_start/bl_finish instead of start/finish for Mode A. See dateField's
 // own header just below for exactly what that does and doesn't affect.
@@ -2414,7 +2438,7 @@ export function TimelinePlayback({
   // Variance/clash tinting (2026-07-24 fix, per Maro: "i dont see the
   // variance color") — see computeTintedColor's own header for the full
   // root-cause story. Defaulted to "off"/empty so every other
-  // TimelinePlayback caller (BaselineViewportPane.tsx, which has no
+  // TimelinePlayback caller (ComparisonViewportPane.tsx, which has no
   // selection/variance UI of its own) doesn't need to pass anything.
   varianceByElementKey?: Map<string, VarianceEntry>
   showVarianceColors?: boolean
@@ -3387,17 +3411,100 @@ export function TimelinePlayback({
 // 2026-07-08, see upAxis.ts's header — OrbitControls reads camera.up to
 // decide which direction stays "vertical" on screen while orbiting, so this
 // has to move in lockstep with the content-rotation group below it.)
-function CameraSettings({ fov, near, far, upAxis }: { fov: number; near: number; far: number; upAxis: UpAxis }) {
+function CameraSettings({ fov, near, far, upAxis, overridden }: { fov: number; near: number; far: number; upAxis: UpAxis; overridden: boolean }) {
   const { camera } = useThree()
   useEffect(() => {
-    if (camera instanceof THREE.PerspectiveCamera) {
+    // Cinematic Cameras (2026-08-03) — while looking through one,
+    // ActiveCameraPose below owns fov/near/far instead; skipping it here
+    // (rather than letting both effects fight each other) is what lets a
+    // Camera's own lens settings actually take effect, and `overridden`
+    // in the dep array is what re-asserts the viewer's own settings the
+    // instant Exit Camera View clears activeCameraId back to null.
+    if (!overridden && camera instanceof THREE.PerspectiveCamera) {
       camera.fov = fov
       camera.near = near
       camera.far = far
       camera.updateProjectionMatrix()
     }
     camera.up.set(0, upAxis === 'z' ? 0 : 1, upAxis === 'z' ? 1 : 0)
-  }, [camera, fov, near, far, upAxis])
+  }, [camera, fov, near, far, upAxis, overridden])
+  return null
+}
+
+// Cinematic Cameras (2026-08-03) — while activeCamera is set, imperatively
+// drives the live camera/controls to that Camera's own base pose/lens
+// (base_* — no keyframes exist yet at this stage of the feature; a later
+// pass replaces this with per-frame interpolateKeyframeTrack playback,
+// same mechanism mesh-object keyframes already use). A plain effect, not
+// useFrame — without keyframes the pose never changes after activation,
+// and OrbitControls is disabled while active (see the JSX below), so
+// there's nothing to re-apply every frame; the effect still re-fires
+// correctly whenever the active Camera's own fields change (e.g. editing
+// Focal Length in the Cameras panel while looking through it).
+// Per-frame (useFrame, not a one-time effect) — once keyframes exist on
+// any of this camera's own fields, its pose needs to keep tracking
+// wherever the Animation Timeline's playhead (timelineDateRef) currently
+// is, exactly like mesh-object keyframes already do via
+// applyKeyframedTransform; a one-time effect (this component's original
+// shape, before keyframing existed) could only ever apply the base pose
+// once on activation. Falls back to the camera's own base_* column
+// whenever a given field has no keyframes at all — same "base value
+// until overridden" convention every other animated target already uses.
+function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, controlsRef }: {
+  activeCamera: CinematicCamera | null
+  elementKeyframes: ElementKeyframe[]
+  timelineDateRef: React.MutableRefObject<Date | null>
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+}) {
+  const { camera } = useThree()
+  // Guards against fighting a live OrbitControls drag (2026-08-03) — this
+  // used to run unconditionally every frame, which is fine while the
+  // timeline is static AND nothing's keyed yet (resolve() below always
+  // returns the same base value, so re-setting position to what it
+  // already is is harmless)... except when the user is actively ORBITING
+  // to frame a new shot: a plain per-frame re-apply snapped position back
+  // to the resolved value on the very next frame, making the camera
+  // impossible to drag at all. Skipping whenever nothing relevant has
+  // actually changed since the last applied frame (the active camera
+  // itself, its own keyframes, or the timeline date) is what lets a live
+  // drag through untouched, while still re-applying correctly the moment
+  // any of those three actually change (activation, Add Keyframe/lens
+  // edits, or scrubbing/playing the timeline).
+  const lastAppliedRef = useRef<{ camera: CinematicCamera; keyframes: ElementKeyframe[]; dateMs: number } | null>(null)
+  useFrame(() => {
+    if (!activeCamera) { lastAppliedRef.current = null; return }
+    const now = timelineDateRef.current ?? new Date()
+    const last = lastAppliedRef.current
+    if (last && last.camera === activeCamera && last.keyframes === elementKeyframes && last.dateMs === now.getTime()) return
+    lastAppliedRef.current = { camera: activeCamera, keyframes: elementKeyframes, dateMs: now.getTime() }
+    const resolve = (field: KeyframeField, base: number): number => {
+      const track = elementKeyframes
+        .filter(k => k.source_kind === 'camera' && k.element_ref === activeCamera.id && k.field === field)
+        .map(k => ({ date: new Date(k.date), value: k.value }))
+      if (track.length === 0) return base
+      return interpolateKeyframeTrack(track, now) ?? base
+    }
+    camera.position.set(
+      resolve('pos_x', activeCamera.base_position_x),
+      resolve('pos_y', activeCamera.base_position_y),
+      resolve('pos_z', activeCamera.base_position_z),
+    )
+    const controls = controlsRef.current
+    if (controls) {
+      controls.target.set(
+        resolve('target_x', activeCamera.base_target_x),
+        resolve('target_y', activeCamera.base_target_y),
+        resolve('target_z', activeCamera.base_target_z),
+      )
+      controls.update()
+    }
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = fovFromFocalLength(resolve('focal_length', activeCamera.base_focal_length))
+      camera.near = resolve('clip_start', activeCamera.base_clip_start)
+      camera.far = resolve('clip_end', activeCamera.base_clip_end)
+      camera.updateProjectionMatrix()
+    }
+  })
   return null
 }
 
@@ -3431,7 +3538,7 @@ export interface CameraSyncState {
 // Synchronises orbit camera position/target across the two independent
 // <Canvas> panes (2026-07-24, per Maro: "i'd like to sync the orbit
 // movement. so i get the same camera angles" — the main Viewport3D and
-// BaselineViewportPane.tsx's own comparison pane each own a completely
+// ComparisonViewportPane.tsx's own comparison pane each own a completely
 // separate camera/OrbitControls, one per <Canvas>/WebGL context, with no
 // natural way to share state between them otherwise). `syncRef` is a
 // plain mutable ref (not React state) shared by both panes via FourD.tsx —
@@ -3451,11 +3558,24 @@ export interface CameraSyncState {
 // that applies an incoming change; handleChange ignores 'change' events
 // that fire while it's set.
 export function CameraSync({
-  syncRef, cameraRef, controlsRef,
+  syncRef, cameraRef, controlsRef, disconnected = false,
 }: {
   syncRef: React.MutableRefObject<CameraSyncState | null>
   cameraRef: React.MutableRefObject<THREE.Camera | null>
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+  // Per-pane disconnect/reconnect (2026-08-03, per Maro: multi-viewport
+  // Compare Baseline — "shared by default, ability to disconnect and
+  // change or reconnect") — while true, this instance neither publishes
+  // its own camera moves into `syncRef` nor applies incoming ones, so a
+  // pane can be orbited/framed independently of the group. On the
+  // `true -> false` (reconnect) transition, a one-shot effect below snaps
+  // this pane's camera to whatever `syncRef` currently holds *before* the
+  // next `useFrame` tick — matches the group's current view exactly once,
+  // rather than either fighting that next real frame or immediately
+  // re-publishing this pane's own stale pre-disconnect position as a
+  // false "new" change (lastAppliedVersion is set to the snapped-to
+  // version in the same effect, for exactly that reason).
+  disconnected?: boolean
 }) {
   const lastAppliedVersion = useRef(0)
   const applyingRef = useRef(false)
@@ -3465,7 +3585,7 @@ export function CameraSync({
     const camera = cameraRef.current
     if (!controls || !camera) return
     const handleChange = () => {
-      if (applyingRef.current) return
+      if (applyingRef.current || disconnected) return
       const nextVersion = (syncRef.current?.version ?? 0) + 1
       syncRef.current = {
         position: camera.position.toArray() as [number, number, number],
@@ -3477,9 +3597,30 @@ export function CameraSync({
     controls.addEventListener('change', handleChange)
     return () => controls.removeEventListener('change', handleChange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlsRef.current, cameraRef.current])
+  }, [controlsRef.current, cameraRef.current, disconnected])
+
+  // Reconnect snap — see `disconnected`'s own header above. Deliberately a
+  // separate effect from the publish one above (that one only needs to
+  // re-attach the listener when `disconnected` changes; this one needs to
+  // run its one-shot apply exactly once per `false` transition, not every
+  // time the listener effect happens to re-run for an unrelated reason).
+  useEffect(() => {
+    if (disconnected) return
+    const shared = syncRef.current
+    const controls = controlsRef.current
+    const camera = cameraRef.current
+    if (!shared || !controls || !camera) return
+    applyingRef.current = true
+    camera.position.fromArray(shared.position)
+    controls.target.fromArray(shared.target)
+    controls.update()
+    applyingRef.current = false
+    lastAppliedVersion.current = shared.version
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disconnected])
 
   useFrame(() => {
+    if (disconnected) return
     const shared = syncRef.current
     const controls = controlsRef.current
     const camera = cameraRef.current
@@ -3705,6 +3846,7 @@ export function Viewport3D({
   timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
+  cameras, activeCameraId, onAddCamera, onExitCameraView, onKeyCameraPose,
   scheduleStart, scheduleEnd,
   paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   zones, zoneAnimWindows, addingPointsForZoneId, onZoneDragMove, onZoneDragEnd, onAddZonePoint,
@@ -3715,9 +3857,10 @@ export function Viewport3D({
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
   measurementHoverPoint, onMeasurementHoverPoint,
-  compareBaselineOpen, baselineCanvasRef, onCaptureQualityChange, onCaptureBackgroundChange, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
+  comparisonCanvasRefs, onCaptureQualityChange, onCaptureBackgroundChange, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
 }: Props) {
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
+  const activeCamera = cameras.find(c => c.id === activeCameraId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
   // IFC model, whenever one's actually picked (2026-07-08, per Maro: "the
   // whole ifc model is grouped, even though i select an individual object.
@@ -4155,11 +4298,20 @@ export function Viewport3D({
   const handleCaptureImage = async () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
-    // Include Baseline (2026-07-24) — only meaningful while the pane is
-    // actually mounted (compareBaselineOpen) and has produced a real
-    // canvas (baselineCanvasRef.current, populated by
-    // BaselineViewportPane's own CaptureCamera-like helper).
-    const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
+    // Include Comparison Panes (2026-07-24, generalized 2026-08-03 for up
+    // to 3 panes) — only meaningful while includeBaseline is on AND at
+    // least one comparison pane is actually mounted and has produced a
+    // real canvas (comparisonCanvasRefs[i].current, populated by
+    // ComparisonViewportPane's own CaptureCamera-like helper).
+    const activeComparisonCanvases = renderCaptureSettings.includeBaseline
+      ? comparisonCanvasRefs.map(ref => ref.current)
+      : []
+    // Reserves one rect per open pane slot, not per already-rendered
+    // canvas — a pane whose canvas hasn't produced a frame yet still gets
+    // its layout position (composeExportFrame's own per-rect null check
+    // just skips drawing into it that frame), keeping every canvas's
+    // index aligned with its own rect rather than compacting around gaps.
+    const comparisonPaneCount = activeComparisonCanvases.length
     const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, includeTimelineStrip, resolutionWidth, resolutionHeight } = renderCaptureSettings
     // Radial Progress Charts (2026-07-31) — icons need an actual network
     // fetch (loadRadialChartIcons), so this is resolved up front, before the
@@ -4191,10 +4343,9 @@ export function Viewport3D({
       // to keep the source canvas sharp enough for drawCoverFit's crop,
       // not to size the overlays.
       const overlayScale = resolutionHeight / 1080
-      const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
       const layout = computeExportLayout(
         resolutionWidth, resolutionHeight,
-        overlayScale, { includeGanttChart, includeActivityTable, includeBaseline, includeCostProfile },
+        overlayScale, { includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile },
       )
       const composite = document.createElement('canvas')
       composite.width = layout.totalWidth
@@ -4205,7 +4356,7 @@ export function Viewport3D({
           c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), timelineDateRef.current ?? new Date()),
         ]))
         composeExportFrame(ctx, layout, {
-          mainCanvas: canvas, baselineCanvas,
+          mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
           now: timelineDateRef.current, scheduleStart, scheduleEnd,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
@@ -4281,6 +4432,47 @@ export function Viewport3D({
     onSaveCameraView(pose, thumbnailDataUrl)
   }
 
+  // Cinematic Cameras (2026-08-03) — creates a new named Camera seeded
+  // from the live camera/controls pose, same "frame the shot, then
+  // bookmark it" flow as Save View, plus the viewport's own current lens
+  // (settings.fieldOfView converted to an equivalent starting focal
+  // length, so a freshly-created camera looks like whatever's already on
+  // screen rather than snapping to an arbitrary 50mm default).
+  const handleAddCamera = () => {
+    const camera = cameraRef.current
+    const controls = controlsRef.current
+    if (!camera || !controls) return
+    onAddCamera({
+      base_position_x: camera.position.x, base_position_y: camera.position.y, base_position_z: camera.position.z,
+      base_target_x: controls.target.x, base_target_y: controls.target.y, base_target_z: controls.target.z,
+      base_focal_length: focalLengthFromFov(settings.fieldOfView),
+      base_clip_start: settings.clipStart, base_clip_end: settings.clipEnd,
+    })
+  }
+
+  // Cinematic Cameras keyframing (2026-08-03) — captures whatever this
+  // camera is CURRENTLY showing (its own already-resolved base/keyframed
+  // pose, since ActiveCameraPose keeps the live camera/controls set to
+  // exactly that while looking through it — reading camera.fov/near/far
+  // here rather than settings.fieldOfView/clipStart/clipEnd is what makes
+  // this correct: those describe the *viewer's own* lens, which
+  // CameraSettings deliberately stops applying while a camera is active).
+  const handleKeyCameraPose = () => {
+    if (!activeCameraId) return
+    const camera = cameraRef.current
+    const controls = controlsRef.current
+    if (!camera || !controls) return
+    const date = timelineDateRef.current ?? new Date()
+    const lens = camera instanceof THREE.PerspectiveCamera
+      ? { base_focal_length: focalLengthFromFov(camera.fov), base_clip_start: camera.near, base_clip_end: camera.far }
+      : { base_focal_length: focalLengthFromFov(settings.fieldOfView), base_clip_start: settings.clipStart, base_clip_end: settings.clipEnd }
+    onKeyCameraPose(activeCameraId, date, {
+      base_position_x: camera.position.x, base_position_y: camera.position.y, base_position_z: camera.position.z,
+      base_target_x: controls.target.x, base_target_y: controls.target.y, base_target_z: controls.target.z,
+      ...lens,
+    })
+  }
+
   // Video export (2026-07-10, per Maro's original "AO, video, still renders
   // etc." ask) — the research this session originally cited
   // ("r3f-video-recorder") turned out not to exist on npm at all; rather
@@ -4312,7 +4504,10 @@ export function Viewport3D({
     if (!canvas) return
     const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
     if (totalMs <= 0) return
-    const includeBaseline = renderCaptureSettings.includeBaseline && compareBaselineOpen && !!baselineCanvasRef.current
+    const activeComparisonCanvases = renderCaptureSettings.includeBaseline
+      ? comparisonCanvasRefs.map(ref => ref.current)
+      : []
+    const comparisonPaneCount = activeComparisonCanvases.length
     const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, includeTimelineStrip, resolutionWidth, resolutionHeight } = renderCaptureSettings
     const visibleRadialCharts = includeRadialCharts ? radialCharts.filter(c => c.visible) : []
     const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
@@ -4358,10 +4553,9 @@ export function Viewport3D({
       // clicked, so an outer const computed before the boost took effect
       // would still be stale here.
       const overlayScale = resolutionHeight / 1080
-      const baselineCanvas = includeBaseline ? baselineCanvasRef.current : null
       const layout = computeExportLayout(
         resolutionWidth, resolutionHeight,
-        overlayScale, { includeGanttChart, includeActivityTable, includeBaseline, includeCostProfile },
+        overlayScale, { includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile },
       )
       const composite = document.createElement('canvas')
       composite.width = layout.totalWidth
@@ -4406,7 +4600,7 @@ export function Viewport3D({
               c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), now),
             ]))
             composeExportFrame(compositeCtx, layout, {
-              mainCanvas: canvas, baselineCanvas,
+              mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
               activities: timelineActivities, profiles: timelineProfiles,
               now, scheduleStart, scheduleEnd,
               scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
@@ -4682,14 +4876,14 @@ export function Viewport3D({
         <button
           onClick={handleSelectAllClick}
           title="Select every visible object and IFC element"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm"
         >
           Select All
         </button>
         <button
           onClick={handleSelectUnassigned}
           title="Select every visible element that hasn't been linked to a schedule activity yet"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm"
         >
           Select Unassigned
         </button>
@@ -4697,7 +4891,7 @@ export function Viewport3D({
           onClick={() => setBoxSelectMode(v => !v)}
           title="Box select — drag a rectangle in the viewport to select objects inside it"
           className={`text-xs px-2 py-1 rounded-md border shadow-sm ${
-            boxSelectMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 border-gray-300 hover:bg-gray-50'
+            boxSelectMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Box Select
@@ -4706,7 +4900,7 @@ export function Viewport3D({
           onClick={onToggleIsolate}
           title={isolateMode ? 'Exit isolation — show everything again' : 'Isolate Selected — hide everything except the current selection'}
           className={`text-xs px-2 py-1 rounded-md border shadow-sm ${
-            isolateMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 border-gray-300 hover:bg-gray-50'
+            isolateMode ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/90 text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
           Isolate
@@ -4714,7 +4908,7 @@ export function Viewport3D({
         <button
           onClick={onShowAll}
           title="Show All — clear isolation and un-hide everything"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm"
         >
           Show All
         </button>
@@ -4722,7 +4916,7 @@ export function Viewport3D({
           onClick={onHideSelected}
           disabled={selectedObjectIds.size === 0 && selectedExpressIds.size === 0}
           title="Hide Selected — hide the current selection (Show All brings it back)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Hide
         </button>
@@ -4730,7 +4924,7 @@ export function Viewport3D({
           onClick={onUnloadSelected}
           disabled={selectedExpressIds.size === 0}
           title="Unload Selected — actually remove the selected elements from this session (frees geometry; not reversible short of re-importing). Unlike Hide, this is real disposal, not just visibility."
-          className="text-xs px-2 py-1 rounded-md border border-red-300 bg-white/90 text-red-600 hover:bg-red-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-600"
+          className="text-xs px-2 py-1 rounded-md border border-red-300 bg-white/90 text-red-600 dark:text-red-400 hover:bg-red-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-600"
         >
           Unload Selected
         </button>
@@ -4738,7 +4932,7 @@ export function Viewport3D({
           onClick={() => { onSelect(null); onSelectObject(null) }}
           disabled={selectedObjectIds.size === 0 && selectedExpressIds.size === 0}
           title="Deselect All — clear the current selection"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Deselect All
         </button>
@@ -4746,30 +4940,38 @@ export function Viewport3D({
           onClick={() => setFilterDialogOpen(true)}
           disabled={selectedExpressIds.size === 0}
           title="Filter — narrow the current selection by Category and Spatial Decomposition (storey)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Filter
         </button>
         <button
           onClick={handleFrameSelected}
           title="Frame Selected — move the camera to fit the current selection (or the whole scene if nothing's selected)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Frame Selected
         </button>
         <button
           onClick={handleCaptureImage}
           title={`Capture Image — downloads a ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight} PNG of the current view (see ⚙ Render/Capture Settings)`}
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm"
         >
           Capture
         </button>
         <button
           onClick={handleSaveCameraView}
           title="Save Current View — bookmark this camera angle (see the Camera Views panel to jump back to it later)"
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Save View
+        </button>
+        <button
+          onClick={handleAddCamera}
+          disabled={activeCameraId !== null}
+          title={activeCameraId !== null ? 'Exit Camera View first — a new camera is created from free orbit, not from another camera\'s own view' : 'New Camera — creates a named, keyframeable camera from the current view (see the Cameras panel)'}
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          + Camera
         </button>
         <button
           onClick={handleExportVideo}
@@ -4779,11 +4981,11 @@ export function Viewport3D({
               ? 'Export Video — needs at least one scheduled/linked activity to know what date range to play'
               : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .${renderCaptureSettings.videoFormat} at ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight}, ${renderCaptureSettings.videoFps}fps, of the timeline playing from schedule start to finish (see ⚙ Render/Capture Settings)`
           }
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isExportingVideo ? 'Recording…' : 'Export Video'}
         </button>
-        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} compareBaselineOpen={compareBaselineOpen} />
+        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPanesOpen={comparisonCanvasRefs.length > 0} />
       </div>
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while
@@ -4865,7 +5067,9 @@ export function Viewport3D({
       >
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
-        <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} />
+        <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} overridden={activeCameraId !== null} />
+        <ActiveCameraPose activeCamera={activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />
+        {cameras.filter(c => c.id !== activeCameraId).map(c => <CameraGizmo key={c.id} camera={c} />)}
         <ClippingSetup />
         <ambientLight intensity={0.6} />
         {/* Shadow camera frustum (2026-07-09 fix, per Maro: "check if the
@@ -5145,6 +5349,15 @@ export function Viewport3D({
             real 100x rollSpeed oversensitivity bug, it wasn't a good enough
             navigation feel to keep; OrbitControls is this app's only
             navigation scheme again, same as before Fly Mode existed. */}
+        {/* Cinematic Cameras (2026-08-03) — deliberately NOT disabled while
+            activeCameraId is set. Blender's own camera-view (Numpad0) still
+            lets you fly/orbit while looking through a camera — since
+            OrbitControls always drives camera.position/controls.target
+            directly, orbiting while "in" a camera IS moving that camera,
+            which is exactly what makes framing a new shot to key possible
+            (ActiveCameraPose below only re-asserts a resolved keyframed
+            pose when the timeline date itself actually changes, so it
+            never fights a live drag at a static date). */}
         <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         {activeObject && (
           <TransformControls
@@ -5176,6 +5389,16 @@ export function Viewport3D({
           </GizmoHelper>
         )}
       </Canvas>
+      {activeCamera && (
+        <PassepartoutOverlay
+          containerRef={containerRef}
+          cameraName={activeCamera.name}
+          resolutionWidth={renderCaptureSettings.resolutionWidth}
+          resolutionHeight={renderCaptureSettings.resolutionHeight}
+          onExit={onExitCameraView}
+          onKeyframe={handleKeyCameraPose}
+        />
+      )}
       {radialCharts.map(chart => (
         <RadialChartHud
           key={chart.id}
@@ -5199,7 +5422,7 @@ export function Viewport3D({
       )}
       {importedObjects.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-sm text-gray-400 bg-white/70 px-3 py-1.5 rounded-md">
+          <p className="text-sm text-gray-400 dark:text-prosota-muted bg-white/70 px-3 py-1.5 rounded-md">
             No model loaded — use Import 3D or Import IFC above
           </p>
         </div>
@@ -5213,7 +5436,7 @@ export function Viewport3D({
           not summed into one number. Hidden entirely when nothing's
           selected, so it doesn't clutter an idle viewport. */}
       {(selectedObjectIds.size > 0 || selectedExpressIds.size > 0) && (
-        <div className="absolute top-2 right-2 z-10 text-xs px-2 py-1 rounded-md border border-gray-300 bg-white/90 text-gray-600 shadow-sm pointer-events-none">
+        <div className="absolute top-2 right-2 z-10 text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted shadow-sm pointer-events-none">
           {selectedObjectIds.size > 0 && `${selectedObjectIds.size} object${selectedObjectIds.size === 1 ? '' : 's'} selected`}
           {selectedObjectIds.size > 0 && selectedExpressIds.size > 0 && ' · '}
           {selectedExpressIds.size > 0 && `${selectedExpressIds.size} element${selectedExpressIds.size === 1 ? '' : 's'} selected`}

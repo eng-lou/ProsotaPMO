@@ -120,67 +120,67 @@ export function ScheduleVariantWidget({
   const formOpen = creating || editingId !== null
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">🗂️</span>
-        <div className="font-bold text-sm">Schedules</div>
-        <div className="text-xs text-gray-400">More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ...</div>
-        <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <div className="font-bold text-sm dark:text-prosota-paper">Schedules</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ...</div>
+        <button onClick={onClose} className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper text-sm">✕</button>
       </div>
 
       <table className="w-full text-xs border-collapse mb-2">
         <thead>
-          <tr className="bg-gray-50 text-left text-gray-500">
-            <th className="px-2 py-1.5 border border-gray-200">Name</th>
-            <th className="px-2 py-1.5 border border-gray-200">Type</th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
-            <th className="px-2 py-1.5 border border-gray-200"></th>
+          <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted">
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Name</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line">Type</th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
+            <th className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line"></th>
           </tr>
         </thead>
         <tbody>
           {variants.map(v => (
-            <tr key={v.id} className={v.id === activeVariantId ? 'bg-blue-50/50' : undefined}>
-              <td className="px-2 py-1.5 border border-gray-200 font-medium">
+            <tr key={v.id} className={v.id === activeVariantId ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : undefined}>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">
                 {v.name}
                 {v.is_master && (
-                  <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600 bg-blue-50 rounded px-1 py-0.5">Master</span>
+                  <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600 dark:text-prosota-azure bg-blue-50 rounded px-1 py-0.5">Master</span>
                 )}
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 text-gray-500">{v.variant_type ?? '—'}</td>
-              <td className="px-2 py-1.5 border border-gray-200 whitespace-nowrap">
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">{v.variant_type ?? '—'}</td>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line whitespace-nowrap">
                 {v.id === activeVariantId ? (
-                  <span className="text-blue-600 font-medium">✓ Viewing</span>
+                  <span className="text-blue-600 dark:text-prosota-azure font-medium">✓ Viewing</span>
                 ) : (
                   <button
                     onClick={() => handleSelect(v)}
                     disabled={busyId === v.id}
-                    className="text-blue-600 hover:text-blue-700 disabled:opacity-40"
+                    className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan disabled:opacity-40"
                   >
                     Switch to
                   </button>
                 )}
               </td>
-              <td className="px-2 py-1.5 border border-gray-200 text-right whitespace-nowrap">
-                <button onClick={() => startEdit(v)} className="text-gray-500 hover:text-gray-700 mr-2">Rename</button>
+              <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                <button onClick={() => startEdit(v)} className="text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper mr-2">Rename</button>
                 {!v.is_master && (
                   <button
                     onClick={() => handlePromote(v)}
                     disabled={busyId === v.id}
                     title="Make this the master schedule — Risk/Cost/ICD links follow, matched by activity code"
-                    className="text-gray-500 hover:text-gray-700 mr-2 disabled:opacity-40"
+                    className="text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper mr-2 disabled:opacity-40"
                   >
                     Promote
                   </button>
                 )}
                 {v.is_master ? (
-                  <span className="text-gray-300" title="The master schedule can't be deleted directly — create or duplicate another schedule and promote it to master first">
+                  <span className="text-gray-300 dark:text-prosota-line" title="The master schedule can't be deleted directly — create or duplicate another schedule and promote it to master first">
                     Delete
                   </span>
                 ) : (
                   <button
                     onClick={() => handleDelete(v)}
                     disabled={busyId === v.id}
-                    className="text-gray-400 hover:text-red-600 disabled:opacity-40"
+                    className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 disabled:opacity-40"
                   >
                     Delete
                   </button>
@@ -192,40 +192,40 @@ export function ScheduleVariantWidget({
       </table>
 
       {formOpen ? (
-        <div className={`border rounded p-3 space-y-2 ${editingId ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200'}`}>
+        <div className={`border rounded p-3 space-y-2 ${editingId ? 'border-blue-200 dark:border-prosota-azure/30 bg-blue-50/30 dark:bg-prosota-azure/10' : 'border-gray-200 dark:border-prosota-line'}`}>
           <input
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Schedule name (e.g. Recovery Schedule)"
             autoFocus
-            className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+            className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
           />
           <input
             value={variantType}
             onChange={e => setVariantType(e.target.value)}
             placeholder="Type (optional, e.g. Mitigation, Contractor, Scenario)"
-            className="w-full text-xs border border-gray-300 rounded px-2 py-1"
+            className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
           />
           {!editingId && active && (
-            <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
               <input type="checkbox" checked={duplicateCurrent} onChange={e => setDuplicateCurrent(e.target.checked)} />
               Duplicate {active.name}'s current schedule (activities, relationships, resources, baselines, sub-projects) — leave unchecked to start blank
             </label>
           )}
-          {error && <p className="text-xs text-red-600">{error}</p>}
+          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
           <div className="flex gap-2 justify-end">
-            <button onClick={resetForm} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+            <button onClick={resetForm} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
             <button
               onClick={handleSave}
               disabled={!name.trim()}
-              className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {editingId ? 'Save Changes' : 'Create Schedule'}
             </button>
           </div>
         </div>
       ) : (
-        <button onClick={startCreate} className="text-xs text-blue-600 hover:text-blue-700 font-medium">+ New Schedule</button>
+        <button onClick={startCreate} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">+ New Schedule</button>
       )}
     </div>
   )
