@@ -4618,7 +4618,24 @@ export function Viewport3D({
         ? mp4MimeType!
         : ['video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) ?? 'video/webm'
       const fileExtension = useMp4 ? 'mp4' : 'webm'
-      const recorder = new MediaRecorder(stream, { mimeType })
+      // Explicit bitrate (2026-08-10 fix, per Maro: exported video "not
+      // blender levels, not even eevee... still very low level" — visible
+      // sky-gradient banding and blocky macroblocking in an actual exported
+      // clip, independent of and on top of computeSupersampleMultiplier's
+      // own render-buffer-undersizing bug fixed just above). Left unset,
+      // MediaRecorder falls back to the browser's own default bitrate
+      // heuristic, tuned for "good enough for a web call," not an export
+      // meant to read as high quality. 0.2 bits per output pixel per frame
+      // sits comfortably in high-quality H.264 encoder-preset territory (vs.
+      // typical real-time/streaming defaults closer to 0.05-0.1), floored
+      // so a tiny 720p export isn't starved and ceilinged so a huge custom
+      // resolution doesn't request a bitrate no browser would actually
+      // honor anyway.
+      const videoBitsPerSecond = Math.round(Math.min(
+        100_000_000,
+        Math.max(2_000_000, resolutionWidth * resolutionHeight * fps * 0.2),
+      ))
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond })
       const chunks: Blob[] = []
       recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
       const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
