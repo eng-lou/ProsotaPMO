@@ -4098,7 +4098,13 @@ export function Viewport3D({
   // behaviour regardless of what originally motivated it.
   const [captureDprMultiplier, setCaptureDprMultiplier] = useState<number | null>(null)
   const dprMultiplier = captureDprMultiplier ?? 1
-  const dpr = Math.min(window.devicePixelRatio * dprMultiplier, 4)
+  // No flat cap here (2026-08-10 fix — see computeSupersampleMultiplier's
+  // own header below for the full "even at highest quality, still blurry"
+  // bug this was half of): dprMultiplier itself is already bounded against
+  // this GPU's real MAX_TEXTURE_SIZE during a capture, and the idle
+  // (dprMultiplier === 1) case is just this display's own devicePixelRatio,
+  // which was never the thing needing a ceiling.
+  const dpr = window.devicePixelRatio * dprMultiplier
   // Drives shadow-map resolution — true either while merely idle
   // (boostQuality) or while a capture/export is actively forcing
   // captureDprMultiplier, so a forced capture always gets the full quality
@@ -4283,16 +4289,48 @@ export function Viewport3D({
   // has enough real source pixels to crop-to-fill the requested output
   // resolution without visible upscaling blur (2026-07-25, part of the
   // explicit-resolution rework — see renderCaptureSettings.ts's own header
-  // on resolutionWidth/Height). Takes the larger of the two axis ratios
-  // since cover-fit's crop is driven by whichever axis is the tighter fit;
-  // Math.max(..., 1) guards against *downscaling* the live canvas when the
-  // requested output is smaller than the on-screen pane — supersampling
-  // should only ever add resolution, never remove it. Capped at 4 (same
-  // GPU/memory ceiling the old resolutionMultiplier already had).
+  // on resolutionWidth/Height).
+  //
+  // 2026-08-10 fix, per Maro: "even though i choose the highest renders...
+  // it still comes out very low quality... consider gpu rendering" — this
+  // used to be a *ratio* (resolutionWidth / cssWidth) capped at a flat 4,
+  // and the dpr computation above capped `devicePixelRatio * that ratio`
+  // at another flat 4. On any display with devicePixelRatio > 1 (any scaled
+  // Windows monitor, any Retina-class display), the *second* cap could bite
+  // before the first one's headroom was even used — e.g. devicePixelRatio 2
+  // left only 2x of real supersampling no matter what the first cap
+  // allowed. The actual rendered buffer came out smaller than the
+  // requested output resolution, and drawCoverFit had to *upscale* it via a
+  // plain bilinear stretch to hit the exact requested pixel count — the
+  // file's dimensions matched "4K", a meaningful share of its pixels were
+  // interpolated blow-up, not real rendered detail.
+  //
+  // Fixed by computing the multiplier against an *absolute* pixel target —
+  // does cssWidth * devicePixelRatio * multiplier actually reach
+  // resolutionWidth? — instead of a plain ratio, and capping the result
+  // against this GPU's own real MAX_TEXTURE_SIZE (queried from the live
+  // WebGLRenderer's own capabilities, not a guessed constant), so quality
+  // is bounded by actual hardware capability rather than an arbitrary "4".
+  // Takes the larger of the two axes' needed multipliers since cover-fit's
+  // crop is driven by whichever axis is the tighter fit; the trailing
+  // `Math.max(..., 1)` still guards against *downscaling* the live canvas
+  // when the requested output is smaller than the on-screen pane —
+  // supersampling should only ever add resolution, never remove it.
   const computeSupersampleMultiplier = (canvas: HTMLCanvasElement, resolutionWidth: number, resolutionHeight: number): number => {
     const cssWidth = canvas.clientWidth || 1
     const cssHeight = canvas.clientHeight || 1
-    return Math.min(4, Math.max(resolutionWidth / cssWidth, resolutionHeight / cssHeight, 1))
+    const baseDpr = window.devicePixelRatio || 1
+    const neededMultiplier = Math.max(
+      resolutionWidth / (cssWidth * baseDpr),
+      resolutionHeight / (cssHeight * baseDpr),
+      1,
+    )
+    const maxTextureSize = rendererRef.current?.capabilities.maxTextureSize ?? 4096
+    const gpuMultiplierCeiling = Math.max(1, Math.min(
+      maxTextureSize / (cssWidth * baseDpr),
+      maxTextureSize / (cssHeight * baseDpr),
+    ))
+    return Math.min(neededMultiplier, gpuMultiplierCeiling)
   }
 
   const handleCaptureImage = async () => {
