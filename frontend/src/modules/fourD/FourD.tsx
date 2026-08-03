@@ -79,8 +79,10 @@ import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoin
 import { ZonesPanel } from './ZonesPanel'
 import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialChart, uploadRadialChartIcon, type RadialChart, type RadialChartCenterMode } from './radialCharts'
 import { RadialChartsPanel } from './RadialChartsPanel'
-import { matchingActivityIds } from './radialChartProgress'
+import { resolveScopeActivityIds, type ScopeFilter } from './scheduleScope'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
+import { getTimelineStrip, saveTimelineStrip, type TimelineStrip } from './timelineStrips'
+import { TimelineStripPanel } from './TimelineStripPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import {
@@ -154,6 +156,8 @@ const ZONES_PANEL_OPEN_KEY = 'prosota_4d_zones_panel_open'
 const ZONES_PANEL_DOCK_KEY = 'prosota_4d_zones_panel_dock'
 const RADIAL_CHARTS_PANEL_OPEN_KEY = 'prosota_4d_radial_charts_panel_open'
 const RADIAL_CHARTS_PANEL_DOCK_KEY = 'prosota_4d_radial_charts_panel_dock'
+const TIMELINE_STRIP_PANEL_OPEN_KEY = 'prosota_4d_timeline_strip_panel_open'
+const TIMELINE_STRIP_PANEL_DOCK_KEY = 'prosota_4d_timeline_strip_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
@@ -1025,7 +1029,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setZoneError(pathErrorMessage(err, 'Failed to create zone'))
     }
   }
-  const handleUpdateZone = async (id: string, data: Partial<Pick<Zone, 'name' | 'points' | 'radius' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' | 'visible' | 'animate' | 'animation_loop' | 'animation_mode'>>) => {
+  const handleUpdateZone = async (id: string, data: Partial<Pick<Zone, 'name' | 'points' | 'radius' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' | 'visible' | 'animate' | 'animation_loop' | 'animation_mode' | 'label_font_size'>>) => {
     try {
       setZoneError(null)
       const updated = await updateZone(id, data)
@@ -1136,9 +1140,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     progress_color: string
     fill_color: string
     text_color: string
+    font_size: number
     center_mode: RadialChartCenterMode
+    scope_mode: RadialChart['scope_mode']
     udf_field_definition_id: string | null
     udf_value: string | null
+    wbs_node_activity_id: string | null
   }>) => {
     try {
       setRadialChartError(null)
@@ -1166,8 +1173,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setRadialChartError(pathErrorMessage(err, 'Failed to delete radial chart'))
     }
   }
-  const handleUpdateRadialChartFilter = (id: string, udfFieldDefinitionId: string | null, udfValue: string | null) => {
-    handleUpdateRadialChart(id, { udf_field_definition_id: udfFieldDefinitionId, udf_value: udfValue })
+  const handleUpdateRadialChartScope = (id: string, scope: ScopeFilter) => {
+    handleUpdateRadialChart(id, scope)
   }
   const handleUploadRadialChartIcon = async (id: string, file: File) => {
     try {
@@ -1192,10 +1199,50 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const radialChartMatchingIds = useMemo(() => {
     const map = new Map<string, Set<string>>()
     for (const chart of radialCharts) {
-      map.set(chart.id, matchingActivityIds(activities, chart, activityUdfValues.getValue))
+      map.set(chart.id, resolveScopeActivityIds(activities, chart, activityUdfValues.getValue))
     }
     return map
   }, [radialCharts, activities, activityUdfValues.getValue])
+
+  // Timeline Strip (2026-08-03, per Maro's own Synchro-style reference
+  // screenshot) — a genuine singleton, unlike Radial Charts above: one GET/
+  // PUT pair, no create/delete/list (see timeline_strip.py's own
+  // docstring). null until the initial GET resolves; getTimelineStrip
+  // always returns a full object with real defaults even when nothing's
+  // been saved yet, so there's no separate "not configured" state to
+  // handle beyond the brief pre-fetch null.
+  const [timelineStrip, setTimelineStrip] = useState<TimelineStrip | null>(null)
+  const [timelineStripError, setTimelineStripError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    getTimelineStrip(selectedProject.id).then(s => { if (!cancelled) setTimelineStrip(s) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  // PUT upserts the whole row (no partial-update endpoint — see
+  // timelineStrips.ts's own header), so every caller here merges its patch
+  // onto the current in-memory strip before saving, rather than sending a
+  // sparse body the way Radial Chart/Zone's own PATCH handlers do.
+  const handleUpdateTimelineStrip = async (patch: Partial<Omit<TimelineStrip, 'id' | 'project_id' | 'created_at' | 'updated_at'>>) => {
+    if (!timelineStrip || !selectedProject) return
+    const { id: _id, created_at: _created_at, updated_at: _updated_at, ...current } = timelineStrip
+    try {
+      setTimelineStripError(null)
+      const updated = await saveTimelineStrip({ ...current, project_id: selectedProject.id, ...patch })
+      setTimelineStrip(updated)
+    } catch (err) {
+      setTimelineStripError(pathErrorMessage(err, 'Failed to update timeline strip'))
+    }
+  }
+  const handleUpdateTimelineStripScope = (scope: ScopeFilter) => handleUpdateTimelineStrip(scope)
+  const handleCommitTimelineStripPosition = (positionXPct: number, positionYPct: number) => {
+    handleUpdateTimelineStrip({ position_x_pct: positionXPct, position_y_pct: positionYPct })
+  }
+  const timelineStripMatchingIds = useMemo(
+    () => (timelineStrip ? resolveScopeActivityIds(activities, timelineStrip, activityUdfValues.getValue) : new Set<string>()),
+    [timelineStrip, activities, activityUdfValues.getValue],
+  )
 
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
     if (!selectedProject) return
@@ -1910,6 +1957,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setRadialChartsPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(RADIAL_CHARTS_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Timeline Strip panel (2026-08-03, per Maro's own Synchro-style
+  // reference screenshot) — same shared-side-dock treatment as Radial
+  // Charts just above.
+  const [timelineStripPanelOpen, setTimelineStripPanelOpen] = useState(() => loadPanelOpen(TIMELINE_STRIP_PANEL_OPEN_KEY, false))
+  const toggleTimelineStripPanel = () => {
+    setTimelineStripPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(TIMELINE_STRIP_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [timelineStripPanelDock, setTimelineStripPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(TIMELINE_STRIP_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleTimelineStripPanelDock = () => {
+    setTimelineStripPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(TIMELINE_STRIP_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -5542,8 +5614,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onToggleVisible={handleToggleRadialChartVisible}
           onDelete={handleDeleteRadialChart}
           onUpdateStyle={handleUpdateRadialChart}
-          onUpdateFilter={handleUpdateRadialChartFilter}
+          onUpdateScope={handleUpdateRadialChartScope}
           onUploadIcon={handleUploadRadialChartIcon}
+        />
+      ),
+    })
+  }
+  if (timelineStripPanelOpen && timelineStrip) {
+    dockablePanels.push({
+      id: 'timeline-strip', label: 'Timeline Strip', dock: timelineStripPanelDock,
+      onToggleDock: toggleTimelineStripPanelDock, onClose: toggleTimelineStripPanel,
+      content: (
+        <TimelineStripPanel
+          strip={timelineStrip}
+          error={timelineStripError}
+          udfDefinitions={activityUdfDefinitions.definitions}
+          activities={activities}
+          getUdfValue={activityUdfValues.getValue}
+          onUpdate={handleUpdateTimelineStrip}
+          onUpdateScope={handleUpdateTimelineStripScope}
         />
       ),
     })
@@ -5731,6 +5820,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       radialCharts={radialCharts}
       radialChartMatchingIds={radialChartMatchingIds}
       onCommitRadialChartPosition={handleCommitRadialChartPosition}
+      timelineStrip={timelineStrip}
+      timelineStripMatchingIds={timelineStripMatchingIds}
+      onCommitTimelineStripPosition={handleCommitTimelineStripPosition}
       annotations={resolvedAnnotations}
       addingAnnotationKind={addingAnnotationKind}
       onPlaceAnnotation={handlePlaceAnnotation}
@@ -5853,6 +5945,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           }`}
         >
           Radial Charts
+        </button>
+        <button
+          onClick={toggleTimelineStripPanel}
+          disabled={!timelineStrip}
+          title="A draggable year/month timeline HUD strip with a live playhead"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
+            timelineStripPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Timeline Strip
         </button>
         <button
           onClick={toggleAnnotationsPanel}

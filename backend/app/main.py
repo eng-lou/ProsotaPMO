@@ -69,6 +69,7 @@ from app.api.scheduling_quality import router as scheduling_quality_router
 from app.api.scheduling_quality_criteria import router as scheduling_quality_criteria_router
 from app.api.scheduling_quality_runs import router as scheduling_quality_runs_router
 from app.api.section_boxes import router as section_boxes_router
+from app.api.timeline_strips import router as timeline_strips_router
 from app.api.user_defined_fields import router as user_defined_fields_router
 from app.api.users import router as users_router
 from app.api.zones import router as zones_router
@@ -157,6 +158,7 @@ app.include_router(measurements_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(dashboard_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(dashboard_layouts_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(radial_charts_router, prefix="/api/v1", dependencies=_auth)
+app.include_router(timeline_strips_router, prefix="/api/v1", dependencies=_auth)
 
 
 @app.get("/health")

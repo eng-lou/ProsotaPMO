@@ -30,6 +30,7 @@ async def test_create_and_list_zone(client: AsyncClient, project: Project):
     assert created["animation_mode"] == "draw"
     assert created["shape"] == "polygon"
     assert created["radius"] == 5.0
+    assert created["label_font_size"] == 15.0
     assert len(created["points"]) == 4
 
     listing = (await client.get("/api/v1/zones/", params={"project_id": str(project.id)})).json()
@@ -97,6 +98,33 @@ async def test_animate_zone(client: AsyncClient, project: Project):
     assert updated["animate"] is True
     assert updated["animation_loop"] is True
     assert updated["animation_mode"] == "flash"
+
+
+async def test_sweep_animation_mode_for_circle_zone(client: AsyncClient, project: Project):
+    # Pac-man-style pie-wedge reveal (2026-08-03, per Maro's own crane-
+    # clearance reference screenshot) — only meaningful for shape="circle",
+    # but the backend itself doesn't enforce that (ZonesPanel.tsx only
+    # ever offers the option then); this just confirms the value round-trips.
+    created = (await client.post("/api/v1/zones/", json={
+        "project_id": str(project.id), "shape": "circle", "points": [{"x": 0.0, "y": 0.0, "z": 0.0}], "radius": 8.0,
+    })).json()
+
+    resp = await client.patch(f"/api/v1/zones/{created['id']}", json={"animation_mode": "sweep"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["animation_mode"] == "sweep"
+
+
+async def test_update_label_font_size(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/zones/", json={"project_id": str(project.id), "points": _points(3)})).json()
+
+    resp = await client.patch(f"/api/v1/zones/{created['id']}", json={"label_font_size": 22.0})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["label_font_size"] == 22.0
+
+
+async def test_label_font_size_must_be_positive(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/zones/", json={"project_id": str(project.id), "label_font_size": 0})
+    assert resp.status_code == 422
 
 
 async def test_animate_zone_reveal_window_is_a_keyframe_pair(client: AsyncClient, project: Project):

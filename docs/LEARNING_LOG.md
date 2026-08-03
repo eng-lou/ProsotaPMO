@@ -3204,3 +3204,107 @@ clusters in files unrelated to whatever was just changed.
 
 Committed and pushed per Maro's own explicit request (heading out for two
 days) once the clean single-session suite confirmed nothing was broken.
+
+## 2026-08-03 — Timeline Strip HUD, WBS scoping shared across two widgets,
+and a Zone "Sweep" pie-wedge reveal
+
+**Timeline Strip**: a second Synchro-style HUD overlay, per Maro's own
+reference screenshot — a horizontal year/month strip (bracketed year
+labels over single-letter month ticks) with a live playhead box over the
+active month. Confirmed with Maro up front (via clarifying questions)
+that this is a genuine singleton — one per project, not a creatable list
+like Radial Chart — so `TimelineStrip` (`backend/app/models/timeline_strip.py`)
+mirrors `ProjectLetterhead`'s own "one row per project, GET-or-default,
+PUT-upserts-the-whole-row" shape instead: no create/delete/list endpoints
+at all, `get_or_default` returns real defaults with `id: None` if nothing's
+been saved yet so the frontend never has to special-case "not configured."
+`TimelineStripHud.tsx`'s month/year layout math (`buildMonthCells`/
+`groupByYear`) is exported and reused directly by `exportOverlays.ts`'s own
+`drawTimelineStrip` for Capture/Export Video — one implementation of the
+layout math for both the live DOM render and the canvas export render,
+same precedent this file's other `drawXxx` functions already follow for
+Gantt/Table.
+
+**WBS scoping, shared** — while confirming Timeline Strip's date range
+should auto-derive from the schedule, Maro also asked for an optional
+"scope to one WBS branch" filter (alongside the existing UDF-value filter),
+*and* asked for the same WBS option to be retrofitted onto the already-
+shipped Radial Chart. Rather than building two separate filter systems,
+generalized Radial Chart's own `matchingActivityIds` (UDF-only) into a
+shared `frontend/src/modules/fourD/scheduleScope.ts`: `ScopeMode = 'all' |
+'udf' | 'wbs'`, `resolveScopeActivityIds` handles all three. This codebase
+has no separate WBS-dictionary table (per `activity.py`'s own docstring:
+"the activity list *is* the WBS, MS Project style") — a WBS node is just
+an `Activity` row with `activity_type === 'wbs_summary'`, and the subtree
+is a plain `parent_id` walk. The backend already had exactly this walk
+(`app/services/activity.py`'s own `_subtree_ids`, used by
+`scheduling_quality.py`'s `scope_subproject_id` filtering) — ported the
+same idea client-side (`scheduleScope.ts`'s `wbsSubtreeActivityIds`) since
+Activities are already fully loaded in memory wherever these widgets run,
+rather than adding a new backend endpoint. One real bug avoided by
+checking `computeScheduleRange`'s own convention first: a WBS summary row
+itself has to be excluded from the returned matching-ids set, or its own
+roll-up date span would double-count on top of its children's spans in the
+duration-weighted progress average.
+
+Built a shared `ScopeFilterFields.tsx` component (the mode selector + UDF
+field/value dropdowns + a WBS-node `ActivityPicker`, reusing that existing
+searchable-activity-picker component as-is, filtered to `wbs_summary`
+rows) so Radial Chart's and Timeline Strip's panels can never have their
+scope UIs drift apart from each other.
+
+**Font size controls** — a follow-on ask ("give text size controls for
+the font"), clarified via a quick question to mean all three of the
+widgets actually being touched this session: `Zone.label_font_size`
+(replacing a value hardcoded to 15 at two call sites in `ZoneGizmo.tsx`),
+`RadialChart.font_size`, `TimelineStrip.font_size` — same "one field
+covers title+percentage text" precedent Radial Chart's existing
+`text_color` already established, so no separate title-vs-body size field
+was added without being asked for one.
+
+**Zone "Sweep" reveal** — per Maro's own crane-clearance reference
+screenshot (circular zones filling in as a pac-man-style pie wedge from 0°
+to a full circle), a third `animation_mode` alongside the existing
+`'draw'`/`'flash'`, circle-shape-only. Unlike `'draw'`/`'flash'` (which
+only ever animate opacity or a border line's *length*), the wedge angle
+itself *is* the reveal, so `zoneGeometry.ts`'s `buildZoneShapeGeometry`
+gained a `sweepAngle` param (default a full 2π, so every existing call
+site is unaffected) — below a full circle, `THREE.Shape.absarc` needs an
+explicit leading `moveTo(center)` + trailing `closePath()` to turn the
+bare arc into a real filled wedge (a plain `absarc()` call with no prior
+`moveTo`, which is what the original full-circle code already did, just
+traces the circumference on its own — that's *why* the existing code
+never needed one). `ZoneGizmo.tsx` rebuilds this wedge geometry every
+frame during the reveal and swaps it onto the fill mesh imperatively (a
+new `sweepGeometryRef`, explicit per-frame `.dispose()` of the *previous*
+frame's geometry — same manual-disposal discipline the file's existing
+live-vertex-drag cleanup already established, just per-frame instead of
+per-unmount, since a sweep genuinely needs a fresh
+`THREE.ShapeGeometry` every tick rather than just moving vertices in place
+the way a drag does).
+
+**Verified live in the browser**, though only partially — the available
+test project ("tht") had zero scheduled activities, so the Timeline
+Timeline's own "No dated activities yet" empty state blocked any live
+playhead/sweep-animation check. What *was* confirmed: the "Sweep" option
+only appears for circle-shape zones and persists correctly via PATCH with
+no console errors; the Timeline Strip panel loads with exactly the
+backend's own defaults (900×56px, font size 11); switching its Scope
+selector to "WBS Node" correctly swaps in the `ActivityPicker`; and the
+live HUD's own "No scheduled activities in scope" empty-state message
+renders exactly as coded when `computeScheduleRange` returns null. The
+actual mid-sweep wedge shape and a real cross-domain playhead still need
+checking against a project with real dated activities (e.g. Hospital).
+
+**A second, unrelated pre-existing test failure found the same way as
+last session's SPI bug** — `test_dashboard.py::test_lookahead_flags_incomplete_predecessor_and_respects_window`
+also fails on a clean single-session run (825 passed, 2 failed total,
+both confirmed via `git diff --stat` to be in files untouched this
+session). The test's own comment assumes an activity with no explicitly-
+set `start` is never a lookahead candidate, but creating an
+`ActivityRelationship` in the test now triggers a real CPM recompute that
+assigns that "predecessor" a genuine computed `start` of its own (it's a
+real member of the dependency network) — making it newly eligible. Logged
+alongside the SPI bug in the Controls Dashboard project memory for a
+dedicated future session, not fixed here (out of scope for this session's
+actual asks).

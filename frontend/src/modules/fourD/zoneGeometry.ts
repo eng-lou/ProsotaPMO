@@ -52,22 +52,39 @@ function toLocal2D(point: ZonePoint, upAxis: UpAxis): [number, number] {
 // matters for this branch. THREE.Shape.absarc + ShapeGeometry's own
 // curveSegments param handle the actual circle tessellation, so the fill
 // mesh is a real smooth disc, not a coarse N-gon approximation.
-export function buildZoneShapeGeometry(points: ZonePoint[], upAxis: UpAxis, shape: ZoneShape = 'polygon', radius = 5): ZoneShapeResult | null {
+// sweepAngle (2026-08-03, per Maro's own crane-clearance reference
+// screenshot — "PB-1"/"PB-2" circles filling in as a pac-man-style pie
+// wedge from 0° to a full circle) — defaults to a full circle (2π) so
+// every pre-existing call site is unaffected. Below a full circle, the
+// fill becomes a real pie wedge (center → arc → back to center via
+// moveTo/closePath — absarc alone, with no leading moveTo, only ever
+// traces the bare arc/circumference) and the border outline gets the
+// matching two radial edges instead of just the circumference, so
+// ZoneGizmo.tsx's border Line traces the wedge shape too, not a static
+// full-circle ring sitting around a growing fill.
+export function buildZoneShapeGeometry(
+  points: ZonePoint[], upAxis: UpAxis, shape: ZoneShape = 'polygon', radius = 5, sweepAngle = Math.PI * 2,
+): ZoneShapeResult | null {
   if (shape === 'circle') {
     if (points.length < 1) return null
     const [cx, cy] = toLocal2D(points[0], upAxis)
+    const isWedge = sweepAngle < Math.PI * 2
     const circleShape = new THREE.Shape()
-    circleShape.absarc(cx, cy, radius, 0, Math.PI * 2, false)
+    if (isWedge) circleShape.moveTo(cx, cy)
+    circleShape.absarc(cx, cy, radius, 0, sweepAngle, false)
+    if (isWedge) circleShape.closePath()
     const geometry = new THREE.ShapeGeometry(circleShape, CIRCLE_SEGMENTS)
     if (upAxis === 'y') geometry.rotateX(Math.PI / 2)
 
+    const toVec3 = (x: number, y: number) => (upAxis === 'z' ? new THREE.Vector3(x, y, 0) : new THREE.Vector3(x, 0, y))
+    const arcSegments = isWedge ? Math.max(2, Math.round(CIRCLE_SEGMENTS * (sweepAngle / (Math.PI * 2)))) : CIRCLE_SEGMENTS
     const borderPoints: THREE.Vector3[] = []
-    for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
-      const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
-      const x = cx + radius * Math.cos(angle)
-      const y = cy + radius * Math.sin(angle)
-      borderPoints.push(upAxis === 'z' ? new THREE.Vector3(x, y, 0) : new THREE.Vector3(x, 0, y))
+    if (isWedge) borderPoints.push(toVec3(cx, cy))
+    for (let i = 0; i <= arcSegments; i++) {
+      const angle = (i / arcSegments) * sweepAngle
+      borderPoints.push(toVec3(cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)))
     }
+    if (isWedge) borderPoints.push(toVec3(cx, cy))
     const centroid = upAxis === 'z' ? new THREE.Vector3(cx, cy, 0) : new THREE.Vector3(cx, 0, cy)
     return { geometry, borderPoints, centroid }
   }

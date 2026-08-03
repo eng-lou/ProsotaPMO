@@ -62,6 +62,7 @@ from app.models.element_split import ElementSplit
 from app.models.measurement import Measurement
 from app.models.dashboard_layout import DashboardLayout
 from app.models.radial_chart import RadialChart
+from app.models.timeline_strip import TimelineStrip
 
 __all__ = [
     "Base",
@@ -136,4 +137,5 @@ __all__ = [
     "Measurement",
     "DashboardLayout",
     "RadialChart",
+    "TimelineStrip",
 ]

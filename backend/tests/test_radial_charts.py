@@ -5,6 +5,7 @@ import uuid
 from httpx import AsyncClient
 
 from app.models.project import Project
+from app.models.schedule_period import SchedulePeriod
 
 
 async def _create_udf_field(client: AsyncClient, project: Project, name: str = "Sub Discipline") -> dict:
@@ -13,6 +14,14 @@ async def _create_udf_field(client: AsyncClient, project: Project, name: str = "
     })
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, name: str = "Substructure") -> str:
+    resp = await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "schedule_period_id": str(period.id), "task_name": name,
+    })
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
 
 
 async def test_create_and_list_radial_chart(client: AsyncClient, project: Project):
@@ -34,6 +43,9 @@ async def test_create_and_list_radial_chart(client: AsyncClient, project: Projec
     assert created["icon_storage_filename"] is None
     assert created["udf_field_definition_id"] is None
     assert created["udf_value"] is None
+    assert created["scope_mode"] == "all"
+    assert created["wbs_node_activity_id"] is None
+    assert created["font_size"] == 14.0
 
     listing = (await client.get("/api/v1/radial-charts/", params={"project_id": str(project.id)})).json()
     assert any(c["id"] == created["id"] for c in listing)
@@ -84,6 +96,32 @@ async def test_update_udf_filter(client: AsyncClient, project: Project):
     updated = resp.json()
     assert updated["udf_field_definition_id"] == field["id"]
     assert updated["udf_value"] == "Concrete Works"
+
+
+async def test_update_wbs_scope(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    activity_id = await _create_activity(client, project, live_schedule_period)
+    created = (await client.post("/api/v1/radial-charts/", json={"project_id": str(project.id)})).json()
+
+    resp = await client.patch(f"/api/v1/radial-charts/{created['id']}", json={
+        "scope_mode": "wbs", "wbs_node_activity_id": activity_id,
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["scope_mode"] == "wbs"
+    assert updated["wbs_node_activity_id"] == activity_id
+
+
+async def test_update_font_size(client: AsyncClient, project: Project):
+    created = (await client.post("/api/v1/radial-charts/", json={"project_id": str(project.id)})).json()
+
+    resp = await client.patch(f"/api/v1/radial-charts/{created['id']}", json={"font_size": 20.0})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["font_size"] == 20.0
+
+
+async def test_font_size_must_be_positive(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/radial-charts/", json={"project_id": str(project.id), "font_size": 0})
+    assert resp.status_code == 422
 
 
 async def test_upload_and_download_icon_round_trips_bytes(client: AsyncClient, project: Project):

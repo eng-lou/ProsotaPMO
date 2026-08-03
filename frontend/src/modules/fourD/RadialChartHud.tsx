@@ -104,8 +104,8 @@ export function RadialChartHud({ chart, activities, matchingIds, timelineDateRef
       onMouseDown={startDrag}
     >
       <div
-        className="px-2 py-0.5 mb-1 text-xs font-semibold rounded-sm whitespace-nowrap shadow"
-        style={{ backgroundColor: '#000000', color: chart.text_color }}
+        className="px-2 py-0.5 mb-1 font-semibold rounded-sm whitespace-nowrap shadow"
+        style={{ backgroundColor: '#000000', color: chart.text_color, fontSize: chart.font_size }}
       >
         {chart.title}
       </div>
@@ -129,7 +129,7 @@ export function RadialChartHud({ chart, activities, matchingIds, timelineDateRef
           {chart.center_mode === 'icon' && iconUrl ? (
             <img src={iconUrl} alt="" className="w-3/4 h-3/4 object-contain" />
           ) : (
-            <span className="text-sm font-semibold" style={{ color: chart.text_color }}>
+            <span className="font-semibold" style={{ color: chart.text_color, fontSize: chart.font_size }}>
               {Math.round(progress * 100)}%
             </span>
           )}

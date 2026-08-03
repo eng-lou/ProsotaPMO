@@ -21,6 +21,9 @@ class RadialChartBase(BaseModel):
     center_mode: str = Field(default="percentage", max_length=12)
     udf_field_definition_id: uuid.UUID | None = None
     udf_value: str | None = Field(default=None, max_length=500)
+    scope_mode: str = Field(default="all", max_length=10)
+    wbs_node_activity_id: uuid.UUID | None = None
+    font_size: float = Field(default=14.0, gt=0)
 
 
 class RadialChartCreate(RadialChartBase):
@@ -42,6 +45,9 @@ class RadialChartUpdate(BaseModel):
     center_mode: str | None = Field(default=None, max_length=12)
     udf_field_definition_id: uuid.UUID | None = None
     udf_value: str | None = Field(default=None, max_length=500)
+    scope_mode: str | None = Field(default=None, max_length=10)
+    wbs_node_activity_id: uuid.UUID | None = None
+    font_size: float | None = Field(default=None, gt=0)
 
 
 class RadialChartResponse(RadialChartBase):

@@ -60,8 +60,20 @@ function ZoneGizmo({
   const groupRef = useRef<THREE.Group>(null)
   const dragRef = useRef<{ index: number; plane: THREE.Plane; lastPoints: ZonePoint[] } | null>(null)
   const lineRef = useRef<Line2>(null)
+  const fillMeshRef = useRef<THREE.Mesh>(null)
   const fillMaterialRef = useRef<THREE.MeshBasicMaterial>(null)
   const wasAnimatingRef = useRef(false)
+  // 'sweep' mode's own per-frame-rebuilt geometry (2026-08-03) — unlike
+  // 'draw'/'flash', which only touch opacity/border-line-length, a sweep
+  // reveal animates the fill mesh's actual geometry (a growing pie wedge),
+  // so each frame's THREE.ShapeGeometry needs its own explicit disposal —
+  // same "rebuilt geometry needs manual disposal" discipline the live-drag
+  // cleanup effect below already established, just per-frame instead of
+  // per-unmount.
+  const sweepGeometryRef = useRef<THREE.BufferGeometry | null>(null)
+  useEffect(() => {
+    return () => { sweepGeometryRef.current?.dispose() }
+  }, [])
 
   const shapeResult = useMemo(
     () => buildZoneShapeGeometry(zone.points, upAxis, zone.shape, zone.radius),
@@ -126,7 +138,7 @@ function ZoneGizmo({
         backgroundColor: null,
         borderColor: null,
         textColor: zone.border_color,
-        fontSize: 15,
+        fontSize: zone.label_font_size,
         borderRadius: 0,
         bold: true,
         anchor: 'center',
@@ -143,6 +155,14 @@ function ZoneGizmo({
           lineRef.current.visible = true
         }
         if (fillMaterialRef.current) fillMaterialRef.current.opacity = zone.fill_opacity
+        // Restores the mesh back to the memoized full-circle geometry and
+        // disposes whatever 'sweep' geometry was last active — a stopped
+        // animation shouldn't leave the fill mid-wedge.
+        if (fillMeshRef.current && shapeResult) fillMeshRef.current.geometry = shapeResult.geometry
+        if (sweepGeometryRef.current) {
+          sweepGeometryRef.current.dispose()
+          sweepGeometryRef.current = null
+        }
       }
       return
     }
@@ -163,6 +183,32 @@ function ZoneGizmo({
         const pulse = 1 - Math.abs(2 * progress - 1)
         fillMaterialRef.current.opacity = zone.fill_opacity * pulse
       }
+      return
+    }
+
+    // 'sweep' (2026-08-03, per Maro's own crane-clearance reference
+    // screenshot) — only meaningful for shape="circle" (ZonesPanel.tsx only
+    // ever offers it then; any other shape falls through to 'draw' below as
+    // a safe default). Unlike 'draw'/'flash', the wedge angle itself *is*
+    // the reveal — fill opacity stays constant at zone.fill_opacity
+    // throughout, and both the fill mesh's geometry and the border's wedge
+    // outline are rebuilt from scratch every frame via
+    // buildZoneShapeGeometry's own sweepAngle param.
+    if (zone.animation_mode === 'sweep' && zone.shape === 'circle') {
+      const sweepAngle = progress * Math.PI * 2
+      const sweepResult = buildZoneShapeGeometry(zone.points, upAxis, zone.shape, zone.radius, sweepAngle)
+      if (sweepResult) {
+        if (fillMeshRef.current) fillMeshRef.current.geometry = sweepResult.geometry
+        sweepGeometryRef.current?.dispose()
+        sweepGeometryRef.current = sweepResult.geometry
+        if (lineRef.current) {
+          lineRef.current.visible = true
+          lineRef.current.geometry.setPositions(sweepResult.borderPoints.flatMap(p => [p.x, p.y, p.z]))
+          resetLine2InstanceCap(lineRef.current.geometry)
+          lineRef.current.computeLineDistances()
+        }
+      }
+      if (fillMaterialRef.current) fillMaterialRef.current.opacity = zone.fill_opacity
       return
     }
 
@@ -230,7 +276,7 @@ function ZoneGizmo({
     <group ref={groupRef} position={groupPosition} userData={{ isZoneGizmo: true }}>
       {shapeResult && (
         <>
-          <mesh geometry={shapeResult.geometry} userData={{ isZoneGizmo: true }}>
+          <mesh ref={fillMeshRef} geometry={shapeResult.geometry} userData={{ isZoneGizmo: true }}>
             <meshBasicMaterial
               ref={fillMaterialRef}
               color={zone.fill_color} transparent opacity={zone.fill_opacity}
@@ -250,7 +296,7 @@ function ZoneGizmo({
           />
           <Html center distanceFactor={12} position={[shapeResult.centroid.x, shapeResult.centroid.y, shapeResult.centroid.z]} style={{ pointerEvents: 'none' }}>
             <div style={{
-              fontWeight: 700, fontSize: 15, color: zone.border_color, whiteSpace: 'nowrap',
+              fontWeight: 700, fontSize: zone.label_font_size, color: zone.border_color, whiteSpace: 'nowrap',
               textShadow: '0 1px 3px rgba(0,0,0,0.6), 0 0 6px rgba(0,0,0,0.4)', letterSpacing: '0.03em',
             }}>
               {zone.name}

@@ -157,6 +157,14 @@ export function RenderCaptureSettingsPopover({ settings, onChange, compareBaseli
                 />
                 Radial Charts
               </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Bakes in the Timeline Strip at its own dragged position if it's visible (Timeline Strip panel)">
+                <input
+                  type="checkbox"
+                  checked={settings.includeTimelineStrip}
+                  onChange={e => set('includeTimelineStrip', e.target.checked)}
+                />
+                Timeline Strip
+              </label>
               <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Adds a monthly cost bar chart along the bottom — the same figures as the Resource Usage tab's own 'Cost' unit">
                 <input
                   type="checkbox"

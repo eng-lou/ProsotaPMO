@@ -1,5 +1,4 @@
-import type { Activity, UserDefinedFieldValue } from '@/modules/scheduling/types'
-import type { RadialChart } from './radialCharts'
+import type { Activity } from '@/modules/scheduling/types'
 
 // Direct TS port of scheduling_cpm.py's own elapsed_duration_fraction — same
 // degenerate-window handling (a same-day activity reads as 0 before it
@@ -38,38 +37,4 @@ export function computeRadialChartProgress(activities: Activity[], matchingIds: 
     totalWeight += weight
   }
   return totalWeight > 0 ? weightedSum / totalWeight : 0
-}
-
-// Whichever of a UDF value's four value_* columns is actually populated,
-// stringified — generic across data_type so a chart isn't hard-limited to
-// "text" UDFs even though "Sub Discipline"-style text fields are the
-// primary use case (per Maro's own example).
-// Exported so RadialChartsPanel.tsx can build the "distinct values actually
-// present for this field" dropdown using the exact same stringification —
-// what a chart matches against and what the panel offers as choices must
-// never drift apart.
-export function stringifyUdfValue(value: UserDefinedFieldValue | undefined): string | null {
-  if (!value) return null
-  return value.value_text ?? value.value_number ?? value.value_date ?? value.value_indicator ?? null
-}
-
-// Which Activity ids a chart's own UDF filter currently matches. Null
-// udf_field_definition_id = "all activities" (radial_chart.py's own
-// default-before-configured behaviour); a field chosen but no udf_value yet
-// matches nothing, rather than everything, so a half-configured chart reads
-// as 0% instead of misleadingly 100%-of-everything.
-export function matchingActivityIds(
-  activities: Activity[],
-  chart: Pick<RadialChart, 'udf_field_definition_id' | 'udf_value'>,
-  getValue: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined,
-): Set<string> {
-  if (!chart.udf_field_definition_id) return new Set(activities.map(a => a.id))
-  if (!chart.udf_value) return new Set()
-  const matches = new Set<string>()
-  for (const activity of activities) {
-    if (stringifyUdfValue(getValue(chart.udf_field_definition_id, activity.id)) === chart.udf_value) {
-      matches.add(activity.id)
-    }
-  }
-  return matches
 }

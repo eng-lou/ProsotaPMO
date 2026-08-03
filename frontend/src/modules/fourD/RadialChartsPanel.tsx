@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { RadialChart, RadialChartCenterMode } from './radialCharts'
-import { stringifyUdfValue } from './radialChartProgress'
+import { ScopeFilterFields } from './ScopeFilterFields'
+import type { ScopeFilter } from './scheduleScope'
 
 type RadialChartStylePatch = Partial<Pick<RadialChart,
-  'radius_px' | 'thickness_px' | 'border_color' | 'track_color' | 'progress_color' | 'fill_color' | 'text_color' | 'center_mode'
+  'radius_px' | 'thickness_px' | 'border_color' | 'track_color' | 'progress_color' | 'fill_color' | 'text_color' | 'font_size' | 'center_mode'
 >>
 
 interface Props {
@@ -18,7 +19,7 @@ interface Props {
   onToggleVisible: (id: string) => void
   onDelete: (id: string) => void
   onUpdateStyle: (id: string, patch: RadialChartStylePatch) => void
-  onUpdateFilter: (id: string, udfFieldDefinitionId: string | null, udfValue: string | null) => void
+  onUpdateScope: (id: string, scope: ScopeFilter) => void
   onUploadIcon: (id: string, file: File) => void
 }
 
@@ -34,7 +35,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 }
 
 function Item({
-  chart, activities, udfDefinitions, getUdfValue, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateFilter, onUploadIcon,
+  chart, activities, udfDefinitions, getUdfValue, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateScope, onUploadIcon,
 }: {
   chart: RadialChart
   activities: Activity[]
@@ -44,7 +45,7 @@ function Item({
   onToggleVisible: () => void
   onDelete: () => void
   onUpdateStyle: (patch: RadialChartStylePatch) => void
-  onUpdateFilter: (udfFieldDefinitionId: string | null, udfValue: string | null) => void
+  onUpdateScope: (scope: ScopeFilter) => void
   onUploadIcon: (file: File) => void
 }) {
   const [editing, setEditing] = useState(false)
@@ -57,20 +58,6 @@ function Item({
     if (trimmed && trimmed !== chart.title) onRename(trimmed)
     else setDraftTitle(chart.title)
   }
-
-  // Distinct values actually present for the currently-chosen field, e.g.
-  // every real "Sub Discipline" value some Activity already carries — a
-  // free-text input would let a chart target a value that matches nothing,
-  // silently reading as 0% forever.
-  const valueOptions = useMemo(() => {
-    if (!chart.udf_field_definition_id) return []
-    const seen = new Set<string>()
-    for (const activity of activities) {
-      const v = stringifyUdfValue(getUdfValue(chart.udf_field_definition_id, activity.id))
-      if (v !== null) seen.add(v)
-    }
-    return [...seen].sort()
-  }, [chart.udf_field_definition_id, activities, getUdfValue])
 
   return (
     <div className="px-3 py-2 space-y-1.5">
@@ -96,35 +83,14 @@ function Item({
         <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 hover:text-red-600 shrink-0">✕</button>
       </div>
       <p className="text-[11px] text-gray-400">Drag the ring itself in the 3D viewport to reposition it.</p>
-      <div className="space-y-1 bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
-        <label className="flex items-center gap-1.5 text-[11px] text-gray-500" title="Which Activities' schedule progress this ring shows — leave blank to show every Activity in the project">
-          <span className="w-16 shrink-0">Filter by</span>
-          <select
-            value={chart.udf_field_definition_id ?? ''}
-            onChange={e => onUpdateFilter(e.target.value || null, null)}
-            className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
-          >
-            <option value="">All Activities</option>
-            {udfDefinitions.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
-        </label>
-        {chart.udf_field_definition_id && (
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
-            <span className="w-16 shrink-0">Value</span>
-            <select
-              value={chart.udf_value ?? ''}
-              onChange={e => onUpdateFilter(chart.udf_field_definition_id, e.target.value || null)}
-              className="flex-1 border border-gray-200 rounded px-1.5 py-0.5"
-            >
-              <option value="">Choose a value…</option>
-              {valueOptions.map(v => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </label>
-        )}
+      <div className="bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+        <ScopeFilterFields
+          scope={chart}
+          activities={activities}
+          udfDefinitions={udfDefinitions}
+          getUdfValue={getUdfValue}
+          onChange={onUpdateScope}
+        />
       </div>
       <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
         {styleOpen ? '▾' : '▸'} Style
@@ -154,6 +120,15 @@ function Item({
           <ColorField label="Progress" value={chart.progress_color} onChange={v => onUpdateStyle({ progress_color: v })} />
           <ColorField label="Fill" value={chart.fill_color} onChange={v => onUpdateStyle({ fill_color: v })} />
           <ColorField label="Text" value={chart.text_color} onChange={v => onUpdateStyle({ text_color: v })} />
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="w-16 shrink-0">Font size</span>
+            <input
+              type="number" min={6} step={1}
+              value={chart.font_size}
+              onChange={e => onUpdateStyle({ font_size: Number(e.target.value) })}
+              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+            />
+          </label>
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
             <span className="w-16 shrink-0">Center</span>
             <select
@@ -191,7 +166,7 @@ function Item({
 // RadialChartHud.tsx), not by anything in this panel.
 export function RadialChartsPanel({
   charts, error, udfDefinitions, activities, getUdfValue,
-  onCreate, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateFilter, onUploadIcon,
+  onCreate, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateScope, onUploadIcon,
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
@@ -219,7 +194,7 @@ export function RadialChartsPanel({
               onToggleVisible={() => onToggleVisible(chart.id)}
               onDelete={() => onDelete(chart.id)}
               onUpdateStyle={patch => onUpdateStyle(chart.id, patch)}
-              onUpdateFilter={(fieldId, value) => onUpdateFilter(chart.id, fieldId, value)}
+              onUpdateScope={scope => onUpdateScope(chart.id, scope)}
               onUploadIcon={file => onUploadIcon(chart.id, file)}
             />
           ))}

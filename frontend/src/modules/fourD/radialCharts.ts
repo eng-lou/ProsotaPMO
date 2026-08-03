@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import type { ScopeFilter } from './scheduleScope'
 
 // Frontend for radial_chart.py's backend — a screen-space progress-ring
 // HUD widget (2026-07-31, per Maro's own Synchro-style reference
@@ -10,7 +11,11 @@ import { api } from '@/lib/api'
 // udf_value as of the scrubbed Animation Timeline date (radialChartProgress.ts).
 export type RadialChartCenterMode = 'percentage' | 'icon'
 
-export interface RadialChart {
+// RadialChart's own scope filter fields are exactly ScopeFilter's shape
+// (see scheduleScope.ts) — extended here rather than duplicated, so the two
+// can never silently drift apart. scope_mode "all" (the default) = every
+// Activity in the project, same as before this field existed.
+export interface RadialChart extends ScopeFilter {
   id: string
   project_id: string
   title: string
@@ -24,13 +29,9 @@ export interface RadialChart {
   progress_color: string
   fill_color: string
   text_color: string
+  font_size: number
   center_mode: RadialChartCenterMode
   icon_storage_filename: string | null
-  // Null = "all Activities in the project" — see radial_chart.py's own
-  // docstring for why a freshly-created chart defaults to this rather than
-  // erroring/showing nothing before it's configured.
-  udf_field_definition_id: string | null
-  udf_value: string | null
   created_at: string
   updated_at: string
 }
@@ -53,9 +54,12 @@ export async function createRadialChart(data: {
   progress_color?: string
   fill_color?: string
   text_color?: string
+  font_size?: number
   center_mode?: RadialChartCenterMode
+  scope_mode?: RadialChart['scope_mode']
   udf_field_definition_id?: string | null
   udf_value?: string | null
+  wbs_node_activity_id?: string | null
 }): Promise<RadialChart> {
   const res = await api.post<RadialChart>('/api/v1/radial-charts/', data)
   return res.data
@@ -73,9 +77,12 @@ export async function updateRadialChart(id: string, data: Partial<{
   progress_color: string
   fill_color: string
   text_color: string
+  font_size: number
   center_mode: RadialChartCenterMode
+  scope_mode: RadialChart['scope_mode']
   udf_field_definition_id: string | null
   udf_value: string | null
+  wbs_node_activity_id: string | null
 }>): Promise<RadialChart> {
   const res = await api.patch<RadialChart>(`/api/v1/radial-charts/${id}`, data)
   return res.data

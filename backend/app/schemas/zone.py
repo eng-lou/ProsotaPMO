@@ -29,6 +29,7 @@ class ZoneBase(BaseModel):
     animate: bool = False
     animation_loop: bool = False
     animation_mode: str = Field(default="draw", max_length=10)
+    label_font_size: float = Field(default=15.0, gt=0)
 
 
 class ZoneCreate(ZoneBase):
@@ -52,6 +53,7 @@ class ZoneUpdate(BaseModel):
     animate: bool | None = None
     animation_loop: bool | None = None
     animation_mode: str | None = Field(default=None, max_length=10)
+    label_font_size: float | None = Field(default=None, gt=0)
 
 
 class ZoneResponse(ZoneBase):

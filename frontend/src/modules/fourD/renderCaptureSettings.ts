@@ -94,6 +94,11 @@ export interface RenderCaptureSettings {
   // live (RadialChart.visible off) is never exported even with this on —
   // see exportOverlays.ts's own drawRadialChart/composeExportFrame.
   includeRadialCharts: boolean
+  // Timeline Strip (2026-08-03) — same master opt-in switch shape as
+  // includeRadialCharts just above; the strip's own `visible` still gates
+  // it individually (a hidden-live strip is never exported even with this
+  // on) — see exportOverlays.ts's own drawTimelineStrip/composeExportFrame.
+  includeTimelineStrip: boolean
   // View titles (2026-07-25, per Maro: "add a title for both 3d views,
   // Current for the left and Baseline for the right, allow me to name the
   // titles") — always drawn when non-blank (not behind a separate on/off
@@ -133,6 +138,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   includeAppearanceLegend: false,
   includeDateOverlay: false,
   includeRadialCharts: false,
+  includeTimelineStrip: false,
   mainViewTitle: 'Current',
   baselineViewTitle: 'Baseline',
   includeCostProfile: false,

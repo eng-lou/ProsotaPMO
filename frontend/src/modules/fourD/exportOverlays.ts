@@ -3,6 +3,8 @@ import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { ExportLabel, ExportLabelRegistry } from './exportLabels'
 import type { RadialChart } from './radialCharts'
+import type { TimelineStrip } from './timelineStrips'
+import { MONTH_LETTERS, type MonthCell, type YearGroup } from './TimelineStripHud'
 
 // Export Content overlays for Capture/Export Video (2026-07-25, per Maro's
 // Synchro "Export Animation" reference: a Gantt bar strip, an Activity
@@ -788,6 +790,73 @@ export function drawRadialChart(
   ctx.restore()
 }
 
+// Timeline Strip (2026-08-03, per Maro's own Synchro-style reference
+// screenshot) — canvas equivalent of TimelineStripHud.tsx's own live HTML
+// rendering: `cells`/`yearGroups` are built by the caller once per capture
+// (buildMonthCells/groupByYear, imported from that same file so there's
+// only one implementation of the layout math for both), `playheadIndex` is
+// the currently-active month's index into `cells` (-1 = outside the
+// strip's own domain, draws no playhead at all — same as the live HUD).
+export function drawTimelineStrip(
+  ctx: CanvasRenderingContext2D, x: number, y: number, strip: TimelineStrip,
+  cells: MonthCell[], yearGroups: YearGroup[], playheadIndex: number, scale: number,
+): void {
+  const width = strip.width_px * scale
+  const height = strip.height_px * scale
+  const halfHeight = height / 2
+
+  ctx.save()
+  ctx.fillStyle = strip.background_color
+  ctx.fillRect(x, y, width, height)
+  ctx.strokeStyle = strip.band_border_color
+  ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(x, y, width, height)
+
+  if (cells.length === 0) {
+    ctx.fillStyle = strip.text_color
+    ctx.font = `${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('No scheduled activities in scope', x + width / 2, y + height / 2)
+    ctx.restore()
+    return
+  }
+
+  const cellWidth = width / cells.length
+
+  if (playheadIndex >= 0) {
+    ctx.fillStyle = strip.playhead_color
+    ctx.globalAlpha = 0.55
+    ctx.fillRect(x + playheadIndex * cellWidth, y, cellWidth, height)
+    ctx.globalAlpha = 1
+    ctx.strokeStyle = strip.playhead_color
+    ctx.lineWidth = Math.max(2, 2 * scale)
+    ctx.strokeRect(x + playheadIndex * cellWidth, y, cellWidth, height)
+  }
+
+  ctx.fillStyle = strip.text_color
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = `bold ${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+  ctx.strokeStyle = strip.band_border_color
+  ctx.lineWidth = Math.max(1, scale)
+  for (const g of yearGroups) {
+    const groupX = x + g.startIndex * cellWidth
+    const groupWidth = g.count * cellWidth
+    ctx.fillText(String(g.year), groupX + groupWidth / 2, y + halfHeight / 2)
+    ctx.beginPath()
+    ctx.moveTo(groupX, y + halfHeight)
+    ctx.lineTo(groupX + groupWidth, y + halfHeight)
+    ctx.stroke()
+  }
+
+  ctx.font = `${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+  cells.forEach((c, i) => {
+    ctx.fillText(MONTH_LETTERS[c.month], x + i * cellWidth + cellWidth / 2, y + halfHeight + halfHeight / 2)
+  })
+  ctx.restore()
+}
+
 // Greedy word-wrap — breaks `text` into lines no wider than `maxWidth` at
 // this ctx's own current font, same measure-first approach
 // drawTruncatedText uses rather than trusting fillText's own maxWidth
@@ -935,6 +1004,16 @@ export interface ComposeExportFrameOptions {
   radialCharts: RadialChart[]
   radialChartProgress: Map<string, number>
   radialChartIcons: Map<string, HTMLImageElement>
+  // Timeline Strip (2026-08-03) — cells/yearGroups are computed once by the
+  // caller per capture (the matched-activity set doesn't change mid-
+  // recording); timelineStripPlayheadIndex is recomputed every frame for
+  // video (it depends on `now`, same split Radial Chart's own progress
+  // recompute already uses).
+  includeTimelineStrip: boolean
+  timelineStrip: TimelineStrip | null
+  timelineStripCells: MonthCell[]
+  timelineStripYearGroups: YearGroup[]
+  timelineStripPlayheadIndex: number
 }
 
 // Cover-fit (2026-07-25, for the explicit-output-resolution rework above) —
@@ -1138,5 +1217,10 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
       const icon = opts.radialChartIcons.get(chart.id) ?? null
       drawRadialChart(ctx, xPx, yPx, chart, progress, icon, opts.scale)
     }
+  }
+  if (opts.includeTimelineStrip && opts.timelineStrip && opts.timelineStrip.visible) {
+    const xPx = mv.x + (opts.timelineStrip.position_x_pct / 100) * mv.width
+    const yPx = mv.y + (opts.timelineStrip.position_y_pct / 100) * mv.height
+    drawTimelineStrip(ctx, xPx, yPx, opts.timelineStrip, opts.timelineStripCells, opts.timelineStripYearGroups, opts.timelineStripPlayheadIndex, opts.scale)
   }
 }

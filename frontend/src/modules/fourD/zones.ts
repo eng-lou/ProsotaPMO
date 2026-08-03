@@ -26,9 +26,12 @@ export type ZoneBorderStyle = 'solid' | 'dashed'
 // only place it's actually chosen.
 export type ZoneShape = 'polygon' | 'circle'
 
-// 'draw' | 'flash' — same loose-string convention. See ZoneGizmo.tsx for
-// what each actually does; ZonesPanel.tsx's own <select> writes the value.
-export type ZoneAnimationMode = 'draw' | 'flash'
+// 'draw' | 'flash' | 'sweep' — same loose-string convention. See
+// ZoneGizmo.tsx for what each actually does; ZonesPanel.tsx's own <select>
+// writes the value. 'sweep' (2026-08-03, per Maro's own crane-clearance
+// reference screenshot — a pac-man-style pie wedge growing from 0° to a
+// full circle) is only ever offered by that panel for shape="circle".
+export type ZoneAnimationMode = 'draw' | 'flash' | 'sweep'
 
 export interface Zone {
   id: string
@@ -61,6 +64,9 @@ export interface Zone {
   animate: boolean
   animation_loop: boolean
   animation_mode: ZoneAnimationMode
+  // 2026-08-03, per Maro: "give text size controls for the font" — was
+  // hardcoded to 15 in ZoneGizmo.tsx.
+  label_font_size: number
   created_at: string
   updated_at: string
 }
@@ -88,6 +94,7 @@ export async function createZone(data: {
   animate?: boolean
   animation_loop?: boolean
   animation_mode?: ZoneAnimationMode
+  label_font_size?: number
 }): Promise<Zone> {
   const res = await api.post<Zone>('/api/v1/zones/', data)
   return res.data
@@ -110,6 +117,7 @@ export async function updateZone(id: string, data: Partial<{
   animate: boolean
   animation_loop: boolean
   animation_mode: ZoneAnimationMode
+  label_font_size: number
 }>): Promise<Zone> {
   const res = await api.patch<Zone>(`/api/v1/zones/${id}`, data)
   return res.data

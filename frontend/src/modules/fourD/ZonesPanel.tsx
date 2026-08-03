@@ -4,7 +4,7 @@ import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
 
 type ZoneStylePatch = Partial<Pick<Zone,
   'radius' | 'elevation' | 'fill_color' | 'fill_opacity' | 'border_color' | 'border_width' | 'border_style' | 'border_dash_size' | 'border_gap_size' |
-  'animate' | 'animation_loop' | 'animation_mode'
+  'animate' | 'animation_loop' | 'animation_mode' | 'label_font_size'
 >>
 
 // Threaded down for the Start/End fields' own frames/seconds/date display
@@ -211,9 +211,18 @@ function Item({
               className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
             />
           </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="w-16 shrink-0">Font size</span>
+            <input
+              type="number" min={6} step={1}
+              value={zone.label_font_size}
+              onChange={e => onUpdateStyle({ label_font_size: Number(e.target.value) })}
+              className="flex-1 w-0 border border-gray-200 rounded px-1.5 py-0.5"
+            />
+          </label>
           <label
             className="flex items-center gap-1.5 text-[11px] text-gray-500"
-            title="'Draw' traces the border in over the first half of the Start/End window below, then fades the fill in over the second half. 'Flash' keeps the border fixed and pulses the fill's opacity instead."
+            title="'Draw' traces the border in over the first half of the Start/End window below, then fades the fill in over the second half. 'Flash' keeps the border fixed and pulses the fill's opacity instead. 'Sweep' (circle only) grows a pie wedge from 0° to a full circle."
           >
             <input type="checkbox" checked={zone.animate} onChange={e => onUpdateStyle({ animate: e.target.checked })} />
             Animate
@@ -229,6 +238,7 @@ function Item({
                 >
                   <option value="draw">Draw (border, then fill)</option>
                   <option value="flash">Flash (fill pulses)</option>
+                  {zone.shape === 'circle' && <option value="sweep">Sweep (0% → full circle)</option>}
                 </select>
               </label>
               {/* Frames/Seconds/Date + Key button, not a raw datetime-local

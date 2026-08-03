@@ -80,4 +80,19 @@ class Zone(Base, TimestampMixin):
     # field="anim_start"/"anim_end").
     animate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     animation_loop: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # animation_mode (2026-08-03, per Maro's own crane-clearance reference
+    # screenshot — "PB-1"/"PB-2" circles filling in as a pac-man-style pie
+    # wedge) gains a third value, "sweep", alongside "draw"/"flash" — only
+    # meaningful for shape="circle" (ZonesPanel.tsx only ever offers it
+    # then, same conditional the circle-only `radius` field already uses).
+    # Unlike "draw" (border-then-fill) or "flash" (opacity pulse), "sweep"
+    # animates the fill+border geometry itself — a live wedge growing from
+    # 0° to 360° (see zoneGeometry.ts's own buildZoneShapeGeometry
+    # sweepAngle param and ZoneGizmo.tsx's per-frame geometry rebuild).
     animation_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="draw")
+    # 2026-08-03, per Maro: "give text size controls for the font" — was
+    # hardcoded to 15 at both of ZoneGizmo.tsx's own label call sites (the
+    # Html overlay and the exportLabelsRef entry); default here matches
+    # that prior fixed value exactly, so no existing zone's label visibly
+    # changes size until someone explicitly adjusts it.
+    label_font_size: Mapped[float] = mapped_column(Float, nullable=False, default=15.0)

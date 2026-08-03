@@ -22,19 +22,18 @@ class RadialChart(Base, TimestampMixin):
     in the same visual spot regardless of window size or export resolution.
 
     Progress is never stored here — it's computed live, client-side, each
-    frame, from whichever Activities currently match
-    udf_field_definition_id/udf_value (a User Defined Field filter, e.g.
-    "Sub Discipline" = "Concrete Works" — see
-    radialChartProgress.ts/user_defined_field.py) as of wherever the
-    Animation Timeline's playhead currently sits: duration-weighted elapsed
-    fraction across the matched set, the same per-activity 0..1 fraction
-    math already used by scheduling_cpm.py's own elapsed_duration_fraction,
-    just ported to run against an arbitrary scrubbed date instead of a
-    SchedulePeriod's fixed data_date.
+    frame, from whichever Activities currently match this row's own scope
+    filter (scope_mode + udf_field_definition_id/udf_value or
+    wbs_node_activity_id — see frontend's scheduleScope.ts) as of wherever
+    the Animation Timeline's playhead currently sits: duration-weighted
+    elapsed fraction across the matched set, the same per-activity 0..1
+    fraction math already used by scheduling_cpm.py's own
+    elapsed_duration_fraction, just ported to run against an arbitrary
+    scrubbed date instead of a SchedulePeriod's fixed data_date.
 
-    udf_field_definition_id/udf_value null = "all Activities in the
-    project" — a freshly-created chart shows real (if uninteresting)
-    progress immediately rather than erroring or sitting blank before it's
+    scope_mode="all" (the default) = every Activity in the project — a
+    freshly-created chart shows real (if uninteresting) progress
+    immediately rather than erroring or sitting blank before it's
     configured, same spirit Zone/Annotation's own sensible-default fields
     already follow.
 
@@ -73,3 +72,22 @@ class RadialChart(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("user_defined_field_definitions.id", ondelete="SET NULL"), nullable=True
     )
     udf_value: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # scope_mode (2026-08-03, per Maro: "also implement radial chart by wbs
+    # node too") — a third way to pick which Activities this chart tracks,
+    # alongside the original UDF filter above: "all" (every Activity, the
+    # original null-fields behaviour), "udf" (udf_field_definition_id/
+    # udf_value, unchanged), "wbs" (wbs_node_activity_id below — every real
+    # task/milestone under that WBS node's own subtree, walked client-side
+    # via Activity.parent_id — see frontend's scheduleScope.ts). Explicit
+    # mode rather than inferring from which fields are non-null, so
+    # switching modes can cleanly clear the other mode's now-irrelevant
+    # fields without ambiguity about which one "wins."
+    scope_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="all")
+    wbs_node_activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
+    )
+    # Text size for both the title label and the center percentage text
+    # (2026-08-03, per Maro: "give text size controls for the font") — same
+    # single-field-covers-both-labels convention this row's own text_color
+    # already established.
+    font_size: Mapped[float] = mapped_column(Float, nullable=False, default=14.0)
