@@ -3308,3 +3308,350 @@ real member of the dependency network) — making it newly eligible. Logged
 alongside the SPI bug in the Controls Dashboard project memory for a
 dedicated future session, not fixed here (out of scope for this session's
 actual asks).
+
+## 2026-08-03 (later still) — Cinematic Cameras, a full dark-mode pass,
+and two Capture/Export Video quality fixes
+
+**Cinematic Cameras** — per Maro's own framing ("thinking of a preview of
+the camera passepartout like in blender... add separate cameras and play
+the animation and see the transitions"), a new named, keyframeable
+`Camera` entity (`backend/app/models/camera.py`, `api/cameras.py`,
+`services/camera.py`) distinct from the existing `CameraView` bookmark (a
+one-shot "jump to this pose," no lens settings, no timeline binding). A
+`Camera` row only ever stores its *base* pose/lens (`base_position_x/y/z`,
+`base_target_x/y/z`, `base_focal_length`, `base_clip_start/end`) —
+position/target/lens *over time* aren't new columns at all, they're
+`ElementKeyframe` rows with `source_kind="camera"` and
+`element_ref=str(camera.id)`, reusing the exact same generic
+per-field/per-date scalar keyframe store (and its existing
+linear-interpolation playback) that mesh transforms and annotations
+already use, rather than inventing a second keyframing system.
+`KeyframeField` grew six new literals (`target_x/y/z`, `focal_length`,
+`clip_start`, `clip_end`) to carry this.
+
+Aims via a look-at target point rather than full 6DOF rotation (same
+convention `CameraView` already used) — easier to keyframe smoothly, at
+the cost of no independent camera roll, confirmed acceptable for v1. Focal
+length is stored in millimetres against an assumed 36mm full-frame sensor
+(Blender's own default) rather than raw fov, converted at render time via
+`cameras.ts`'s `fovFromFocalLength`; lens shift (Shift X/Y) was
+deliberately left out of v1 as a rarely-animated architectural correction.
+
+**Passepartout preview** (`PassepartoutOverlay.tsx`) — a Blender-style
+dimmed border showing exactly what falls outside the active Camera's
+output frame, rendered as a plain HTML overlay on top of the viewport (not
+inside the R3F `<Canvas>`) whenever a Camera is being looked through.
+Reuses the project's own Capture/Export Video output resolution as the
+frame's aspect ratio (one source of truth for "what will actually render,"
+rather than a separate per-camera aspect field). Sized in JS off the
+container's live `clientWidth`/`clientHeight` rather than a pure-CSS
+`aspect-ratio` trick, since `aspect-ratio` only ever constrains one
+dimension at a time once both are already definite — it can't express
+"contain-fit a fixed-aspect box inside an arbitrarily-sized flex parent"
+on its own.
+
+Cameras now surface as their own actor row (Location/Target/Lens
+sub-tracks) in the Animation Timeline — their keyframe list respects the
+existing Date/Seconds/Frames display toggle, and clicking a keyframe seeks
+the timeline to it, same as every other animated actor.
+
+**Full dark-mode pass** — extended `dark:` Tailwind variants across the
+remaining page-content components (dashboard, costs, ICD, risk, scheduling
+modules) that the original theming pass had missed, plus
+`ResettableNumberInput` fields. One real root-cause fix along the way:
+Tailwind's Preflight never sets a `color` on `<body>`, so any element with
+no explicit `text-*` class (plain `font-medium`/`font-semibold`
+value/label text, not just headings) was always falling back to the
+browser's default black — invisible against a dark panel background.
+Rather than hunting down every bare-text span across 100+ components
+(unwinnable whack-a-mole), fixed it once at the source:
+`html.dark body { color: #E6EDF7 }` in `index.css` — a class selector on
+any individual element is still more specific than this inherited body
+color, so already-themed muted/secondary text is untouched; this only
+fixes text that was never explicitly colored at all.
+
+**`BaselineViewportPane.tsx` → `ComparisonViewportPane.tsx`** rename — the
+pane had outgrown its original name; its `dateField` prop already followed
+the pane's own content mode (`'live'` for collection/scope modes matching
+the main viewport's current dates, `'baseline'` only for actual baseline
+mode) rather than being hardcoded to `'baseline'`. Caught one real bug
+while touching the file: it ran `frameloop="always"` unconditionally
+regardless of whether the 4D tab itself was even visible, unlike the
+primary `Viewport3D` which already drops to `frameloop="never"` while
+hidden — a gap that only gets worse the more comparison panes a user has
+open at once. Now gated the same way.
+
+**Two Capture/Export Video quality fixes**, filed back-to-back after Maro
+reported exports still looking soft even at the highest quality setting
+("not blender levels, not even eevee... still very low level... consider
+gpu rendering"):
+
+1. *Render-buffer undersizing* (`a5224e8`) — the internal WebGL render
+   buffer was capped at a flat 4x on two independent, stacked axes: the
+   supersample ratio itself, then `devicePixelRatio * that ratio` again.
+   On any scaled/Retina-class display (`devicePixelRatio` 2), the second
+   cap could bite before the first one's headroom was even used, so the
+   real rendered buffer often came out *smaller* than the requested output
+   resolution — `drawCoverFit` then had to upscale it via a plain bilinear
+   stretch to hit the exact requested pixel count. The file's dimensions
+   said "4K"; a meaningful share of its actual pixels were interpolated
+   blow-up, not rendered detail. Fixed by computing the multiplier against
+   an absolute pixel target (does `cssWidth * devicePixelRatio *
+   multiplier` actually reach `resolutionWidth`?) instead of a plain
+   ratio, capped against the live `WebGLRenderer`'s own queried
+   `capabilities.maxTextureSize` rather than a guessed constant — quality
+   is now bounded by actual GPU capability, not an arbitrary "4".
+
+2. *Missing bitrate* (`dbcc74d`) — `MediaRecorder` was constructed with no
+   `videoBitsPerSecond` at all, so it fell back to the browser's own
+   conservative default heuristic (tuned for "good enough for a web call,"
+   not a quality export) — visible as banding in gradient sky backgrounds
+   and blocky macroblocking, independent of and on top of bug #1. Now
+   requests 0.2 bits/pixel/frame (floored at 2 Mbps so a small 720p export
+   isn't starved, ceilinged at 100 Mbps so a huge custom resolution
+   doesn't request a bitrate no browser would honor), comfortably in
+   high-quality H.264 encoder-preset territory versus the ~0.05–0.1
+   typical real-time/streaming defaults. **Verified live**: a re-export of
+   the same scene came out visibly sharper with no banding, at roughly 5x
+   the bitrate of the same clip before the fix.
+
+## 2026-08-19 — "Site Context": Google Photorealistic 3D Tiles, three
+designs deep before landing — three.js embed, then a real CesiumJS panel,
+then back to a three.js embed for real
+
+**The ask**: bring Google's Photorealistic 3D Tiles into the 4D module as
+real-world site context around an imported model, pointing at Cesium's
+own `cesium.com/learn/3d-tiling` page. First read of that page was "OGC
+3D Tiles is a data format, not an engine mandate" — so design #1
+(researched, planned, partly built) piped the tiles into the *existing*
+react-three-fiber `<Canvas>` via `3d-tiles-renderer` (three.js-native,
+npm), reasoning that adopting the full CesiumJS engine would mean a
+second renderer the existing BIM viewport — camera, gizmos, Animation
+Timeline, batched IFC rendering, Capture/Export, ~114 files deep — can't
+share a WebGL context with.
+
+**Design #2 — Maro corrected this mid-build** ("i want cesium
+incorporation mind you, not just the google 3d tiles etc"), then linked
+Cesium's own 2023 post on Google tiles becoming natively available
+through Cesium ion/CesiumJS. Asked directly which of several very
+different things "Cesium" could mean (the full engine as its own view?
+Cesium ion as a swap-in data source behind the already-installed
+three.js loader? both, staged?) rather than guessing — a real
+architectural fork, not a wording preference. Answer: real CesiumJS, as
+its own dedicated Site/GIS panel (`CesiumSitePane.tsx`), shown
+*alongside* the BIM viewport rather than fused into its scene.
+
+Built it fully: `cesium` + `vite-plugin-cesium` (Vite integration for
+CesiumJS's own static Workers/Widgets/Assets, a genuinely different class
+of dependency than a normal npm package), `Cesium.
+createGooglePhotorealistic3DTileset({ key: apiKey })` using the existing
+Google Maps Platform key directly (confirmed from CesiumJS's own
+TypeScript defs, not assumed, including the one real ToS detail buried in
+that function's own doc comment — Google's tiles may only be used
+alongside the Google geocoder, so `onlyUsingWithGoogleGeocoder: true`
+had to be passed explicitly), `Viewer` built with `baseLayerPicker:
+false`/`baseLayer: false` and no terrain override so it never touched
+Cesium ion at all. Attribution was free — `Viewer`'s own built-in credit
+container. **This actually worked** — verified live, a real screenshot of
+Buckingham Palace rendering correctly.
+
+Also built, prompted directly by Maro ("unable to put my key... the user
+experience going to notepad to do all of that and back is not good"): a
+new `AppSettings` singleton table (`backend/app/models/app_settings.py`,
+`GET`/`PUT /api/v1/site-context/tiles-key`) so the Google Maps Platform
+key is editable from inside the product itself instead of a server
+`.env` edit + restart — a genuinely new pattern for this codebase (every
+other backend secret up to now was `.env`-only, e.g. `auth0_domain`).
+
+**Design #3 — seeing it live is what actually surfaced the real
+requirement.** Maro's response to the working Cesium panel: *"i wanted it
+in the og viewport. this new viewport doesnt have features"* — Select
+All, Box Select, Isolate, Capture, Export Video, the camera gizmo, all
+visible in his own screenshot's main-viewport toolbar, none of them
+reachable from the bare Cesium panel. Not a missing feature — a hard
+limit of running two separate WebGL engines side by side, explained
+plainly rather than tacked on as a footnote, then confirmed directly:
+drop CesiumJS, embed tiles as a real object in the main viewport instead
+(back to design #1's engine, this time armed with a working key/UI
+already proven out).
+
+**What carried across all three designs unchanged**: `AppSettings` + the
+`GET`/`PUT /tiles-key` endpoints — the key-in-the-product UX Maro asked
+for is completely engine-agnostic, needed zero rework. What got deleted
+and rebuilt each time `SiteContext` itself: first shipped with two full
+calibration points (local xyz + lat/lon each) + a `recenter_offset`
+drift-correction trio, for design #1's "derive a full transform from two
+clicked points" plan; simplified to just `lat`/`lon`/`label`/
+`camera_height_m` for design #2 (a standalone camera-flyover panel needs
+one anchor, not a calibration transform); simplified again for design #3
+to `lat`/`lon`/`label`/`offset_x/y/z`/`offset_yaw_deg`/`scale` — a
+real-world recentre plus a *manual numeric nudge*, deliberately not
+re-adding the two-point calibration math design #1 originally planned.
+Each revision was a straight drop-and-recreate migration (nothing
+committed or depended on the columns yet) rather than a chain of
+ALTERs, except the final one — by then `AppSettings` existed as a later
+migration on top, so this one really did have to be a proper `ALTER
+TABLE` (`op.drop_column`/`op.add_column`), the first migration in this
+whole arc that couldn't just be rewritten from scratch.
+
+**The real technique, verified against the library's own source before
+trusting it** (`node_modules/3d-tiles-renderer/src/three/renderer/math/
+Ellipsoid.js`): `Ellipsoid.getEastNorthUpFrame(lat, lon, height, target)`
+returns a matrix in **X=East, Y=North, Z=Up** — not three.js's native
+Y-up — a real detail that would have been easy to get wrong by assuming
+Y-up like everything else in this codebase. Inverting that matrix and
+assigning it directly to the tileset's own `group.matrix` (with
+`matrixAutoUpdate = false`) recentres the whole globally-rooted tileset
+so the saved lat/lon lands at local origin instead of the real ECEF
+distance from Earth's centre — the standard technique for placing a
+globally-rooted tileset near a point of interest. `SiteTilesLayer.tsx`
+wraps this in `axisCorrectionRotation('z', upAxis)` (not `'y'` —
+because of that X/Y/Z convention above) matching every other layer in
+`Viewport3D.tsx`'s own "each layer self-wraps in its own axis-correction
+group" convention, with the manual offset/yaw/scale nudge as an outer
+group on top. Re-applied on the tileset's own `'load-tileset'` event
+(not just once) since a tileset's `3DTILES_ellipsoid` extension can
+override `tiles.ellipsoid` after load — the same defensive pattern
+`3d-tiles-renderer`'s own `EastNorthUpFrame` r3f component already uses
+internally, found by reading that component's source rather than
+assumed.
+
+**Attribution needed zero custom code again**, differently this time —
+`3d-tiles-renderer/r3f` ships a ready-made `TilesAttributionOverlay`
+component (reads live attributions off the tiles renderer, must be a
+child of `<TilesRenderer>`), so despite losing Cesium's own automatic
+credit container, no hand-built overlay was needed either.
+
+**Numeric nudge fields, not a drag gizmo** — `SiteContextPanel.tsx`'s
+offset/yaw/scale controls are plain typed number inputs, not the
+existing Move gizmo. A deliberately smaller v1: wiring `TransformControls`
+to a layer that isn't a tracked "imported object" is real additional
+scope, left as a named follow-up rather than attempted here.
+
+**Bundle size, tracked through all three designs** — this app has an
+active deploy-size discipline (177MB→29MB, an earlier session). Design
+#2's Cesium build was dynamically imported and confirmed (via `npm run
+build`) to add a separate `dist/cesium/` static payload (~14MB) fetched
+only on demand; removing it in design #3 confirmed the deploy dropped
+back to exactly 29MB, `dist/cesium/` gone entirely.
+
+**What's genuinely unverified**: no browser extension was connected in
+this session (`tabs_context_mcp` failed — "Browser extension is not
+connected"), so despite having a real, already-saved API key sitting in
+the database from design #2's testing, the final three.js-embedded
+version has never actually been watched rendering a tile. Confirmed only
+as far as static checks can reach: backend tests pass (7 for
+`site_context`, full suite otherwise unchanged), `tsc --noEmit` clean,
+`npm run build` succeeds with the expected chunk/size profile. The
+recentre-matrix technique is standard and read directly off the real
+library source rather than assumed, but "compiles and matches the docs"
+is not the same as "renders correctly" — needs Maro's own in-browser
+check, same as design #2 did, before this is trustworthy enough to
+commit.
+
+## 2026-08-19 (later still) — Site Context goes live (two real bugs,
+both root-caused from library source, not guessed), then a Dynamic Sky
+feature built, fixed twice, and fully reverted
+
+**Site Context verified live, in two rounds, against two real bugs** — no
+browser extension was ever available this session, so all of this was
+diagnosed purely from what Maro pasted back (console traces, screenshots)
+plus reading the actual library source, never by reproducing it directly.
+
+1. *"Cannot read properties of null (reading 'removeEventListener')"* —
+   first hit opening the Site Context panel. Root cause: this app runs
+   `React.StrictMode` (`main.tsx`), which deliberately mounts → tears
+   down → remounts every component once in dev specifically to surface
+   exactly this class of bug. `<TilesRenderer>`'s own internal cleanup
+   (a *child* effect) disposes the tileset before `SiteTilesLayer`'s own
+   effect (a *parent* effect, cleaning up later per React's child-before-
+   parent unmount order) got to call `tiles.removeEventListener` on it.
+   Fixed by wrapping that one call in try/catch — the object's being torn
+   down regardless, a failed best-effort unsubscribe isn't worth crashing
+   the module over.
+2. That fix didn't turn out to be the real blocker — tiles still didn't
+   render, and Maro sent a real console trace: `GET .../files/....glb
+   400 (Bad Request)`, throwing inside `3d-tiles-renderer`'s own
+   `GoogleCloudAuth.js` (`TypeError: Cannot read properties of undefined
+   (reading 'content')`, inside its own `getSessionToken`/
+   `TraversalUtils.traverseSet`). Read that file directly rather than
+   guess: its session-token bootstrap (walking the root tileset response
+   for a `content.uri` carrying `session=`) throws against the real
+   Google API, and — genuinely worse — once that first parse fails,
+   `sessionToken` stays `null` forever, so *every* later request
+   (including binary `.glb` tiles) re-enters the same broken path.
+   First fix attempt dropped session tokens outright (a
+   `SimpleGoogleTilesAuthPlugin` doing plain `?key=` auth) — fixed the
+   crash, but the `400`s on `.glb` specifically proved Google's tile-
+   *content* endpoint genuinely requires the session (only the tileset
+   *structure* JSON tolerates a bare key) — so the real fix was a
+   from-scratch, recursive, null-safe reimplementation of the same
+   session-extraction the library was attempting, not skipping it.
+   **Confirmed live**: a real, detailed aerial render of Buckingham
+   Palace and the surrounding streets, using the exact key already saved
+   via `AppSettings` from the earlier Cesium-panel testing.
+
+**Then: "allow me to switch to cesium weather/time controls. its using
+the hdr/white background alone."** Scoped directly with Maro (not
+assumed) to "time-of-day sun + basic sky conditions" over "full weather
+simulation," given a plain `AskUserQuestion` — reused `@react-three/drei`'s
+existing `Sky` (no new dependency) plus a new `computeSunFromTimeOfDay`
+day-arc feeding the same `computeSunPosition`/`directionalLight` pipeline
+`sunAzimuth`/`sunElevation` already drove. Two more real bugs, again
+found by reading source rather than guessing:
+
+- *"no change when hdr is off"* — `three-stdlib`'s `Sky.js` hardcodes a
+  shader uniform `up: vec3(0,1,0)`, always Y-up, regardless of any
+  rotation applied to the mesh — a uniform isn't part of the vertex
+  pipeline a wrapping `<group>` rotation touches, unlike real geometry.
+  This app defaults Z-up, so the sun position being fed to the shader was
+  on the wrong axis entirely from the shader's own point of view. Fixed
+  by computing a *second*, always-Y-up sun position specifically for
+  `<Sky>`'s own `sunPosition` prop, keeping the mesh's own
+  `axisCorrectionRotation` wrapper for visual orientation same as every
+  other Y-up-native layer in this file.
+- *"it comes out off with time of day change"* (a hard light/dark seam,
+  not a smooth gradient) — drei's own `Sky` (`Sky.js`) never repositions
+  its box geometry at all; it sits fixed at world origin, scaled to a
+  flat 1000-unit radius. This app's camera can legitimately end up
+  hundreds or thousands of units from origin (Site Context's real-world
+  tiles span whole city blocks) — once the camera drifted near the edge
+  of that fixed box, what was visible was the box's own corner, not a
+  continuous atmosphere. Fixed with a `SkyFollowsCamera` wrapper
+  (`useFrame` copying `camera.position` onto the group every frame — the
+  one thing every real skybox has to do that this component doesn't) and
+  sizing the box to `clipEnd * 0.95` so it stays just inside the far
+  plane without ever occluding distant tiles.
+
+**Then: "NOT IMPRESSED WITH DYNAMIC SKY/TIME OF DAY..just color changes,
+no clouds etc."** — real, if uncomfortable, feedback that the earlier
+scoping call (time/lighting only, no clouds) was the wrong one in
+hindsight, even though it was confirmed explicitly beforehand. Added real
+drifting cloud puffs via drei's own `Cloud`/`Clouds` (billboard-based,
+`speed`-driven drift, count/density/colour keyed to Clear vs Overcast) —
+texture downloaded and self-hosted at `public/textures/cloud.png` rather
+than left pointed at drei's own default third-party CDN, same "no network
+dependency beyond our own server" precedent `DEFAULT_ENVIRONMENT_URL`
+already set.
+
+**Then: "its horrible, remove sky mode and sky condition. hdr alone will
+suffice for now."** Full revert, same session — `skyMode`/
+`timeOfDayHours`/`skyCondition` out of `ViewerSettings`,
+`computeSunFromTimeOfDay`/`SkyFollowsCamera`/`CLOUD_LAYOUT`/the `<Sky>`/
+`<Clouds>` JSX all deleted from `Viewport3D.tsx`, the Sky Mode/Sky
+Condition UI removed from `PropertiesPanel.tsx`, `public/textures/`
+deleted. Confirmed via `git diff --stat` afterward that both
+`viewerSettings.ts` and `PropertiesPanel.tsx` came back byte-for-byte
+identical to their last-committed state — a genuinely clean revert, not
+just a visual no-op with dead code left behind. Worth naming plainly:
+every individual bug found and fixed along the way was a *real* bug,
+correctly diagnosed and correctly fixed — the feature still didn't
+survive contact with actually looking at it. Confirming scope explicitly
+before building (as this session did, via `AskUserQuestion`) reduces
+wasted work but doesn't replace watching the user's actual reaction to
+the real thing; "technically what was agreed" and "what's actually
+wanted once you can see it" aren't always the same, and only one of them
+matters when they diverge. Site Context (the tiles themselves) was
+unaffected by any of this — `git diff` on `Viewport3D.tsx` after the
+revert shows only the Site Context integration, exactly as it was before
+Dynamic Sky was ever started.

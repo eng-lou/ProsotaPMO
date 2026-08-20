@@ -2,20 +2,19 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js'
 import { captureBaseline, captureOriginalGeometryRecursive, captureOriginalMaterialsRecursive, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
-// "Import 3D" (2026-07-10, per Maro) — GLTF/GLB, OBJ, FBX via three.js's own
-// mature, stable loaders (already available through the `three` package
-// installed last session) — no new dependency, unlike IFC (see ifcModel.ts).
-export async function loadModel3DFile(file: File): Promise<THREE.Object3D> {
-  const ext = file.name.split('.').pop()?.toLowerCase()
-  const buffer = await file.arrayBuffer()
-  const object = await parseModel3DFile(ext, buffer)
-  // FBX/OBJ load as a classic (Phong/Lambert/Basic) material, never
-  // THREE.MeshStandardMaterial — see convertMeshesToStandardMaterial's own
-  // header just below for why that's a real problem in this specifically
-  // PBR-lit app, and why it has to happen *before* the capture calls right
-  // after this.
+// Shared post-load pipeline (2026-08-20, factored out of loadModel3DFile so
+// loadTexturedObj below — a second, genuinely different loading path for
+// multi-file OBJ+MTL+texture sets, see that function's own header — gets
+// the exact same treatment rather than a second, drifting copy of it).
+// FBX/OBJ load as a classic (Phong/Lambert/Basic) material, never
+// THREE.MeshStandardMaterial — see convertMeshesToStandardMaterial's own
+// header just below for why that's a real problem in this specifically
+// PBR-lit app, and why it has to happen *before* the capture calls right
+// after this.
+function finalizeImportedObject(object: THREE.Object3D): THREE.Object3D {
   convertMeshesToStandardMaterial(object)
   // Whatever root-level position/rotation/scale the file itself carries
   // (usually identity, but not always) — captured here so TransformPanel.tsx's
@@ -34,6 +33,69 @@ export async function loadModel3DFile(file: File): Promise<THREE.Object3D> {
   // for the same reason (a mesh-kind import can contain many meshes).
   captureOriginalGeometryRecursive(object)
   return object
+}
+
+// "Import 3D" (2026-07-10, per Maro) — GLTF/GLB, OBJ, FBX via three.js's own
+// mature, stable loaders (already available through the `three` package
+// installed last session) — no new dependency, unlike IFC (see ifcModel.ts).
+export async function loadModel3DFile(file: File): Promise<THREE.Object3D> {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  const buffer = await file.arrayBuffer()
+  const object = await parseModel3DFile(ext, buffer)
+  return finalizeImportedObject(object)
+}
+
+// Reality Captures (2026-08-20, per Maro — a real Matterport MatterPak
+// export inspected directly: an .obj + matching .mtl + ~60 .jpg texture
+// tiles, no relative paths, filenames matched exactly between the two) —
+// loadModel3DFile's own plain `new OBJLoader().parse(text)` never touches
+// materials/textures at all (confirmed: no MTLLoader anywhere in this
+// codebase before this), so a MatterPak .obj imported through it would
+// render as flat, untextured geometry — the one thing that actually makes
+// a reality capture worth comparing against the model.
+//
+// Standard technique for loading a multi-file OBJ set with no real
+// filesystem underneath it (the canonical drag-and-drop-a-folder pattern
+// three.js's own examples use): a THREE.LoadingManager whose
+// setURLModifier intercepts every texture request MTLLoader/OBJLoader make
+// and redirects it to URL.createObjectURL() of the matching selected File,
+// matched by filename alone (matching resolveURL's own behaviour of
+// appending the .mtl's declared basePath, which is '' here since these are
+// blobs, not real relative paths — matching by basename is robust to
+// however exactly that ends up formatted).
+export async function loadTexturedObj(objFile: File, mtlFile: File, textureFiles: File[]): Promise<THREE.Object3D> {
+  const objectUrls: string[] = []
+  const manager = new THREE.LoadingManager()
+  const blobUrlByName = new Map<string, string>()
+  for (const file of textureFiles) {
+    const url = URL.createObjectURL(file)
+    objectUrls.push(url)
+    blobUrlByName.set(file.name, url)
+  }
+  manager.setURLModifier(url => {
+    const name = url.split('/').pop() ?? url
+    return blobUrlByName.get(name) ?? url
+  })
+
+  try {
+    const mtlText = await mtlFile.text()
+    const mtlLoader = new MTLLoader(manager)
+    const materials = mtlLoader.parse(mtlText, '')
+    materials.preload()
+
+    const objText = await objFile.text()
+    const objLoader = new OBJLoader(manager)
+    objLoader.setMaterials(materials)
+    const object = objLoader.parse(objText)
+
+    return finalizeImportedObject(object)
+  } finally {
+    // Textures have finished uploading to the GPU synchronously as part of
+    // materials.preload()/the parse above (three.js's TextureLoader reads
+    // the blob eagerly) — safe to revoke immediately after, same as the
+    // browser's own recommended pattern for object URLs used once.
+    objectUrls.forEach(url => URL.revokeObjectURL(url))
+  }
 }
 
 // FBX's own ShadingModel (confirmed directly against man.fbx's binary

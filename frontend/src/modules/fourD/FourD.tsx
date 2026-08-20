@@ -11,7 +11,8 @@ import { ResourceTrackingWidget } from '@/modules/scheduling/ResourceTrackingWid
 import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsageProfileWidget'
 import { computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
-import { disposeObject3D, loadModel3DFile } from './import3d'
+import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
+import { createPointCloudObject, parseXyzFile } from './pointCloud'
 import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
 import { loadCustomEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
@@ -85,6 +86,8 @@ import { resolveScopeActivityIds, type ScopeFilter } from './scheduleScope'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { getTimelineStrip, saveTimelineStrip, type TimelineStrip } from './timelineStrips'
 import { TimelineStripPanel } from './TimelineStripPanel'
+import { getSiteContext, saveSiteContext, getTilesApiKey, saveTilesApiKey, type SiteContext } from './siteContext'
+import { SiteContextPanel } from './SiteContextPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import {
@@ -163,6 +166,8 @@ const RADIAL_CHARTS_PANEL_OPEN_KEY = 'prosota_4d_radial_charts_panel_open'
 const RADIAL_CHARTS_PANEL_DOCK_KEY = 'prosota_4d_radial_charts_panel_dock'
 const TIMELINE_STRIP_PANEL_OPEN_KEY = 'prosota_4d_timeline_strip_panel_open'
 const TIMELINE_STRIP_PANEL_DOCK_KEY = 'prosota_4d_timeline_strip_panel_dock'
+const SITE_CONTEXT_PANEL_OPEN_KEY = 'prosota_4d_site_context_panel_open'
+const SITE_CONTEXT_PANEL_DOCK_KEY = 'prosota_4d_site_context_panel_dock'
 const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
@@ -1226,6 +1231,47 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     [timelineStrip, activities, activityUdfValues.getValue],
   )
 
+  // Site Context (2026-08-19, per Maro) — Google Photorealistic 3D Tiles
+  // embedded directly in the main viewport (SiteTilesLayer.tsx); a
+  // separate CesiumJS panel was tried and dropped first, see that file's
+  // own header. Same singleton GET/PUT shape as Timeline Strip above.
+  const [siteContext, setSiteContext] = useState<SiteContext | null>(null)
+  const [siteContextError, setSiteContextError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    getSiteContext(selectedProject.id).then(s => { if (!cancelled) setSiteContext(s) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  const handleUpdateSiteContext = async (patch: Partial<Omit<SiteContext, 'id' | 'project_id' | 'created_at' | 'updated_at'>>) => {
+    if (!siteContext || !selectedProject) return
+    const { id: _id, created_at: _created_at, updated_at: _updated_at, ...current } = siteContext
+    try {
+      setSiteContextError(null)
+      const updated = await saveSiteContext({ ...current, project_id: selectedProject.id, ...patch })
+      setSiteContext(updated)
+    } catch (err) {
+      setSiteContextError(pathErrorMessage(err, 'Failed to update site context'))
+    }
+  }
+
+  // App-level Google Maps Platform key (site_context.py's own AppSettings-
+  // backed GET/PUT /tiles-key) — fetched once per session, editable
+  // straight from SiteContextPanel.tsx (per Maro: editing backend/.env by
+  // hand "is not good" UX).
+  const [siteTilesApiKey, setSiteTilesApiKey] = useState<string | null>(null)
+  useEffect(() => {
+    if (!hasEverBeenActive) return
+    let cancelled = false
+    getTilesApiKey().then(k => { if (!cancelled) setSiteTilesApiKey(k) })
+    return () => { cancelled = true }
+  }, [hasEverBeenActive])
+  const handleSaveSiteTilesApiKey = async (key: string) => {
+    const saved = await saveTilesApiKey(key)
+    setSiteTilesApiKey(saved)
+  }
+
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
     if (!selectedProject) return
     // Scope boundary (2026-07-12) — see the Element Parenting block's own
@@ -2109,6 +2155,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setTimelineStripPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(TIMELINE_STRIP_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
+  // Dockable Site Context panel — same shared-side-dock treatment as
+  // Timeline Strip above.
+  const [siteContextPanelOpen, setSiteContextPanelOpen] = useState(() => loadPanelOpen(SITE_CONTEXT_PANEL_OPEN_KEY, false))
+  const toggleSiteContextPanel = () => {
+    setSiteContextPanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(SITE_CONTEXT_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [siteContextPanelDock, setSiteContextPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(SITE_CONTEXT_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleSiteContextPanelDock = () => {
+    setSiteContextPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(SITE_CONTEXT_PANEL_DOCK_KEY, next)
       return next
     })
   }
@@ -3185,8 +3255,35 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // how the import was triggered. Mesh imports (GLTF/OBJ/FBX) keep the
     // dialog — axis convention genuinely varies file-to-file for those,
     // unlike IFC (see ImportModelDialog.tsx's own header).
-    const ifcFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'ifc')
-    const meshFiles = files.filter(file => !ifcFiles.includes(file))
+    // Reality Captures — point cloud (.xyz) and textured OBJ (.obj + its
+    // .mtl + referenced textures) detection (2026-08-20) — pulled out of
+    // this selection *before* the ifc/mesh split below, since neither
+    // fits that split's own two buckets (an .xyz isn't parseable by
+    // loadModel3DFile at all; a MatterPak's .mtl/.jpg files aren't
+    // independently importable 3D files the way the existing multi-select
+    // batch assumes every remaining file is). See
+    // handleImportPointCloud/handleImportTexturedObj's own header for why
+    // these are a live-preview-only path for now, ahead of the real
+    // site_capture backend.
+    const xyzFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'xyz')
+    for (const file of xyzFiles) {
+      importQueueRef.current = importQueueRef.current.then(() => handleImportPointCloud(file))
+    }
+    const objFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'obj')
+    const consumedForObj = new Set<File>(xyzFiles)
+    for (const objFile of objFiles) {
+      const base = objFile.name.slice(0, -('.obj'.length))
+      const mtlFile = files.find(f => f !== objFile && f.name === `${base}.mtl`)
+      if (!mtlFile) continue // a lone .obj with no matching .mtl falls through to the normal (untextured) mesh path below, unchanged
+      const textureFiles = files.filter(f => f !== objFile && f !== mtlFile && /\.(jpe?g|png)$/i.test(f.name))
+      consumedForObj.add(objFile).add(mtlFile)
+      textureFiles.forEach(f => consumedForObj.add(f))
+      importQueueRef.current = importQueueRef.current.then(() => handleImportTexturedObj(objFile, mtlFile, textureFiles))
+    }
+
+    const remaining = files.filter(file => !consumedForObj.has(file))
+    const ifcFiles = remaining.filter(file => file.name.split('.').pop()?.toLowerCase() === 'ifc')
+    const meshFiles = remaining.filter(file => !ifcFiles.includes(file))
     for (const file of ifcFiles) {
       importQueueRef.current = importQueueRef.current.then(
         () => handleImportIfc(file, defaultSourceUpAxis('ifc'), file.name),
@@ -3319,6 +3416,60 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       await enqueueUpload(() => persistModelFile(id, file, 'mesh', sourceUpAxis, name))
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Reality Captures — quick live-preview import (2026-08-20), ahead of
+  // the real site_capture backend/UI (not built yet, see the plan's own
+  // phase ordering) — Maro asked "how do i use" the newly-built
+  // loadTexturedObj/pointCloud.ts before either had any way to actually
+  // trigger them. Deliberately skips persistModelFile/enqueueUpload
+  // entirely (unlike handleImport3D just above) — there's no backend
+  // storage shape for a multi-file OBJ+MTL+texture set or a point cloud
+  // yet, so this is genuinely session-only, same "fileId stays null,
+  // usable but won't survive a hard refresh" fallback path
+  // handleImport3D's own SceneObject already supports for a failed
+  // upload — just deliberately never even attempted here, not failed.
+  // Both add a visible addImportError-channel note saying exactly that,
+  // rather than silently behaving like a normal, persisted import.
+  const handleImportPointCloud = async (file: File) => {
+    setImporting(true)
+    clearImportErrorsForFile(file.name)
+    try {
+      const name = file.name
+      await unloadExistingNamesake(name, 'mesh')
+      const cloud = await parseXyzFile(file)
+      const object = createPointCloudObject(cloud)
+      const id = crypto.randomUUID()
+      object.name = name
+      object.userData.sceneObjectId = id
+      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: defaultSourceUpAxis('mesh'), object, fileId: null }])
+      setDataTab('3d')
+      addImportError(`Note: "${name}" (${cloud.count.toLocaleString()} points) is a live preview only — Reality Capture storage isn't built yet, so this won't survive a page refresh.`)
+    } catch (err) {
+      addImportError(err instanceof Error ? err.message : 'Failed to import point cloud')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handleImportTexturedObj = async (objFile: File, mtlFile: File, textureFiles: File[]) => {
+    setImporting(true)
+    clearImportErrorsForFile(objFile.name)
+    try {
+      const name = objFile.name
+      await unloadExistingNamesake(name, 'mesh')
+      const object = await loadTexturedObj(objFile, mtlFile, textureFiles)
+      const id = crypto.randomUUID()
+      object.name = name
+      object.userData.sceneObjectId = id
+      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: defaultSourceUpAxis('mesh'), object, fileId: null }])
+      setDataTab('3d')
+      addImportError(`Note: "${name}" is a live preview only — Reality Capture storage isn't built yet, so this won't survive a page refresh.`)
+    } catch (err) {
+      addImportError(err instanceof Error ? err.message : 'Failed to import textured OBJ')
     } finally {
       setImporting(false)
     }
@@ -5878,6 +6029,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (siteContextPanelOpen && siteContext) {
+    dockablePanels.push({
+      id: 'site-context', label: 'Site Context', dock: siteContextPanelDock,
+      onToggleDock: toggleSiteContextPanelDock, onClose: toggleSiteContextPanel,
+      content: (
+        <SiteContextPanel
+          ctx={siteContext}
+          error={siteContextError}
+          apiKey={siteTilesApiKey}
+          onUpdate={handleUpdateSiteContext}
+          onSaveApiKey={handleSaveSiteTilesApiKey}
+        />
+      ),
+    })
+  }
   if (annotationsPanelOpen) {
     dockablePanels.push({
       id: 'annotations', label: '3D Notations', dock: annotationsPanelDock,
@@ -6049,6 +6215,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onAddCamera={handleAddCamera}
       onExitCameraView={handleExitCameraView}
       onKeyCameraPose={handleKeyCameraPose}
+      siteContext={siteContext}
+      siteTilesApiKey={siteTilesApiKey}
       onExportVideo={handleExportVideoUpload}
       paths={resolvedPaths}
       pathAnimWindows={pathAnimWindows}
@@ -6211,6 +6379,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Timeline Strip
         </button>
         <button
+          onClick={toggleSiteContextPanel}
+          disabled={!siteContext}
+          title="Real-world Google Photorealistic 3D Tiles around the model"
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
+            siteContextPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
+          }`}
+        >
+          Site Context
+        </button>
+        <button
           onClick={toggleAnnotationsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
             annotationsPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
@@ -6263,7 +6441,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           </button>
         )}
         <div className="w-px h-4 bg-gray-200 mx-1" />
-        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" multiple onChange={handleFileSelected} className="hidden" />
+        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc,.mtl,.jpg,.jpeg,.png,.xyz" multiple onChange={handleFileSelected} className="hidden" />
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}

@@ -50,6 +50,8 @@ import type { CameraViewPose } from './cameraViews'
 import { CameraGizmo } from './CameraGizmo'
 import { PassepartoutOverlay } from './PassepartoutOverlay'
 import { fovFromFocalLength, focalLengthFromFov, type Camera as CinematicCamera, type CameraPose } from './cameras'
+import { SiteTilesLayer } from './SiteTilesLayer'
+import type { SiteContext } from './siteContext'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
@@ -382,6 +384,15 @@ interface Props {
   cameras: CinematicCamera[]
   activeCameraId: string | null
   onAddCamera: (pose: CameraPose) => void
+  // Site Context (2026-08-19, per Maro) — Google Photorealistic 3D Tiles,
+  // embedded as a real object in this scene (see SiteTilesLayer.tsx's own
+  // header for why a genuinely separate CesiumJS panel was tried and
+  // dropped first). siteTilesApiKey is null until fetched/if unconfigured
+  // — the layer only ever mounts once both it and siteContext.enabled are
+  // truthy, same "don't even try without a key" convention as everything
+  // else that depends on an external service.
+  siteContext: SiteContext | null
+  siteTilesApiKey: string | null
   onExitCameraView: () => void
   // Keyframing (2026-08-03) — captures the active camera's current pose/
   // lens at whatever date the Animation Timeline's own playhead is
@@ -3847,6 +3858,7 @@ export function Viewport3D({
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
   cameras, activeCameraId, onAddCamera, onExitCameraView, onKeyCameraPose,
+  siteContext, siteTilesApiKey,
   scheduleStart, scheduleEnd,
   paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   zones, zoneAnimWindows, addingPointsForZoneId, onZoneDragMove, onZoneDragEnd, onAddZonePoint,
@@ -5198,6 +5210,15 @@ export function Viewport3D({
               untouched — the two are independent, deliberately not fighting
               over which one wins. */}
           {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
+          {/* Site Context (2026-08-19) — real-world Google Photorealistic
+              3D Tiles, a real object in this scene like everything else
+              here (see SiteTilesLayer.tsx's own header for why this
+              replaced a separate CesiumJS panel). Only mounted once both
+              the layer's enabled AND a key's actually been fetched — no
+              point instantiating a TilesRenderer that can't authenticate. */}
+          {siteContext?.enabled && siteTilesApiKey && (
+            <SiteTilesLayer apiKey={siteTilesApiKey} ctx={siteContext} upAxis={settings.upAxis} />
+          )}
           {/* Grid is Y-up by its own native convention (it's our own
               geometry) — this wrapper corrects it to match upAxis, same as
               ModelObjects does per-object internally using each object's own

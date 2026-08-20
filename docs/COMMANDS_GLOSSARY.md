@@ -40,6 +40,7 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | `python -m pytest -q` (or `pytest -v`) | Runs all the automated tests — little scripts that check the code behaves correctly. `-q` = quiet/short output, `-v` = verbose/detailed output. This is how we catch bugs before they reach real users. |
 | `alembic revision --autogenerate -m "message"` | Looks at the database table definitions in the code and automatically writes a "migration" — a script describing how to update the real database to match. |
 | `alembic upgrade head` | Actually runs the migration scripts against the database, bringing it up to date with the latest table structure. |
+| `alembic downgrade <revision>` | Rolls the database *back* to an earlier point in the migration history, undoing everything after it. Used here to cleanly remove a table added minutes earlier (before it was ever committed to git) so the migration file itself could be rewritten and regenerated, rather than layering a second "fix the first one" migration on top. |
 
 ---
 
@@ -48,6 +49,8 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | Command | What it does |
 |---|---|
 | `npm install` | Reads `package.json` and downloads every software package the frontend needs (React, Tailwind, etc.) into a `node_modules` folder. |
+| `npm install <package>` | Adds one specific new package (e.g. `npm install cesium vite-plugin-cesium`) — downloads it and records it in `package.json` so everyone's `npm install` picks it up too. |
+| `npm uninstall <package>` | The reverse — removes a package from `node_modules` and `package.json` (e.g. `npm uninstall cesium vite-plugin-cesium`, once a feature built with it got redesigned to not need it any more). |
 | `npm run dev` | Starts the frontend in "development mode" using Vite — opens a local website (usually `http://localhost:5173`) that automatically refreshes in the browser whenever you save a code change. |
 | `npm run build` | Compiles the frontend into optimised, production-ready files, ready to be hosted for real users. |
 | `npm run preview` | Lets you view the built production version locally, to sanity-check it before deploying. |

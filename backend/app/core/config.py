@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # model3d_storage_dir, same reasoning — a real object-storage integration
     # is still explicitly out of scope for now, see that setting's own comment.
     fourd_video_storage_dir: str = "uploads/fourd_videos"
+    # Google Maps Platform key for the 4D "Site Context" layer (Google
+    # Photorealistic 3D Tiles, 2026-08-19) — one app-level key, same
+    # env-var-overridable pattern as auth0_domain/auth0_audience above,
+    # not per-project (see site_context.py's own docstring on why the
+    # geo-anchor itself IS per-project but the billing key isn't). Empty
+    # by default so a fresh checkout doesn't silently ship a real key.
+    google_tiles_api_key: str = ""
 
 
 settings = Settings()
