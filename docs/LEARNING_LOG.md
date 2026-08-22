@@ -3655,3 +3655,485 @@ matters when they diverge. Site Context (the tiles themselves) was
 unaffected by any of this — `git diff` on `Viewport3D.tsx` after the
 revert shows only the Site Context integration, exactly as it was before
 Dynamic Sky was ever started.
+
+## 2026-08-20 — Progress Variance Detection: the backend + client-side
+engine for "the schedule says complete, does the scan actually show it,"
+built to a written plan after two mid-implementation scope corrections
+
+Continuing straight from the approved plan (`piped-whistling-neumann`,
+"Reality Captures: textured overlay + a precision point-cloud progress-
+variance engine") — see the two prior entries in this file for how that
+plan came about: Maro corrected the original "site context for the
+project itself" ask twice while implementation was already underway (once
+to clarify Part B was variance *detection*, not a visual overlay; once to
+pin the precision data source to the point cloud, not the decimated OBJ
+mesh), and explicitly said "stop implementing... analyse my texts and
+create a plan first" before any of what follows was built.
+
+**Backend, in two pieces, both mirroring existing architecture rather than
+inventing new shapes:**
+
+1. `site_capture.py` (model/schema/service/api) — a dated point-cloud scan
+   upload, deliberately shaped like `Model3DFile` (one metadata row + the
+   raw bytes on local disk under a new `settings.site_capture_storage_dir`,
+   never `Model3DFile`'s own directory — kept separate per-kind, same
+   precedent `fourd_video_storage_dir` already set) rather than `Zone`'s
+   freeform-fields shape, since this table is fundamentally about one
+   uploaded file's own identity. The one real design call: unlike
+   `Model3DFile`'s "same name replaces the old row" convention, uploading
+   a capture with an already-used name does **not** replace anything — a
+   project is expected to accumulate many dated captures over time
+   (`captured_at`), and Progress Variance needs to reference a specific
+   one, not "whichever currently has this name." Verified with 10 new
+   backend tests, including one that specifically pins down this
+   "re-upload does not replace" behaviour against `Model3DFile`'s opposite
+   convention, so a future reader can't assume they're the same pattern.
+2. `progress_variance_test.py`/`progress_variance_result.py` — mirrors
+   `clash_test.py`/`clash_result.py` closely (same "Collection resolves to
+   whatever the viewport currently shows" Group A, same bulk-replace-on-
+   Run-Test with matching-by-ref preserving prior review status/comment),
+   but single-sided instead of a pair: there's no Group B collection, only
+   `site_capture_id` — the "other side" of this test is a point cloud's
+   density, not a second set of BIM elements. Added `min_points_threshold`
+   as its own column (a small follow-up migration after the first one
+   landed) rather than an ephemeral per-run frontend param — the plan
+   itself flags this as the one number that genuinely needs real,
+   repeated tuning against actual site data, so it has to be persisted and
+   remembered per test, the same way `tolerance_mm` already is for
+   `ClashTest`. 8 more backend tests, including the identical "re-run
+   preserves review status for elements still flagged" behaviour
+   `ClashResult` already has, adapted single-sided.
+
+**A real process note, not a bug**: the very first full `pytest -q` run
+this session collided with later, solo test-file runs against the same
+`prosotapmo_test` database (two pytest processes hitting the same DB at
+once — the exact failure mode already in this project's own standing
+practice notes) and produced ~1350 spurious errors across unrelated test
+files. Recognized from the pattern (mass unrelated `zones.py` failures,
+not anything touching the new tables) rather than chased as a regression;
+a clean, solo re-run afterward is what actually counts.
+
+**Frontend — the client-side density-query engine (`progressVarianceEngine.ts`)
+mirrors `sceneClash.ts`'s own split (pure geometry logic in the engine,
+project/scene wiring in `FourD.tsx`) and reuses that file's
+`resolveMembersToElements` directly rather than re-deriving Group A
+resolution a second time.** The one genuinely new piece of reasoning: the
+point cloud rendered in the viewport (`pointCloud.ts`'s own
+`createPointCloudObject`) is *decimated* for display — up to 4M of a real
+13.5M-point MatterPak scan — but density querying has to use the full,
+undecimated cloud (see `pointCloud.ts`'s own header: "visual decimation
+never affects Progress Variance precision"). So the engine keeps a
+module-level cache of the full parsed cloud, separate from whatever's
+actually in the THREE.js scene graph, and bakes the *loaded preview
+object's own current `matrixWorld`* — whatever the user has manually
+nudged into place with the existing Move gizmo, per the plan's own
+disclosed "only as good as manual alignment" limitation — onto a fresh
+copy of the full cloud's raw positions before building the spatial index
+for that run. Hand-unrolled matrix math (no per-point `THREE.Vector3`
+allocation) for that transform specifically, since it's the one place
+13.5M-point scale actually matters for interactivity.
+
+Also unified the two `.xyz` import paths that had drifted apart: the
+original drag-and-drop "Import 3D" flow (`handleImportPointCloud`) was
+built *before* `site_capture.py` existed and was explicitly session-only
+("Note: ... won't survive a page refresh" — see the prior entry, written
+in response to Maro's "how do i use"). Now that the real backend exists,
+that same handler uploads via `uploadSiteCapture` too, so a `.xyz` dropped
+in either through the file picker or the new Progress Variance panel's own
+"+ Upload .xyz" button ends up as the same real, persisted `SiteCapture` —
+one entry point's result, not two different behaviours depending on which
+button was clicked.
+
+**Verification this round**: `pytest -q` (solo, 18 new backend tests
+passing), `tsc --noEmit` clean, `npm run build` clean. **Not yet
+live-verified against Maro's own real MatterPak data or a real BIM
+model** — loading a 500MB+ point cloud, manually aligning it with the Move
+gizmo, and running a variance query against real building elements all
+need an actual browser session and Maro's own judgement on whether the
+confirmed/flagged split matches ground truth, which is exactly the "needs
+a real tuning pass" step the plan itself calls out as expected, not
+optional. Per this project's own standing practice, nothing from this
+round is committed yet — reported back for Maro to test live first.
+
+## 2026-08-20 (later still) — "pointcloud to ifc": vendoring Cloud2BIM, a
+real open-source scan-to-BIM pipeline, rather than attempting this from
+scratch
+
+Maro's own arxiv link from earlier ([2503.11498](https://arxiv.org/abs/2503.11498))
+turned out to be the point — asked directly what "pointcloud to ifc"
+meant first (auto-generate real IFC geometry from a scan vs. just making
+a loaded point cloud behave like an IFC element in existing panels), and
+it was the former: real scan-to-BIM. Rather than attempt that from
+scratch (a genuinely hard, research-level problem — wall/plane fitting,
+segmentation), researched what already exists first.
+
+**[Cloud2BIM](https://github.com/VaclavNezerka/Cloud2BIM)** (Nežerka &
+Zbirovský, CTU Prague, MIT license) is that paper's own real, working
+implementation — a Python pipeline that segments walls/slabs/openings
+from a point cloud via density-image analysis (histogram → morphological
+ops → contour detection, no RANSAC) and writes real IFC via
+`ifcopenshell`. Fetched and read its actual source (not just the README)
+before vendoring anything.
+
+**Real integration obstacles, found and fixed, not just installed
+blind:**
+1. Cloud2BIM's own `requirements.txt` pins `open3d` — which has no PyPI
+   wheels for this app's Python version (3.14; open3d tops out at 3.12) at
+   all. Read every `o3d.`/`import open3d` call site directly before
+   assuming this was fatal: every one of them sits behind either an
+   always-`False` visualization flag this app already forces off, or in a
+   function (`visualize_segmented_pointclouds`) genuinely never called
+   from the real pipeline. Confirmed dead code, not guessed — removed the
+   import and those two spots entirely, which also sidesteps the Python-
+   version problem completely (no second venv needed).
+2. Several plotting calls used `plt.rc('text', usetex=True)` — real LaTeX
+   rendering this server has no `latex` executable for. Forcing
+   matplotlib's `Agg` backend alone wasn't enough (a first attempt still
+   crashed: `Agg` avoids needing a *display*, but `usetex=True` still
+   invokes real LaTeX the moment anything calls `tight_layout()`/
+   `savefig()`, even headless) — the actual fix was patching every
+   `usetex=True` to `False` directly; matplotlib's own built-in mathtext
+   already renders the `$...$`-style labels used here without any
+   external LaTeX dependency at all.
+3. Found a genuine ordering bug in the **upstream** script itself: it
+   calls `identify_walls()` (which unconditionally saves a debug plot to
+   `images/pdf/wall_mask.pdf`, no flag to skip it) *before* the
+   `os.makedirs("images/pdf", ...)` call meant to create that directory —
+   only worked for the original authors because their own repo ships a
+   pre-existing `images/` folder from prior runs. A genuinely fresh
+   working directory reproduces `FileNotFoundError` immediately. Fixed by
+   moving the directory creation earlier, before the loop that needs it.
+
+**Verified end-to-end against a real synthetic room**, not just "the
+script exited 0": built a proper 4m×3m×2.5m box (floor, ceiling, four
+walls, realistic ~3cm point density, not a trivial/random cloud) and ran
+it through the actual vendored subprocess path. Correctly detected all 4
+walls, both slabs (floor+ceiling), and 1 enclosed space — parsed the
+output with `ifcopenshell.open()` and asserted real entity counts, not
+just file existence. The same fixture now backs a real pytest test
+(`test_cloud2bim.py`), including a re-run-replaces-prior-result test
+(same convention as every other "re-generate this" feature this session)
+and both real error paths (wrong capture kind, unknown capture).
+
+**Architecture**: runs as a genuine subprocess (`python cloud2entities.py
+config.yaml`), not an in-process import — a crash or hang inside ~4000
+lines of someone else's algorithm should never be able to take down this
+app's own server process — in a fresh temp directory per call (the
+vendored script's own scratch/log files use hardcoded relative paths
+everywhere, so real isolation across concurrent requests comes entirely
+from that per-call `cwd`, same reasoning as the E57 conversion's own temp
+handling earlier today). `run_in_threadpool`, same reasoning as every
+other genuinely CPU-bound backend call added today. The result registers
+as a normal `Model3DFile` (`kind='ifc'`) — loads through this app's
+existing IFC import/viewer pipeline with zero new frontend rendering
+code, just a "Generate IFC" button that downloads the result and hands it
+to the same `handleImportIfc` every other IFC restore already uses.
+
+**Honestly still unproven**: `pc_resolution`/`grid_coefficient` are fixed
+defaults (0.02m / 5), not yet tuned against a real MatterPak-scale point
+cloud or Maro's own real building data — same "one number that genuinely
+needs a live tuning pass" pattern the Progress Variance threshold already
+went through. The synthetic test room proves the *pipeline* works
+correctly end-to-end; it doesn't prove the *defaults* are right for real,
+messier, larger scan data. `pytest -q` (35/35 across the whole Reality
+Captures test family), `tsc --noEmit`, and `npm run build` all clean.
+
+## 2026-08-20 (later) — E57 as a real second Reality Captures input path,
+via a genuine spike rather than trusting the plan's own earlier "thin,
+unverified" read of the ecosystem
+
+The plan explicitly deferred this ("Add three-e57-loader as a second
+input path once the .xyz-based core is proven, as a real spike... rather
+than building on an unverified dependency from the start") — with the
+`.xyz` engine now built and reported for Maro to test, this picked that
+spike up for real, not by re-reading the same blocked doc pages from
+before.
+
+**Fetched `web-e57`'s actual npm registry README directly** (the earlier
+attempts at its GitHub page had 404/403'd) — it's a real, self-contained
+WASM build (wasm-bindgen output, zero other dependencies) exposing one
+function, `convertE57(bytes: Uint8Array, format: string): string`, that
+converts an E57 file's bytes straight into the *same* `x y z r g b` text
+`pointCloud.ts`'s own `parseXyzFile` already handles — meaning the
+integration is genuinely one conversion step in front of the already-
+built, already-verified `.xyz` pipeline, not a second parser to write and
+trust.
+
+**Two real bundling problems, found by actually trying to build, not by
+reading docs**:
+1. `web-e57`'s wasm-bindgen glue does a raw `import * as wasm from
+   './e57_bg.wasm'` (the in-progress "ESM integration for WebAssembly"
+   proposal) — Vite's default pipeline doesn't support this at all
+   (`[vite:wasm-fallback] ... Use vite-plugin-wasm`). Fixed by adding
+   `vite-plugin-wasm`.
+2. That plugin's own generated glue calls a real top-level `await` to
+   instantiate the module — esbuild rejected it under this project's
+   prior (unset, defaulted) build target. The standard fix,
+   `vite-plugin-top-level-await`, itself crashed with an internal SWC
+   error (`missing field 'type'`) against this project's installed
+   `@swc/core` version — a genuine plugin/toolchain incompatibility, not
+   a config mistake. Rather than chase a pin-and-hope fix for a plugin
+   that isn't actually needed here, bumped `vite.config.ts`'s own
+   `build.target` to `esnext` directly — a reasonable call for an internal
+   tool run in one modern browser, not a public site needing legacy
+   support — which resolved it with one line instead of a second
+   dependency.
+
+**Verified the WASM itself actually runs, independent of any bundler
+concern**, via a direct Node test against `web-e57`'s own documented
+Node API: `convertE57(new Uint8Array([1,2,3,4,5]), 'XYZ')` threw `"Failed
+to open E57 file: Failed to read E57: Failed to read E57 file header"` —
+a real, specific header-validation error from the actual parser, not a
+generic crash or "module not found." That's meaningfully different from
+"it didn't throw an unhandled exception" — it proves the parser inside
+the WASM binary is doing genuine work, not silently no-op'ing.
+
+**What's still honestly unverified**: parsing an actual, valid `.e57`
+file — there wasn't one in hand this session (the local MatterPak folder
+only had `cloud.xyz`, no `.e57` export), so this needs a real file from
+Maro before the E57 path is trusted for real project data, same as the
+`.xyz` engine itself still needs live confirmation. `frontend/src/modules/
+fourD/e57.ts`'s own header states this plainly rather than implying more
+confidence than the spike actually earned.
+
+Wired into both existing upload paths (drag-and-drop "Import 3D" and the
+Progress Variance panel's own "+ Upload Scan", now accepting `.e57`
+alongside `.xyz`) — `SiteCapture.kind` already had an `'e57'` value in its
+schema from Task #19's own design (see that migration's own comment on
+why), so no backend change was needed at all, just the frontend's
+conversion step and file-picker/accept updates. `tsc --noEmit` and `npm
+run build` both clean with the new dependency and Vite config in place.
+
+## 2026-08-20 (later still) — that E57 path immediately hit real scale, so
+it moved server-side within the hour: "File too large... 14.4gb"
+
+Maro tested live almost immediately after the E57 spike above landed —
+with his own real export, `cloud_0.e57`, a 105-scan, 14.4GB MatterPak
+capture (a single-scan MatterPak `cloud.xyz`, for comparison, runs
+~500MB). Two real problems, in order:
+
+1. **Hit `site_capture.py`'s own upload cap first** (1GB, sized for the
+   `.xyz` case) — a plain "raise the number" fix, but the real number
+   needed asking about rather than guessing (asked directly; answer:
+   `C:\Users\Maro\Downloads\mp_e57_Heartland_HD_JbFwgbfNDio\cloud_0.e57`,
+   confirmed 14,742,827,008 bytes on disk). Raised to 20GB — real headroom
+   for that file, not an arbitrary round number.
+2. **The bigger problem, caught before Maro hit it rather than after**:
+   the E57 spike's own browser-side conversion (`web-e57`'s `convertE57`)
+   holds its *entire* converted output as one JS string before handing it
+   to `parseXyzFile`. A 14.4GB, likely 300-800M+ point export converted
+   that way could easily be 10-20GB+ of text sitting in one browser tab's
+   memory at once — a near-certain crash or hang, not a slow-but-working
+   path. This wasn't a hypothetical worry: reading the file's own header
+   (`pye57`, see below) confirmed **105 separate scans**, ~5-6.5M points
+   each — genuinely an order of magnitude beyond what the spike was ever
+   tested against.
+
+**Fix: move E57->XYZ conversion server-side entirely**, not patch the
+browser path to cope. Researched `pye57` (wraps `libE57Format`, the real
+C++ reference E57 implementation) directly rather than assume it would
+work: confirmed a prebuilt wheel exists for this exact Python version (no
+compiler needed), confirmed it actually opens and reads Maro's real file
+(`scan_count: 105`, `point_count: 6480000` for scan 0 alone — read in
+under a second), and confirmed `read_scan()` (not `read_scan_raw()`)
+already applies each scan's own registered pose automatically, so
+concatenating every scan's output lands in one correctly-merged
+coordinate frame with no manual rotation/translation math needed.
+
+New `e57_convert.py` reads and writes **scan-by-scan** (never the whole
+multi-hundred-million-point file in memory at once — confirmed against
+the real per-scan point counts above), converting each scan's own
+`cartesianX/Y/Z` + `colorRed/Green/Blue` into the exact same `x y z r g b`
+text `parseXyzFile` already streams — so once converted, a capture is a
+completely ordinary `.xyz` capture from every downstream consumer's point
+of view, no special-casing needed anywhere else. Wired behind a new,
+explicit `POST /api/v1/site-captures/{id}/convert` endpoint (not automatic
+on upload — a real multi-scan conversion can take minutes, and
+`run_in_threadpool` keeps that from freezing every other request on the
+server for the whole time, but it's still one long synchronous HTTP call,
+not a background job with polling — a deliberate, disclosed simplicity
+trade-off for a rare, explicit, one-time-per-capture action). The original
+`.e57` is deleted once conversion succeeds, `kind` flips to `'xyz'` — a
+14GB+ source plus a comparable-or-larger text output would otherwise
+roughly double the disk cost of every large capture for no ongoing
+benefit.
+
+**Verified genuinely end-to-end**, not just "the function ran without
+throwing": a new backend test builds a real (if tiny) `.e57` file with
+`pye57`'s own writer, uploads it through the actual API, calls the new
+`/convert` endpoint, and asserts the downloaded result is exactly the
+expected `x y z r g b` text — round-tripping through the real
+`libE57Format` binding on both ends, not a mocked stand-in for one. Also
+manually verified against Maro's own real file directly (header read,
+one real scan's data read and inspected) before writing the conversion
+loop, not just against the synthetic fixture.
+
+**The E57 spike's own browser-side work (`e57.ts`, `web-e57`,
+`vite-plugin-wasm`, `vite.config.ts`'s `esnext` build target) was fully
+removed**, not left dead alongside the new path — confirmed genuinely
+unreachable code with real live data at real scale, not a hedge worth
+keeping "just in case." The frontend's `progressVarianceEngine.ts` now
+only ever loads `kind='xyz'` captures; a `kind='e57'` capture shows a
+"Convert" button instead of "Load" until it's been converted, and can't
+be picked as a Progress Variance test's own capture until then either
+(the test-creation form filters to `xyz`-only captures with an explicit
+"Convert a Site Capture to XYZ first" placeholder, rather than letting
+someone create a test that could never actually run).
+
+**Not yet run against the real 14.4GB file this session** — the backend
+conversion path is verified correct against a real (if small) E57 and
+against Maro's own file's *header/one scan* directly, but a full 105-scan
+conversion of the actual file hasn't been executed end-to-end yet. Worth
+flagging plainly: peak disk usage during that conversion will briefly be
+the original 14.4GB `.e57` *plus* the converted `.xyz` (likely larger
+than the source — E57's binary/compressed encoding is more space-
+efficient than plain text) before the original gets deleted — real
+headroom to have free on whatever disk `site_capture_storage_dir` points
+at before running this for real.
+
+---
+
+## 2026-08-21 — "Generate IFC" hits real scale: seven real bugs found and
+fixed, one genuine algorithm limit hit and parked
+
+Maro uploaded a real single-scan E57 export, `Eka_15mm_res_E57.e57` —
+232 million points, 9.3GB converted `.xyz`, a real multi-wing residential
+building. Trying to actually use it (Load into viewport, then Generate
+IFC) surfaced a chain of real bugs, each one only found by actually
+running the thing against this real file, not by reading the code:
+
+1. **Point cloud wouldn't load at all.** A single `Float32Array` for
+   232M points' positions needs ~2.78GB — this browser's V8 caps a single
+   `ArrayBuffer` at 2^31-1 bytes (~2GB), confirmed directly by probing
+   allocation sizes in the browser console (2000MB succeeds, 2047MB
+   throws `RangeError: Array buffer allocation failed`). Fixed by
+   splitting `PointCloudData` into multiple chunks (100M points each) —
+   `PointCloudIndex` and the renderer both updated to read across chunks
+   transparently, no decimation.
+2. **The tab froze solid while loading**, not just slowly — screenshots
+   and script calls timed out with "page is busy" for the whole parse.
+   Cause: `parseXyzFile`'s `await reader.read()` loop never hit a real
+   macrotask boundary, so it starved the browser's own render/input loop
+   for minutes straight. Fixed with a time-based `setTimeout` yield every
+   ~50ms of work.
+3. **Generate IFC crashed**: `shapely.errors.GEOSException: Edge
+   direction cannot be determined because endpoints are equal`. The
+   vendored Cloud2BIM library's own `distance_point_to_line` already
+   detects a zero-length wall segment and warns about it — it just never
+   actually discards the wall, so the resulting NaN silently poisons
+   everything downstream until shapely hard-crashes on it. Fixed with a
+   degenerate-wall filter at both places that consume the raw wall list.
+4. **Generate IFC then timed out at 30 minutes.** `cloud2bim_convert.py`
+   had dilution hardcoded off, feeding all 232M points through the whole
+   pipeline at 15mm density when the reconstruction only targets 2cm
+   anyway. Fixed by scaling dilution to file size — plus a real,
+   independent bug found along the way (`load_selective_lines` split
+   lines on `\t`, but every xyz file this app produces is space-
+   delimited, so dilution literally could never have worked before this).
+5. **Roofs came out as flat stepped boxes.** Confirmed by grepping the
+   *entire* vendored library for "roof"/"pitch"/"gable"/"slope" — zero
+   hits. Not a tuning gap: this library has no concept of a sloped roof
+   at all, full stop. Maro's own call: accept it, don't chase it.
+6. **Walls under the roof came out a few centimetres tall.** Same blind
+   spot as #5, but with real consequences: a pitched roof's points span
+   a wide Z-range at high density over the same footprint, so the
+   flat-surface-detection code misread the whole roof as one ~3-metre
+   "slab" (confirmed: 3220mm/2997mm measured vs. ~270-300mm for every
+   real slab on the same building) — which then starved the storey
+   underneath of its real wall height. Fixed with a sanity cap on
+   detected slab thickness, anchored to the correctly-detected top
+   surface.
+7. **Fixing #6 exposed a genuinely cubic-time bug**: `process_
+   disconnected_walls` reset its wall-splitting scan to index 0 after
+   *every single split*, even though nothing before that point had
+   changed. Fixed with real O(1) index bookkeeping instead — verified
+   correct (exact wall length preserved on a synthetic T-junction case)
+   and fast (677 synthetic walls: never finished before, 0.67s after).
+
+**Then hit a real wall (not a bug I introduced).** With its real height
+back, the storey under the roof's own dense, real wall-detection output
+triggers what looks like a genuine cascade in the same wall-splitting
+function: instrumented and watched live, it split off *exactly one new
+wall every single iteration, for 200,000 straight iterations*, with zero
+sign of converging. No real floor plan has 200,000 walls — this is
+almost certainly floating-point near-duplicate points from noisy 2cm-grid
+detection over a complex real storey, repeatedly re-tripping a 1e-6
+tolerance check against points that are effectively the same point.
+Added a hard iteration cap so this can never again run away (an earlier,
+uncapped attempt consumed 18GB of memory before being killed by hand),
+but the cap itself doesn't fix anything — it just stops the bleeding.
+**Paused here per Maro** rather than guess at more multi-hour cycles;
+full status and the two real options for fixing the cascade properly are
+in memory (`project_cloud2bim_generate_ifc.md`), not duplicated here.
+
+**Every fix above was verified against the real file directly**, not
+assumed from reading the vendored code — copying the real `.xyz` into a
+scratch dir and running `cloud2entities.py` directly (bypassing the API's
+own 1800s subprocess timeout) so a full run's real output could actually
+be inspected, repeated across several ~5-50 minute cycles as each fix
+landed.
+
+---
+
+## 2026-08-21 (later) — Redirect: stop reconstructing a *new* IFC from
+the point cloud, correlate it against the as-planned one instead
+
+Maro's own reframing, after watching the Cloud2BIM saga above: blind
+point-cloud-to-IFC reconstruction is a genuinely hard, open-ended
+problem (proven the hard way, not assumed). He already has an as-planned
+IFC with real elements, and a real 4D schedule linked to them — what he
+actually wants is for the point cloud to say, for elements that already
+exist in the plan, *how much of each one is actually built*. A
+correlation/verification problem against known geometry, not a
+reconstruction problem.
+
+Planned properly (via plan mode, with an Explore agent pass over the
+WBS/schedule-progress side of the app first) before writing anything —
+worth calling out what that research actually found: `Activity.
+pct_complete` is already the app's one canonical "actual % complete"
+field, already duration-weighted-rolled-up, already feeding EVM (SPI/
+CPI) and Baseline Comparison, and `ModelElementLink` already links
+`activity_id ↔ (source_kind, element_ref)` — the exact identifier shape
+Progress Variance's own results already use. Neither of those was known
+going in; finding them turned "build a new progress-tracking system"
+into "write into the field that already exists," with zero new plumbing
+needed anywhere downstream.
+
+**Built, in two layers, both verified (backend test suite + typecheck,
+not yet Maro's own click-through):**
+
+1. **Per-element scan coverage %, replacing the old binary confirmed/
+   not-confirmed check.** The old check (`countPointsInBox`) counted scan
+   points anywhere in an element's whole bounding box — a single stray
+   point cluster near one corner "confirmed" an entire untouched wall,
+   with no way to say "60% poured." New: `surfaceSampling.ts` samples
+   points across the element's *own* mesh surface (area-weighted
+   barycentric sampling, so a big flat face gets proportionally more
+   samples than a tiny bevel triangle), and a new `PointCloudIndex.
+   hasPointNear` proximity query (same cell-grid as the existing
+   box-count, just walking a point's own neighbourhood) checks each
+   sample individually. `coverage_percent = samples-with-scan-support /
+   total-samples` — a real number, not a guess from one lucky cluster.
+2. **Rolling that up into `Activity.pct_complete`.** A new endpoint
+   joins a test's own results against `ModelElementLink` on `(source_
+   kind, element_ref)`, averages coverage per activity, and returns it
+   as a *suggestion* — current % vs. scan-suggested %, `matched_element_
+   count` of `linked_element_count` so the reviewer can see how much of
+   an activity's real scope was actually scanned. Deliberately
+   review-and-apply, never automatic: `pct_complete` is EVM-critical and
+   today PM-entered, so applying a scan suggestion is always one
+   explicit per-activity click, which just PATCHes the existing
+   activities endpoint — nothing else needed to change for Baseline
+   Comparison/EVM to pick it up.
+
+**Verified**: full backend suite run (859 passed, 1 pre-existing failure
+confirmed unrelated — it's in schedule-SPI/baseline code this session
+never touched, and was already showing modified in git status before
+this session even started), plus a dedicated set of new tests for both
+the coverage-% math and the activity roll-up (partial coverage stays
+unconfirmed, multi-element averaging, an activity with a link this
+test's own results never matched correctly staying out of the
+suggestions list). **Not yet verified against Maro's own real project**
+(a real as-planned IFC with real `ModelElementLink`s, a real converted
+capture) — per standing practice, no commit until he confirms it
+actually works end-to-end in the app itself.

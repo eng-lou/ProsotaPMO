@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useRef } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useThree } from '@react-three/fiber'
 import { Environment, Grid, OrbitControls } from '@react-three/drei'
@@ -17,7 +17,7 @@ import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import {
-  CameraSync, computeModelRadius, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
+  CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
   TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
@@ -127,8 +127,20 @@ export function ComparisonViewportPane({
   // background — see that file's own comments for the full reasoning.
   const showWhiteBackground = captureBackgroundOverride === null && whiteBackground
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
-  const modelRadius = useMemo(() => computeModelRadius(importedObjects), [importedObjects])
-  const sunPosition = computeSunPosition(sunAzimuth, sunElevation, modelRadius, zUp)
+  // center-offset sun position + explicit target (2026-08-22, mirrors
+  // Viewport3D.tsx's own fix — see computeModelBounds's header there for
+  // the full "why": without this, the sun/its shadow frustum always aimed
+  // at world origin regardless of where this pane's own model actually
+  // sits, same "not well placed" bug as the primary viewport had).
+  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects])
+  const modelRadius = modelBounds.radius
+  const sunOffset = computeSunPosition(sunAzimuth, sunElevation, modelRadius, zUp)
+  const sunPosition: [number, number, number] = [
+    modelBounds.center[0] + sunOffset[0],
+    modelBounds.center[1] + sunOffset[1],
+    modelBounds.center[2] + sunOffset[2],
+  ]
+  const [sunTarget] = useState(() => new THREE.Object3D())
 
   // Cloned once per source-object identity change (2026-07-12) — a plain
   // Map keyed by the *original* Object3D, rebuilt whenever the set of
@@ -177,10 +189,15 @@ export function ComparisonViewportPane({
   // clonesByOriginal's own cloneKey memo above), not the fresh-every-render
   // clonedImportedObjects array, so this only re-traverses when the model
   // set or the shadows setting itself actually changes.
+  // THREE.Points too, not just THREE.Mesh (2026-08-22 fix, mirrors
+  // Viewport3D.tsx's own — see that file's point-cloud shadow-casting
+  // comment for the full "why": a Site Capture point cloud is a
+  // THREE.Points object, and three.js's shadow map genuinely does support
+  // object.isPoints for casting, this just wasn't being set here either).
   useEffect(() => {
     for (const clone of clonesByOriginal.values()) {
       clone.traverse(child => {
-        if (child instanceof THREE.Mesh) {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
           child.castShadow = shadows
           child.receiveShadow = shadows
         }
@@ -258,14 +275,20 @@ export function ComparisonViewportPane({
         {/* Settings-driven sun light (2026-07-25), replacing this pane's old
             fixed directionalLight — mirrors Viewport3D.tsx's own
             sunPosition/shadow-frustum setup (see computeSunPosition/
-            computeModelRadius, shared from that file) so shadows in this
+            computeModelBounds, shared from that file) so shadows in this
             pane actually match the live viewport's sun angle instead of a
             constant corner light. Frustum sizing simplified relative to the
             primary viewport's own (no highQuality/normalBias tuning) since
             this is a read-only comparison pane, not the primary editing
-            surface. */}
+            surface. sunTarget (2026-08-22, same fix as Viewport3D.tsx's own)
+            — without an explicit target, three.js's DirectionalLight aims
+            at a never-added Object3D stuck at world origin, so the light
+            (and its shadow frustum) always pointed past this pane's own
+            model instead of at it whenever that model wasn't centered on
+            (0,0,0). */}
+        <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
-          position={sunPosition} intensity={1} castShadow={shadows}
+          position={sunPosition} target={sunTarget} intensity={1} castShadow={shadows}
           shadow-mapSize={[2048, 2048]}
           shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
           shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}

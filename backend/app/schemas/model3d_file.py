@@ -38,6 +38,13 @@ class Model3DFileResponse(BaseModel):
     # [] and hiding that distinction; model3dFiles.ts's own frontend type
     # coalesces this to [] at the one call site that reads it.
     unloaded_elements: list[UnloadedElementInfo] | None = None
+    # See Model3DFile.keep_raw_animation's own docstring — True only for a
+    # particle/multi-node-style embedded animation this app can never
+    # convert to schedule keyframes, so the restore-on-mount path knows to
+    # keep it raw (played back by Viewport3D.tsx's EmbeddedAnimationLoop)
+    # instead of stripping it the way an already-baked import's animation
+    # correctly gets stripped on every reload.
+    keep_raw_animation: bool = False
 
 
 class Model3DFileUnloadedElementsUpdate(BaseModel):

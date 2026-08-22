@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,7 +52,22 @@ class Model3DFile(Base, TimestampMixin):
     brought back. Nullable/JSONB rather than a dozen scalar columns, same
     flexible-blob precedent CameraView.viewport_state already established
     for "small, evolving, per-record structured data that isn't queried
-    across rows"."""
+    across rows".
+
+    keep_raw_animation (2026-08-22, per Maro's own real Blender particle-
+    VFX export, "Water Spray.glb") — True only for the case
+    embeddedAnimationBake.ts's own findSingleAnimatedNode can never bake: a
+    clip that animates more than one node independently (a real particle
+    sim, not a rigid whole). For that case FourD.tsx's own import handler
+    deliberately does NOT bake to ElementKeyframe rows and does NOT strip
+    the file's own embedded animation — Viewport3D.tsx's
+    EmbeddedAnimationLoop plays it back as a raw, always-looping preview
+    instead. This flag is what tells the restore-on-mount path (FourD.tsx)
+    to keep that raw animation on the reloaded object rather than
+    stripping it the way every other mesh import's already-baked-once
+    animation correctly gets stripped on restore (re-baking on every
+    reload would duplicate keyframes dated from the reload day, not the
+    original import day)."""
 
     __tablename__ = "model3d_files"
 
@@ -64,3 +79,4 @@ class Model3DFile(Base, TimestampMixin):
     storage_filename: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     unloaded_elements: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    keep_raw_animation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

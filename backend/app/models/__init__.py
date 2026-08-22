@@ -67,6 +67,9 @@ from app.models.radial_chart import RadialChart
 from app.models.timeline_strip import TimelineStrip
 from app.models.site_context import SiteContext
 from app.models.app_settings import AppSettings
+from app.models.site_capture import SiteCapture
+from app.models.progress_variance_test import ProgressVarianceTest
+from app.models.progress_variance_result import ProgressVarianceResult
 
 __all__ = [
     "Base",
@@ -146,4 +149,7 @@ __all__ = [
     "TimelineStrip",
     "SiteContext",
     "AppSettings",
+    "SiteCapture",
+    "ProgressVarianceTest",
+    "ProgressVarianceResult",
 ]

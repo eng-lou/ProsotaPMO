@@ -214,7 +214,7 @@ export function PropertiesPanel({
       <Row label="Shadows">
         <input type="checkbox" checked={settings.shadows} onChange={e => set('shadows', e.target.checked)} />
       </Row>
-      {settings.shadows && (
+      {(settings.shadows || settings.dynamicSky) && (
         <>
           <Row label="Sun Azimuth">
             <div className="flex items-center gap-1.5 w-full">
@@ -238,6 +238,22 @@ export function PropertiesPanel({
           </Row>
         </>
       )}
+      <Row label="Real-Time Sky">
+        <input
+          type="checkbox"
+          checked={settings.dynamicSky}
+          onChange={e => set('dynamicSky', e.target.checked)}
+          title="Procedural sky synced to Sun Azimuth/Elevation, replacing the static HDR — the visible sky, its lighting, and cast shadows all move together with the sun controls. A real, ongoing GPU cost, off by default"
+        />
+      </Row>
+      <Row label="Ambient Occlusion">
+        <input
+          type="checkbox"
+          checked={settings.ambientOcclusion}
+          onChange={e => set('ambientOcclusion', e.target.checked)}
+          title="Shades corners/crevices realistically using contact occlusion (N8AO) — a real GPU cost, off by default"
+        />
+      </Row>
       <Row label="Variance Colours">
         <input
           type="checkbox"

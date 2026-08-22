@@ -28,6 +28,13 @@ export interface Model3DFile {
   // Nullable at the backend (see model3d_file.py's own schema comment) — a
   // fresh import has never had anything unloaded yet.
   unloaded_elements: UnloadedElementInfo[] | null
+  // True only for a particle/multi-node-style embedded animation this app
+  // can never bake to schedule keyframes (see embeddedAnimationBake.ts's
+  // own findSingleAnimatedNode) — tells FourD.tsx's restore-on-mount path
+  // to keep the raw animation on the reloaded object instead of stripping
+  // it, so Viewport3D.tsx's EmbeddedAnimationLoop still has something to
+  // play after a refresh, not just right after the original import.
+  keep_raw_animation: boolean
 }
 
 // Frontend for model3d_file.py's backend (2026-07-09, per Maro: "keep the
@@ -50,13 +57,14 @@ export async function listModel3DFiles(projectId: string): Promise<Model3DFile[]
 // need to pass one.
 export async function uploadModel3DFile(
   projectId: string, name: string, kind: Model3DKind, sourceUpAxis: UpAxis, file: Blob,
-  onProgress?: (percent: number) => void,
+  onProgress?: (percent: number) => void, keepRawAnimation = false,
 ): Promise<Model3DFile> {
   const form = new FormData()
   form.append('project_id', projectId)
   form.append('name', name)
   form.append('kind', kind)
   form.append('source_up_axis', sourceUpAxis)
+  form.append('keep_raw_animation', String(keepRawAnimation))
   form.append('file', file, name)
   const res = await api.post<Model3DFile>('/api/v1/model3d-files/', form, {
     onUploadProgress: onProgress

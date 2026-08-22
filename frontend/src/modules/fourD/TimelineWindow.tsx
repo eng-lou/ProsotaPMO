@@ -79,6 +79,19 @@ interface Props {
   onTimeDisplayModeChange: (mode: TimeDisplayMode) => void
   fps: number
   onFpsChange: (value: number) => void
+  // Mesh imports whose own raw embedded animation loop couldn't be baked
+  // to keyframes (2026-08-22, per Maro's real Blender particle-VFX
+  // export, "Water Spray.glb", then his own follow-up: "I need to be
+  // able to keyframe the pause/play of the loop... yes like that" — "that"
+  // being Path/Zone/Annotation's own existing anim_start/anim_end Reveal
+  // window). Threaded straight through to AnimationActorsList — see that
+  // component's own rawAnimationMeshNames header for the rest of this
+  // feature; Viewport3D.tsx's EmbeddedAnimationLoop reads the same
+  // resolved anim_start/anim_end window (FourD.tsx's own meshAnimWindows)
+  // to gate whether the clip advances or holds its pose.
+  rawAnimationMeshNames: Set<string>
+  onKeyAnimStart: (elementRef: string) => void
+  onKeyAnimEnd: (elementRef: string) => void
 }
 
 const SPEED_OPTIONS = [
@@ -114,6 +127,7 @@ export function TimelineWindow({
   onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
   speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
+  rawAnimationMeshNames, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [loop, setLoop] = useState(false)
@@ -579,6 +593,7 @@ export function TimelineWindow({
         paths={paths}
         zones={zones}
         cameras={cameras}
+        rawAnimationMeshNames={rawAnimationMeshNames}
         timeDisplayMode={timeDisplayMode}
         speedDaysPerSecond={speedDaysPerSecond}
         fps={fps}
@@ -588,6 +603,8 @@ export function TimelineWindow({
         onCreateKeyframes={onCreateKeyframes}
         onReverseKeyframes={onReverseKeyframes}
         onSelectActor={onSelectActor}
+        onKeyAnimStart={onKeyAnimStart}
+        onKeyAnimEnd={onKeyAnimEnd}
       />
     </div>
   )

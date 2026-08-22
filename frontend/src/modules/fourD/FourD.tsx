@@ -96,6 +96,16 @@ import {
 } from './clashTests'
 import { ClashDetectionPanel } from './ClashDetectionPanel'
 import { resolveMembersToElements, findClashes, type ClashSceneObject } from './sceneClash'
+import { listSiteCaptures, uploadSiteCapture, convertSiteCapture, generateIfcFromCapture, downloadSiteCapture, deleteSiteCapture, type SiteCapture, type SiteCaptureKind } from './siteCaptures'
+import {
+  createProgressVarianceTest, deleteProgressVarianceTest, listProgressVarianceTests,
+  replaceProgressVarianceResults, updateProgressVarianceResult, updateProgressVarianceTest,
+  getActivityProgressSuggestions,
+  type ProgressVarianceResult, type ProgressVarianceResultElement, type ProgressVarianceTest,
+  type ActivityProgressSuggestion,
+} from './progressVarianceTests'
+import { ProgressVariancePanel } from './ProgressVariancePanel'
+import { loadFullPointCloud, getCachedPointCloud, setCachedPointCloud, clearPointCloudCache, runProgressVarianceQuery } from './progressVarianceEngine'
 import { createMeasurement, deleteMeasurement, listMeasurements, updateMeasurement, type Measurement, type MeasurementPoint } from './measurements'
 import { MeasurementsPanel, type MeasuringTool } from './MeasurementsPanel'
 import type { MeasurementHit } from './MeasurementGizmo'
@@ -172,6 +182,8 @@ const ANNOTATIONS_PANEL_OPEN_KEY = 'prosota_4d_annotations_panel_open'
 const ANNOTATIONS_PANEL_DOCK_KEY = 'prosota_4d_annotations_panel_dock'
 const CLASH_PANEL_OPEN_KEY = 'prosota_4d_clash_panel_open'
 const CLASH_PANEL_DOCK_KEY = 'prosota_4d_clash_panel_dock'
+const PROGRESS_VARIANCE_PANEL_OPEN_KEY = 'prosota_4d_progress_variance_panel_open'
+const PROGRESS_VARIANCE_PANEL_DOCK_KEY = 'prosota_4d_progress_variance_panel_dock'
 const RIG_PANEL_OPEN_KEY = 'prosota_4d_rig_panel_open'
 const RIG_PANEL_DOCK_KEY = 'prosota_4d_rig_panel_dock'
 const MEASUREMENTS_PANEL_OPEN_KEY = 'prosota_4d_measurements_panel_open'
@@ -1844,7 +1856,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // includes `date`, so keying at a *different* playhead position than
   // last time would otherwise leave two anim_start rows instead of moving
   // the one that matters.
-  const handleKeyAnim = async (sourceKind: 'path' | 'zone' | 'annotation', elementRef: string, field: 'anim_start' | 'anim_end') => {
+  const handleKeyAnim = async (sourceKind: 'path' | 'zone' | 'annotation' | 'mesh', elementRef: string, field: 'anim_start' | 'anim_end') => {
     const now = timelineDateRef.current ?? new Date()
     const existing = elementKeyframes.keyframes.filter(k => k.source_kind === sourceKind && k.element_ref === elementRef && k.field === field)
     for (const k of existing) await elementKeyframes.remove(k.id)
@@ -2231,6 +2243,30 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+  // Dockable Progress Variance panel (2026-08-20) — same shared-side-dock
+  // treatment as every panel above.
+  const [progressVariancePanelOpen, setProgressVariancePanelOpen] = useState(() => loadPanelOpen(PROGRESS_VARIANCE_PANEL_OPEN_KEY, false))
+  const toggleProgressVariancePanel = () => {
+    setProgressVariancePanelOpen(prev => {
+      const next = !prev
+      localStorage.setItem(PROGRESS_VARIANCE_PANEL_OPEN_KEY, String(next))
+      return next
+    })
+  }
+  const [progressVariancePanelDock, setProgressVariancePanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(PROGRESS_VARIANCE_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleProgressVariancePanelDock = () => {
+    setProgressVariancePanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      localStorage.setItem(PROGRESS_VARIANCE_PANEL_DOCK_KEY, next)
+      return next
+    })
+  }
   // Dockable Rigging panel (2026-07-12) — same shared-side-dock treatment
   // as every panel above.
   const [rigPanelOpen, setRigPanelOpen] = useState(() => loadPanelOpen(RIG_PANEL_OPEN_KEY, false))
@@ -2570,6 +2606,40 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // DataPanel.tsx) are derived from below (2026-07-11, per Maro: manage 3D
   // data, not just IFC — including unloading one).
   const [sceneObjects, setSceneObjects] = useState<SceneObject[]>([])
+
+  // A mesh import's own raw embedded animation loop, keyframeable exactly
+  // like Path/Zone/Annotation's own Reveal window (2026-08-22, per Maro:
+  // first "I need some controls" — a plain play/pause toggle — then,
+  // rejecting that in favour of "I need to be able to keyframe the
+  // pause/play of the loop... yes like that," confirming Path/Zone's own
+  // anim_start/anim_end pattern is what he actually wants). A raw-loop
+  // actor has none of AnimationActorsList's own OTHER actor-defining
+  // signals (no ModelElementLink, PathFollower, or animate-flagged
+  // Path/Zone) — object.animations.length > 0 is the only thing that
+  // actually distinguishes "this mesh kept its raw clip because it
+  // couldn't be baked" from every other mesh import, so this Set is what
+  // makes it show up in AnimationActorsList as animatable (its own
+  // rawAnimationMeshNames header) even before any anim_start/anim_end
+  // keyframe has been set on it yet.
+  const rawAnimationMeshNames = useMemo(
+    () => new Set(sceneObjects.filter(o => o.kind === 'mesh' && o.object.animations.length > 0).map(o => o.name)),
+    [sceneObjects],
+  )
+  // Resolved straight out of the same ElementKeyframe rows, exactly
+  // mirroring pathAnimWindows/zoneAnimWindows/annotationAnimWindows below
+  // (same convention, just source_kind: 'mesh') — Viewport3D.tsx's own
+  // EmbeddedAnimationLoop reads this to gate whether each raw clip
+  // advances or holds its pose at the current scrubber date.
+  const meshAnimWindows = useMemo(() => {
+    const map = new Map<string, { start: Date | null; end: Date | null }>()
+    for (const k of elementKeyframes.keyframes) {
+      if (k.source_kind !== 'mesh' || (k.field !== 'anim_start' && k.field !== 'anim_end')) continue
+      const entry = map.get(k.element_ref) ?? { start: null, end: null }
+      if (k.field === 'anim_start') entry.start = new Date(k.date); else entry.end = new Date(k.date)
+      map.set(k.element_ref, entry)
+    }
+    return map
+  }, [elementKeyframes.keyframes])
 
   // Forces a real save before a refresh is allowed to actually happen
   // (2026-07-17, per Maro, after a real incident: a freshly-imported IFC
@@ -3055,6 +3125,328 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return map
   }, [clashTests, clashRefKeys])
 
+  // Progress Variance (2026-08-20, per the approved plan) — reuses
+  // sceneClash.ts's own resolveMembersToElements for Group A resolution
+  // (the exact same "Collection resolves to whatever the viewport
+  // currently shows" concept Clash Detective's Group A already is), just
+  // tested against a SiteCapture's point-cloud density instead of a
+  // second element group's own geometry (progressVarianceEngine.ts).
+  const [siteCaptures, setSiteCaptures] = useState<SiteCapture[]>([])
+  const [progressVarianceTests, setProgressVarianceTests] = useState<ProgressVarianceTest[]>([])
+  const [progressVarianceError, setProgressVarianceError] = useState<string | null>(null)
+  const [progressVarianceRunProgress, setProgressVarianceRunProgress] = useState<{ testId: string; done: number; total: number } | null>(null)
+  // Keyed by test id — a read-only view fetched on demand (not part of
+  // the test's own persisted shape, see getActivityProgressSuggestions's
+  // own docstring), so it's tracked separately rather than folded into
+  // ProgressVarianceTest itself.
+  const [activityProgressSuggestions, setActivityProgressSuggestions] = useState<Record<string, ActivityProgressSuggestion[]>>({})
+  const [applyingActivityId, setApplyingActivityId] = useState<string | null>(null)
+  const [uploadingCapture, setUploadingCapture] = useState(false)
+  // Which capture (if any) is currently mid-conversion server-side
+  // (2026-08-20) — see site_capture.py's own POST .../convert: for a real,
+  // large multi-scan .e57 this can genuinely take minutes, so the panel
+  // needs a real "this is working, not stuck" state, not just a disabled
+  // button with no explanation.
+  const [convertingCaptureId, setConvertingCaptureId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !hasEverBeenActive) return
+    let cancelled = false
+    listSiteCaptures(selectedProject.id).then(cs => { if (!cancelled) setSiteCaptures(cs) })
+    listProgressVarianceTests(selectedProject.id).then(ts => { if (!cancelled) setProgressVarianceTests(ts) })
+    return () => { cancelled = true }
+  }, [selectedProject, hasEverBeenActive])
+
+  const progressVarianceErrorMessage = (err: unknown, fallback: string): string => {
+    if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    return err instanceof Error ? err.message : fallback
+  }
+
+  // Which SceneObject (if any) each currently-loaded SiteCapture became —
+  // keyed by site_capture_id -> sceneObject.id (2026-08-20). Deliberately
+  // NOT name-matched (unlike mesh-kind Collection members/
+  // resolveMembersToElements, which key on SceneObject.name) — a real
+  // MatterPak export's own cloud.xyz is *always* that literal filename,
+  // and site_capture.py explicitly allows re-uploading the same name as a
+  // new, separate dated capture rather than replacing (see that model's
+  // own docstring: "a project can, and should, have many captures over
+  // time"), so name collisions between two different captures are the
+  // expected normal case here, not an edge case. Stale entries (the
+  // mapped scene object was removed some other way — e.g. a future
+  // "Unload All") are harmless: every reader below treats a missing
+  // sceneObjects match as "not loaded," so nothing needs to proactively
+  // clean this map on every possible unload path.
+  const [captureSceneObjectIds, setCaptureSceneObjectIds] = useState<Record<string, string>>({})
+  const loadedCaptureIds: Set<string> = useMemo(() => {
+    const set = new Set<string>()
+    for (const [captureId, sceneObjectId] of Object.entries(captureSceneObjectIds)) {
+      if (sceneObjects.some(o => o.id === sceneObjectId)) set.add(captureId)
+    }
+    return set
+  }, [captureSceneObjectIds, sceneObjects])
+
+  const handleUploadSiteCapture = async (file: File) => {
+    if (!selectedProject) return
+    setUploadingCapture(true)
+    try {
+      setProgressVarianceError(null)
+      const capturedAt = new Date().toISOString().slice(0, 10)
+      // Raw .e57 bytes upload as-is — conversion to a loadable point cloud
+      // happens later, server-side, via the panel's own explicit "Convert"
+      // button (site_capture.py's POST .../convert) — see that endpoint's
+      // own header for why (a real 14.4GB export has no safe way to
+      // convert in a browser tab).
+      const kind: SiteCaptureKind = file.name.toLowerCase().endsWith('.e57') ? 'e57' : 'xyz'
+      const created = await uploadSiteCapture(selectedProject.id, file.name, capturedAt, kind, defaultSourceUpAxis('mesh'), file)
+      setSiteCaptures(prev => [...prev, created])
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to upload site capture'))
+    } finally {
+      setUploadingCapture(false)
+    }
+  }
+
+  const handleDeleteSiteCapture = async (id: string) => {
+    try {
+      setProgressVarianceError(null)
+      const loadedSceneObjectId = captureSceneObjectIds[id]
+      if (loadedSceneObjectId) {
+        performUnloadMesh(loadedSceneObjectId)
+        setCaptureSceneObjectIds(prev => { const { [id]: _removed, ...rest } = prev; return rest })
+      }
+      clearPointCloudCache(id)
+      await deleteSiteCapture(id)
+      setSiteCaptures(prev => prev.filter(c => c.id !== id))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to delete site capture'))
+    }
+  }
+
+  // Server-side E57->XYZ conversion (2026-08-20, per Maro's own real
+  // 14.4GB, 105-scan export — see site_capture.py's own convert_capture
+  // for the full "why this doesn't happen in the browser" story). A plain
+  // await, not fire-and-forget — the request itself can take minutes, so
+  // convertingCaptureId drives the panel's own "Converting… this can take
+  // several minutes for a large scan" state for exactly that long, rather
+  // than the button just going quiet.
+  const handleConvertSiteCapture = async (id: string) => {
+    setConvertingCaptureId(id)
+    try {
+      setProgressVarianceError(null)
+      const updated = await convertSiteCapture(id)
+      setSiteCaptures(prev => prev.map(c => (c.id === id ? updated : c)))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to convert site capture'))
+    } finally {
+      setConvertingCaptureId(null)
+    }
+  }
+
+  // "Generate IFC" (2026-08-20, per Maro: "pointcloud to ifc" / "build") —
+  // runs the vendored Cloud2BIM pipeline server-side against this
+  // capture's own xyz point cloud, then immediately loads the resulting
+  // Model3DFile into the viewport the exact same way any other persisted
+  // IFC restore does — download its bytes, wrap them as a File, hand off
+  // to handleImportIfc (defined further down this component) rather than
+  // duplicating that function's own scene-object/persistence wiring here.
+  // handleImportIfc's own persistModelFile re-upload at the end re-saves
+  // bytes the server just generated — a real but small waste (a generated
+  // room-scale IFC is KB-to-low-MB, nothing like the point-cloud sizes
+  // this session's other work had to specifically design around), traded
+  // for reusing already-correct, already-tested import wiring instead of
+  // a second copy of it.
+  const [generatingIfcCaptureId, setGeneratingIfcCaptureId] = useState<string | null>(null)
+  const handleGenerateIfcFromCapture = async (captureId: string) => {
+    setGeneratingIfcCaptureId(captureId)
+    try {
+      setProgressVarianceError(null)
+      const model3dFile = await generateIfcFromCapture(captureId)
+      const blob = await downloadModel3DFile(model3dFile.id)
+      const file = new File([blob], model3dFile.name)
+      await handleImportIfc(file, model3dFile.source_up_axis, model3dFile.name)
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to generate IFC'))
+    } finally {
+      setGeneratingIfcCaptureId(null)
+    }
+  }
+
+  // "Load in Viewport" (2026-08-20) parses the FULL cloud once (cached by
+  // progressVarianceEngine.ts, reused by every later "Run Test" against
+  // this capture) and separately renders a decimated preview
+  // (pointCloud.ts's own createPointCloudObject) as a normal mesh-kind
+  // scene object — positioned at the origin, same as any other import, so
+  // the existing Move gizmo is how it gets manually aligned onto the BIM
+  // model (see the plan's own disclosed "only as good as manual alignment"
+  // limitation). "Unload" just removes that scene object, same
+  // performUnloadMesh path any other mesh-kind import already uses — the
+  // capture's own backend row/disk file is untouched (deleting it is a
+  // separate, explicit action).
+  const handleToggleLoadCapture = async (capture: SiteCapture) => {
+    const existingId = captureSceneObjectIds[capture.id]
+    const existing = existingId ? sceneObjects.find(o => o.id === existingId) : undefined
+    if (existing) {
+      performUnloadMesh(existing.id)
+      setCaptureSceneObjectIds(prev => { const { [capture.id]: _removed, ...rest } = prev; return rest })
+      return
+    }
+    if (capture.kind === 'e57') {
+      setProgressVarianceError('Convert this capture to XYZ first (see its own "Convert" button above) — a raw .e57 can\'t be loaded directly.')
+      return
+    }
+    try {
+      setProgressVarianceError(null)
+      const blob = await downloadSiteCapture(capture.id)
+      const cloud = await loadFullPointCloud(capture.id, blob, capture.name)
+      const object = createPointCloudObject(cloud)
+      const id = crypto.randomUUID()
+      object.name = capture.name
+      object.userData.sceneObjectId = id
+      object.userData.siteCaptureId = capture.id
+      setSceneObjects(prev => [...prev, { id, name: capture.name, kind: 'mesh', sourceUpAxis: capture.source_up_axis, object, fileId: null }])
+      setCaptureSceneObjectIds(prev => ({ ...prev, [capture.id]: id }))
+      setDataTab('3d')
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to load site capture'))
+    }
+  }
+
+  const handleCreateProgressVarianceTest = async (draft: {
+    name: string; group_a_collection_id: string; site_capture_id: string; min_coverage_percent: number
+  }) => {
+    if (!selectedProject) return
+    try {
+      setProgressVarianceError(null)
+      const created = await createProgressVarianceTest({ project_id: selectedProject.id, ...draft })
+      setProgressVarianceTests(prev => [...prev, created])
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to create progress variance test'))
+    }
+  }
+
+  const handleDeleteProgressVarianceTest = async (id: string) => {
+    try {
+      setProgressVarianceError(null)
+      await deleteProgressVarianceTest(id)
+      setProgressVarianceTests(prev => prev.filter(t => t.id !== id))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to delete progress variance test'))
+    }
+  }
+
+  const handleUpdateProgressVarianceThreshold = async (testId: string, minCoveragePercent: number) => {
+    try {
+      setProgressVarianceError(null)
+      const updated = await updateProgressVarianceTest(testId, { min_coverage_percent: minCoveragePercent })
+      setProgressVarianceTests(prev => prev.map(t => (t.id === testId ? updated : t)))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to update threshold'))
+    }
+  }
+
+  const handleUpdateProgressVarianceResult = async (resultId: string, data: { status?: ProgressVarianceResult['status']; comment?: string | null }) => {
+    try {
+      setProgressVarianceError(null)
+      const updated = await updateProgressVarianceResult(resultId, data)
+      setProgressVarianceTests(prev => prev.map(t => (
+        t.id === updated.progress_variance_test_id ? { ...t, results: t.results.map(r => (r.id === updated.id ? updated : r)) } : t
+      )))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to update result'))
+    }
+  }
+
+  const handleRunProgressVarianceTest = async (testId: string) => {
+    const test = progressVarianceTests.find(t => t.id === testId)
+    if (!test) return
+    const collectionA = collections.find(c => c.id === test.group_a_collection_id)
+    const capture = siteCaptures.find(c => c.id === test.site_capture_id)
+    if (!collectionA) {
+      setProgressVarianceError('This test\'s Collection no longer exists — pick a new one (delete and recreate the test)')
+      return
+    }
+    if (!capture) {
+      setProgressVarianceError('This test\'s Site Capture no longer exists — pick a new one (delete and recreate the test)')
+      return
+    }
+    const pointCloudSceneObjectId = captureSceneObjectIds[capture.id]
+    const pointCloudSceneObject = pointCloudSceneObjectId ? sceneObjects.find(o => o.id === pointCloudSceneObjectId) : undefined
+    const fullCloud = getCachedPointCloud(capture.id)
+    if (!pointCloudSceneObject || !fullCloud) {
+      setProgressVarianceError('Load this capture in the viewport first (Site Captures above)')
+      return
+    }
+    setProgressVarianceError(null)
+    setProgressVarianceRunProgress({ testId, done: 0, total: 0 })
+    try {
+      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
+      // Same level-slice exclusion as Clash Detective's own handleRunClashTest
+      // — see that handler's own comment.
+      const nonSplitMembers = collectionA.members.filter(
+        (m): m is typeof m & { source_kind: 'ifc' | 'mesh' } => m.source_kind !== 'ifc_split',
+      )
+      const found = await runProgressVarianceQuery(
+        nonSplitMembers, clashSceneObjects, ifcHandles, fullCloud, pointCloudSceneObject.object, test.min_coverage_percent,
+        (done, total) => setProgressVarianceRunProgress({ testId, done, total }),
+      )
+      const elements: ProgressVarianceResultElement[] = found.map(f => ({
+        element_source_kind: f.ref.sourceKind, element_ref: f.ref.ref, element_label: f.ref.label,
+        point_count: f.pointCount, coverage_percent: f.coveragePercent, confirmed_in_scan: f.confirmedInScan,
+      }))
+      const updated = await replaceProgressVarianceResults(testId, elements)
+      setProgressVarianceTests(prev => prev.map(t => (t.id === testId ? updated : t)))
+      // Best-effort, not blocking/failing the run itself — a fresh set
+      // of element results is exactly when there's something new to
+      // suggest, but a project with no ModelElementLinks at all (most
+      // projects, until this feature actually gets used) just comes back
+      // empty, which is a normal, silent outcome, not an error to surface.
+      try {
+        const suggestions = await getActivityProgressSuggestions(testId)
+        setActivityProgressSuggestions(prev => ({ ...prev, [testId]: suggestions }))
+      } catch { /* non-fatal — the element results above already saved fine */ }
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to run progress variance test'))
+    } finally {
+      setProgressVarianceRunProgress(null)
+    }
+  }
+
+  // "Apply" writes a scan-suggested % straight into Activity.pct_complete
+  // (2026-08-21) — the same field the PM already edits manually, already
+  // feeding EVM/SPI/CPI and Baseline Comparison with zero new plumbing,
+  // per the approved plan's own "review-and-apply, not silent overwrite"
+  // call: pct_complete is EVM-critical, so this is always an explicit
+  // per-activity action the reviewer takes, never automatic off a Run
+  // Test. Removes the applied suggestion from the review list on success
+  // (its own current_pct_complete is now stale) rather than leaving a
+  // suggestion that reads as "not yet applied" once it has been.
+  const handleApplyActivityProgress = async (testId: string, suggestion: ActivityProgressSuggestion) => {
+    setApplyingActivityId(suggestion.activity_id)
+    try {
+      setProgressVarianceError(null)
+      await api.patch(`/api/v1/activities/${suggestion.activity_id}`, { pct_complete: suggestion.scan_suggested_pct_complete })
+      setActivityProgressSuggestions(prev => ({
+        ...prev,
+        [testId]: (prev[testId] ?? []).filter(s => s.activity_id !== suggestion.activity_id),
+      }))
+    } catch (err) {
+      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to apply activity progress'))
+    } finally {
+      setApplyingActivityId(null)
+    }
+  }
+
+  const handleSelectVarianceElement = async (element: { source_kind: 'ifc' | 'mesh'; ref: string }) => {
+    const refs = [{ source_kind: element.source_kind, element_ref: element.ref }]
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    if (objectIds.size === 0 && expressIds.size === 0) return
+    setSelectedObjectIds(objectIds)
+    setSelectedExpressIds(expressIds)
+    setSelectedExpressId(null)
+    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
+    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
+    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
+  }
+
   // Joins each backend SectionBox (keyed by its own model3d_file_id) against
   // whichever currently-loaded SceneObject actually corresponds to that
   // file (keyed by fileId — see model3dFiles.ts wiring) — a box whose
@@ -3258,19 +3650,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // Reality Captures — point cloud (.xyz) and textured OBJ (.obj + its
     // .mtl + referenced textures) detection (2026-08-20) — pulled out of
     // this selection *before* the ifc/mesh split below, since neither
-    // fits that split's own two buckets (an .xyz isn't parseable by
+    // fits that split's own two buckets (a point cloud isn't parseable by
     // loadModel3DFile at all; a MatterPak's .mtl/.jpg files aren't
     // independently importable 3D files the way the existing multi-select
-    // batch assumes every remaining file is). See
-    // handleImportPointCloud/handleImportTexturedObj's own header for why
-    // these are a live-preview-only path for now, ahead of the real
-    // site_capture backend.
-    const xyzFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'xyz')
-    for (const file of xyzFiles) {
+    // batch assumes every remaining file is). .xyz and .e57 both land here
+    // — .e57 just uploads raw and stops there (see handleImportPointCloud's
+    // own header on why it doesn't parse an .e57 client-side).
+    const pointCloudFiles = files.filter(file => {
+      const ext = file.name.split('.').pop()?.toLowerCase()
+      return ext === 'xyz' || ext === 'e57'
+    })
+    for (const file of pointCloudFiles) {
       importQueueRef.current = importQueueRef.current.then(() => handleImportPointCloud(file))
     }
     const objFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'obj')
-    const consumedForObj = new Set<File>(xyzFiles)
+    const consumedForObj = new Set<File>(pointCloudFiles)
     for (const objFile of objFiles) {
       const base = objFile.name.slice(0, -('.obj'.length))
       const mtlFile = files.find(f => f !== objFile && f.name === `${base}.mtl`)
@@ -3313,13 +3707,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // off per Maro's explicit "if i unload, i expect the data not to persist"
   // — the alternative (blocking unload on any in-flight upload) would make
   // unload feel laggy for no real benefit.
-  const persistModelFile = async (id: string, file: File, kind: Model3DKind, sourceUpAxis: UpAxis, name: string) => {
+  const persistModelFile = async (
+    id: string, file: File, kind: Model3DKind, sourceUpAxis: UpAxis, name: string, keepRawAnimation = false,
+  ) => {
     if (!selectedProject) return
     setUploadProgress(prev => new Map(prev).set(id, { name, percent: 0 }))
     try {
       const saved = await uploadModel3DFile(selectedProject.id, name, kind, sourceUpAxis, file, percent => {
         setUploadProgress(prev => new Map(prev).set(id, { name, percent }))
-      })
+      }, keepRawAnimation)
       let stillLoaded = false
       setSceneObjects(prev => {
         stillLoaded = prev.some(o => o.id === id)
@@ -3396,24 +3792,40 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // why an earlier always-looping AnimationMixer preview was scrapped
       // in favour of this). Starts "today" at local midnight, one calendar
       // day per clip-second — Maro's own confirmed choice over an explicit
-      // start-date/duration dialog. object.animations is cleared
-      // afterward either way (baked or not, unchecked or not) so nothing
-      // ever double-drives this object outside whatever real keyframes just
-      // landed on the Timeline.
+      // start-date/duration dialog.
+      //
+      // keepRawAnimation (2026-08-22, per Maro's own real Blender particle-
+      // VFX export, "Water Spray.glb") — a clip that animates more than
+      // one node independently (findSingleAnimatedNode's own multi-node
+      // case) can NEVER become keyframes at all, not just "wasn't this
+      // time" — this app's ElementKeyframe schema has no way to express a
+      // per-particle animation, full stop. Rather than just discard it
+      // (the old, only behaviour: object.animations always cleared
+      // afterward, baked or not), that specific case now keeps the raw
+      // clip on the object for Viewport3D.tsx's own EmbeddedAnimationLoop
+      // to play back as an always-looping preview instead — the one case
+      // the earlier "always-looping AnimationMixer" design (scrapped
+      // above) was actually right for. Every other case (baked
+      // successfully, no animation at all, or the checkbox unchecked)
+      // still clears object.animations exactly as before, so a single
+      // rigid-body import stays fully driven by its own real keyframes,
+      // never double-animated by both systems at once.
+      let keepRawAnimation = false
       if (includeAnimation && object.animations.length > 0) {
         const startDate = new Date()
         startDate.setHours(0, 0, 0, 0)
         const baked = bakeEmbeddedAnimationToKeyframes(object, settings.upAxis, startDate)
         if (baked === null) {
-          addImportError(`"${name}" imported, but its animation couldn't be converted to keyframes — it animates more than one part independently (e.g. a rig/skeleton), and this app can only key a mesh import as one rigid whole. The mesh itself imported fine.`)
+          keepRawAnimation = true
+          addImportError(`"${name}" imported — its animation moves more than one part independently (e.g. a particle effect or a rig), which can't become schedule keyframes, so it's playing back as a raw, always-looping preview instead.`)
         } else {
           for (const kf of baked) await elementKeyframes.upsert('mesh', name, kf.field, kf.date, kf.value)
         }
       }
-      object.animations = []
+      if (!keepRawAnimation) object.animations = []
       setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setDataTab('3d')
-      await enqueueUpload(() => persistModelFile(id, file, 'mesh', sourceUpAxis, name))
+      await enqueueUpload(() => persistModelFile(id, file, 'mesh', sourceUpAxis, name, keepRawAnimation))
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
     } finally {
@@ -3421,33 +3833,56 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  // Reality Captures — quick live-preview import (2026-08-20), ahead of
-  // the real site_capture backend/UI (not built yet, see the plan's own
-  // phase ordering) — Maro asked "how do i use" the newly-built
-  // loadTexturedObj/pointCloud.ts before either had any way to actually
-  // trigger them. Deliberately skips persistModelFile/enqueueUpload
-  // entirely (unlike handleImport3D just above) — there's no backend
-  // storage shape for a multi-file OBJ+MTL+texture set or a point cloud
-  // yet, so this is genuinely session-only, same "fileId stays null,
-  // usable but won't survive a hard refresh" fallback path
-  // handleImport3D's own SceneObject already supports for a failed
-  // upload — just deliberately never even attempted here, not failed.
-  // Both add a visible addImportError-channel note saying exactly that,
-  // rather than silently behaving like a normal, persisted import.
+  // Reality Captures — dragging/picking a .xyz or .e57 straight into the
+  // "Import 3D" flow (2026-08-20) now persists it as a real SiteCapture
+  // (site_capture.py's backend, siteCaptures.ts), same as uploading via
+  // the Progress Variance panel's own "+ Upload Scan" — a second entry
+  // point to the identical result, not a second behaviour, so a scan
+  // dropped in here doesn't silently disappear on refresh the way it did
+  // before that backend existed (Maro's own "how do i use" prompted the
+  // very first, genuinely session-only version of this). captured_at
+  // defaults to today (the import date) — rename/re-date via the panel if
+  // the scan is actually from an earlier site visit.
+  //
+  // .xyz gets the immediate parse+preview+cache treatment (safe — that's
+  // exactly the format/scale this app's streaming parser was built for).
+  // .e57 does NOT (2026-08-20, per Maro's own real 14.4GB, 105-scan
+  // export) — it just uploads the raw bytes and stops there; converting
+  // it into something loadable happens server-side, explicitly, via the
+  // Progress Variance panel's own "Convert" button (site_capture.py's
+  // POST .../convert) — see that endpoint's own header for why that
+  // conversion has no safe way to happen in a browser tab at this scale.
   const handleImportPointCloud = async (file: File) => {
+    if (!selectedProject) return
     setImporting(true)
     clearImportErrorsForFile(file.name)
     try {
       const name = file.name
+      const kind: SiteCaptureKind = name.toLowerCase().endsWith('.e57') ? 'e57' : 'xyz'
+      const sourceUpAxis = defaultSourceUpAxis('mesh')
+      const capturedAt = new Date().toISOString().slice(0, 10)
+
+      if (kind === 'e57') {
+        const capture = await uploadSiteCapture(selectedProject.id, name, capturedAt, kind, sourceUpAxis, file)
+        setSiteCaptures(prev => [...prev, capture])
+        addImportError(`"${name}" uploaded as a raw Site Capture dated today — open the Point Cloud panel and click "Convert" before it can be loaded in the viewport (can take several minutes for a large scan).`)
+        return
+      }
+
       await unloadExistingNamesake(name, 'mesh')
       const cloud = await parseXyzFile(file)
+      const capture = await uploadSiteCapture(selectedProject.id, name, capturedAt, kind, sourceUpAxis, file)
+      setSiteCaptures(prev => [...prev, capture])
+      setCachedPointCloud(capture.id, cloud)
       const object = createPointCloudObject(cloud)
       const id = crypto.randomUUID()
       object.name = name
       object.userData.sceneObjectId = id
-      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: defaultSourceUpAxis('mesh'), object, fileId: null }])
+      object.userData.siteCaptureId = capture.id
+      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
+      setCaptureSceneObjectIds(prev => ({ ...prev, [capture.id]: id }))
       setDataTab('3d')
-      addImportError(`Note: "${name}" (${cloud.count.toLocaleString()} points) is a live preview only — Reality Capture storage isn't built yet, so this won't survive a page refresh.`)
+      addImportError(`"${name}" (${cloud.count.toLocaleString()} points) imported and saved as a Site Capture dated today — open the Point Cloud panel to rename/re-date it or run a variance test against it.`)
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import point cloud')
     } finally {
@@ -3455,6 +3890,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Unlike handleImportPointCloud just above, Part A's textured OBJ+MTL+
+  // texture set still has no backend of its own (site_capture.py's
+  // SiteCapture holds a single file — the .xyz point cloud — see that
+  // model's own docstring on why: it's the precision source variance
+  // testing needs, where this decimated, photographic mesh is a quick
+  // visual overlay only) — deliberately still session-only, same "fileId
+  // stays null, won't survive a refresh" fallback path.
   const handleImportTexturedObj = async (objFile: File, mtlFile: File, textureFiles: File[]) => {
     setImporting(true)
     clearImportErrorsForFile(objFile.name)
@@ -3807,7 +4249,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             // here must not re-bake (would duplicate keyframes dated from
             // today instead of the original import day) or leave a stray
             // live clip sitting unused on the restored object.
-            object.animations = []
+            //
+            // EXCEPT when file.keep_raw_animation is set (2026-08-22, per
+            // Maro's own real Blender particle-VFX export) — that clip was
+            // never baked in the first place (it can't be — see
+            // Model3DFile.keep_raw_animation's own docstring), so there are
+            // no keyframes coming back to replace it with. Keeping it here
+            // is what lets Viewport3D.tsx's EmbeddedAnimationLoop still
+            // have something to play after a refresh, not just right after
+            // the original import.
+            if (!file.keep_raw_animation) object.animations = []
             const id = crypto.randomUUID()
             object.name = file.name
             object.userData.sceneObjectId = id
@@ -5698,6 +6149,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onTimeDisplayModeChange={handleTimeDisplayModeChange}
             fps={fps}
             onFpsChange={handleFpsChange}
+            rawAnimationMeshNames={rawAnimationMeshNames}
+            onKeyAnimStart={id => handleKeyAnim('mesh', id, 'anim_start')}
+            onKeyAnimEnd={id => handleKeyAnim('mesh', id, 'anim_end')}
           />
         )
     }
@@ -6092,6 +6546,39 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
+  if (progressVariancePanelOpen) {
+    dockablePanels.push({
+      id: 'progress-variance', label: 'Point Cloud', dock: progressVariancePanelDock,
+      onToggleDock: toggleProgressVariancePanelDock, onClose: toggleProgressVariancePanel,
+      content: (
+        <ProgressVariancePanel
+          collections={collections}
+          siteCaptures={siteCaptures}
+          tests={progressVarianceTests}
+          error={progressVarianceError}
+          runProgress={progressVarianceRunProgress}
+          loadedCaptureIds={loadedCaptureIds}
+          uploadingCapture={uploadingCapture}
+          convertingCaptureId={convertingCaptureId}
+          generatingIfcCaptureId={generatingIfcCaptureId}
+          onUploadCapture={handleUploadSiteCapture}
+          onDeleteCapture={handleDeleteSiteCapture}
+          onToggleLoadCapture={handleToggleLoadCapture}
+          onConvertCapture={handleConvertSiteCapture}
+          onGenerateIfc={handleGenerateIfcFromCapture}
+          onCreateTest={handleCreateProgressVarianceTest}
+          onDeleteTest={handleDeleteProgressVarianceTest}
+          onRunTest={handleRunProgressVarianceTest}
+          onUpdateThreshold={handleUpdateProgressVarianceThreshold}
+          onUpdateResult={handleUpdateProgressVarianceResult}
+          onSelectElement={handleSelectVarianceElement}
+          activityProgressSuggestions={activityProgressSuggestions}
+          applyingActivityId={applyingActivityId}
+          onApplyActivityProgress={handleApplyActivityProgress}
+        />
+      ),
+    })
+  }
   if (rigPanelOpen) {
     dockablePanels.push({
       id: 'rigging', label: 'Rigging', dock: rigPanelDock,
@@ -6146,6 +6633,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       key="primary"
       settings={settings}
       importedObjects={viewportObjects}
+      meshAnimWindows={meshAnimWindows}
       selectedExpressId={selectedExpressId}
       selectedExpressIds={selectedExpressIds}
       onSelect={handleSelectExpressId}
@@ -6405,6 +6893,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Clash Detective
         </button>
         <button
+          onClick={toggleProgressVariancePanel}
+          className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
+            progressVariancePanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
+          }`}
+        >
+          Point Cloud
+        </button>
+        <button
           onClick={toggleRigPanel}
           title="Rig one part as the child of another (crane base -> jib -> trolley -> hook) — rotating/moving the parent carries the child along"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
@@ -6441,7 +6937,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           </button>
         )}
         <div className="w-px h-4 bg-gray-200 mx-1" />
-        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc,.mtl,.jpg,.jpeg,.png,.xyz" multiple onChange={handleFileSelected} className="hidden" />
+        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc,.mtl,.jpg,.jpeg,.png,.xyz,.e57" multiple onChange={handleFileSelected} className="hidden" />
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}

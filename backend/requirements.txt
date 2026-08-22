@@ -6,3 +6,17 @@ alembic>=1.13.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
 PyJWT[crypto]>=2.8.0
+pye57==0.4.19
+# Cloud2BIM (app/services/cloud2bim/, vendored from
+# https://github.com/VaclavNezerka/Cloud2BIM, MIT) — "Generate IFC" from a
+# Site Capture's point cloud. open3d deliberately excluded (see that
+# directory's aux_functions.py's own header): it's only ever touched by
+# optional-visualization code paths this app always disables, and its own
+# PyPI wheels don't support this app's Python version anyway.
+ifcopenshell==0.8.5
+opencv-python==5.0.0.93
+scikit-image==0.26.0
+pandas==3.0.5
+matplotlib==3.11.1
+PyYAML==6.0.3
+tqdm==4.70.0

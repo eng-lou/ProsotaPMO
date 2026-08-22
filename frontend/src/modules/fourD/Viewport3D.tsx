@@ -1,7 +1,7 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Environment, Grid, GizmoHelper, OrbitControls, TransformControls } from '@react-three/drei'
+import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
@@ -138,6 +138,162 @@ export interface ResolvedSectionBox {
   rotation: SectionBoxRotation
 }
 
+// Ambient occlusion (2026-07-09, per Maro — N8AO via
+// @react-three/postprocessing, chosen per this session's own research:
+// mature, actively maintained, same pmndrs family as drei already a
+// dependency here). Lazy-loaded, same "keep it out of the main bundle"
+// discipline this file already applies to web-ifc — `postprocessing` +
+// `n8ao` together added ~100kb gzipped to the main chunk, for a toggle
+// that's off by default (see viewerSettings.ts's own ambientOcclusion
+// default) and may never be turned on in a given session.
+// aoSamples/denoiseSamples (2026-07-11) — real, verified quality knobs on
+// N8AO's own underlying pass (checked directly in
+// node_modules/@react-three/postprocessing's N8AOPostPass source, not
+// assumed): defaults are 16/8, boosted to 64/32 while genuinely idle — see
+// this file's own boostQuality state/comment for the "real-time path
+// tracer, scoped down" reasoning this serves.
+// intensity dropped 2 -> 0.8 (2026-07-21, per Maro: "the dark ring is
+// unrealistic" — confirmed live: at 2, N8AO's contact occlusion around a
+// small object sitting on a larger face reads as a hard omnidirectional
+// dark halo, not a soft, physically-plausible occlusion, regardless of the
+// sun's own direction).
+//
+// Removed 2026-07-25 (per Maro: "just remove AO completely"), diagnosed at
+// the time as "an unfixable EffectComposer mount/unmount corruption bug
+// (stippled/dithered rendering after toggling, worsened by orbiting)" — the
+// settings.ambientOcclusion checkbox drove `{ambientOcclusion && <EffectComposer>...
+// </EffectComposer>}` directly, i.e. this whole tree (and the WebGLRenderTarget(s)
+// it owns) got destroyed and recreated on every single toggle. That's the
+// textbook @react-three/postprocessing footgun their own docs warn against —
+// never conditionally mount an EffectComposer/effect, toggle via the pass's
+// own `enabled` instead — not an inherent flaw in N8AO/EffectComposer
+// themselves, so "unfixable" undersold it: it just hadn't been tried yet.
+//
+// Re-added 2026-08-22 (per Maro: "you can add ao back now") on that fix:
+// this component (and the <EffectComposer>/<N8AO> tree inside it) now mounts
+// at most *once* per session — see mountAmbientOcclusion below, where the
+// call site latches true the first time settings.ambientOcclusion goes true
+// and never unmounts it again — and every subsequent toggle only ever flips
+// this component's own `enabled` prop straight through to <EffectComposer
+// enabled={enabled}>, never touching the mount at all.
+//
+// enabled on <EffectComposer> itself, not (only) on <N8AO> (2026-08-22
+// follow-up fix, per Maro: "unchecking off ao results in considerable lag")
+// — an earlier version of this fix toggled just the N8AO pass's own
+// `enabled` via a ref, which does skip *that* pass, but @react-three/
+// postprocessing's own EffectComposer.js (checked directly, not assumed)
+// adds a *separate*, permanently-`enabled` NormalPass as soon as
+// `enableNormalPass` is set — a full second render of the entire scene
+// (into a normal-buffer texture) every frame, run unconditionally by the
+// composer regardless of whether the N8AO pass that actually needs it is
+// itself on. That's the "considerable lag while unchecked": disabling only
+// the N8AO pass left that full extra scene render silently running for the
+// rest of the session. <EffectComposer>'s own top-level `enabled` prop is
+// the one this library actually built for exactly this: when false, its
+// useFrame callback skips composer.render() entirely (no RenderPass,
+// NormalPass, or N8AO pass runs — checked directly in EffectComposer.js,
+// not assumed) and hands rendering back to R3F's own default per-frame
+// render, exactly as if this component were never mounted at all — while
+// `enabled` still isn't a dependency of the composer/pass-construction
+// effects inside EffectComposer.js, so flipping it is a plain reactive prop
+// change, not a remount (the actual bug this whole component was pulled
+// for, see above).
+//
+// toneMapping + autoClear restore-on-disable (2026-08-22, second and third
+// follow-up — same screenshot symptom the original removal called
+// "stippled/dithered rendering," reproduced again after unchecking, twice:
+// the toneMapping fix alone visibly wasn't enough — the real, dominant
+// cause turned out to be autoClear, not toneMapping) —
+//
+// autoClear (the actual cause — checked directly in node_modules/
+// postprocessing's own EffectComposer class): its `setRenderer()`, called
+// from inside the R3F wrapper's one-time `useMemo` that constructs the
+// composer, unconditionally sets `renderer.autoClear = false` the moment
+// this tree first mounts — permanently, with no `enabled` gating and no
+// unmount cleanup anywhere in either package. While actively enabled, the
+// R3F wrapper's own useFrame flips it true only for the duration of each
+// composer.render() call, then puts it right back to false — the
+// composer's own internal per-pass clearing doesn't depend on the
+// renderer-level flag staying true between frames, so this is invisible
+// while AO is genuinely on. But once `enabled` is false, that whole
+// useFrame body (including the autoClear dance) is skipped entirely, and
+// rendering falls back to R3F's own plain `gl.render(scene, camera)` —
+// which, same as any three.js render call, relies on `renderer.autoClear`
+// actually being true to clear the framebuffer before drawing each frame.
+// Left stuck false, every "plain" frame drew on top of the previous one
+// instead of clearing first — accumulating frames' worth of near-identical,
+// slightly-jittered content into exactly the speckled/smeared look in both
+// screenshots (and explains "worsened by orbiting" from the original
+// bug report: more camera movement between un-cleared frames means more
+// visibly different content piling up).
+//
+// toneMapping (a real but secondary contributor): the same package's
+// EffectComposer.js forces `gl.toneMapping = NoToneMapping` in a second
+// effect keyed only on `[gl]`, also with no `enabled` gating, reverting
+// only in that effect's own unmount cleanup — which this component
+// deliberately never triggers (see above). R3F's own <Canvas> otherwise
+// defaults gl.toneMapping to ACESFilmicToneMapping (checked in
+// @react-three/fiber's own source), which is what keeps bright HDR values
+// from clipping into banding against an 8-bit framebuffer.
+//
+// enableNormalPass dropped entirely (2026-08-22) — its own type doc reads
+// "Only used for SSGI currently, leave it disabled for everything else
+// unless it's needed", and N8AOPostPass's source (checked directly) never
+// references a normalBuffer at all — it derives occlusion from its own
+// depth data. It was never doing anything for N8AO except adding a second,
+// permanently-enabled full-scene render (see the "considerable lag" note
+// above) for no benefit.
+//
+// KNOWN UNRESOLVED ISSUE (2026-08-22) — reproduced in complete isolation,
+// outside this app entirely, in a bare Canvas + <EffectComposer><N8AO/>
+// tree with none of this file's own shadows/dpr/multisampling code
+// involved: the moment N8AO (any depth-requiring pass, not something
+// specific to N8AO) is active, the browser console fills with a continuous,
+// every-frame "GL_INVALID_OPERATION: glBlitFramebuffer: Read and write
+// depth stencil attachments cannot be the same image" — traced to
+// EffectComposer's own createDepthTexture()/blitDepthBuffer() (its
+// "stable depth target" mechanism, node_modules/postprocessing's own
+// EffectComposer class), independent of enableNormalPass, multisampling,
+// or anything app-specific. Confirmed present with the *exact* postprocessing
+// (6.39.x)/n8ao (1.10.3) versions already locked in this repo's own
+// package-lock.json from before the original 2026-07-25 removal — not a
+// version regression introduced by reinstalling. A WebGL error means that
+// specific blit silently no-ops, so the "stable" depth texture the AO pass
+// actually samples from is never populated correctly — very likely why
+// visible corruption kept reappearing across the mount/enabled/toneMapping/
+// autoClear fixes above: those were all real, verified bugs, but this one
+// remains and wasn't caused by (or fixed by) any of them. Flagged rather
+// than silently worked around — the original "unfixable" verdict may
+// genuinely have been right, just for a different specific reason than the
+// stated one.
+//
+// Neither of the library's own effects ever re-fires after the first mount
+// (neither one's dependency changes again), so this single effect, keyed on
+// our own `enabled`, is free to own both settings for the rest of the
+// tree's life — matching what N8AO's own pass was authored to composite
+// against while AO is genuinely on, restored to this app's real defaults
+// (ACESFilmicToneMapping, autoClear true) the instant it's switched off,
+// whether or not this component ever unmounts again.
+const AmbientOcclusionEffect = lazy(() =>
+  import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
+    default: ({ enabled, boostQuality }: { enabled: boolean; boostQuality: boolean }) => {
+      const { gl } = useThree()
+      useEffect(() => {
+        gl.toneMapping = enabled ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping
+        if (!enabled) gl.autoClear = true
+      }, [enabled, gl])
+      return (
+        <EffectComposer enabled={enabled}>
+          <N8AO
+            aoRadius={1} intensity={0.8} distanceFalloff={1}
+            aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
+          />
+        </EffectComposer>
+      )
+    },
+  })),
+)
+
 // Self-hosted default environment (2026-07-11, per Maro — replaces the
 // earlier RoomEnvironment/drei-CDN-preset fallback: "copy and save it in
 // our files for default load out"). Served straight from Vite's public/
@@ -149,20 +305,47 @@ export const DEFAULT_ENVIRONMENT_URL = '/hdr/kloofendal_48d_partly_cloudy_puresk
 
 // Extracted + exported (2026-07-25, per Maro: "baseline 3d doesnt share
 // the same render shader settings etc") — ComparisonViewportPane.tsx calls
-// these same two functions now instead of using a fixed light position of
-// its own, so its own sun direction/shadow scale actually matches the main
+// these same functions now instead of using a fixed light position of its
+// own, so its own sun direction/shadow scale actually matches the main
 // viewport's for the same settings, rather than an independent guess. Pure
-// functions, no change to the maths itself — see modelRadius/sunPosition's
+// functions, no change to the maths itself — see modelBounds/sunPosition's
 // own original inline comments (still below, where Viewport3D calls these)
 // for the full "why" on both.
-export function computeModelRadius(importedObjects: ImportedObject[]): number {
+//
+// center + min, not just radius (2026-08-22 fix, per Maro: shadows are "one
+// big shadowy shape" and "not well placed") — computeModelRadius used to
+// report only the model's *size*, never where it actually sits in space, so
+// the sun (below) always aimed at world origin and the shadow-catcher
+// ground plane (Viewport3D's own JSX further down) always sat at a fixed
+// world position/height, regardless of the real model. Fine for a model
+// authored right at the origin at height 0; wrong for anything moved,
+// georeferenced, or offset on import — the sun ended up pointed at empty
+// space next to the model instead of at it, and the catcher plane floated
+// at the wrong elevation, so shadows fell in the wrong place. `center` lets
+// the sun/its shadow-camera actually aim at the real model; `min` gives the
+// ground-catcher plane the model's real base elevation to sit at instead of
+// a hardcoded 0.
+export interface ModelBounds {
+  center: [number, number, number]
+  min: [number, number, number]
+  radius: number
+}
+
+export function computeModelBounds(importedObjects: ImportedObject[]): ModelBounds {
   const box = new THREE.Box3()
   let any = false
   for (const { object } of importedObjects) { box.expandByObject(object); any = true }
-  if (!any || box.isEmpty()) return 20
-  return Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
+  if (!any || box.isEmpty()) return { center: [0, 0, 0], min: [-20, -20, -20], radius: 20 }
+  const center = box.getCenter(new THREE.Vector3())
+  const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10)
+  return { center: [center.x, center.y, center.z], min: [box.min.x, box.min.y, box.min.z], radius }
 }
 
+// Returns the sun's position as an *offset from the model's own center*
+// (2026-08-22: previously treated as an absolute position, i.e. an offset
+// from world origin — see computeModelBounds above for why that broke any
+// model not sitting exactly at (0,0,0)). Callers add this to
+// computeModelBounds(...).center to get the light's real world position.
 export function computeSunPosition(sunAzimuth: number, sunElevation: number, modelRadius: number, zUp: boolean): [number, number, number] {
   const sunAzimuthRad = (sunAzimuth * Math.PI) / 180
   const sunElevationRad = (sunElevation * Math.PI) / 180
@@ -177,6 +360,17 @@ export function computeSunPosition(sunAzimuth: number, sunElevation: number, mod
 interface Props {
   settings: ViewerSettings
   importedObjects: ImportedObject[]
+  // A mesh import's own raw embedded-animation loop (EmbeddedAnimationLoop,
+  // below), keyframeable exactly like Path/Zone/Annotation's own reveal
+  // window (2026-08-22, per Maro's own follow-up: "I need to be able to
+  // keyframe the pause/play of the loop... yes like that"). Keyed by
+  // ImportedObject.name (= its own element_ref, matching every other mesh
+  // ElementKeyframe convention already established elsewhere in this
+  // file), resolved from ElementKeyframe rows the same way
+  // pathAnimWindows/zoneAnimWindows are (FourD.tsx's own meshAnimWindows).
+  // No start/end set at all means "always plays" — the same default
+  // behaviour as before any keyframe exists.
+  meshAnimWindows: Map<string, { start: Date | null; end: Date | null }>
   selectedExpressId: number | null
   selectedExpressIds: Set<number>
   onSelect: (expressID: number | null, additive?: boolean, objectId?: string) => void
@@ -2362,6 +2556,68 @@ function applyPathFollow(target: ResolvedPathTarget, now: Date, upAxis: UpAxis) 
   }
 }
 
+// Plays a mesh import's own raw embedded animation continuously in a
+// loop (2026-08-22, per Maro's own real Blender particle-VFX export,
+// "Water Spray.glb") — the fallback for exactly the case
+// embeddedAnimationBake.ts's own findSingleAnimatedNode can never bake: a
+// real particle simulation animates hundreds of nodes independently, not
+// one rigid whole, so there's no way to express it as this app's own
+// Location/Rotation/Scale keyframes at all (that's a hard limit of the
+// keyframe schema, not a bug to fix there). FourD.tsx's own import
+// handler keeps object.animations intact for exactly this case (instead
+// of always clearing it once baking is attempted, which it otherwise
+// does) so this component has something to play. One AnimationMixer per
+// animated object, not a single shared one — each object's own clips
+// only ever apply to that object's own node tree. three.js AnimationAction's
+// own default (LoopRepeat, infinite) is what makes it loop at all.
+//
+// Gated by animWindows (2026-08-22, per Maro's own follow-up: "I need to
+// be able to keyframe the pause/play of the loop... yes like that" —
+// confirming Path/Zone/Annotation's own existing anim_start/anim_end
+// Reveal-window pattern, not a plain manual toggle), keyed by object
+// *name* (= element_ref) rather than id — same convention every other
+// mesh ElementKeyframe already uses. No window set at all (the common
+// case until the user actually keyframes one) means "always advance,"
+// identical to this component's original always-looping behaviour;
+// outside a set window the mixer is simply skipped, which freezes it at
+// whatever pose it last reached rather than resetting it.
+function EmbeddedAnimationLoop({
+  objects, animWindows, timelineDateRef,
+}: {
+  objects: ImportedObject[]
+  animWindows: Map<string, { start: Date | null; end: Date | null }>
+  timelineDateRef: React.MutableRefObject<Date | null>
+}) {
+  const mixersRef = useRef(new Map<string, { mixer: THREE.AnimationMixer; name: string }>())
+
+  useEffect(() => {
+    const mixers = mixersRef.current
+    const live = new Set(objects.map(o => o.id))
+    for (const id of mixers.keys()) {
+      if (!live.has(id)) mixers.delete(id)
+    }
+    for (const { id, name, object } of objects) {
+      if (object.animations.length === 0 || mixers.has(id)) continue
+      const mixer = new THREE.AnimationMixer(object)
+      for (const clip of object.animations) mixer.clipAction(clip).play()
+      mixers.set(id, { mixer, name })
+    }
+  }, [objects])
+
+  useFrame((_, delta) => {
+    const now = timelineDateRef.current
+    for (const { mixer, name } of mixersRef.current.values()) {
+      const window = animWindows.get(name)
+      const active = !window || !window.start || !window.end || !now
+        ? true
+        : now.getTime() >= window.start.getTime() && now.getTime() <= window.end.getTime()
+      if (active) mixer.update(delta)
+    }
+  })
+
+  return null
+}
+
 // Exported (2026-07-12, per Maro's "advanced 4D" baseline-vs-actual
 // compare request) so ComparisonViewportPane.tsx can mount its own instance
 // against the same imported geometry (cloned — see sceneClone.ts), reading
@@ -3849,7 +4105,7 @@ function ClippingSetup() {
 // re-renders both.
 
 export function Viewport3D({
-  settings, importedObjects, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
+  settings, importedObjects, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
@@ -3900,19 +4156,70 @@ export function Viewport3D({
   const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
   const zUp = settings.upAxis === 'z'
 
-  // Model-scale radius (2026-07-19 fix, per Maro: "shadow is still weird
-  // floating on that plane") — a real building can easily span well past
-  // the fixed 20-unit light distance this used before, which put the
-  // "sun" only marginally outside (sometimes practically inside) the
-  // model's own volume instead of comfortably above/around it, producing
-  // exactly this kind of warped, disconnected-looking shadow. Derived from
-  // the actual loaded model's own bounding sphere (its diagonal/2) instead
-  // of a fixed guess, so the light — and its shadow camera's own frustum
-  // below — scale to whatever's actually loaded rather than one arbitrary
-  // demo-scale number. Memoized since expandByObject does a real geometry
-  // traversal, not free to redo on every unrelated render. Falls back to
-  // 20 (the old fixed default) when nothing's loaded yet.
-  const modelRadius = useMemo(() => computeModelRadius(importedObjects), [importedObjects])
+  // Model-scale bounds (2026-07-19 fix, per Maro: "shadow is still weird
+  // floating on that plane"; extended 2026-08-22, per Maro: "one big shadowy
+  // shape... not well placed" — see computeModelBounds's own header) — a
+  // real building can easily span well past the fixed 20-unit light
+  // distance this used before, which put the "sun" only marginally outside
+  // (sometimes practically inside) the model's own volume instead of
+  // comfortably above/around it, producing exactly this kind of warped,
+  // disconnected-looking shadow. Derived from the actual loaded model's own
+  // bounding box (radius from its diagonal/2, center and base from the box
+  // itself) instead of a fixed guess, so the light — and its shadow
+  // camera's own frustum below — scale to and aim at whatever's actually
+  // loaded rather than one arbitrary demo-scale number sitting at world
+  // origin. Memoized since expandByObject does a real geometry traversal,
+  // not free to redo on every unrelated render. Falls back to a 20-radius
+  // box centered at the origin (the old fixed default) when nothing's
+  // loaded yet.
+  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects])
+  const modelRadius = modelBounds.radius
+
+  // Shadow casting for the two element kinds the big selection/material
+  // effect further down this file deliberately never touches — a shared
+  // THREE.BatchedMesh (repeated-geometry IFC elements — e.g. many
+  // identical tree elements placed around a site, all merged into one draw
+  // call by elementBatching.ts, ifcModel.ts's own header) and a
+  // THREE.Points object (a Site Capture point cloud, pointCloud.ts).
+  //
+  // BatchedMesh — the actual cause (2026-08-22 fix, per Maro: "the shadows
+  // of the tree... arent being cast on the ground no matter how i change
+  // the sun controls," corrected after a wrong first guess that this was a
+  // Site Capture point cloud rather than a real, batched IFC element) —
+  // ifcModel.ts's own `new THREE.BatchedMesh(...)` construction (checked
+  // directly) never sets castShadow/receiveShadow at all, and nothing else
+  // in this codebase does either (grepped for `.mesh.castShadow` /
+  // `.mesh.receiveShadow` against BatchState — zero hits). The big
+  // selection/material effect below explicitly skips the batch mesh itself
+  // (`child === batchMeshForSkip?.mesh`, that skip's own header explains
+  // why — visibility/colour there are each batch's *own* dedicated
+  // per-instance job, not this generic per-mesh loop's), so this flag was
+  // never being set by anything, for any repeated-geometry IFC element,
+  // regardless of the Shadows toggle or sun controls — not a sun-angle bug
+  // at all, just a genuinely un-set flag.
+  //
+  // Points — real but secondary (kept from the first, wrong-target guess
+  // above since it's still a real, separate gap in its own right): the same
+  // Mesh-only traversal skips any THREE.Points object outright
+  // (`if (!(child instanceof THREE.Mesh)) return`), so a Site Capture point
+  // cloud's castShadow was equally never being set — three.js's own shadow
+  // map (WebGLShadowMap.projectObject, checked directly) does explicitly
+  // support object.isPoints for casting, so this is a real gap too, just
+  // not the one actually reported here.
+  useEffect(() => {
+    for (const { object } of importedObjects) {
+      const batch = object.userData.batch as BatchState | undefined
+      if (batch) {
+        batch.mesh.castShadow = settings.shadows
+        batch.mesh.receiveShadow = settings.shadows
+      }
+      object.traverse(child => {
+        if (!(child instanceof THREE.Points)) return
+        child.castShadow = settings.shadows
+        child.receiveShadow = settings.shadows
+      })
+    }
+  }, [importedObjects, settings.shadows])
 
   // Multi-object drag (2026-07-28, per Maro: dragging the gizmo with
   // several objects selected — "number changes [but] isnt moving the
@@ -3990,16 +4297,75 @@ export function Viewport3D({
   // angle" — see viewerSettings.ts's own sunAzimuth/sunElevation header for
   // why these two numbers and their defaults). Plain spherical-to-Cartesian
   // conversion at modelRadius * 3 (comfortably outside the model regardless
-  // of its real scale, see modelRadius's own comment just above — this
+  // of its real scale, see modelBounds's own comment just above — this
   // used to be a fixed 20 regardless of model size); azimuth is the compass
   // angle in the ground plane, elevation the angle up from it, with the
   // ground plane's own two axes swapped between up-axis conventions the
   // same way every other zUp-conditional in this file already is.
-  const sunPosition = computeSunPosition(settings.sunAzimuth, settings.sunElevation, modelRadius, zUp)
+  //
+  // Offset from modelBounds.center, not world origin (2026-08-22 fix, per
+  // Maro: "not well placed") — computeSunPosition only ever returns a
+  // direction/distance from *some* point; this used to implicitly treat
+  // that point as (0,0,0), which is wrong for any model that doesn't happen
+  // to sit exactly at the world origin (moved, georeferenced, or just
+  // imported off-center). The light's own `target` further down (JSX) is
+  // set to this same center so the sun actually points at the model instead
+  // of past it.
+  const sunOffset = computeSunPosition(settings.sunAzimuth, settings.sunElevation, modelRadius, zUp)
+  const sunPosition: [number, number, number] = [
+    modelBounds.center[0] + sunOffset[0],
+    modelBounds.center[1] + sunOffset[1],
+    modelBounds.center[2] + sunOffset[2],
+  ]
   // Mirrors computeSunPosition's own internal sunRadius (modelRadius * 3) —
   // needed again here for the shadow-camera-far calc below, which sizes the
   // frustum's far plane relative to how far away the light itself sits.
   const sunRadius = modelRadius * 3
+  // <Sky>'s own sunPosition (2026-08-22, Real-Time Sky — see
+  // viewerSettings.ts's own dynamicSky header for the full "why") — always
+  // computed zUp=false regardless of settings.upAxis and a plain unit
+  // radius, unlike sunOffset above: three-stdlib's Sky shader (drei's own
+  // Sky.js, checked directly) always treats its own sunPosition input as
+  // Y-up ("vector.y = Math.sin(theta)" is literally its elevation term) and
+  // has no concept of *this app's* upAxis convention at all — the Sky mesh
+  // itself is what gets reoriented for zUp (its own `rotation` prop, JSX
+  // below), the same "author Y-up-native, let a rotation carry it into the
+  // real upAxis" split this file already uses for Grid. Magnitude doesn't
+  // matter to the shader (it only reads direction), so a unit radius keeps
+  // this independent of modelRadius — the sky dome's own visual scale is a
+  // fixed constant (Sky's own `distance` prop) already comfortably larger
+  // than any real model.
+  const skySunPosition = computeSunPosition(settings.sunAzimuth, settings.sunElevation, 1, false)
+  // The directional light's own `target` (2026-08-22, paired with
+  // sunPosition's own center-offset above) — three.js's DirectionalLight
+  // aims from light.position toward light.target.position, defaulting the
+  // latter to a *fresh, never-added* Object3D sitting at world (0,0,0);
+  // since it's never part of the scene graph, nothing ever updates its
+  // matrixWorld, so the light silently points at the origin regardless of
+  // what `target-position` you'd set on it. A single stable instance,
+  // mounted below as a real scene child via <primitive> (so R3F's normal
+  // per-frame matrixWorld update actually reaches it) and handed to
+  // <directionalLight target={...}>, is the standard three.js fix.
+  const [sunTarget] = useState(() => new THREE.Object3D())
+  // Shadow-catcher ground plane's own placement (2026-08-22 fix, per Maro:
+  // "one big shadowy shape... not well placed") — see this file's JSX
+  // below (where it's actually mounted) for the fuller "why"; the short
+  // version is that a *fixed* 400x400 plane sitting at local (0,-0.01,0)
+  // only ever lined up with a model that happened to sit at world origin,
+  // height 0. Computed here (not inline in JSX) since it's plain math, not
+  // markup. groundRotation replaces the old rotation-wrapper-group
+  // approach (a Y-up-authored local rotation nested inside a group that
+  // re-corrected it to the real upAxis) with the equivalent direct-in-
+  // world-space rotation for each upAxis — same net orientation, but able
+  // to sit at the model's own real position instead of always the origin
+  // (a plain rotation has no translation to piggyback a position-correction
+  // on to).
+  const groundEpsilon = modelBounds.radius * 0.001
+  const groundSize = modelBounds.radius * 8
+  const groundPosition: [number, number, number] = zUp
+    ? [modelBounds.center[0], modelBounds.center[1], modelBounds.min[2] - groundEpsilon]
+    : [modelBounds.center[0], modelBounds.min[1] - groundEpsilon, modelBounds.center[2]]
+  const groundRotation: [number, number, number] = zUp ? [0, 0, 0] : [-Math.PI / 2, 0, 0]
 
   // Box-select (2026-07-08, per Maro: "select box in viewport", modelled on
   // Blender's B-key marquee) — a toggleable mode rather than always-on,
@@ -4122,6 +4488,19 @@ export function Viewport3D({
   // captureDprMultiplier, so a forced capture always gets the full quality
   // treatment (shadows included), not just the extra resolution.
   const highQuality = boostQuality || captureDprMultiplier !== null
+  // Mounts AmbientOcclusionEffect's <EffectComposer>/<N8AO> tree at most
+  // once per session (2026-08-22 — see that component's own header for the
+  // full "why"): latches true the first time settings.ambientOcclusion goes
+  // true and never resets, so switching AO back off afterward only ever
+  // flips the pass's own `enabled` (below, in the JSX) rather than
+  // unmounting the tree — the actual fix for the mount/unmount corruption
+  // this feature was pulled for. Starts already-true if AO was left on in a
+  // previously-saved ViewerSettings, so a page refresh with AO already
+  // enabled doesn't need a second toggle to mount it.
+  const [mountAmbientOcclusion, setMountAmbientOcclusion] = useState(settings.ambientOcclusion)
+  useEffect(() => {
+    if (settings.ambientOcclusion) setMountAmbientOcclusion(true)
+  }, [settings.ambientOcclusion])
   // HDR Background override for a capture/export (2026-07-11, per Maro:
   // "give me the option to show hdr background when rendering/capturing")
   // — null means "just use the live viewport's own ViewerSettings.
@@ -5155,9 +5534,20 @@ export function Viewport3D({
             that actually reaches back past the model, and a too-tight
             fixed frustum on a much smaller/larger real model than the
             original +-100 guess was tuned for is exactly what produced a
-            clipped, disconnected-looking shadow. */}
+            clipped, disconnected-looking shadow.
+            2026-08-22 fix (per Maro: "one big shadowy shape... not well
+            placed") — the frustum itself was always correctly *sized*, but
+            centered on wherever `target` points, which without an explicit
+            target defaults to world (0,0,0): a model not centered at the
+            origin had its frustum (and the light aiming into it) centered
+            on empty space next to the model rather than the model itself.
+            sunTarget (mounted below as a real scene object) now points the
+            light at modelBounds.center — see sunPosition/sunTarget's own
+            comments above — so this frustum is finally centered on the
+            actual model regardless of where it sits in world space. */}
+        <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
-          position={sunPosition} intensity={1} castShadow={settings.shadows}
+          position={sunPosition} target={sunTarget} intensity={1} castShadow={settings.shadows}
           shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]}
           // normalBias, not (only) bias (2026-07-21 fix, per Maro: a real,
           // flat exterior wall self-shadowing with a hard diagonal band
@@ -5184,21 +5574,71 @@ export function Viewport3D({
           shadow-camera-near={0.5} shadow-camera-far={sunRadius + modelRadius * 2}
         />
         <Suspense fallback={null}>
-          <ViewportErrorBoundary key={activeEnvironmentUrl} onError={onEnvironmentError}>
-            {/* Equirect HDR/EXR skies are authored assuming Y is the zenith
-                direction (2026-07-08 fix, per Maro: "hdr too off") — that
-                mapping is baked into the texture sampling itself, not the
-                scene graph, so wrapping <Environment> in a rotated <group>
-                (like Grid/ModelObjects above) wouldn't touch it. backgroundRotation/
-                environmentRotation (three.js r162+) are the actual hook for
-                this — same +90-about-X correction as everything else Y-up. */}
+          {settings.dynamicSky ? (
+            /* Real-Time Sky (2026-08-22, per Maro — see viewerSettings.ts's
+               own dynamicSky header for the full "why"). <Environment> with
+               `children` instead of `files` (drei's own Environment.js,
+               checked directly: `props.children ? EnvironmentPortal :
+               EnvironmentCube`) captures whatever's inside it into a real
+               cubemap every frame (frames={Infinity}) and uses that as both
+               the scene's own IBL source and (via `background`, same prop/
+               meaning as the static-HDR branch below) its visible backdrop
+               — so <Sky>'s own physically-based atmosphere, driven by
+               skySunPosition (computed above from the exact same
+               sunAzimuth/sunElevation the shadow-casting light uses),
+               becomes the actual thing lighting the model, not just a
+               picture behind it. far={2000} — comfortably past Sky's own
+               default `distance` (1000, its dome's scale) so the portal's
+               internal cubeCamera (default far=1000, checked in
+               Environment.js) doesn't clip it.
+               backgroundRotation/environmentRotation, not a rotated <Sky>
+               or wrapping <group> (2026-08-22 fix, caught before it shipped
+               by an isolated Playwright repro — see it in this session's
+               own history if resumed: an axis-correction group wrapping
+               <Sky> measurably changed nothing) — three-stdlib's own Sky
+               shader (checked directly, node_modules/three-stdlib/objects/
+               Sky.js) normalizes its `sunPosition` uniform and dots it
+               against a *hardcoded* `up = vec3(0,1,0)` entirely independent
+               of the mesh's modelMatrix; only the dome's raw vertex
+               positions (its visual gradient) respect the mesh's own
+               transform, not the actual sun-direction physics — so rotating
+               the mesh is cosmetic at best and, worse, desyncs the visible
+               glow from the real lighting once the mesh no longer matches
+               the uniform's own assumed frame. skySunPosition is therefore
+               always computed zUp=false (Y-up-native, matching what the
+               shader hardcodes, regardless of settings.upAxis — see that
+               computation's own comment above), and backgroundRotation/
+               environmentRotation — the same props, same values, the
+               static-HDR branch below already uses successfully for its
+               own "authored Y-up" HDR files — reorient the *result* (how
+               the rest of the scene samples the finished cubemap) after
+               capture instead, which the isolated repro confirmed actually
+               changes the sampled lighting. */
             <Environment
-              files={activeEnvironmentUrl}
+              resolution={256} frames={Infinity} far={2000}
               background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
-            />
-          </ViewportErrorBoundary>
+            >
+              <Sky sunPosition={skySunPosition} />
+            </Environment>
+          ) : (
+            <ViewportErrorBoundary key={activeEnvironmentUrl} onError={onEnvironmentError}>
+              {/* Equirect HDR/EXR skies are authored assuming Y is the zenith
+                  direction (2026-07-08 fix, per Maro: "hdr too off") — that
+                  mapping is baked into the texture sampling itself, not the
+                  scene graph, so wrapping <Environment> in a rotated <group>
+                  (like Grid/ModelObjects above) wouldn't touch it. backgroundRotation/
+                  environmentRotation (three.js r162+) are the actual hook for
+                  this — same +90-about-X correction as everything else Y-up. */}
+              <Environment
+                files={activeEnvironmentUrl}
+                background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
+                backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+                environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+              />
+            </ViewportErrorBoundary>
+          )}
           {/* Plain white backdrop (2026-07-24, per Maro, comparing against
               the Baseline pane's own look: "allow me to switch to it on the
               main") — Environment above still lights the scene via IBL
@@ -5243,18 +5683,27 @@ export function Viewport3D({
               like the setting did nothing. <shadowMaterial> renders fully
               invisible everywhere except where a shadow actually falls
               across it, so this doesn't add a visible floor/disc when
-              shadows are off or nothing's casting one — same rotation
-              wrapper as Grid, independent of showGrid (shadows should work
-              whether or not the visual grid lines are on), slightly below
-              y=0 in local space to avoid z-fighting with the Grid's own
-              lines when both are visible. */}
+              shadows are off or nothing's casting one.
+              2026-08-22 fix (per Maro: "one big shadowy shape... not well
+              placed") — this used to be a *fixed* 400x400 plane sitting at
+              local (0,-0.01,0), i.e. always world origin at height 0
+              regardless of the real model: any model moved, georeferenced,
+              or just imported off-center had this catcher sitting next to
+              (or floating above/below) it rather than under it, so whatever
+              shadow *did* land on it looked like one big misplaced blob
+              instead of a shadow actually grounded under the building.
+              groundPosition/groundSize/groundRotation (computed above, see
+              their own comment) now follow the model's real bounds instead
+              — centered under it, sized to it (radius*8, comfortably past
+              the shadow's own reach for a low sun angle), sitting right at
+              its lowest point (minus a small relative epsilon, scaled with
+              the model instead of a fixed 0.01, to avoid z-fighting with
+              the Grid's own lines when both are visible). */}
           {settings.shadows && (
-            <group rotation={axisCorrectionRotation('y', settings.upAxis)}>
-              <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
-                <planeGeometry args={[400, 400]} />
-                <shadowMaterial transparent opacity={0.35} />
-              </mesh>
-            </group>
+            <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
+              <planeGeometry args={[groundSize, groundSize]} />
+              <shadowMaterial transparent opacity={0.35} />
+            </mesh>
           )}
           <ModelObjects
             objects={importedObjects}
@@ -5308,6 +5757,7 @@ export function Viewport3D({
             clashByElementKey={clashByElementKey}
             showClashColors={settings.showClashColors}
           />
+          <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
           <PathGizmos
             paths={paths}
             upAxis={settings.upAxis}
@@ -5463,6 +5913,11 @@ export function Viewport3D({
           <GizmoHelper alignment="bottom-left" margin={[80, 80]}>
             <AxisGizmo axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" cameraRef={cameraRef} controlsRef={controlsRef} />
           </GizmoHelper>
+        )}
+        {mountAmbientOcclusion && (
+          <Suspense fallback={null}>
+            <AmbientOcclusionEffect enabled={settings.ambientOcclusion} boostQuality={highQuality} />
+          </Suspense>
         )}
       </Canvas>
       {activeCamera && (

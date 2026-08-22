@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     # geo-anchor itself IS per-project but the billing key isn't). Empty
     # by default so a fresh checkout doesn't silently ship a real key.
     google_tiles_api_key: str = ""
+    # Where Reality Captures' own uploaded scan files (2026-08-20) persist —
+    # today just a MatterPak's plain-text `cloud.xyz` point cloud (see
+    # frontend/src/modules/fourD/pointCloud.ts's own header on why .xyz,
+    # not the already-supported-but-unpersisted textured OBJ+MTL, is what
+    # actually gets stored: it's the precision data source the Progress
+    # Variance engine needs, and the one thing worth keeping across a
+    # refresh so a variance test can reference a specific dated capture
+    # later). Same local-disk-per-kind convention as model3d_storage_dir/
+    # fourd_video_storage_dir above, kept in its own directory rather than
+    # reusing either — a capture is neither an importable 3D model nor an
+    # exported video, and giving it a separate root avoids the two ever
+    # colliding on a generated filename.
+    site_capture_storage_dir: str = "uploads/site_captures"
 
 
 settings = Settings()

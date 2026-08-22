@@ -109,7 +109,7 @@ export function ImportModelDialog({ files, kind, queuePosition, onConfirm, onCan
           {supportsAnimation && (
             <label className="flex items-center gap-1.5 text-[11px] text-gray-600 dark:text-prosota-muted cursor-pointer">
               <input type="checkbox" checked={includeAnimation} onChange={e => setIncludeAnimation(e.target.checked)} />
-              Convert this file's animation into keyframes, if it has any
+              Include this file's animation, if it has any (converted to editable keyframes when possible, otherwise played back as a raw loop)
             </label>
           )}
         </div>

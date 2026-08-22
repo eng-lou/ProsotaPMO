@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import uuid
+from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -29,6 +31,7 @@ async def list_files(db: AsyncSession, project_id: uuid.UUID) -> list[Model3DFil
 
 async def create_file(
     db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, upload: UploadFile,
+    keep_raw_animation: bool = False,
 ) -> Model3DFileResponse:
     # Re-importing a file with the same name/kind REPLACES the existing one
     # rather than accumulating a new row alongside it (2026-07-11, per a
@@ -68,6 +71,40 @@ async def create_file(
     except Exception:
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+
+    row = Model3DFile(
+        project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,
+        storage_filename=storage_filename, size_bytes=size, keep_raw_animation=keep_raw_animation,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return Model3DFileResponse.model_validate(row)
+
+
+# Used by site_capture.py's own generate_ifc (2026-08-20, Cloud2BIM
+# integration — an .ifc generated server-side from a SiteCapture's point
+# cloud, not an upload) — same replace-on-reimport convention as
+# create_file above (re-running "Generate IFC" against the same capture
+# should replace its own prior result, not accumulate duplicates), just
+# copying from an already-on-disk file instead of streaming an UploadFile.
+async def create_file_from_path(
+    db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, source_path: Path,
+) -> Model3DFileResponse:
+    existing = (await db.execute(
+        select(Model3DFile).where(
+            Model3DFile.project_id == project_id, Model3DFile.name == name, Model3DFile.kind == kind,
+        )
+    )).scalar_one_or_none()
+    if existing is not None:
+        delete_stored_file(existing.storage_filename)
+        await db.delete(existing)
+        await db.flush()
+
+    storage_filename = generate_storage_filename(name)
+    dest = storage_path(storage_filename)
+    shutil.copyfile(source_path, dest)
+    size = dest.stat().st_size
 
     row = Model3DFile(
         project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,

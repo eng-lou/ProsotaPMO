@@ -282,6 +282,7 @@ function useBoxSelect(keyframes: ElementKeyframe[], scheduleStart: Date, totalMs
 function ActorRow({
   actor, links, keyframes, isPathBound, isAnimatable, activityById, profileById, scheduleStart, scheduleEnd, totalMs, format,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onSelect, selectedIds, onBoxSelect,
+  onKeyAnimStart, onKeyAnimEnd,
 }: {
   actor: Actor
   links: ModelElementLink[]
@@ -300,6 +301,12 @@ function ActorRow({
   onSelect: (() => void) | null
   selectedIds: Set<string>
   onBoxSelect: (ids: string[]) => void
+  // "Key Start"/"Key End" for a mesh's own raw-animation Reveal window
+  // (2026-08-22) — see SubTrackDef.labelExtra's own header. null for
+  // every other actor kind (their own dedicated panel already handles
+  // this), never called otherwise.
+  onKeyAnimStart: (() => void) | null
+  onKeyAnimEnd: (() => void) | null
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const boxSelect = useBoxSelect(keyframes, scheduleStart, totalMs, onBoxSelect)
@@ -393,6 +400,32 @@ function ActorRow({
           </div>
         </div>
       )}
+      {/* Path/Zone/Annotation key their own Reveal window's first Start/
+          End from a dedicated side panel (PathsPanel.tsx and siblings) —
+          a mesh import has no such panel, so its Reveal row gets these
+          two buttons directly instead (2026-08-22, per Maro: "I need to
+          be able to keyframe the pause/play of the loop"). Own row below
+          the two-column subtrack stack, not squeezed into the label
+          column's own fixed h-3 rows, which have no room for button text. */}
+      {!collapsed && hasAnim && actor.sourceKind === 'mesh' && onKeyAnimStart && onKeyAnimEnd && (
+        <div className="flex items-center gap-1 pl-4 pr-2 pb-1.5">
+          <span className="text-[10px] text-gray-400 dark:text-prosota-muted w-14 shrink-0">Reveal at</span>
+          <button
+            onClick={onKeyAnimStart}
+            title="Key the current playhead date as this loop's Start"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
+          >
+            Key Start
+          </button>
+          <button
+            onClick={onKeyAnimEnd}
+            title="Key the current playhead date as this loop's End"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
+          >
+            Key End
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -430,8 +463,10 @@ function ActorRow({
 // the (still-advancing, wall-clock-driven) playhead had reached by then.
 export const AnimationActorsList = memo(function AnimationActorsList({
   scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras,
+  rawAnimationMeshNames,
   timeDisplayMode, speedDaysPerSecond, fps,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onCreateKeyframes, onReverseKeyframes, onSelectActor,
+  onKeyAnimStart, onKeyAnimEnd,
 }: {
   scheduleStart: Date
   scheduleEnd: Date
@@ -447,6 +482,18 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   paths: Path[]
   zones: Zone[]
   cameras: Camera[]
+  // Mesh imports whose own raw embedded animation loop couldn't be baked
+  // to Location/Rotation/Scale keyframes (2026-08-22, per Maro's real
+  // Blender particle-VFX export, "Water Spray.glb", then his own
+  // follow-up: "I need to be able to keyframe the pause/play of the
+  // loop"). Same "binding alone is immediately visible" treatment as
+  // Path/Zone/Annotation's own `animate` flag just below — a mesh with a
+  // kept raw clip is animatable the moment it's imported, so its own
+  // Reveal sub-track (anim_start/anim_end — Viewport3D.tsx's
+  // EmbeddedAnimationLoop reads the same resolved window to gate whether
+  // the clip advances or holds its pose) shows up here even before any
+  // keyframe has actually been set on it yet.
+  rawAnimationMeshNames: Set<string>
   timeDisplayMode: TimeDisplayMode
   speedDaysPerSecond: number
   fps: number
@@ -456,6 +503,12 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   onCreateKeyframes: (rows: { sourceKind: ElementKeyframe['source_kind']; elementRef: string; field: KeyframeField; date: Date; value: number }[]) => void
   onReverseKeyframes: (keyframes: ElementKeyframe[]) => void
   onSelectActor: (sourceKind: ActorSourceKind, elementRef: string) => void
+  // Keys the current playhead as a mesh's own anim_start/anim_end
+  // (2026-08-22) — same generic FourD.tsx handleKeyAnim already used for
+  // Path/Zone/Annotation, widened to accept 'mesh' too; see ActorRow's
+  // own Reveal-row buttons for where these are actually called from.
+  onKeyAnimStart: (elementRef: string) => void
+  onKeyAnimEnd: (elementRef: string) => void
 }) {
   const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
   const format: DisplayFormat = { scheduleStart, timeDisplayMode, speedDaysPerSecond, fps }
@@ -616,13 +669,19 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       if (!a.animate) continue
       animatableActors_.add(add('annotation', a.id))
     }
+    // Same "binding alone is immediately visible" reasoning, for a mesh
+    // import's own raw embedded-animation loop (2026-08-22) — see
+    // rawAnimationMeshNames' own header just above.
+    for (const name of rawAnimationMeshNames) {
+      animatableActors_.add(add('mesh', name))
+    }
     for (const actor of byKey.values()) actor.label = labelFor(actor.sourceKind, actor.elementRef)
 
     return {
       actors: [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label)),
       linksByActor: linksByActor_, keyframesByActor: keyframesByActor_, pathBoundActors: pathBoundActors_, animatableActors: animatableActors_,
     }
-  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations, paths, zones, cameras])
+  }, [modelElementLinks, elementKeyframes, pathFollowers, annotations, paths, zones, cameras, rawAnimationMeshNames])
 
   // Built once here, not per PresetTrack render (2026-07-21 perf fix) —
   // PresetTrack used to build these same two Maps itself, from the full
@@ -696,6 +755,8 @@ export const AnimationActorsList = memo(function AnimationActorsList({
               onSelect={actor.sourceKind === 'ifc' ? null : () => onSelectActor(actor.sourceKind, actor.elementRef)}
               selectedIds={selectedActorKey === key ? selectedIds : EMPTY_IDS}
               onBoxSelect={ids => handleBoxSelect(key, ids)}
+              onKeyAnimStart={actor.sourceKind === 'mesh' ? () => onKeyAnimStart(actor.elementRef) : null}
+              onKeyAnimEnd={actor.sourceKind === 'mesh' ? () => onKeyAnimEnd(actor.elementRef) : null}
             />
           )
         })}

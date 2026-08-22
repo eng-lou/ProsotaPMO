@@ -58,6 +58,37 @@ export interface ViewerSettings {
   // current look.
   sunAzimuth: number
   sunElevation: number
+  // Real-Time Sky (2026-08-22, per Maro: "the sun position remains the
+  // same, i take its the hdr doing this... add real time option so i can
+  // use the sun controls with a dynamic shadow effect") — the default
+  // environment is a *static* baked HDR photo (DEFAULT_ENVIRONMENT_URL,
+  // Viewport3D.tsx), which has its own real sun already baked into its
+  // pixels: dragging Sun Azimuth/Elevation only ever moved the shadow-
+  // casting directional light, never that image, so a model's own IBL
+  // reflections/ambient shading (dominated by the HDR, the directional
+  // light being comparatively weak) barely appeared to respond to the sun
+  // controls at all — confirmed live: a tree's own lit/shaded side stayed
+  // the same regardless of sun position. This swaps the static HDR for a
+  // procedural sky (three-stdlib's Sky shader via drei, physically-based
+  // Preetham/Nishita-style atmospheric scattering) captured live into the
+  // scene's own environment map every frame, driven by the exact same
+  // sunAzimuth/sunElevation this file already exposes — so the visible
+  // sky, its IBL contribution, and the cast shadow all move together, in
+  // real time, off ONE set of sun controls, instead of two disconnected
+  // "shadow direction" vs "everything else" systems. Off by default, same
+  // "real GPU cost worth opting into deliberately" caution as shadows/AO —
+  // continuous cubemap capture every frame is real, ongoing GPU work, not
+  // a one-time cost like the static HDR's own single texture load.
+  dynamicSky: boolean
+  // Ambient occlusion (2026-07-09, per Maro; removed 2026-07-25 after a real
+  // EffectComposer mount/unmount corruption bug — see Viewport3D.tsx's own
+  // AmbientOcclusionEffect header; re-added 2026-08-22, per Maro: "you can
+  // add ao back now" — fixed this time by never mounting/unmounting that
+  // tree on toggle, only flipping the underlying pass's own `enabled`, the
+  // documented-safe way to toggle a postprocessing effect). Off by default,
+  // same "real GPU/visual cost worth opting into deliberately" caution as
+  // shadows above.
+  ambientOcclusion: boolean
   // Blender's "Scene World" checkbox equivalent (2026-07-11, per Maro: "see
   // the sky as well from the added HDR"). Defaults on — Viewport3D.tsx's
   // DEFAULT_ENVIRONMENT_URL is an actual outdoor sky (a self-hosted HDR,
@@ -134,6 +165,8 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   shadows: false,
   sunAzimuth: 45,
   sunElevation: 45,
+  dynamicSky: false,
+  ambientOcclusion: false,
   environmentBackground: true,
   whiteBackground: false,
   upAxis: 'z',

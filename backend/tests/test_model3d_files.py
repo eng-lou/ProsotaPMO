@@ -27,6 +27,28 @@ async def test_upload_and_list_file(client: AsyncClient, project: Project):
     assert any(f["id"] == created["id"] for f in listing)
 
 
+async def test_upload_defaults_keep_raw_animation_false(client: AsyncClient, project: Project):
+    data, files = upload_payload(str(project.id))
+    resp = await client.post("/api/v1/model3d-files/", data=data, files=files)
+    assert resp.json()["keep_raw_animation"] is False
+
+
+async def test_upload_keep_raw_animation_true_round_trips(client: AsyncClient, project: Project):
+    """The Water Spray.glb case (2026-08-22): a particle-VFX import whose
+    animation can't become schedule keyframes gets uploaded with
+    keep_raw_animation set, so the restore-on-mount path (FourD.tsx) knows
+    to keep the raw clip instead of stripping it on every reload."""
+    data, files = upload_payload(str(project.id), name="water_spray.glb", kind="mesh", axis="y")
+    data["keep_raw_animation"] = "true"
+    resp = await client.post("/api/v1/model3d-files/", data=data, files=files)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["keep_raw_animation"] is True
+
+    listing = (await client.get("/api/v1/model3d-files/", params={"project_id": str(project.id)})).json()
+    found = next(f for f in listing if f["name"] == "water_spray.glb")
+    assert found["keep_raw_animation"] is True
+
+
 async def test_upload_writes_to_disk(client: AsyncClient, project: Project):
     data, files = upload_payload(str(project.id), content=b"hello-world-bytes")
     resp = await client.post("/api/v1/model3d-files/", data=data, files=files)

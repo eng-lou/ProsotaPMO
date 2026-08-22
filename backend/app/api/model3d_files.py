@@ -32,10 +32,11 @@ async def create_file(
     name: str = Form(...),
     kind: Model3DKind = Form(...),
     source_up_axis: UpAxis = Form(...),
+    keep_raw_animation: bool = Form(False),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    return await svc.create_file(db, project_id, name, kind, source_up_axis, file)
+    return await svc.create_file(db, project_id, name, kind, source_up_axis, file, keep_raw_animation)
 
 
 @router.get("/{file_id}/download")
