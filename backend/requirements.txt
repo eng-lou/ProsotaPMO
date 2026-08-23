@@ -13,10 +13,19 @@ pye57==0.4.19
 # directory's aux_functions.py's own header): it's only ever touched by
 # optional-visualization code paths this app always disables, and its own
 # PyPI wheels don't support this app's Python version anyway.
-ifcopenshell==0.8.5
-opencv-python==5.0.0.93
-scikit-image==0.26.0
-pandas==3.0.5
-matplotlib==3.11.1
+#
+# ifcopenshell/opencv-python/scikit-image/pandas/matplotlib deliberately
+# NOT installed here (2026-08-23, first Vercel deploy) — Vercel's Python
+# function bundle has a hard 500MB cap, and this app's own build hit
+# 826MB with them in; these five are used *only* inside
+# app/services/cloud2bim/ (grepped every import across the whole backend
+# to confirm — nothing else touches them), and cloud2bim_convert.py
+# already runs that whole pipeline as an isolated subprocess specifically
+# so a crash in it can never take down the real server (see that file's
+# own header) — site_capture.py already catches Cloud2BimError around
+# every call site, so a missing-dependency failure here degrades to a
+# normal error response, not an outage. Re-add all five (opencv as
+# opencv-python-headless instead — same swap, still no GUI calls anywhere
+# in aux_functions.py, confirmed) if/when Cloud2BIM moves off pause.
 PyYAML==6.0.3
 tqdm==4.70.0
