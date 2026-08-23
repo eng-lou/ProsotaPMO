@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { uploadDirectToStorage } from '@/lib/directUpload'
 import type { Model3DFile } from './model3dFiles'
 import type { UpAxis } from './upAxis'
 
@@ -28,21 +29,23 @@ export async function listSiteCaptures(projectId: string): Promise<SiteCapture[]
   return res.data
 }
 
+// Direct-to-R2 upload (2026-08-23) — same three-step presign/PUT/record
+// flow as model3dFiles.ts's own uploadModel3DFile; see that function's own
+// header for the full "why" (Vercel's hard 4.5MB Function body cap), which
+// matters even more here — a real raw .e57 export routinely runs into the
+// GB range (see site_capture.py's own MAX_UPLOAD_BYTES comment).
 export async function uploadSiteCapture(
   projectId: string, name: string, capturedAt: string, kind: SiteCaptureKind, sourceUpAxis: UpAxis, file: Blob,
   onProgress?: (percent: number) => void,
 ): Promise<SiteCapture> {
-  const form = new FormData()
-  form.append('project_id', projectId)
-  form.append('name', name)
-  form.append('captured_at', capturedAt)
-  form.append('kind', kind)
-  form.append('source_up_axis', sourceUpAxis)
-  form.append('file', file, name)
-  const res = await api.post<SiteCapture>('/api/v1/site-captures/', form, {
-    onUploadProgress: onProgress
-      ? (e) => { if (e.total) onProgress(Math.round((e.loaded / e.total) * 100)) }
-      : undefined,
+  const contentType = file.type || 'application/octet-stream'
+  const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
+    '/api/v1/site-captures/presign', { name, content_type: contentType },
+  )
+  await uploadDirectToStorage(presigned.upload_url, file, contentType, onProgress)
+  const res = await api.post<SiteCapture>('/api/v1/site-captures/', {
+    project_id: projectId, name, captured_at: capturedAt, kind, source_up_axis: sourceUpAxis,
+    storage_key: presigned.storage_key,
   })
   return res.data
 }

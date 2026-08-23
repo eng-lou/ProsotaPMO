@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { uploadDirectToStorage } from '@/lib/directUpload'
 
 // Frontend for fourd_video.py's backend (2026-07-20, per Maro: a dashboard
 // widget to "open one of the videos 4d sequence vids we've captured") —
@@ -21,13 +22,18 @@ export async function listFourDVideos(projectId: string): Promise<FourDVideo[]> 
   return res.data
 }
 
+// Direct-to-R2 upload (2026-08-23) — same three-step presign/PUT/record
+// flow as model3dFiles.ts's own uploadModel3DFile; see that function's own
+// header for the full "why" (Vercel's hard 4.5MB Function body cap).
 export async function uploadFourDVideo(projectId: string, name: string, durationSec: number, file: Blob): Promise<FourDVideo> {
-  const form = new FormData()
-  form.append('project_id', projectId)
-  form.append('name', name)
-  form.append('duration_sec', String(durationSec))
-  form.append('file', file, name)
-  const res = await api.post<FourDVideo>('/api/v1/fourd-videos/', form)
+  const contentType = file.type || 'video/webm'
+  const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
+    '/api/v1/fourd-videos/presign', { content_type: contentType },
+  )
+  await uploadDirectToStorage(presigned.upload_url, file, contentType)
+  const res = await api.post<FourDVideo>('/api/v1/fourd-videos/', {
+    project_id: projectId, name, duration_sec: durationSec, storage_key: presigned.storage_key,
+  })
   return res.data
 }
 

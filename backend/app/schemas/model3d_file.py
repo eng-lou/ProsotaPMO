@@ -49,3 +49,28 @@ class Model3DFileResponse(BaseModel):
 
 class Model3DFileUnloadedElementsUpdate(BaseModel):
     unloaded_elements: list[UnloadedElementInfo]
+
+
+# Direct-to-R2 upload (2026-08-23) — see object_storage.py's own header for
+# the full "why" (Vercel's hard 4.5MB Function request-body cap). The
+# browser calls POST /presign first with just the filename/content-type,
+# PUTs the file's own bytes straight to the returned url (never touching
+# this backend), then calls the real create endpoint below with the
+# resulting storage_key instead of the file itself.
+class PresignedUploadRequest(BaseModel):
+    name: str
+    content_type: str
+
+
+class PresignedUpload(BaseModel):
+    storage_key: str
+    upload_url: str
+
+
+class Model3DFileCreate(BaseModel):
+    project_id: uuid.UUID
+    name: str
+    kind: Model3DKind
+    source_up_axis: UpAxis
+    storage_key: str
+    keep_raw_animation: bool = False

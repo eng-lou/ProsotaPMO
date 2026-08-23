@@ -50,6 +50,27 @@ class Settings(BaseSettings):
     # exported video, and giving it a separate root avoids the two ever
     # colliding on a generated filename.
     site_capture_storage_dir: str = "uploads/site_captures"
+    # Cloudflare R2 (2026-08-23, per Maro: first real Vercel deploy hit a
+    # real IFC upload — "Snowdon Towers Sample Structural.ifc" — with a 413:
+    # Vercel Functions hard-cap request bodies at 4.5MB, platform-enforced
+    # (AWS Lambda underneath), not something app code can raise. The fix the
+    # local-disk settings above were always going to need eventually: model3d_file.py/
+    # site_capture.py/fourd_video_storage.py now generate a presigned R2 PUT
+    # URL and the *browser* uploads directly to R2, never routing the file's
+    # own bytes through this backend's own request body at all — the same
+    # object storage also fixes local disk's other, separately-known problem
+    # on Vercel (an ephemeral filesystem, not guaranteed to survive between
+    # requests/instances). R2 specifically (not S3) because it's plain
+    # S3-compatible — boto3 talks to it with zero new dependencies beyond
+    # boto3 itself — and has no egress fees, unlike S3, for what's meant to
+    # be routinely re-downloaded BIM data. No local-disk fallback kept: same
+    # "one real code path, point it at whichever real backing store" choice
+    # database_url already makes (local dev's own backend/.env needs these
+    # three set too, same R2 bucket or a separate one, either works).
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket_name: str = "prosota-pmo"
 
 
 settings = Settings()

@@ -16,3 +16,22 @@ class FourDVideoResponse(BaseModel):
     size_bytes: int
     created_at: datetime
     updated_at: datetime
+
+
+# Direct-to-R2 upload (2026-08-23) — see model3d_file.py's own
+# PresignedUploadRequest/PresignedUpload for the shared shape/reasoning
+# (Vercel's hard 4.5MB Function request-body cap).
+class PresignedUploadRequest(BaseModel):
+    content_type: str
+
+
+class PresignedUpload(BaseModel):
+    storage_key: str
+    upload_url: str
+
+
+class FourDVideoCreate(BaseModel):
+    project_id: uuid.UUID
+    name: str
+    duration_sec: float
+    storage_key: str

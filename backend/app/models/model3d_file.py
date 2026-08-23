@@ -15,15 +15,17 @@ class Model3DFile(Base, TimestampMixin):
     models and associated data similar to the persistent data in
     Schedule... so i dont have to repeat my actions import again").
 
-    Only metadata lives here — the actual bytes live on local disk under
-    settings.model3d_storage_dir (see app/core/config.py's own comment on
-    why local disk, not S3/blob storage or a DB column, for this pass),
-    named by storage_filename (a fresh UUID + the original extension, never
-    the user's own filename — avoids both path-traversal and same-name
-    collisions across projects/re-imports). name keeps the original
-    filename for display and for mesh-kind ModelElementLink's own
-    element_ref matching (that's keyed by filename, the only stable
-    identifier a plain mesh import has — see model_element_link.py).
+    Only metadata lives here — the actual bytes live in Cloudflare R2 (see
+    app/core/config.py's own r2_* comment and object_storage.py for why —
+    Vercel's hard 4.5MB Function request-body cap made local disk
+    unworkable in production), keyed by storage_filename (despite the name,
+    an R2 object key since the 2026-08-23 migration off local disk — a
+    fresh UUID + the original extension, never the user's own filename —
+    avoids both path-traversal and same-name collisions across projects/
+    re-imports). name keeps the original filename for display and for
+    mesh-kind ModelElementLink's own element_ref matching (that's keyed by
+    filename, the only stable identifier a plain mesh import has — see
+    model_element_link.py).
 
     source_up_axis mirrors frontend/src/modules/fourD/upAxis.ts's UpAxis
     ('y' | 'z') — the axis choice made in ImportModelDialog.tsx at import

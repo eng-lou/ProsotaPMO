@@ -6,6 +6,11 @@ alembic>=1.13.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
 PyJWT[crypto]>=2.8.0
+# Cloudflare R2 (2026-08-23) — see config.py's own r2_* header. boto3 talks
+# to R2 directly since it's plain S3-compatible; ~15MB installed, well
+# inside the 500MB Python function cap even before this session's own
+# Cloud2BIM-dependency removal freed up headroom.
+boto3>=1.34
 pye57==0.4.19
 # Cloud2BIM (app/services/cloud2bim/, vendored from
 # https://github.com/VaclavNezerka/Cloud2BIM, MIT) — "Generate IFC" from a

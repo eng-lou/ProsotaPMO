@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.model3d_file import Model3DFileResponse
-from app.schemas.site_capture import SiteCaptureKind, SiteCaptureResponse, SiteCaptureUpdate, UpAxis
+from app.schemas.site_capture import (
+    PresignedUpload, PresignedUploadRequest, SiteCaptureCreate, SiteCaptureResponse, SiteCaptureUpdate,
+)
 from app.services import site_capture as svc
 
 router = APIRouter(prefix="/site-captures", tags=["site-captures"])
@@ -23,20 +24,26 @@ async def list_captures(
     return await svc.list_captures(db, project_id)
 
 
-# multipart/form-data, same convention as model3d_files.py's own upload
-# endpoint (see that router's own comment) — metadata as plain form fields
-# alongside the file itself.
+# Step 1 of the direct-to-R2 upload (2026-08-23) — see object_storage.py's
+# own header for the full "why" (Vercel's hard 4.5MB Function body cap).
+@router.post("/presign", response_model=PresignedUpload)
+async def presign_upload(payload: PresignedUploadRequest) -> PresignedUpload:
+    return svc.presign_upload(payload.name, payload.content_type)
+
+
+# JSON, not multipart/form-data (2026-08-23, replacing this endpoint's own
+# pre-Vercel shape) — see model3d_files.py's own create_file for the
+# identical reasoning; the browser has already PUT the file's own bytes
+# straight to R2 via the presigned url from /presign above.
 @router.post("/", response_model=SiteCaptureResponse, status_code=201)
 async def create_capture(
-    project_id: uuid.UUID = Form(...),
-    name: str = Form(...),
-    captured_at: date = Form(...),
-    kind: SiteCaptureKind = Form("xyz"),
-    source_up_axis: UpAxis = Form(...),
-    file: UploadFile = File(...),
+    payload: SiteCaptureCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    return await svc.create_capture(db, project_id, name, captured_at, kind, source_up_axis, file)
+    return await svc.create_capture(
+        db, payload.project_id, payload.name, payload.captured_at, payload.kind,
+        payload.source_up_axis, payload.storage_key,
+    )
 
 
 @router.patch("/{capture_id}", response_model=SiteCaptureResponse)
@@ -52,7 +59,7 @@ async def update_capture(
 async def download_capture(
     capture_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
+) -> RedirectResponse:
     return await svc.get_download(db, capture_id)
 
 

@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import HTTPException
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.model3d_file import Model3DFile
-from app.schemas.model3d_file import Model3DFileResponse, Model3DKind, UnloadedElementInfo, UpAxis
-from app.services.model3d_storage import delete_stored_file, generate_storage_filename, storage_path
+from app.schemas.model3d_file import Model3DFileResponse, Model3DKind, PresignedUpload, UnloadedElementInfo, UpAxis
+from app.services import object_storage
 
-# A defensive cap, not a tuned production limit — this app has no CDN/chunked
-# upload infrastructure yet, so a single request just streams straight to
-# local disk (see model3d_storage.py); 1GB is generous headroom for a real
-# federated IFC/GLTF model while still catching an obviously-wrong upload
-# (e.g. a browser retry loop) before it fills the disk.
-MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
-CHUNK_SIZE = 1024 * 1024
+STORAGE_PREFIX = "model3d"
 
 
 async def list_files(db: AsyncSession, project_id: uuid.UUID) -> list[Model3DFileResponse]:
@@ -29,52 +23,51 @@ async def list_files(db: AsyncSession, project_id: uuid.UUID) -> list[Model3DFil
     return [Model3DFileResponse.model_validate(r) for r in rows]
 
 
+# Step 1 of the direct-to-R2 upload (2026-08-23) — see object_storage.py's
+# own header. presigned_put_url is pure local HMAC signing, no network call,
+# so this stays a plain sync function unlike everything below that actually
+# talks to R2.
+def presign_upload(name: str, content_type: str) -> PresignedUpload:
+    storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, name)
+    upload_url = object_storage.presigned_put_url(storage_key, content_type)
+    return PresignedUpload(storage_key=storage_key, upload_url=upload_url)
+
+
+# Step 2 — the browser has already PUT the file's own bytes straight to R2
+# by the time this runs; this only ever handles metadata (2026-08-23,
+# replacing the old direct multipart-upload version this file had before
+# Vercel's 4.5MB Function body cap made that impossible in production).
+# size_bytes is read back from R2 itself (head_object_size), not trusted
+# from the client, so a stale/lied-about value can't corrupt it.
 async def create_file(
-    db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, upload: UploadFile,
-    keep_raw_animation: bool = False,
+    db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis,
+    storage_key: str, keep_raw_animation: bool = False,
 ) -> Model3DFileResponse:
     # Re-importing a file with the same name/kind REPLACES the existing one
-    # rather than accumulating a new row alongside it (2026-07-11, per a
-    # real incident: the frontend's own restore-on-mount effect was slow/
-    # unreliable enough in practice that a user re-imported the same ~15MB
-    # IFC file 5 separate times across one day, leaving 5 full duplicate
-    # copies in the database and on disk, each restore slower than the
-    # last). Deleting the prior row first (not overwriting its bytes in
-    # place) deliberately cascades anything FK'd to it -- SectionBox,
-    # ElementTransform -- consistent with how those tables already treat a
-    # "re-import" as potentially-different geometry, not guaranteed to be
-    # the same file (see section_box.py's own docstring on why it uses a
-    # real FK instead of ModelElementLink's loose filename identity).
+    # rather than accumulating a new row alongside it — see this function's
+    # own pre-R2 history for the full "why" (a real incident: 5 duplicate
+    # imports of the same file in one day). Deliberately cascades anything
+    # FK'd to the old row (SectionBox, ElementTransform), same as before.
     existing = (await db.execute(
         select(Model3DFile).where(
             Model3DFile.project_id == project_id, Model3DFile.name == name, Model3DFile.kind == kind,
         )
     )).scalar_one_or_none()
     if existing is not None:
-        delete_stored_file(existing.storage_filename)
+        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         await db.delete(existing)
         await db.flush()
 
-    storage_filename = generate_storage_filename(name)
-    dest = storage_path(storage_filename)
-    size = 0
     try:
-        with open(dest, "wb") as out:
-            while chunk := await upload.read(CHUNK_SIZE):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="File too large")
-                out.write(chunk)
-    except HTTPException:
-        dest.unlink(missing_ok=True)
-        raise
+        size = await run_in_threadpool(object_storage.head_object_size, storage_key)
     except Exception:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+        raise HTTPException(
+            status_code=400, detail="Uploaded file not found in storage — the upload may have failed or expired",
+        ) from None
 
     row = Model3DFile(
         project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,
-        storage_filename=storage_filename, size_bytes=size, keep_raw_animation=keep_raw_animation,
+        storage_filename=storage_key, size_bytes=size, keep_raw_animation=keep_raw_animation,
     )
     db.add(row)
     await db.commit()
@@ -82,12 +75,11 @@ async def create_file(
     return Model3DFileResponse.model_validate(row)
 
 
-# Used by site_capture.py's own generate_ifc (2026-08-20, Cloud2BIM
-# integration — an .ifc generated server-side from a SiteCapture's point
-# cloud, not an upload) — same replace-on-reimport convention as
-# create_file above (re-running "Generate IFC" against the same capture
-# should replace its own prior result, not accumulate duplicates), just
-# copying from an already-on-disk file instead of streaming an UploadFile.
+# Used by site_capture.py's own generate_ifc (Cloud2BIM integration — an
+# .ifc generated server-side from a SiteCapture's point cloud, not a
+# browser upload) — same replace-on-reimport convention as create_file
+# above, just uploading an already-local temp file to R2 instead of
+# recording a browser-uploaded storage_key directly.
 async def create_file_from_path(
     db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, source_path: Path,
 ) -> Model3DFileResponse:
@@ -97,18 +89,17 @@ async def create_file_from_path(
         )
     )).scalar_one_or_none()
     if existing is not None:
-        delete_stored_file(existing.storage_filename)
+        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         await db.delete(existing)
         await db.flush()
 
-    storage_filename = generate_storage_filename(name)
-    dest = storage_path(storage_filename)
-    shutil.copyfile(source_path, dest)
-    size = dest.stat().st_size
+    storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, name)
+    await run_in_threadpool(object_storage.upload_from_path, storage_key, source_path)
+    size = source_path.stat().st_size
 
     row = Model3DFile(
         project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,
-        storage_filename=storage_filename, size_bytes=size,
+        storage_filename=storage_key, size_bytes=size,
     )
     db.add(row)
     await db.commit()
@@ -116,21 +107,24 @@ async def create_file_from_path(
     return Model3DFileResponse.model_validate(row)
 
 
-async def get_download(db: AsyncSession, file_id: uuid.UUID) -> FileResponse:
+# Redirects to a presigned R2 GET url (2026-08-23) — a large model's bytes
+# streaming back through this backend's own Function would hit Vercel's
+# matching response-body cap, same reasoning as the upload side. The
+# frontend's own axios GET (responseType: 'blob') follows a 307
+# transparently, so this needed no frontend change.
+async def get_download(db: AsyncSession, file_id: uuid.UUID) -> RedirectResponse:
     row = await db.get(Model3DFile, file_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Model file not found")
-    path = storage_path(row.storage_filename)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Stored file is missing on disk")
-    return FileResponse(path, filename=row.name, media_type="application/octet-stream")
+    url = await run_in_threadpool(object_storage.presigned_get_url, row.storage_filename)
+    return RedirectResponse(url)
 
 
 async def delete_file(db: AsyncSession, file_id: uuid.UUID) -> None:
     row = await db.get(Model3DFile, file_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Model file not found")
-    delete_stored_file(row.storage_filename)
+    await run_in_threadpool(object_storage.delete_object, row.storage_filename)
     await db.delete(row)
     await db.commit()
 

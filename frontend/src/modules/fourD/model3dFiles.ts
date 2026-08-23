@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { uploadDirectToStorage } from '@/lib/directUpload'
 import type { UpAxis } from './upAxis'
 
 export type Model3DKind = 'ifc' | 'mesh'
@@ -50,26 +51,34 @@ export async function listModel3DFiles(projectId: string): Promise<Model3DFile[]
   return res.data
 }
 
-// onProgress (2026-07-28, per Maro: "show a percentage save") — axios' own
-// onUploadProgress, a real byte-count-based percentage of this specific
-// upload, not a guess. Optional so every other caller (there are none yet,
-// but this mirrors downloadModel3DFile's own plain-Promise shape) doesn't
-// need to pass one.
+// Direct-to-R2 upload (2026-08-23, replacing this function's own former
+// single multipart POST) — see backend/app/services/object_storage.py's
+// own header for the full "why" (Vercel Functions hard-cap request bodies
+// at 4.5MB; a real IFC import routinely exceeds that). Three steps: ask
+// the backend for a presigned url (no file bytes involved yet), PUT the
+// file straight to R2 with it (never touching our own backend), then tell
+// the backend the upload finished so it can record the metadata — that
+// last call is a small JSON body regardless of how large the file itself
+// was, so it never risks the same 4.5MB cap.
+//
+// onProgress (2026-07-28, per Maro: "show a percentage save") — still a
+// real byte-count-based percentage of the actual file transfer (now the
+// direct-to-R2 PUT, uploadDirectToStorage's own XHR progress, not axios')
+// not a guess. Optional so every other caller (there are none yet, but
+// this mirrors downloadModel3DFile's own plain-Promise shape) doesn't need
+// to pass one.
 export async function uploadModel3DFile(
   projectId: string, name: string, kind: Model3DKind, sourceUpAxis: UpAxis, file: Blob,
   onProgress?: (percent: number) => void, keepRawAnimation = false,
 ): Promise<Model3DFile> {
-  const form = new FormData()
-  form.append('project_id', projectId)
-  form.append('name', name)
-  form.append('kind', kind)
-  form.append('source_up_axis', sourceUpAxis)
-  form.append('keep_raw_animation', String(keepRawAnimation))
-  form.append('file', file, name)
-  const res = await api.post<Model3DFile>('/api/v1/model3d-files/', form, {
-    onUploadProgress: onProgress
-      ? (e) => { if (e.total) onProgress(Math.round((e.loaded / e.total) * 100)) }
-      : undefined,
+  const contentType = file.type || 'application/octet-stream'
+  const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
+    '/api/v1/model3d-files/presign', { name, content_type: contentType },
+  )
+  await uploadDirectToStorage(presigned.upload_url, file, contentType, onProgress)
+  const res = await api.post<Model3DFile>('/api/v1/model3d-files/', {
+    project_id: projectId, name, kind, source_up_axis: sourceUpAxis,
+    storage_key: presigned.storage_key, keep_raw_animation: keepRawAnimation,
   })
   return res.data
 }

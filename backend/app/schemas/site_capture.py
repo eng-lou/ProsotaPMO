@@ -35,3 +35,27 @@ class SiteCaptureUpdate(BaseModel):
     name: str | None = None
     captured_at: date | None = None
     force_visible: bool | None = None
+
+
+# Direct-to-R2 upload (2026-08-23) — see model3d_file.py's own
+# PresignedUploadRequest/PresignedUpload for the shared shape/reasoning
+# (Vercel's hard 4.5MB Function request-body cap); site_capture.py has its
+# own copy rather than importing model3d_file.py's, since the two schema
+# modules are otherwise independent and this is a tiny, stable shape.
+class PresignedUploadRequest(BaseModel):
+    name: str
+    content_type: str
+
+
+class PresignedUpload(BaseModel):
+    storage_key: str
+    upload_url: str
+
+
+class SiteCaptureCreate(BaseModel):
+    project_id: uuid.UUID
+    name: str
+    captured_at: date
+    kind: SiteCaptureKind = "xyz"
+    source_up_axis: UpAxis
+    storage_key: str

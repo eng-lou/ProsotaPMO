@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.model3d_file import Model3DFileResponse, Model3DFileUnloadedElementsUpdate, Model3DKind, UpAxis
+from app.schemas.model3d_file import (
+    Model3DFileCreate, Model3DFileResponse, Model3DFileUnloadedElementsUpdate, PresignedUpload,
+    PresignedUploadRequest,
+)
 from app.services import model3d_file as svc
 
 router = APIRouter(prefix="/model3d-files", tags=["model3d-files"])
@@ -21,29 +24,33 @@ async def list_files(
     return await svc.list_files(db, project_id)
 
 
-# multipart/form-data, not JSON (2026-07-09) — this app's first real binary
-# upload endpoint; project_id/name/kind/source_up_axis arrive as plain form
-# fields alongside the file itself, matching the standard FastAPI pattern
-# for "some metadata plus a file" rather than a separate two-step
-# create-then-attach flow.
+# Step 1 of the direct-to-R2 upload (2026-08-23) — see object_storage.py's
+# own header for the full "why" (Vercel's hard 4.5MB Function body cap).
+@router.post("/presign", response_model=PresignedUpload)
+async def presign_upload(payload: PresignedUploadRequest) -> PresignedUpload:
+    return svc.presign_upload(payload.name, payload.content_type)
+
+
+# JSON, not multipart/form-data (2026-08-23, replacing this endpoint's own
+# pre-Vercel shape) — the browser has already PUT the file's own bytes
+# straight to R2 via the presigned url from /presign above; this only ever
+# records the metadata + the resulting storage_key.
 @router.post("/", response_model=Model3DFileResponse, status_code=201)
 async def create_file(
-    project_id: uuid.UUID = Form(...),
-    name: str = Form(...),
-    kind: Model3DKind = Form(...),
-    source_up_axis: UpAxis = Form(...),
-    keep_raw_animation: bool = Form(False),
-    file: UploadFile = File(...),
+    payload: Model3DFileCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    return await svc.create_file(db, project_id, name, kind, source_up_axis, file, keep_raw_animation)
+    return await svc.create_file(
+        db, payload.project_id, payload.name, payload.kind, payload.source_up_axis,
+        payload.storage_key, payload.keep_raw_animation,
+    )
 
 
 @router.get("/{file_id}/download")
 async def download_file(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
+) -> RedirectResponse:
     return await svc.get_download(db, file_id)
 
 
