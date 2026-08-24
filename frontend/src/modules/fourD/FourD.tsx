@@ -5114,17 +5114,34 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleSelectLinkedMaterial = (slot: TextureSlot) => {
     const handle = getIfcHandleFor(activeObjectId)
     if (!handle || !activeObjectId || selectedExpressId === null) return
+    // findLinkedExpressIds (2026-08-24 perf fix) no longer materializeAll's
+    // the whole model just to search — it scans still-batched elements
+    // straight off their own batch data, so nothing here changes the set of
+    // real meshes and no materializeVersion bump is needed (unlike Apply to
+    // Linked just below, which does).
     const matches = findLinkedExpressIds(handle, activeObjectId, slot, selectedExpressId, customTextures)
     setSelectedExpressIds(new Set(matches))
-    // findLinkedExpressIds calls materializeAll internally (see its own
-    // header in linkedMaterials.ts) — same TimelinePlayback re-derive
-    // trigger as every other materializeAll call site.
-    setMaterializeVersion(v => v + 1)
   }
   const handleApplyToLinkedMaterial = (slot: TextureSlot) => {
     if (!activeTextureKey || !activeObjectId) return
     const sourceValue = customTextures[activeTextureKey]?.[slot]
     if (!sourceValue) return
+    // Materializes exactly the elements actually receiving this override,
+    // not the whole model (2026-08-24 perf fix, per Maro: "changing the
+    // textures makes the viewport laggy while orbiting" — see
+    // linkedMaterials.ts's own findLinkedExpressIds header for the full
+    // story). A still-batched instance has no way to carry its own texture
+    // at all — THREE.BatchedMesh shares one material across every
+    // instance — so an element that's actually getting a per-element
+    // texture override unavoidably has to become a real, individual mesh;
+    // this just scopes that unavoidable cost to only the elements this
+    // click is actually touching, the same as clicking each one
+    // individually would.
+    const handle = getIfcHandleFor(activeObjectId)
+    if (handle) {
+      for (const expressID of selectedExpressIds) ensureMaterialized(handle.object, expressID)
+      setMaterializeVersion(v => v + 1)
+    }
     setCustomTextures(prev => {
       const next = { ...prev }
       for (const expressID of selectedExpressIds) {
