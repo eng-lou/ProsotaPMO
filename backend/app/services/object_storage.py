@@ -75,6 +75,15 @@ def upload_from_path(key: str, src: Path, content_type: str | None = None) -> No
     _client().upload_file(str(src), settings.r2_bucket_name, key, ExtraArgs=extra_args)
 
 
+# Used by material_preset.py — textures arrive as a browser multipart upload
+# already buffered in memory (small PBR maps, not full IFC models, so no
+# presigned-PUT step for these), so this uploads the bytes directly rather
+# than needing a local temp file first like upload_from_path does.
+def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> None:
+    extra_args = {"ContentType": content_type} if content_type else {}
+    _client().put_object(Bucket=settings.r2_bucket_name, Key=key, Body=data, **extra_args)
+
+
 def delete_object(key: str) -> None:
     _client().delete_object(Bucket=settings.r2_bucket_name, Key=key)
 

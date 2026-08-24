@@ -1,59 +1,65 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.material_preset import MaterialPreset
 from app.models.material_preset_texture import MaterialPresetTexture
 from app.schemas.material_preset import MaterialPresetResponse, MaterialPresetSlot
-from app.services.model3d_storage import delete_stored_file, generate_storage_filename, storage_path
+from app.services import object_storage
 
-# Same defensive cap/chunk size as model3d_file.py's own create_file —
-# reused verbatim, not re-tuned, for the identical reason: no CDN/chunked
-# upload infrastructure, just a straight stream to local disk.
+STORAGE_PREFIX = "material-presets"
+
+# Same defensive cap/chunk size as model3d_file.py's own create_file used to
+# have pre-R2 — kept here since these still arrive as a plain multipart
+# upload through this backend's own request body (small PBR maps, not full
+# IFC models, so no presigned-PUT step for these — see object_storage.py's
+# own upload_bytes).
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
 
 
-async def _write_upload_to_disk(name: str, upload: UploadFile) -> tuple[str, int]:
-    storage_filename = generate_storage_filename(name)
-    dest = storage_path(storage_filename)
-    size = 0
+# Uploads straight to R2 (2026-08-24 fix — the old local-disk write, still
+# on model3d_storage.py's storage_path, hit Vercel's read-only filesystem in
+# production: every preset save with a texture 500'd). Buffers the whole
+# upload in memory first since object_storage has no streaming-PUT, which is
+# fine at this size (Vercel's own 4.5MB request body cap already bounds it
+# tighter than MAX_UPLOAD_BYTES ever would).
+async def _write_upload_to_r2(name: str, upload: UploadFile) -> tuple[str, int]:
+    storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, name)
+    data = bytearray()
+    while chunk := await upload.read(CHUNK_SIZE):
+        data.extend(chunk)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File too large")
     try:
-        with open(dest, "wb") as out:
-            while chunk := await upload.read(CHUNK_SIZE):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="File too large")
-                out.write(chunk)
+        await run_in_threadpool(object_storage.upload_bytes, storage_key, bytes(data), upload.content_type)
     except HTTPException:
-        dest.unlink(missing_ok=True)
         raise
     except Exception:
-        dest.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to save uploaded texture")
-    return storage_filename, size
+    return storage_key, len(data)
 
 
 async def _replace_slot(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot, upload: UploadFile) -> None:
     existing = (await db.execute(
         select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id, MaterialPresetTexture.slot == slot)
     )).scalar_one_or_none()
-    storage_filename, size = await _write_upload_to_disk(upload.filename or slot, upload)
+    storage_key, size = await _write_upload_to_r2(upload.filename or slot, upload)
     if existing is not None:
-        delete_stored_file(existing.storage_filename)
+        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         existing.name = upload.filename or slot
-        existing.storage_filename = storage_filename
+        existing.storage_filename = storage_key
         existing.size_bytes = size
     else:
         db.add(MaterialPresetTexture(
             preset_id=preset_id, slot=slot, name=upload.filename or slot,
-            storage_filename=storage_filename, size_bytes=size,
+            storage_filename=storage_key, size_bytes=size,
         ))
 
 
@@ -62,7 +68,7 @@ async def _clear_slot(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPres
         select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id, MaterialPresetTexture.slot == slot)
     )).scalar_one_or_none()
     if existing is not None:
-        delete_stored_file(existing.storage_filename)
+        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         await db.delete(existing)
 
 
@@ -122,18 +128,19 @@ async def delete_preset(db: AsyncSession, preset_id: uuid.UUID) -> None:
         select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id)
     )).scalars().all()
     for t in textures:
-        delete_stored_file(t.storage_filename)
+        await run_in_threadpool(object_storage.delete_object, t.storage_filename)
     await db.delete(row)  # cascades the MaterialPresetTexture rows themselves
     await db.commit()
 
 
-async def get_texture_download(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot) -> FileResponse:
+# Redirects to a presigned R2 GET url, same reasoning as model3d_file.py's
+# own get_download — the frontend's axios GET (responseType: 'blob') follows
+# a 307 transparently, so this needed no frontend change.
+async def get_texture_download(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot) -> RedirectResponse:
     row = (await db.execute(
         select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id, MaterialPresetTexture.slot == slot)
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="This preset has no texture in that slot")
-    path: Path = storage_path(row.storage_filename)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Stored texture is missing on disk")
-    return FileResponse(path, filename=row.name, media_type="application/octet-stream")
+    url = await run_in_threadpool(object_storage.presigned_get_url, row.storage_filename)
+    return RedirectResponse(url)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -83,7 +83,7 @@ async def download_texture(
     preset_id: uuid.UUID,
     slot: MaterialPresetSlot,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
+) -> RedirectResponse:
     return await svc.get_texture_download(db, preset_id, slot)
 
 
