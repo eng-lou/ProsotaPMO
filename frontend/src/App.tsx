@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import { Analytics } from '@vercel/analytics/react'
 import { Layout } from './components/Layout'
 import { ProsotaLogo } from './components/ProsotaLogo'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
@@ -172,6 +173,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthGate />
+      <Analytics />
     </ThemeProvider>
   )
 }
