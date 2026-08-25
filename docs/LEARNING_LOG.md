@@ -4310,3 +4310,42 @@ feature has had no live-browser pass at all yet. Per standing practice,
 no commit until Maro confirms — flagging this explicitly since "commit
 and push" was given as a direct instruction rather than that
 confirmation.
+
+---
+
+## 2026-08-25 (continued) — real production incident: migrated local, not
+## production, then pushed straight to `main`
+
+**What happened**: after the branch push, Maro asked to merge to `main`
+for a real production deploy ("yes live"). That deployed the new code —
+which reads `users.status`/`users.is_super_user`, columns that didn't
+exist until this session's two migrations — but `alembic upgrade head`
+had only ever been run against the local dev database in this session,
+never production. Maro immediately hit the Access Pending / Request
+Access screen on his own `sotalouisx@gmail.com` super-user account on
+the live site, and the whole app was very likely down for every real
+user simultaneously (any `get_db_user` call would hit a raw
+"column does not exist" error). **A migration is not "shipped" just
+because the code that depends on it is** — `alembic upgrade head` has to
+run against every database whose app code is about to change, and
+pushing to `main` here does *not* do that automatically (confirmed: no
+migration step in `vercel.json` or `.github/workflows/`).
+
+**Compounded by the same email-claim bug reappearing**: even after
+running the migration against production, both real accounts there were
+still stuck on the synthetic `user+<sub>@prosotapmo.local` placeholder —
+the exact same Auth0-access-token-has-no-email quirk from earlier this
+session, this time showing that migration `c1a2b3d4e5f6`'s targeted
+backfill (`UPDATE ... WHERE email IN ('sotalouisx@gmail.com', ...)`)
+silently matched *zero* production rows, since production's stored email
+was never the real one either. Fixed with a direct one-off UPDATE by
+`auth0_sub` (a stable id across environments — same Auth0 tenant for
+local and production) rather than waiting on the deployed self-heal to
+fire on Maro's next request, to get him back in immediately. The second
+real account there is still sitting `pending`, same as the local-dev
+scenario, left for Maro to approve/deny himself now that the admin panel
+actually works.
+
+**Fixed live**, confirmed working by Maro ("it works perfectly!"). See
+[[feedback_migrate_production_db]] — added as a standing rule so this
+specific gap (migrate local, forget prod, deploy anyway) doesn't repeat.
