@@ -187,7 +187,7 @@ async def test_resource_from_other_project_rejected(
 ):
     from app.models.project import Project as ProjectModel
 
-    other_project = ProjectModel(org_id=org.id, name="Other Project")
+    other_project = ProjectModel(org_id=org.id, created_by=project.created_by, name="Other Project")
     db.add(other_project)
     await db.commit()
     await db.refresh(other_project)

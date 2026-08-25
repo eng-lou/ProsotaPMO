@@ -1,10 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import { AccessPendingScreen } from './components/AccessPendingScreen'
 import { Layout } from './components/Layout'
 import { ProsotaLogo } from './components/ProsotaLogo'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ConfirmHost } from './lib/confirmWithDontAsk'
+import { CurrentUserProvider, useCurrentUser } from './lib/CurrentUserContext'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ThemeProvider } from './lib/ThemeContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
@@ -140,6 +142,34 @@ function AuthenticatedApp() {
   )
 }
 
+// Gates on the backend's own approval status, not just a valid Auth0 token
+// (2026-08-25, trial/beta access gate) — sits between AuthTokenProvider and
+// ProjectProvider so a not-yet-approved user never triggers ProjectProvider's
+// own API calls (project list, etc.), which the backend would now 403 for
+// anyone not status="approved" (see _auth_approved in backend/app/main.py).
+function AccessGate() {
+  const { loading, currentUser } = useCurrentUser()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
+        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
+      </div>
+    )
+  }
+
+  if (!currentUser || currentUser.status !== 'approved') {
+    return <AccessPendingScreen />
+  }
+
+  return (
+    <ProjectProvider>
+      <AuthenticatedApp />
+      <ConfirmHost />
+    </ProjectProvider>
+  )
+}
+
 function AuthGate() {
   const { isLoading, isAuthenticated } = useAuth0()
 
@@ -155,10 +185,9 @@ function AuthGate() {
 
   return (
     <AuthTokenProvider>
-      <ProjectProvider>
-        <AuthenticatedApp />
-        <ConfirmHost />
-      </ProjectProvider>
+      <CurrentUserProvider>
+        <AccessGate />
+      </CurrentUserProvider>
     </AuthTokenProvider>
   )
 }

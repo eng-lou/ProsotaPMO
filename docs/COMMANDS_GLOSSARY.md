@@ -41,6 +41,7 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 | `alembic revision --autogenerate -m "message"` | Looks at the database table definitions in the code and automatically writes a "migration" — a script describing how to update the real database to match. |
 | `alembic upgrade head` | Actually runs the migration scripts against the database, bringing it up to date with the latest table structure. |
 | `alembic downgrade <revision>` | Rolls the database *back* to an earlier point in the migration history, undoing everything after it. Used here to cleanly remove a table added minutes earlier (before it was ever committed to git) so the migration file itself could be rewritten and regenerated, rather than layering a second "fix the first one" migration on top. |
+| `python -c "from alembic.config import Config; from alembic import command; command.upgrade(Config('alembic.ini'), 'head')"` | Same effect as `alembic upgrade head`, but called through Alembic's own Python API instead of its command-line tool — used when the `alembic` command itself isn't on this machine's PATH (the package is installed, but its console-script entry point wasn't), so the CLI can't be run directly. |
 
 ---
 

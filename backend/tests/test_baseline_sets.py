@@ -5,6 +5,7 @@ from httpx import AsyncClient
 from app.models.organisation import Organisation
 from app.models.period import Period
 from app.models.project import Project
+from app.models.user import User
 from app.models.schedule_period import SchedulePeriod
 
 
@@ -75,9 +76,9 @@ async def test_manual_link_and_unlink_a_standalone_baseline(
 
 
 async def test_link_rejects_a_set_from_a_different_project(
-    client: AsyncClient, db, org: Organisation, project: Project, live_period: Period
+    client: AsyncClient, db, org: Organisation, project: Project, live_period: Period, user: User
 ):
-    other_project = Project(org_id=org.id, name="Other Project", client_name="Other Client")
+    other_project = Project(org_id=org.id, created_by=user.id, name="Other Project", client_name="Other Client")
     db.add(other_project)
     await db.commit()
     await db.refresh(other_project)

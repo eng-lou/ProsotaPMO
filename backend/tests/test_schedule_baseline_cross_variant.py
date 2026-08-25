@@ -115,7 +115,7 @@ async def test_baseline_from_variant_rejects_variant_from_another_project(
     master_period = await _bootstrap_period(client, master["id"])
     await _create_activity(client, project, master_period, "Piling", duration_hours=40)
 
-    other_project = Project(org_id=org.id, name="Other Project")
+    other_project = Project(org_id=org.id, created_by=project.created_by, name="Other Project")
     db.add(other_project)
     await db.commit()
     await db.refresh(other_project)

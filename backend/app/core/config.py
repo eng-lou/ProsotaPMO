@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_bucket_name: str = "prosota-pmo"
+    # Trial/beta access gate (2026-08-25, per Maro: Google sign-in via Auth0
+    # is open to anyone, but only these emails should get real app access —
+    # everyone else lands on the in-app access-request screen instead). Only
+    # a bootstrap list: get_db_user self-heals status="approved"/
+    # is_super_user=True for any of these emails on every login, but actual
+    # day-to-day approvals happen via the DB (a super user clicking Approve
+    # in the app), not by editing this env var.
+    super_user_emails: str = "sotalouisx@gmail.com,lsota@prosota.com"
 
 
 settings = Settings()

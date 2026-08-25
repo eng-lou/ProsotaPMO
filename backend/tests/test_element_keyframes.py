@@ -87,7 +87,7 @@ async def test_delete_missing_keyframe_404s(client: AsyncClient, project: Projec
 
 
 async def test_list_scoped_to_project(client: AsyncClient, db: AsyncSession, project: Project):
-    other_project = Project(org_id=project.org_id, name="Other Project", client_name="Other Client")
+    other_project = Project(org_id=project.org_id, created_by=project.created_by, name="Other Project", client_name="Other Client")
     db.add(other_project)
     await db.commit()
     await db.refresh(other_project)

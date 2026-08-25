@@ -34,6 +34,7 @@ class ProjectResponse(BaseModel):
 
     id: uuid.UUID
     org_id: uuid.UUID
+    created_by: uuid.UUID
     name: str
     client_name: str | None
     status: str

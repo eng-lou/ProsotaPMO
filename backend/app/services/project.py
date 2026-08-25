@@ -68,7 +68,7 @@ def _clone_row(row: Base, new_id: uuid.UUID, **overrides):
     return cls(**data)
 
 
-async def duplicate_project(db: AsyncSession, project_id: uuid.UUID, new_name: str) -> Project:
+async def duplicate_project(db: AsyncSession, project_id: uuid.UUID, new_name: str, created_by: uuid.UUID) -> Project:
     """A full, independent deep copy of a project — every module (Scheduling,
     Risk, Cost, ICD, Resources, Calendars, saved Layouts/Filters/Baselines,
     letterhead) and every cross-module link, with every internal id remapped
@@ -93,16 +93,20 @@ async def duplicate_project(db: AsyncSession, project_id: uuid.UUID, new_name: s
     a join at all; found instead by matching against the id maps already
     built while cloning Activity/Risk/CostElement/IcdItem).
 
-    Tenant-level ids are copied as-is, never remapped: Project.org_id,
-    Activity/ScheduleSubproject.owning_party_org_id, IcdComment.author_id,
-    RecordLink.created_by — all point at Organisation/User rows the new
-    project rightfully still shares with the original.
+    Tenant-level ids are copied as-is, never remapped: Activity/ScheduleSubproject.
+    owning_party_org_id, IcdComment.author_id, RecordLink.created_by — all
+    point at Organisation/User rows the new project rightfully still shares
+    with the original. Project.org_id and Project.created_by are the two
+    exceptions — org_id is copied as-is (still the same tenant) but
+    created_by is deliberately overridden to whoever is doing the
+    duplicating (2026-08-25 per-user project ownership), not inherited from
+    the original project's own creator.
     """
     original = await db.get(Project, project_id)
     if original is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    new_project = _clone_row(original, uuid.uuid4(), name=new_name)
+    new_project = _clone_row(original, uuid.uuid4(), name=new_name, created_by=created_by)
     db.add(new_project)
 
     # --- Periods (root scope container for Risk/Cost/ICD's own reporting

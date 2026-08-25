@@ -20,6 +20,13 @@ class Project(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organisations.id"), nullable=False, index=True)
+    # 2026-08-25 (per Maro, alongside the trial/beta access gate) — projects
+    # are private to whoever created them, not org-wide shared: a normal
+    # (non-super) user is capped at 2 of their own, and a super user reviewing
+    # access requests shouldn't incidentally see a normal user's project data
+    # either. org_id is kept alongside this as a genuine tenant boundary, not
+    # a visibility one.
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     client_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

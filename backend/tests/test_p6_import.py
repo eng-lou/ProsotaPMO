@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.resource import Resource
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
+from app.models.user import User
 from tests.test_p6_export import _seed_schedule
 
 # Real, un-modified P6 reference files Maro supplied outside the repo (see
@@ -28,13 +29,13 @@ _FIXTURE_DIR = pathlib.Path(r"C:\Users\Maro\Documents\ProsotaPMO\source\schedule
 
 
 @pytest_asyncio.fixture
-async def target_project(db: AsyncSession, org: Organisation) -> Project:
+async def target_project(db: AsyncSession, org: Organisation, user: User) -> Project:
     """A second, unrelated project in the same org — the round-trip test
     imports into this rather than back into the project it was exported
     from, so every resource/calendar takes the "create new" path instead of
     being matched-and-reused by name (that path is covered separately by
     test_duplicate_import_reuses_resources_and_calendars below)."""
-    p = Project(org_id=org.id, name="Import Target Project", client_name="Test Client")
+    p = Project(org_id=org.id, created_by=user.id, name="Import Target Project", client_name="Test Client")
     db.add(p)
     await db.commit()
     await db.refresh(p)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
+from app.models.user import User
 
 
 async def test_create_activity(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
@@ -123,7 +124,7 @@ async def test_list_activities_by_project(client: AsyncClient, project: Project,
 
 
 async def test_list_activities_excludes_other_projects(
-    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod, org
+    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod, org, user: User
 ):
     await client.post("/api/v1/activities/", json={
         "project_id": str(project.id),
@@ -131,7 +132,7 @@ async def test_list_activities_excludes_other_projects(
         "task_name": "Belongs to project A",
     })
 
-    other_project = Project(org_id=org.id, name="Other Project")
+    other_project = Project(org_id=org.id, created_by=user.id, name="Other Project")
     db.add(other_project)
     await db.commit()
     await db.refresh(other_project)

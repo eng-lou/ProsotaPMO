@@ -109,8 +109,10 @@ export function ProjectSelector() {
       setCreating(false)
       setNewName('')
       setNewClient('')
-    } catch {
-      setError('Failed to create project')
+    } catch (err) {
+      setError(axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
+        ? err.response.data.detail
+        : 'Failed to create project')
     }
   }
 
@@ -146,8 +148,9 @@ export function ProjectSelector() {
         setProjects(prev => [...prev, data])
       }
       setRowAction(null)
-    } catch {
-      setRowActionError(rowAction.mode === 'rename' ? 'Failed to rename project' : 'Failed to duplicate project')
+    } catch (err) {
+      const detail = axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string' ? err.response.data.detail : undefined
+      setRowActionError(detail ?? (rowAction.mode === 'rename' ? 'Failed to rename project' : 'Failed to duplicate project'))
     } finally {
       setRowActionBusy(false)
     }

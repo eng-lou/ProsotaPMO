@@ -78,6 +78,28 @@ async def user(db: AsyncSession, org: Organisation) -> User:
         auth0_sub=_TEST_USER_SUB,
         display_name="Test User",
         role="admin",
+        status="approved",
+        is_super_user=True,
+    )
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    return u
+
+
+@pytest_asyncio.fixture
+async def other_user(db: AsyncSession, org: Organisation) -> User:
+    """A second, normal (non-super) approved user in the same org as `user`
+    — for tests covering the 2026-08-25 per-user project ownership/cap
+    (project visibility no longer follows org membership alone)."""
+    u = User(
+        org_id=org.id,
+        email="other-user@example.com",
+        auth0_sub="auth0|other-user",
+        display_name="Other User",
+        role="member",
+        status="approved",
+        is_super_user=False,
     )
     db.add(u)
     await db.commit()
@@ -112,8 +134,8 @@ async def raw_client() -> AsyncClient:
 
 
 @pytest_asyncio.fixture
-async def project(db: AsyncSession, org: Organisation) -> Project:
-    p = Project(org_id=org.id, name="Test Project", client_name="Test Client")
+async def project(db: AsyncSession, org: Organisation, user: User) -> Project:
+    p = Project(org_id=org.id, created_by=user.id, name="Test Project", client_name="Test Client")
     db.add(p)
     await db.commit()
     await db.refresh(p)

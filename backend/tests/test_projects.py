@@ -6,6 +6,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import get_db_user
+from app.main import app
 from app.models.organisation import Organisation
 from app.models.project import Project
 from app.models.user import User
@@ -54,6 +56,61 @@ async def test_delete_project(client: AsyncClient):
     p = await _create(client)
     assert (await client.delete(f"/api/v1/projects/{p['id']}")).status_code == 204
     assert (await client.get(f"/api/v1/projects/{p['id']}")).status_code == 404
+
+
+async def test_projects_are_private_to_their_creator(client: AsyncClient, other_user: User, user: User):
+    """2026-08-25 — projects stopped being org-wide shared: `user` (a super
+    user) must not see or reach `other_user`'s project just by sharing an
+    org, and vice versa isn't tested here only because `other_user` is the
+    one under test in the cap tests below."""
+    mine = await _create(client, name="Mine")
+
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        list_resp = await client.get("/api/v1/projects/")
+        assert list_resp.json() == []
+        assert (await client.get(f"/api/v1/projects/{mine['id']}")).status_code == 404
+        assert (await client.patch(f"/api/v1/projects/{mine['id']}", json={"status": "archived"})).status_code == 404
+        assert (await client.delete(f"/api/v1/projects/{mine['id']}")).status_code == 404
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+
+async def test_normal_user_capped_at_two_projects(client: AsyncClient, other_user: User, user: User):
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        await _create(client, name="P1")
+        await _create(client, name="P2")
+        third = await client.post("/api/v1/projects/", json={"name": "P3"})
+        assert third.status_code == 403
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+
+async def test_super_user_not_capped(client: AsyncClient):
+    await _create(client, name="P1")
+    await _create(client, name="P2")
+    third = await client.post("/api/v1/projects/", json={"name": "P3"})
+    assert third.status_code == 201
+
+
+async def test_duplicate_owned_by_duplicator_and_counts_against_their_cap(
+    client: AsyncClient, other_user: User, user: User,
+):
+    original = await _create(client, name="Original")
+
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        # Not `other_user`'s project — duplicating it should 404, same as any
+        # other cross-owner access, not silently succeed.
+        dup_resp = await client.post(f"/api/v1/projects/{original['id']}/duplicate", json={})
+        assert dup_resp.status_code == 404
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+    dup_resp = await client.post(f"/api/v1/projects/{original['id']}/duplicate", json={})
+    assert dup_resp.status_code == 201
+    assert dup_resp.json()["created_by"] == str(user.id)
 
 
 async def test_delete_project_with_real_data_cascades_cleanly(

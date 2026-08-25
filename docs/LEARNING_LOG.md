@@ -4137,3 +4137,176 @@ suggestions list). **Not yet verified against Maro's own real project**
 (a real as-planned IFC with real `ModelElementLink`s, a real converted
 capture) — per standing practice, no commit until he confirms it
 actually works end-to-end in the app itself.
+
+---
+
+## 2026-08-25 — Trial/beta access gate: closing off open Google sign-in
+
+**Why this came up:** Auth0 login (Google, via `prosotapmo.uk.auth0.com`)
+had been open to anyone from the start — `get_db_user` auto-provisioned
+*any* authenticated caller as a full `role="admin"` user on their very
+first API call, no allowlist at all. Maro had already signed in himself
+via Google and didn't want that door open to anyone else while the app is
+still in private trial/beta.
+
+**What got built:** a real approval gate, not just a UI hint.
+- `User` gained `status` ("pending"/"approved"), `is_super_user`, and
+  three fields for what someone types on a new "Request Access" form
+  (`requested_title`, `requested_organisation`, `requested_at`).
+- The backend's one global auth dependency (`_auth` in `app/main.py`,
+  applied to all ~78 routers) split in two: `users_router` and a new
+  `access_requests_router` stay on the old "valid token only" gate (a
+  pending user still has to be able to check their own status and submit
+  a request), and every other router — projects, activities, the whole
+  rest of the app — now requires `status="approved"` too
+  (`get_approved_user` in `app/core/auth.py`). A pending user's token is
+  perfectly valid; the app just refuses to do anything with it until
+  approved.
+- `SUPER_USER_EMAILS` (bootstrap list: `sotalouisx@gmail.com`,
+  `lsota@prosota.com`) auto-approves those two on login, but it's only a
+  bootstrap — day-to-day approvals happen in the DB, via a super user
+  clicking Approve on a new in-app panel (Sidebar → "🔑 Access
+  requests…"), not by editing the env var.
+
+**A real bug surfaced while testing the migration, not from anything in
+this session's own diff:** applying the new migration to the local dev
+DB and inspecting `users` showed Maro's *existing* row had email
+`user+106396340770790596527@prosotapmo.local` — a synthetic placeholder,
+not `sotalouisx@gmail.com`. `get_db_user`'s first-login fallback
+(`token.email or f"user+{sub}@prosotapmo.local"`) had silently fired the
+very first time Maro signed in, meaning the Auth0 *access* token (the one
+the backend actually decodes, for the custom `https://api.prosotapmo.com`
+audience) apparently didn't carry an `email` claim — a known Auth0
+quirk where a custom API audience's access token doesn't automatically
+inherit the ID token's profile claims. Harmless before (nothing checked
+email equality), but load-bearing now: the super-user bootstrap match is
+by email, so this would have locked Maro out of his own app the moment
+this shipped. Fixed two ways — `get_db_user` now refreshes `user.email`
+from the token whenever a real one shows up on any future login
+(self-healing, same pattern as the status/is_super_user self-heal), and
+Maro's existing row got a direct one-off SQL fix to unblock testing
+immediately rather than waiting on whether a future login ever supplies
+the claim. Also fixed the frontend to match: the access-pending screen
+was preferring the backend's (possibly-synthetic) email over the Auth0
+React SDK's own `user.email`, which comes from the ID token/userinfo and
+doesn't have this problem — flipped the fallback order.
+
+**Verified**: full backend suite (804 passed; 61 pre-existing failures
+confirmed unrelated — all `python-multipart` form-parsing 422s on file
+upload endpoints, nothing to do with this session's changes, no
+`access_pending`/403 anywhere in them), frontend typecheck clean,
+migration applied to local dev DB. **Not yet verified end-to-end in a
+real browser** (signing in as a second, non-approved Google account to
+see the Access Pending screen, submitting a request, approving it from
+Maro's own super-user account) — per standing practice, no commit until
+that's confirmed working.
+
+---
+
+## 2026-08-25 (continued) — the access token really never has an email,
+## a Deny button, and per-user project ownership + a 2-project trial cap
+
+**Live-testing the access gate surfaced the real bug, not a fluke.**
+Signing in fresh (after clearing the stale-localStorage "Missing Refresh
+Token" cache, [[feedback_auth0_missing_refresh_token]]) as a genuinely
+*different* Google account produced a pending row whose email was still
+the synthetic `user+<sub>@prosotapmo.local` placeholder — proving the
+earlier self-heal ("trust `token.email` whenever it's present") was dead
+code on this tenant: the access token minted for the
+`https://api.prosotapmo.com` audience simply never carries an `email`
+claim here, not occasionally. Fixed properly this time: `get_current_user`
+now threads the raw access token through on `TokenPayload`, and
+`get_db_user` falls back to calling Auth0's own `/userinfo` endpoint with
+that same access token when the JWT itself has none — the SPA already
+requests the `email` scope, so `/userinfo` honours it regardless of what
+the API-audience JWT carries. Only fires as a fallback (first login, or
+healing an old synthetic-email row), so it stays a rare network hop, not
+a per-request one.
+
+**A UI back-and-forth worth recording**: asked to "see the email and
+remove the block of unreasonable text underneath the name" in the Access
+Requests admin panel, first read that backwards — deleted the
+title/organisation line and kept showing the raw synthetic email string.
+Corrected by Maro ("you dumbass... you deleted the useful user info").
+The actual intent: keep title/org (useful), hide the *garbled synthetic
+email* specifically (the "unreasonable text") rather than always
+rendering `r.email` verbatim — now conditional on `!r.email.endsWith('@prosotapmo.local')`.
+**Lesson**: when a fix request names one specific ugly artifact ("that
+text"), don't generalize it to "the whole block it sits near."
+
+**Added Deny** (`DELETE /access-requests/{user_id}`, super-user-only,
+only valid on a still-`pending` row) — the panel only had Approve. Denying
+just deletes the row rather than adding a `denied` status: nothing else
+in the app needs to distinguish "denied" from "never signed up", and a
+re-attempt just re-provisions a fresh pending row on next login.
+
+**Found a second, unrelated stale-process bug** — after shipping the
+Deny route, the browser kept getting 404 on the new `DELETE` endpoint.
+`GET /openapi.json` on the running dev server proved the route genuinely
+wasn't registered, even though the file on disk had it and `WatchFiles`
+had reloaded once already (for an earlier `auth.py` edit). The reloader
+had silently stopped watching after that first reload — no error, no log
+line, just dead. Matches [[feedback_stale_dev_server]]: when something
+that should have picked up a code change hasn't, restart the process
+itself rather than trusting `--reload`.
+
+**Per-user project ownership + cap (per Maro, same session)**: "cap the
+number of projects normal users can create and use to two." Projects
+had zero per-user ownership before this — `Project` had no `created_by`,
+and `list_projects`/`get_project`/etc. filtered only by `org_id`, so
+every user in the (single, shared) Organisation saw every project.
+Clarified with Maro before building: this needed to become a genuine
+per-creator visibility boundary, not just an org-wide creation cap — "as
+a super user, i shouldnt have access to a normal user's project btw."
+Added `Project.created_by` (FK to `users.id`, migration
+`d2b3c4e5f6a7_project_ownership_cap`, backfilled to each org's own super
+user since every existing project was in fact created while testing as
+one), and every `projects.py` endpoint now checks
+`created_by == current_user.id` alongside `org_id`, for everyone —
+super users included, not just normal ones. Only project *creation* is
+role-gated: non-super users are capped at 2 via a `SELECT count(*)`
+guard in `create_project` and `duplicate_project` (a duplicate is owned
+by whoever duplicates it, not inherited from the original, so it counts
+against *their* cap); super users create unlimited.
+
+**Explicitly out of scope, flagged not fixed**: this ownership check
+only lives in `projects.py` itself. Every other router that accepts a
+`project_id` (activities, risks, cost, ~70 others) still trusts it
+blindly with zero ownership check — already true before this session,
+unchanged by it. A determined user who already knows/guesses another
+project's UUID can still hit e.g. `/api/v1/activities/?project_id=<uuid>`
+directly and get real data back, regardless of who owns that project.
+Closing that gap for real means auditing/gating every one of those
+routers, not a follow-on to this change — flagged for Maro, not
+attempted here.
+
+**A real regression, caught before commit, not after**: the first full
+suite run after adding the `created_by` NOT NULL constraint showed 63
+failed instead of the documented 61-failure baseline. The extra two:
+`test_resource_assignments.py` and (found via a second sweep) `test_calendars.py`
+both built a second `Project` row for isolation tests via
+`from app.models.project import Project as ProjectModel` — an aliased
+import that an earlier `grep "Project\("` sweep across the test suite
+missed, because `ProjectModel(` doesn't contain the substring `Project(`.
+Fixed both, reran the targeted subset (112 passed) then the full suite
+again clean (814 passed, 61 failed — matching the historical baseline
+exactly, none of them touching anything this session changed).
+**Lesson**: a grep sweep for "every place that constructs X" needs to
+account for aliased imports, not just the class's own name.
+
+**Verified**: full backend suite run twice (814 passed, 61 pre-existing
+upload-endpoint failures both times, identical to the pre-existing
+baseline — zero regressions), a dedicated 112-test subset covering every
+file touched by the `created_by` change, frontend typecheck clean,
+migration applied to local dev DB. Live-browser-tested this session:
+real Google sign-in (after the stale-localStorage fix), the Access
+Pending screen, and the Access Requests admin panel showing a real
+pending request. **Not** live-browser-verified: Deny (only confirmed via
+pytest + `/openapi.json` after the stale-reload restart — the one live
+attempt before that fix hit the dead route and 404'd), the email
+self-heal actually resolving live for a real second account (confirmed
+via pytest with a mocked token only), and the whole project-cap/ownership
+feature has had no live-browser pass at all yet. Per standing practice,
+no commit until Maro confirms — flagging this explicitly since "commit
+and push" was given as a direct instruction rather than that
+confirmation.
