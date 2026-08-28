@@ -296,6 +296,36 @@ function groupKeyFor(
   }
 }
 
+// Placeholder row for a group header (2026-08-28, per Maro: "when using
+// grouping the gantt chart doesnt show anymore"). GanttChart positions bar i
+// at `i * GANTT_ROW_HEIGHT` purely from array index — it has no concept of
+// the flat grouped table's header/activity row shape. Feeding it a row-for-
+// row mirror of flatGroupRows (a real activity at each 'activity' slot, one
+// of these at each 'header' slot) keeps the two panes' rows aligned under
+// the same shared scroll sync the ungrouped tree+Gantt view already uses,
+// without GanttChart needing to know grouping exists at all. No start/
+// finish means it draws no bar/milestone for this slot — the row's height
+// is still counted, which is the only thing that matters here.
+function groupHeaderPlaceholder(key: string): Activity {
+  return {
+    id: `group-header:${key}`,
+    code: '', project_id: '', schedule_variant_id: '', schedule_period_id: '',
+    task_name: '', activity_type: 'task', parent_id: null, wbs_path: null, sort_order: null,
+    duration_hours: null, duration_days: null, start: null, finish: null,
+    actual_start: null, actual_finish: null, suspend_date: null, resume_date: null,
+    remaining_duration_hours: null, bl_start: null, bl_finish: null, bl_duration_hours: null,
+    variance_days: null, total_float_hours: null, free_float_hours: null, is_critical: null,
+    sub_total_float_hours: null, sub_is_critical: null, pct_complete: null, commentary: null,
+    constraint_type: null, constraint_date: null, calendar_id: null, animation_profile_id: null,
+    created_at: '', updated_at: '', duration_pct_complete: null,
+    bac: null, ac: null, pv: null, ev: null, cv: null, sv: null, cpi: null, spi: null, eac: null, etc: null,
+    wbs_role: '', is_archived: false, is_archive_container: false,
+    schedule_category: null, schedule_phase_key: null, schedule_quantity: null,
+    schedule_material_name: null, schedule_material_quantity: null, schedule_material_unit: null,
+    schedule_material_cost_per_unit: null,
+  }
+}
+
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, critical: 72, free_float: 80, sub_float: 96, sub_critical: 80,
@@ -1742,6 +1772,12 @@ export function Scheduling() {
     return out
   }, [groupedActivities, collapsedGroups])
 
+  // Row-for-row mirror of flatGroupRows for the grouped Gantt pane — see
+  // groupHeaderPlaceholder's own header above.
+  const groupGanttActivities = useMemo(
+    () => flatGroupRows.map(row => row.type === 'activity' ? row.activity : groupHeaderPlaceholder(row.key)),
+    [flatGroupRows]
+  )
   const groupScrollRef = useRef<HTMLDivElement>(null)
   const GROUP_ROW_BUFFER = 20
   const [visibleGroupRowRange, setVisibleGroupRowRange] = useState<{ start: number; end: number }>({ start: 0, end: Math.min(flatGroupRows.length, 40) })
@@ -1762,7 +1798,10 @@ export function Scheduling() {
   }, [flatGroupRows])
 
   const groupScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const handleGroupScroll = () => {
+  const handleGroupScroll = (scrollTop: number) => {
+    // Same "every tick, not debounced" reasoning as handleGridScroll — the
+    // Gantt pane below needs to track scroll position immediately.
+    ganttRef.current?.setScrollTop(scrollTop)
     if (groupScrollDebounceRef.current !== null) clearTimeout(groupScrollDebounceRef.current)
     groupScrollDebounceRef.current = setTimeout(() => {
       groupScrollDebounceRef.current = null
@@ -3737,14 +3776,24 @@ export function Scheduling() {
       </div>
       )}
 
-      {/* Flat grouped view (2026-07-10, per Maro) — replaces the WBS tree +
-          Gantt entirely while a grouping is active; read-only cells (no
-          inline editing here, click the name to open the same detail panel
-          the tree view uses for that). "No grouping" restores the block
-          above, untouched. */}
+      {/* Flat grouped view (2026-07-10, per Maro) — replaces the WBS tree
+          table with a flat, grouped one while a grouping is active;
+          read-only cells (no inline editing here, click the name to open
+          the same detail panel the tree view uses for that). "No grouping"
+          restores the block above, untouched. The Gantt pane alongside it
+          (2026-08-28, per Maro: "when using grouping the gantt chart
+          doesnt show anymore") reuses the same ganttRef/topPaneHeight/
+          leftPaneWidth split-pane machinery as the ungrouped view above —
+          see groupGanttActivities' own header for how row alignment works
+          without GanttChart needing to know grouping exists. */}
       {groupBy !== 'none' && (
-        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden">
-          <div ref={groupScrollRef} onScroll={handleGroupScroll} className="rt-hide-scrollbar" style={{ maxHeight: 500, overflow: 'auto' }}>
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
+          <div
+            ref={groupScrollRef}
+            onScroll={e => handleGroupScroll(e.currentTarget.scrollTop)}
+            className="rt-hide-scrollbar overflow-y-auto overflow-x-auto shrink-0"
+            style={{ height: topPaneHeight, width: leftPaneWidth }}
+          >
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-gray-50 dark:bg-prosota-panel2 text-left text-gray-500 dark:text-prosota-muted border-b border-gray-200 dark:border-prosota-line">
@@ -3818,6 +3867,19 @@ export function Scheduling() {
               )}
             </tbody>
           </table>
+          </div>
+          <div
+            onMouseDown={startPaneResize}
+            title="Drag to resize"
+            className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-blue-300 dark:hover:bg-prosota-azure/40 active:bg-blue-400 dark:active:bg-prosota-azure/60 no-print"
+          />
+          <div className="flex-1 overflow-x-auto overflow-y-hidden no-print" style={{ height: topPaneHeight }}>
+            <GanttChart
+              ref={ganttRef}
+              activities={groupGanttActivities} relationships={relationships} resourceAssignments={resourceAssignments} style={ganttStyle}
+              zoom={ganttZoom} onZoomChange={handleZoomChange}
+              viewportHeight={topPaneHeight - HEADER_HEIGHT}
+            />
           </div>
         </div>
       )}
