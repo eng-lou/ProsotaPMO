@@ -31,5 +31,9 @@ class User(Base, TimestampMixin):
     requested_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requested_organisation: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Access Manager "last accessed" column (2026-08-25) — throttled in
+    # get_db_user (only rewritten if >5 min stale) so this stays a rare
+    # write, not one on every single request; NULL means never recorded yet.
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organisation: Mapped[Organisation] = relationship(back_populates="users")

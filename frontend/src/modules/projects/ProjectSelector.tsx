@@ -1,7 +1,10 @@
 import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AccessManagerPanel } from '@/components/AccessManagerPanel'
+import { FeedbackPanel } from '@/components/FeedbackPanel'
 import { api } from '@/lib/api'
+import { useCurrentUser } from '@/lib/CurrentUserContext'
 import { useProject, type Project } from '@/lib/ProjectContext'
 
 export function ProjectSelector() {
@@ -23,6 +26,16 @@ export function ProjectSelector() {
   const [rowActionBusy, setRowActionBusy] = useState(false)
   const { selectProject } = useProject()
   const navigate = useNavigate()
+  const { currentUser } = useCurrentUser()
+  // Access Manager (2026-08-25, moved+renamed 2026-08-27 per Maro) — lives
+  // here rather than the Sidebar because it's an account-level concern, not
+  // a project one, and the Sidebar only mounts once a project's selected;
+  // a super user shouldn't need to pick a project first just to review access.
+  const [accessManagerOpen, setAccessManagerOpen] = useState(false)
+  // Feedback (2026-08-27, per Maro) — reachable here too, alongside the
+  // Sidebar's own trigger, since this is the first screen after login and
+  // shouldn't require picking a project first just to report an issue.
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
@@ -167,10 +180,32 @@ export function ProjectSelector() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-prosota-ink flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-2xl">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Select a project</h1>
-          <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota</p>
+        <div className="mb-8 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Select a project</h1>
+            <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota</p>
+          </div>
+          <div className="shrink-0 flex items-center gap-3 mt-1">
+            <button
+              onClick={() => setFeedbackOpen(true)}
+              title="Report an issue or leave feedback"
+              className="text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
+            >
+              💬 Feedback…
+            </button>
+            {currentUser?.is_super_user && (
+              <button
+                onClick={() => setAccessManagerOpen(true)}
+                title="Review pending access requests and see who's using the app"
+                className="text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
+              >
+                🔑 Access Manager…
+              </button>
+            )}
+          </div>
         </div>
+        {accessManagerOpen && <AccessManagerPanel onClose={() => setAccessManagerOpen(false)} />}
+        {feedbackOpen && <FeedbackPanel onClose={() => setFeedbackOpen(false)} />}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm flex items-center justify-between gap-3">

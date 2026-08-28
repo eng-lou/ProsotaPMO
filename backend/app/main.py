@@ -30,6 +30,7 @@ from app.api.element_keyframes import router as element_keyframes_router
 from app.api.element_parents import router as element_parents_router
 from app.api.element_splits import router as element_splits_router
 from app.api.element_transforms import router as element_transforms_router
+from app.api.feedback_tickets import router as feedback_tickets_router
 from app.api.icd_action_items import router as icd_action_items_router
 from app.api.icd_baselines import router as icd_baselines_router
 from app.api.icd_bulk_generate import router as icd_bulk_generate_router
@@ -178,6 +179,7 @@ app.include_router(site_context_router, prefix="/api/v1", dependencies=_auth_app
 app.include_router(site_captures_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(progress_variance_tests_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(progress_variance_results_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(feedback_tickets_router, prefix="/api/v1", dependencies=_auth_approved)
 
 
 @app.get("/health")

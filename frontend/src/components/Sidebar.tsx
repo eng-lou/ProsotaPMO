@@ -2,11 +2,10 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { resetAllDismissedWarnings, useDismissedWarningsCount } from '@/lib/confirmWithDontAsk'
-import { useCurrentUser } from '@/lib/CurrentUserContext'
 import { loadHiddenNavPanels, saveHiddenNavPanels } from '@/lib/hiddenNavPanels'
 import { useProject } from '@/lib/ProjectContext'
 import { useTheme } from '@/lib/ThemeContext'
-import { AccessRequestsPanel } from './AccessRequestsPanel'
+import { FeedbackPanel } from './FeedbackPanel'
 import { ProsotaLogo } from './ProsotaLogo'
 
 // Exported (2026-07-25) — Layout.tsx's own document-title effect reuses
@@ -26,16 +25,15 @@ export const NAV = [
 
 export function Sidebar() {
   const { user, logout } = useAuth0()
-  const { currentUser } = useCurrentUser()
   const { selectedProject, clearProject } = useProject()
   const navigate = useNavigate()
   const dismissedCount = useDismissedWarningsCount()
-  const [accessRequestsOpen, setAccessRequestsOpen] = useState(false)
   // Which panels are hidden from the list below (2026-07-10, per Maro) —
   // hiding one only removes it from this list; its route still works if
   // visited directly, nothing is actually disabled.
   const [hiddenPanels, setHiddenPanels] = useState<Set<string>>(loadHiddenNavPanels)
   const [hidePanelsOpen, setHidePanelsOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const toggleHiddenPanel = (to: string) => {
     setHiddenPanels(prev => {
       const next = new Set(prev)
@@ -133,16 +131,14 @@ export function Sidebar() {
             ))}
           </div>
         )}
-        {currentUser?.is_super_user && (
-          <button
-            onClick={() => setAccessRequestsOpen(true)}
-            title="Review and approve pending access requests"
-            className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
-          >
-            🔑 Access requests…
-          </button>
-        )}
-        {accessRequestsOpen && <AccessRequestsPanel onClose={() => setAccessRequestsOpen(false)} />}
+        <button
+          onClick={() => setFeedbackOpen(true)}
+          title="Report an issue or leave feedback"
+          className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
+        >
+          💬 Feedback…
+        </button>
+        {feedbackOpen && <FeedbackPanel onClose={() => setFeedbackOpen(false)} />}
         <p className="text-xs text-gray-500 dark:text-prosota-muted truncate mb-2">{user?.email}</p>
         <button
           onClick={() => {

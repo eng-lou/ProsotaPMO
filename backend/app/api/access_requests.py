@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_db_user, require_super_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import AccessRequestSubmit, PendingUserResponse, UserResponse
+from app.schemas.user import AccessRequestSubmit, CurrentUserSummaryResponse, PendingUserResponse, UserResponse
 
 router = APIRouter(prefix="/access-requests", tags=["access-requests"])
 
@@ -40,6 +40,20 @@ async def list_access_requests(
 ):
     result = await db.execute(
         select(User).where(User.status == "pending").order_by(User.requested_at.desc().nullslast())
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/users", response_model=list[CurrentUserSummaryResponse])
+async def list_current_users(
+    db: AsyncSession = Depends(get_db),
+    _super_user: User = Depends(require_super_user),
+):
+    """Access Manager's roster of everyone already approved — separate from
+    list_access_requests above (which is pending-only), so the panel can
+    show "who's actually using this" alongside "who's waiting on me"."""
+    result = await db.execute(
+        select(User).where(User.status == "approved").order_by(User.last_active_at.desc().nullslast())
     )
     return list(result.scalars().all())
 

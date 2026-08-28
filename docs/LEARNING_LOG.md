@@ -4349,3 +4349,89 @@ actually works.
 **Fixed live**, confirmed working by Maro ("it works perfectly!"). See
 [[feedback_migrate_production_db]] — added as a standing rule so this
 specific gap (migrate local, forget prod, deploy anyway) doesn't repeat.
+
+---
+
+## 2026-08-27/28 — Access Manager rename+move, current-users tracking,
+## and a new Feedback ticket system
+
+**Access Manager**: per Maro, the "Access requests" panel got renamed to
+"Access Manager", moved from the Sidebar (only reachable once inside a
+project) to the Project Selector page (reachable right after login,
+before picking one) — still super-user-only. Extended with a "current
+users" roster alongside the existing pending-requests queue: every
+approved user, when they last used the app (`User.last_active_at`,
+throttled to a 5-minute-stale rewrite in `get_db_user` so it doesn't turn
+into a write on every single API call), shown both as a relative "3m
+ago" and an absolute timestamp.
+
+**A UI-vs-instruction mismatch worth remembering**: asked to rename it
+and specified "current users... when they last accessed and how long" —
+checked with Maro before building rather than guessing, since "how long"
+was genuinely ambiguous (how long ago vs. tenure vs. real session
+duration, the last of which this app's stateless JWT auth can't actually
+track without new infrastructure). Confirmed: "how long ago", the simple
+one.
+
+**Two real bugs found live-testing the new roster, not from code review**:
+1. `display_name` never self-healed the way `email` did — nested inside
+   the same "does email need fixing" check, so a row whose email had
+   *already* healed on an earlier login never re-triggered the /userinfo
+   call needed to fix display_name too. Fixed by making the trigger
+   condition check both fields independently; regression-tested
+   (`test_display_name_heals_even_when_email_already_resolved`).
+2. Port 8000 kept getting silently reoccupied by a truly dead process —
+   `Get-NetTCPConnection` reported a PID as the listener that
+   `Get-Process` confirmed didn't exist. A stale kernel socket-table
+   entry, not the [[feedback_stale_dev_server]] reload issue this looked
+   like at first. Fix was the same either way (kill everything on the
+   port, verify empty, restart clean) but worth knowing the two look
+   identical from the outside and aren't always the same root cause.
+
+**Feedback tickets** (per Maro, modelled on Reallusion's own support-
+ticket flow, screenshotted): submit subject/description/attachments,
+see your own ticket history with status; super users see every ticket
+from every user and can move status through open → in_progress → closed.
+Attachments reuse the app's existing direct-to-R2 presign/PUT/record
+pattern verbatim (`object_storage.py`, same as site_captures/model3d
+files) — authoritative size always read back from R2 via
+`head_object_size`, never trusted from the client. Reachable from both
+the Sidebar and the Project Selector page (confirmed with Maro up front
+— unlike Access Manager, this is for every approved user, not just
+super users). No reply/comment thread — status-only, matching what was
+actually asked for rather than building the full two-way conversation
+Reallusion's own screenshots implied on their staff side.
+
+**A real process mistake, twice**: ran the full backend suite in the
+background, then — while it was still running — ran other `pytest`
+invocations to check smaller things. This is exactly
+[[feedback_pytest_concurrent_runs]]'s own documented failure mode
+(deadlocks against the shared `prosotapmo_test` database), and it
+happened again here despite already being logged from an earlier
+session — the first concurrent run produced 539 spurious errors, looking
+exactly like a real regression. Recovered by confirming no `pytest`
+process was running (`Win32_Process` `CommandLine` filter, not just
+process count) before relaunching alone. Second mistake compounding the
+first: while hunting the stale port-8000 process during the *second*
+clean run, killed a process by PID/start-time guesswork without checking
+its actual command line first — turned out to be the pytest run itself,
+killed at 8% progress. **Lesson, stated plainly this time**: never kill
+a process by inference (PID proximity, start time) when `pytest` is
+running in the background — always confirm via `Win32_Format_Process`
+`CommandLine` that the target is not the test run before touching it.
+
+**Verified**: full backend suite, run alone with no concurrent pytest
+(826 passed, 61 failed — exact match to the documented pre-existing
+upload-endpoint baseline — plus one `test_activities.py` error confirmed
+non-reproducible in isolation, a test-ordering artifact unrelated to
+anything this session touched), frontend typecheck clean, migrations
+applied to local dev DB. Live-browser-verified via real clicks (not just
+pytest): Access Manager's new location and current-users roster, ticket
+submission, the your-tickets/all-tickets split, and status updates all
+confirmed working. **Not** live-verified: attachment upload through an
+actual file picker — browser automation's synthetic `DataTransfer`
+assignment didn't reliably trigger React's file-input change handling,
+a known automation limitation, not a sign of an app bug (the upload
+pipeline itself is covered by 3 passing backend tests using the same
+proven pattern as site-captures/model3d files). Flagged to Maro as worth
+a real click-through when convenient.

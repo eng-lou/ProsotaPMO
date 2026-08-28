@@ -134,3 +134,71 @@ async def test_cannot_deny_an_already_approved_user(client: AsyncClient, user: U
 
     deny_resp = await client.delete(f"/api/v1/access-requests/{approved.id}")
     assert deny_resp.status_code == 400
+
+
+async def test_current_users_list_only_shows_approved_not_pending(client: AsyncClient, user: User, db):
+    pending = User(
+        org_id=user.org_id, email="still-pending@example.com", auth0_sub="auth0|still-pending",
+        display_name="Still Pending", role="member", status="pending",
+    )
+    approved = User(
+        org_id=user.org_id, email="another-approved@example.com", auth0_sub="auth0|another-approved",
+        display_name="Another Approved", role="member", status="approved",
+    )
+    db.add_all([pending, approved])
+    await db.commit()
+
+    resp = await client.get("/api/v1/access-requests/users")
+    assert resp.status_code == 200
+    emails = [row["email"] for row in resp.json()]
+    assert "another-approved@example.com" in emails
+    assert "still-pending@example.com" not in emails
+    # `user` (the fixture's own super user, status="approved") shows up too
+    assert user.email in emails
+
+
+async def test_non_super_user_cannot_list_current_users(client: AsyncClient, user: User):
+    user.is_super_user = False
+    resp = await client.get("/api/v1/access-requests/users")
+    assert resp.status_code == 403
+
+
+async def test_display_name_heals_even_when_email_already_resolved(user: User, db, monkeypatch):
+    # Regression (2026-08-27) — display_name healing used to be nested
+    # inside the "does email need fixing" check, so a row whose *email* had
+    # already healed on an earlier login (but predated this display_name
+    # fix) never triggered the /userinfo call again at all, leaving
+    # display_name stuck on the synthetic default forever. Real email,
+    # synthetic display_name is exactly that scenario.
+    import app.core.auth as auth_module
+    from app.core.auth import TokenPayload, get_db_user
+
+    user.email = "already-real@example.com"
+    user.display_name = f"user+{user.auth0_sub.split('|')[-1]}@prosotapmo.local"
+    await db.commit()
+
+    monkeypatch.setattr(auth_module, "_fetch_userinfo_sync", lambda access_token: {"name": "Real Name"})
+
+    token = TokenPayload(sub=user.auth0_sub, email=None, access_token="fake-token")
+    healed = await get_db_user(token=token, db=db)
+    assert healed.display_name == "Real Name"
+    assert healed.email == "already-real@example.com"  # untouched, was already fine
+
+
+async def test_last_active_at_set_on_first_request_and_throttled_after(user: User, db):
+    # The `client` fixture overrides get_db_user entirely (returns the fixture's
+    # `user` directly, see conftest.py), so it can't exercise get_db_user's own
+    # body at all — calling the real function directly instead, the same way
+    # its own self-heal logic above would need to be (nothing in this file
+    # tests that either, a pre-existing gap, not one this test tries to close).
+    from app.core.auth import TokenPayload, get_db_user
+
+    token = TokenPayload(sub=user.auth0_sub, email=user.email)
+    healed = await get_db_user(token=token, db=db)
+    assert healed.last_active_at is not None
+    first_seen = healed.last_active_at
+
+    # A second call within the throttle window must NOT rewrite it — get_db_user's
+    # own 5-minute throttle, not a bug if this stays equal.
+    healed_again = await get_db_user(token=token, db=db)
+    assert healed_again.last_active_at == first_seen
