@@ -53,32 +53,42 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
   const ticks = Array.from({ length: TICK_COUNT }, (_, i) => minTime + (span * i) / (TICK_COUNT - 1))
 
   return (
-    <div className="relative pt-10 pb-8" style={{ minHeight: 140 }}>
+    <div className="relative pt-16 pb-12" style={{ minHeight: 190 }}>
       <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-gray-200" />
 
-      {/* Calendar interval ticks — below the axis, purely a scale reference. */}
+      {/* Calendar interval ticks — below the axis, purely a scale reference.
+          Anchored at the axis's own vertical centre (top-1/2, zero-height
+          wrapper) rather than translated onto it, same "position by anchor,
+          not by straddling the line" fix as the milestones below. */}
       {ticks.map((t, i) => (
         <div key={i} className="absolute top-1/2" style={{ left: `${positionOf(t)}%` }}>
-          <span className="block w-px h-2.5 bg-gray-300" />
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 dark:text-prosota-muted whitespace-nowrap">
+          <span className="absolute top-2 left-1/2 -translate-x-1/2 block w-px h-3 bg-gray-300" />
+          <div className="absolute top-7 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 dark:text-prosota-muted whitespace-nowrap">
             {formatTick(t)}
           </div>
         </div>
       ))}
 
-      {/* Milestones — above the axis, positioned by real date. */}
+      {/* Milestones — above the axis, positioned by real date. The dot sits
+          a clear 12px above the line (not straddling it) and the label a
+          further clear gap above the dot — per Maro: "milestone points and
+          texts are close to the line". Anchored at the axis's own vertical
+          centre (a zero-height wrapper, same trick as the ticks above) with
+          bottom-offset children stacking upward from there, rather than
+          translating the dot onto the line and eyeballing the label's own
+          offset from it. */}
       {dated.map(m => {
         const left = positionOf(new Date(m.finish!).getTime())
         return (
           <div key={m.id} className="absolute top-1/2" style={{ left: `${left}%`, transform: 'translateX(-50%)' }}>
             <span
-              className="block w-3 h-3 rounded-full ring-2 ring-white -translate-y-1/2"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 block w-3 h-3 rounded-full ring-2 ring-white"
               style={{ backgroundColor: statusColor(m) }}
               title={m.task_name}
             />
-            <div className="absolute bottom-3 w-max max-w-[140px] text-center left-1/2 -translate-x-1/2 text-xs">
+            <div className="absolute bottom-9 w-max max-w-[140px] text-center left-1/2 -translate-x-1/2 text-xs">
               <div className="text-gray-700 dark:text-prosota-muted font-medium leading-tight">{m.task_name}</div>
-              <div className="text-gray-400 dark:text-prosota-muted">{formatDate(m.finish)}</div>
+              <div className="text-gray-400 dark:text-prosota-muted mt-0.5">{formatDate(m.finish)}</div>
             </div>
           </div>
         )

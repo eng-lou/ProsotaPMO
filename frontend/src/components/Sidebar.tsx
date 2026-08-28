@@ -56,7 +56,7 @@ export function Sidebar() {
   return (
     <aside className="no-print flex flex-col w-60 min-h-screen bg-white text-gray-900 dark:bg-prosota-ink dark:text-prosota-paper shrink-0 border-r border-gray-200 dark:border-prosota-line">
       <div className="flex items-center gap-2.5 px-6 py-5 border-b border-gray-200 dark:border-prosota-line">
-        <ProsotaLogo size={24} />
+        <ProsotaLogo size={30} />
         <span className="font-display text-lg font-bold tracking-tight">Prosota</span>
       </div>
 
