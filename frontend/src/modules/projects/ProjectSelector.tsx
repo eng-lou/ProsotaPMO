@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth0 } from '@auth0/auth0-react'
 import { AccessManagerPanel } from '@/components/AccessManagerPanel'
 import { FeedbackPanel } from '@/components/FeedbackPanel'
 import { api } from '@/lib/api'
@@ -25,9 +26,10 @@ export function ProjectSelector() {
   const [rowAction, setRowAction] = useState<{ mode: 'rename' | 'duplicate'; project: Project; value: string } | null>(null)
   const [rowActionError, setRowActionError] = useState<string | null>(null)
   const [rowActionBusy, setRowActionBusy] = useState(false)
-  const { selectProject } = useProject()
+  const { selectProject, clearProject } = useProject()
   const navigate = useNavigate()
   const { currentUser } = useCurrentUser()
+  const { user, logout } = useAuth0()
   // Access Manager (2026-08-25, moved+renamed 2026-08-27 per Maro) — lives
   // here rather than the Sidebar because it's an account-level concern, not
   // a project one, and the Sidebar only mounts once a project's selected;
@@ -381,6 +383,24 @@ export function ProjectSelector() {
             + New project
           </button>
         )}
+
+        <div className="mt-8 pt-4 border-t border-gray-200 dark:border-prosota-line">
+          <p className="text-xs text-gray-500 dark:text-prosota-muted truncate mb-2">{user?.email}</p>
+          <button
+            onClick={() => {
+              // Same "clear the stashed project before logging out" reasoning
+              // as Sidebar.tsx's own Sign out button — harmless here since
+              // this page only ever renders with no project selected, but
+              // keeps the two sign-out paths identical rather than one of
+              // them silently depending on it never mattering.
+              clearProject()
+              logout({ logoutParams: { returnTo: window.location.origin } })
+            }}
+            className="text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
     </div>
   )
