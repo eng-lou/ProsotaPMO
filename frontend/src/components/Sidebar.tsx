@@ -19,9 +19,6 @@ export const NAV = [
   { to: '/risks', label: 'Risk Register' },
   { to: '/costs', label: 'Cost Plan' },
   { to: '/icd', label: 'ICD Tracker' },
-  { to: '/files', label: 'File Manager' },
-  { to: '/periods', label: 'Period Manager' },
-  { to: '/exports', label: 'Export Centre' },
 ]
 
 export function Sidebar() {

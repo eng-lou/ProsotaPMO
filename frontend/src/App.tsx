@@ -33,13 +33,6 @@ const RiskRegister = lazy(() => import('./modules/risks/RiskRegister').then(m =>
 const CostPlan = lazy(() => import('./modules/costs/CostPlan').then(m => ({ default: m.CostPlan })))
 const IcdTracker = lazy(() => import('./modules/icd/IcdTracker').then(m => ({ default: m.IcdTracker })))
 
-const Placeholder = ({ title, subtitle = 'Coming soon.' }: { title: string; subtitle?: string }) => (
-  <div className="p-8">
-    <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
-    <p className="text-gray-500 mt-2">{subtitle}</p>
-  </div>
-)
-
 function LoginPage() {
   const { loginWithRedirect } = useAuth0()
   return (
@@ -131,9 +124,6 @@ function AuthenticatedApp() {
               <Route path="/risks" element={<RiskRegister />} />
               <Route path="/costs" element={<CostPlan />} />
               <Route path="/icd" element={<IcdTracker />} />
-              <Route path="/files" element={<Placeholder title="File Manager" />} />
-              <Route path="/periods" element={<Placeholder title="Period Manager" />} />
-              <Route path="/exports" element={<Placeholder title="Export Centre" />} />
             </Routes>
           </Suspense>
         </Layout>

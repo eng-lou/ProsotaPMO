@@ -23,7 +23,6 @@ from app.models.risk_baseline import RiskBaseline, RiskBaselineItem
 from app.models.risk_mitigation_action import RiskMitigationAction
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
-from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
 from app.schemas.dashboard import (
     BaselineComparisonResponse,
@@ -169,12 +168,12 @@ async def _kpis(
     ), elements
 
 
-def _schedule_buckets(activities: list[Activity], critical_attr: str) -> ScheduleBuckets:
+def _schedule_buckets(activities: list[Activity]) -> ScheduleBuckets:
     on_time = at_risk = delayed = 0
     for a in activities:
         if a.variance_days is not None and a.variance_days > 0:
             delayed += 1
-        elif getattr(a, critical_attr) is True:
+        elif a.is_critical is True:
             at_risk += 1
         else:
             on_time += 1
@@ -208,7 +207,7 @@ def _cost_element_summaries(elements: list) -> list[CostElementSummary]:
 
 
 async def _dcma_quality_summary(
-    db: AsyncSession, schedule_period_id: uuid.UUID, subproject_id: uuid.UUID | None,
+    db: AsyncSession, schedule_period_id: uuid.UUID,
     all_activities: list[Activity], relationships: list[ActivityRelationship],
 ) -> DcmaQualitySummary:
     # all_activities/relationships (2026-07-20, optimization pass) — reuses
@@ -216,8 +215,19 @@ async def _dcma_quality_summary(
     # compute_quality independently re-running both full-table queries on
     # every single dashboard load (see that function's own docstring on why
     # this is a safe substitution).
+    #
+    # Always whole-schedule (2026-08-28) — get_overview's own WBS-node scope
+    # slicer (Maro: "allow slicers for wbs which affects all the cards")
+    # deliberately doesn't reach this: compute_quality's sub-project scoping
+    # switches checks 6/7/12 to read sub_is_critical/sub_total_float_hours,
+    # fields only meaningful for a *registered* ScheduleSubproject's own
+    # dedicated isolated-CPM pass — not something derivable on the fly for
+    # an arbitrary WBS node picked from a dropdown. Reproducing that
+    # isolated pass ad hoc would be real new engineering, not a slicer wire-
+    # up, so DCMA Quality stays whole-schedule regardless of the slicer's
+    # current selection.
     report = await quality_svc.compute_quality(
-        db, schedule_period_id, subproject_id,
+        db, schedule_period_id, None,
         pre_fetched_activities=all_activities, pre_fetched_relationships=relationships,
     )
     checks = report["checks"]
@@ -494,26 +504,34 @@ async def get_overview(
     project_id: uuid.UUID,
     period_id: uuid.UUID,
     schedule_period_id: uuid.UUID,
-    subproject_id: uuid.UUID | None,
+    wbs_node_activity_id: uuid.UUID | None,
     critical_only: bool,
 ) -> DashboardOverviewResponse:
     activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
+    all_activities_including_wbs = list(activities_result.scalars().all())
     all_activities = [
-        a for a in activities_result.scalars().all()
+        a for a in all_activities_including_wbs
         if a.activity_type != "wbs_summary" and not a.is_archived and not a.is_archive_container
     ]
 
-    critical_attr = "is_critical"
+    # WBS-node scope slicer (2026-08-28, per Maro: "allow slicers for wbs
+    # which affects all the cards") — replaces the old registered-sub-
+    # project picker with any real WBS node chosen directly from the tree,
+    # so scoping isn't limited to whatever's been pre-tagged. Always uses
+    # the master is_critical field (not a sub-project's own isolated
+    # sub_is_critical) — that field only exists for a registered
+    # ScheduleSubproject's dedicated CPM pass, not derivable on the fly for
+    # an arbitrary node (see _dcma_quality_summary's own docstring for the
+    # same reasoning, which is why DCMA Quality itself stays unscoped).
     scoped_activities = all_activities
-    if subproject_id is not None:
-        subproject = await db.get(ScheduleSubproject, subproject_id)
-        if subproject is None or subproject.project_id != project_id:
-            raise HTTPException(status_code=404, detail="Sub-project not found in this project.")
-        scope_ids = await _subtree_ids(db, schedule_period_id, subproject.root_wbs_id)
+    if wbs_node_activity_id is not None:
+        node = next((a for a in all_activities_including_wbs if a.id == wbs_node_activity_id), None)
+        if node is None or node.schedule_period_id != schedule_period_id:
+            raise HTTPException(status_code=404, detail="WBS node not found in this schedule.")
+        scope_ids = await _subtree_ids(db, schedule_period_id, wbs_node_activity_id)
         scoped_activities = [a for a in all_activities if a.id in scope_ids]
-        critical_attr = "sub_is_critical"
 
-    bucket_activities = [a for a in scoped_activities if getattr(a, critical_attr) is True] if critical_only else scoped_activities
+    bucket_activities = [a for a in scoped_activities if a.is_critical is True] if critical_only else scoped_activities
 
     icd_result = await db.execute(
         select(IcdItem).where(IcdItem.project_id == project_id, IcdItem.period_id == period_id)
@@ -521,7 +539,7 @@ async def get_overview(
     icd_items = list(icd_result.scalars().all())
 
     kpis, cost_elements = await _kpis(db, project_id, period_id, all_activities, icd_items)
-    schedule_buckets = _schedule_buckets(bucket_activities, critical_attr)
+    schedule_buckets = _schedule_buckets(bucket_activities)
     milestones = _milestones(scoped_activities)
     schedule_activities = _schedule_activities(scoped_activities)
     cost_element_summaries = _cost_element_summaries(cost_elements)
@@ -536,7 +554,7 @@ async def get_overview(
     mitigation_actions = await _mitigation_actions(db, risks)
 
     project_info, period, relationships = await _project_info(db, project_id, schedule_period_id, all_activities)
-    dcma_quality = await _dcma_quality_summary(db, schedule_period_id, subproject_id, all_activities, relationships)
+    dcma_quality = await _dcma_quality_summary(db, schedule_period_id, all_activities, relationships)
     clash_summary, clash_pairs = await _clash_summary_and_pairs(db, project_id)
     now = datetime.combine(period.cutoff_date, time.min) if period is not None and period.cutoff_date is not None else datetime.now()
     lookahead_items, lookahead_summary = _lookahead(all_activities, scoped_activities, relationships, milestones, now)

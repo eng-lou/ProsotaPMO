@@ -65,11 +65,12 @@ class GanttStyle(BaseModel):
     # wbs_row_color pair.
     wbs_level_colors: list[str] = Field(default_factory=lambda: list(DEFAULT_WBS_LEVEL_COLORS))
     activity_row_color: str = Field(default="#ffffff", pattern=_HEX_PATTERN)
-    milestone_row_color: str = Field(default="#a855f7", pattern=_HEX_PATTERN)
+    milestone_row_color: str = Field(default="#ffffff", pattern=_HEX_PATTERN)
     # Display-only toggle (2026-07-05, per Maro) — doesn't affect any stored
     # or computed value, just whether the activity table/print view shows a
-    # date's time-of-day (e.g. "06 Jul 2026 09:00" vs "06 Jul 2026").
-    show_time_of_day: bool = True
+    # date's time-of-day (e.g. "06 Jul 2026 09:00" vs "06 Jul 2026"). Off by
+    # default (2026-08-28, per Maro).
+    show_time_of_day: bool = False
     # Gantt display toggles (2026-07-05, per Maro) — same on-screen/print
     # split as everything else in GanttStyle. show_connectors hides the
     # predecessor/successor elbow lines entirely (GanttChart.tsx's SVG /

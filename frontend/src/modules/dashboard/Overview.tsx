@@ -4,7 +4,8 @@ import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
-import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
+import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
+import type { Activity } from '@/modules/scheduling/types'
 import { DashboardGrid } from './DashboardGrid'
 import type { DashboardOverviewResponse } from './types'
 
@@ -25,10 +26,21 @@ export function Overview() {
   const { selectedProject } = useProject()
   const { period, loading: periodLoading } = useActivePeriod(selectedProject?.id)
   const { period: schedulePeriod, loading: scheduleLoading } = useActiveScheduleVariant(selectedProject?.id)
-  const { subprojects } = useScheduleSubprojects(selectedProject?.id)
 
-  const [subprojectId, setSubprojectId] = useState<string>('whole')
-  const [criticalOnly, setCriticalOnly] = useState(false)
+  // WBS slicer (2026-08-28, per Maro: "allow slicers for wbs which affects
+  // all the cards") — replaces the old registered-sub-project picker with
+  // any real WBS node, fetched once here purely to populate the picker
+  // (get_overview itself does its own scoped query server-side; this list
+  // is never used to compute anything client-side).
+  const [wbsNodes, setWbsNodes] = useState<Activity[]>([])
+  useEffect(() => {
+    if (!selectedProject || !schedulePeriod) return
+    api.get<Activity[]>('/api/v1/activities/', {
+      params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id },
+    }).then(({ data }) => setWbsNodes(data.filter(a => a.activity_type === 'wbs_summary')))
+  }, [selectedProject?.id, schedulePeriod?.id])
+
+  const [wbsNodeId, setWbsNodeId] = useState<string>('')
   const [data, setData] = useState<DashboardOverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -40,13 +52,12 @@ export function Overview() {
         project_id: selectedProject.id,
         period_id: period.id,
         schedule_period_id: schedulePeriod.id,
-        subproject_id: subprojectId === 'whole' ? undefined : subprojectId,
-        critical_only: criticalOnly,
+        wbs_node_activity_id: wbsNodeId || undefined,
       },
     })
       .then(({ data }) => setData(data))
       .finally(() => setLoading(false))
-  }, [selectedProject?.id, period?.id, schedulePeriod?.id, subprojectId, criticalOnly])
+  }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId])
 
   if (periodLoading || scheduleLoading || loading || !data) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
@@ -56,20 +67,23 @@ export function Overview() {
     <div className="space-y-6">
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-3 text-sm">
-          <select
-            className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5"
-            value={subprojectId}
-            onChange={e => setSubprojectId(e.target.value)}
-          >
-            <option value="whole">Whole schedule</option>
-            {subprojects.map(sp => (
-              <option key={sp.id} value={sp.id}>{sp.name}</option>
-            ))}
-          </select>
-          <label className="flex items-center gap-1.5 text-gray-600 dark:text-prosota-muted">
-            <input type="checkbox" checked={criticalOnly} onChange={e => setCriticalOnly(e.target.checked)} />
-            Critical path only
-          </label>
+          <div className="w-56">
+            <ActivityPicker
+              activities={wbsNodes}
+              value={wbsNodeId}
+              onChange={setWbsNodeId}
+              placeholder="Whole schedule"
+            />
+          </div>
+          {wbsNodeId && (
+            <button
+              onClick={() => setWbsNodeId('')}
+              title="Clear the WBS scope and show the whole schedule again"
+              className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper"
+            >
+              ✕ Whole schedule
+            </button>
+          )}
         </div>
       </div>
 

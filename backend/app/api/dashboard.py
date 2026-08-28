@@ -17,11 +17,11 @@ async def get_overview(
     project_id: uuid.UUID,
     period_id: uuid.UUID,
     schedule_period_id: uuid.UUID,
-    subproject_id: uuid.UUID | None = None,
+    wbs_node_activity_id: uuid.UUID | None = None,
     critical_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ) -> DashboardOverviewResponse:
-    return await svc.get_overview(db, project_id, period_id, schedule_period_id, subproject_id, critical_only)
+    return await svc.get_overview(db, project_id, period_id, schedule_period_id, wbs_node_activity_id, critical_only)
 
 
 @router.get("/baseline-comparison", response_model=BaselineComparisonResponse)

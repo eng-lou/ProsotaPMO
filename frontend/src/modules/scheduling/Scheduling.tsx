@@ -108,6 +108,14 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
 
 const VISIBLE_COLUMNS_STORAGE_KEY = 'prosota_scheduling_visible_columns'
 
+// A lean starting set (2026-08-28, per Maro: "by default i want these
+// columns activated not all of them") — every column used to show by
+// default, which meant a brand-new user's table was crowded with EVM/3D/
+// sub-project columns they'd never touched. Only ever applies to a fresh
+// browser with nothing saved yet; anyone who's already customized their
+// own visible set keeps exactly what they chose.
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ['code', 'duration', 'start', 'finish']
+
 function loadVisibleColumns(): Set<ColumnKey> {
   try {
     const raw = localStorage.getItem(VISIBLE_COLUMNS_STORAGE_KEY)
@@ -115,7 +123,7 @@ function loadVisibleColumns(): Set<ColumnKey> {
   } catch {
     // fall through to default
   }
-  return new Set(ALL_COLUMNS.map(c => c.key))
+  return new Set(DEFAULT_VISIBLE_COLUMNS)
 }
 
 // User Defined Fields (docs/SCHEDULING_GAPS_PLAN.md Phase 9) — unlike the

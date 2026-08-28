@@ -346,37 +346,32 @@ async def test_critical_only_restricts_bucket_population(
     assert critical_only["at_risk"] == 1
 
 
-async def test_subproject_scope_uses_sub_critical_field(
+async def test_wbs_node_scope_filters_activities_by_subtree(
     client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod, live_period: Period
 ):
     top = await _create_activity(client, project, live_schedule_period, "Programme")
     branch = await _create_activity(client, project, live_schedule_period, "Enabling Works", parent_id=top["id"])
     inside = await _create_activity(client, project, live_schedule_period, "Task A", parent_id=branch["id"])
     outside = await _create_activity(client, project, live_schedule_period, "Task B", parent_id=top["id"])
-    # Master-critical is False for everything, but the branch's own scoped
-    # pass says "inside" is critical within its own sub-network.
-    await _set_computed_fields(db, inside["id"], is_critical=False, sub_is_critical=True, variance_days=0)
-    await _set_computed_fields(db, outside["id"], is_critical=False, sub_is_critical=None, variance_days=0)
-
-    subproject_resp = await client.post("/api/v1/schedule-subprojects/", json={
-        "project_id": str(project.id), "name": "Enabling Works", "root_wbs_id": branch["id"],
-    })
-    assert subproject_resp.status_code == 201, subproject_resp.text
-    subproject = subproject_resp.json()
+    # 2026-08-28: the WBS slicer always reads the master is_critical field —
+    # unlike the old registered-sub-project picker it replaced, there's no
+    # separate sub_is_critical for an arbitrary node chosen ad hoc.
+    await _set_computed_fields(db, inside["id"], is_critical=True, variance_days=0)
+    await _set_computed_fields(db, outside["id"], is_critical=False, variance_days=0)
 
     scoped = (await client.get(
         "/api/v1/dashboard/overview",
-        params=_overview_params(project, live_period, live_schedule_period, subproject_id=subproject["id"]),
+        params=_overview_params(project, live_period, live_schedule_period, wbs_node_activity_id=branch["id"]),
     )).json()["schedule_buckets"]
 
-    # Only "Task A" is in the branch; scoped reading uses sub_is_critical (True) -> at_risk.
+    # Only "Task A" is in the branch's own subtree.
     assert scoped == {"on_time": 0, "at_risk": 1, "delayed": 0, "total": 1}
 
 
-async def test_unknown_subproject_id_returns_404(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
+async def test_unknown_wbs_node_activity_id_returns_404(client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
     resp = await client.get(
         "/api/v1/dashboard/overview",
-        params=_overview_params(project, live_period, live_schedule_period, subproject_id="00000000-0000-0000-0000-000000000000"),
+        params=_overview_params(project, live_period, live_schedule_period, wbs_node_activity_id="00000000-0000-0000-0000-000000000000"),
     )
     assert resp.status_code == 404
 

@@ -29,10 +29,13 @@ class DashboardKpis(BaseModel):
 
 
 class DcmaQualitySummary(BaseModel):
-    """Live-computed DCMA 14-point score for whatever scope (whole schedule
-    or one sub-project) the dashboard's own subproject_id param already
-    selects — reuses scheduling_quality.compute_quality (the same engine
-    the Scheduling module's own "Run Quality Analysis" action calls) rather
+    """Live-computed DCMA 14-point score for the whole schedule — always
+    unscoped, deliberately not affected by get_overview's own WBS-node
+    slicer (see dashboard.py:_dcma_quality_summary's own docstring for why:
+    two of the 14 checks depend on a registered ScheduleSubproject's own
+    isolated CPM pass, which an arbitrary ad-hoc WBS node has no equivalent
+    of). Reuses scheduling_quality.compute_quality (the same engine the
+    Scheduling module's own "Run Quality Analysis" action calls) rather
     than depending on the user having saved a SchedulingQualityRun, so the
     dashboard always reflects the schedule as it stands right now."""
 
@@ -110,8 +113,9 @@ class MilestoneTimelineItem(BaseModel):
 
 class ScheduleActivitySummary(BaseModel):
     """One non-summary, non-archived activity in the currently-scoped
-    schedule (whole/sub-project, per get_overview's own subproject_id/
-    critical_only params) — raw enough for several Schedule-module widgets
+    schedule (whole schedule, or one WBS node's own subtree, per
+    get_overview's own wbs_node_activity_id/critical_only params) — raw
+    enough for several Schedule-module widgets
     (float distribution, activities-by-trade, baseline variance, critical
     activities) to aggregate client-side from one shared fetch, same
     "one fetch, many views" split the six original widgets already use.
