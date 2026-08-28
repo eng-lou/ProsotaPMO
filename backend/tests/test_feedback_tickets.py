@@ -75,6 +75,113 @@ async def test_super_user_can_update_status(client: AsyncClient):
     assert resp.json()["status"] == "in_progress"
 
 
+async def test_status_change_recorded_as_an_event(client: AsyncClient, user: User):
+    ticket = await _create_ticket(client)
+    resp = await client.patch(f"/api/v1/feedback-tickets/{ticket['id']}", json={"status": "in_progress"})
+    events = resp.json()["events"]
+    assert len(events) == 1
+    assert events[0]["kind"] == "status_change"
+    assert events[0]["old_status"] == "open"
+    assert events[0]["new_status"] == "in_progress"
+    assert events[0]["author_email"] == user.email
+
+
+async def test_setting_the_same_status_does_not_record_an_event(client: AsyncClient):
+    ticket = await _create_ticket(client)
+    resp = await client.patch(f"/api/v1/feedback-tickets/{ticket['id']}", json={"status": "open"})
+    assert resp.json()["events"] == []
+
+
+async def test_owner_and_super_user_can_both_comment(client: AsyncClient, other_user: User, user: User):
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        ticket = await _create_ticket(client)
+        resp = await client.post(f"/api/v1/feedback-tickets/{ticket['id']}/comments", json={"body": "Here's more detail"})
+        assert resp.status_code == 200
+        assert resp.json()["events"][0]["body"] == "Here's more detail"
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+    resp = await client.post(f"/api/v1/feedback-tickets/{ticket['id']}/comments", json={"body": "Thanks, looking into it"})
+    assert resp.status_code == 200
+    bodies = [e["body"] for e in resp.json()["events"]]
+    assert bodies == ["Here's more detail", "Thanks, looking into it"]
+
+
+async def test_unrelated_normal_user_cannot_comment_or_see_ticket(client: AsyncClient, other_user: User, user: User):
+    ticket = await _create_ticket(client)  # owned by the super user (`user`)
+
+    third = User(
+        org_id=user.org_id, email="third@example.com", auth0_sub="auth0|third",
+        display_name="Third", role="member", status="approved", is_super_user=False,
+    )
+    app.dependency_overrides[get_db_user] = lambda: third
+    try:
+        resp = await client.post(f"/api/v1/feedback-tickets/{ticket['id']}/comments", json={"body": "butting in"})
+        assert resp.status_code == 404
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+
+async def test_unread_reflects_activity_since_last_viewed(client: AsyncClient, other_user: User, user: User):
+    # Nothing yet.
+    assert (await client.get("/api/v1/feedback-tickets/unread")).json() == {"has_unread": False}
+
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        await _create_ticket(client, subject="A new one")
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+    # Super user hasn't looked yet — the new ticket from someone else counts.
+    assert (await client.get("/api/v1/feedback-tickets/unread")).json() == {"has_unread": True}
+
+    mark_resp = await client.post("/api/v1/feedback-tickets/mark-read")
+    assert mark_resp.status_code == 200
+    assert (await client.get("/api/v1/feedback-tickets/unread")).json() == {"has_unread": False}
+
+
+async def test_normal_user_sees_unread_when_super_user_replies(client: AsyncClient, other_user: User, user: User):
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        ticket = await _create_ticket(client)
+        assert (await client.get("/api/v1/feedback-tickets/unread")).json() == {"has_unread": False}
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+    await client.post(f"/api/v1/feedback-tickets/{ticket['id']}/comments", json={"body": "Can you share a screenshot?"})
+
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        assert (await client.get("/api/v1/feedback-tickets/unread")).json() == {"has_unread": True}
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+
+async def test_export_requires_super_user(client: AsyncClient, other_user: User, user: User):
+    app.dependency_overrides[get_db_user] = lambda: other_user
+    try:
+        resp = await client.get("/api/v1/feedback-tickets/export")
+        assert resp.status_code == 403
+    finally:
+        app.dependency_overrides[get_db_user] = lambda: user
+
+
+async def test_export_returns_csv_of_all_events(client: AsyncClient):
+    ticket = await _create_ticket(client, subject="Export me")
+    await client.post(f"/api/v1/feedback-tickets/{ticket['id']}/comments", json={"body": "a note"})
+    await client.patch(f"/api/v1/feedback-tickets/{ticket['id']}", json={"status": "closed"})
+
+    resp = await client.get("/api/v1/feedback-tickets/export")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    body = resp.text
+    assert "Export me" in body
+    assert "a note" in body
+    assert "status_change" in body
+    assert "comment" in body
+
+
 async def test_update_missing_ticket_404s(client: AsyncClient):
     resp = await client.patch(f"/api/v1/feedback-tickets/{uuid.uuid4()}", json={"status": "closed"})
     assert resp.status_code == 404

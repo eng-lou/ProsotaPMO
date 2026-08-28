@@ -5,6 +5,7 @@ import { resetAllDismissedWarnings, useDismissedWarningsCount } from '@/lib/conf
 import { loadHiddenNavPanels, saveHiddenNavPanels } from '@/lib/hiddenNavPanels'
 import { useProject } from '@/lib/ProjectContext'
 import { useTheme } from '@/lib/ThemeContext'
+import { useFeedbackUnread } from '@/lib/useFeedbackUnread'
 import { FeedbackPanel } from './FeedbackPanel'
 import { ProsotaLogo } from './ProsotaLogo'
 
@@ -34,6 +35,7 @@ export function Sidebar() {
   const [hiddenPanels, setHiddenPanels] = useState<Set<string>>(loadHiddenNavPanels)
   const [hidePanelsOpen, setHidePanelsOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const { hasUnread, refresh: refreshUnread } = useFeedbackUnread()
   const toggleHiddenPanel = (to: string) => {
     setHiddenPanels(prev => {
       const next = new Set(prev)
@@ -134,11 +136,12 @@ export function Sidebar() {
         <button
           onClick={() => setFeedbackOpen(true)}
           title="Report an issue or leave feedback"
-          className="w-full text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
+          className="w-full flex items-center gap-1.5 text-left text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors mb-2"
         >
           💬 Feedback…
+          {hasUnread && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
         </button>
-        {feedbackOpen && <FeedbackPanel onClose={() => setFeedbackOpen(false)} />}
+        {feedbackOpen && <FeedbackPanel onClose={() => { setFeedbackOpen(false); refreshUnread() }} />}
         <p className="text-xs text-gray-500 dark:text-prosota-muted truncate mb-2">{user?.email}</p>
         <button
           onClick={() => {

@@ -4435,3 +4435,58 @@ a known automation limitation, not a sign of an app bug (the upload
 pipeline itself is covered by 3 passing backend tests using the same
 proven pattern as site-captures/model3d files). Flagged to Maro as worth
 a real click-through when convenient.
+
+---
+
+## 2026-08-28 — Two-way ticket comms, status history, unread badge,
+## downloadable audit log — and the real cause of a whole session's worth
+## of "why isn't my backend change taking effect"
+
+**Feature, per Maro**: "as super user i can change the status but i need
+to be able to provide guidance not just status change... its a two way
+comms... the feedback icon needs to show there's a new notification...
+i need to be able to keep track of the progress... back and forth...
+i can download the log." One new table, `TicketEvent`
+(`app/models/feedback_ticket.py`) — a single ordered timeline per ticket
+holding both comment replies (`kind="comment"`, body set) and auto-
+recorded status transitions (`kind="status_change"`, old/new status set,
+authored by whoever changed it), rather than two separate tables — the
+same query that renders a ticket's conversation is also exactly what the
+super-user CSV export (`GET /feedback-tickets/export`) needs across every
+ticket at once. Unread tracking is a single `users.last_viewed_feedback_at`
+timestamp, compared against `TicketEvent.created_at`/`FeedbackTicket.created_at`
+on demand (`GET /feedback-tickets/unread`) rather than a stored counter —
+always correct, no denormalized state to keep in sync. 17 new/updated
+backend tests, all passing, including the specific "email already
+resolved but this trigger still needs to fire" class of bug this session
+already hit once before with `display_name`.
+
+**The real story of today's dev-server pain, finally run to ground**:
+across many restart attempts, a backend code change would refuse to take
+effect even after what looked like a clean restart — new PID, no error
+in the log, `Get-NetTCPConnection` confirming that PID owned port 8000.
+Every time, the live server kept answering with stale routes anyway.
+Root cause, found only by finally bypassing `--reload` entirely and
+capturing a *real* bind error: `uvicorn --reload`'s actual worker process
+on this Windows machine is spawned via Python's `multiprocessing.spawn`
+as a **separate, orphanable child** of the reloader — killing the
+reloader's own PID (the one every restart attempt was targeting) does
+**not** kill this child on Windows, so the true listener survives,
+invisible to the usual "did I kill the server" checks, sometimes for a
+full day across sessions. Full writeup and the actual recovery procedure
+in [[feedback_stale_dev_server]] (rewritten today — the old entry's advice,
+"just restart the process," was necessary but not sufficient, and never
+explained *why* a restart could still fail this way).
+
+**Verified**: full backend suite run alone (no concurrent pytest, learned
+the hard way yesterday), frontend typecheck clean, migration applied to
+local dev DB. Live-browser-tested via real clicks: posting a comment as
+the super user, the comment rendering correctly with author/timestamp,
+the "Download log" button returning a real 200 CSV response. **Not**
+live-tested this round: the unread badge across two real accounts (the
+only ticket in local dev right now is owned by the super user themself,
+so a second account can't legitimately see it to test against) — covered
+instead by two dedicated passing backend tests
+(`test_unread_reflects_activity_since_last_viewed`,
+`test_normal_user_sees_unread_when_super_user_replies`) that exercise the
+exact cross-user scenario directly.

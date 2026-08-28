@@ -10,6 +10,19 @@ export interface TicketAttachment {
   download_url: string
 }
 
+export type EventKind = 'comment' | 'status_change'
+
+export interface TicketEvent {
+  id: string
+  kind: EventKind
+  body: string | null
+  old_status: TicketStatus | null
+  new_status: TicketStatus | null
+  created_at: string
+  author_email: string
+  author_display_name: string
+}
+
 export interface Ticket {
   id: string
   created_by: string
@@ -17,6 +30,7 @@ export interface Ticket {
   description: string
   status: TicketStatus
   attachments: TicketAttachment[]
+  events: TicketEvent[]
   created_at: string
   updated_at: string
   reporter_email: string
@@ -26,6 +40,34 @@ export interface Ticket {
 export async function listTickets(): Promise<Ticket[]> {
   const res = await api.get<Ticket[]>('/api/v1/feedback-tickets/')
   return res.data
+}
+
+export async function hasUnreadFeedback(): Promise<boolean> {
+  const res = await api.get<{ has_unread: boolean }>('/api/v1/feedback-tickets/unread')
+  return res.data.has_unread
+}
+
+export async function markFeedbackRead(): Promise<void> {
+  await api.post('/api/v1/feedback-tickets/mark-read')
+}
+
+export async function addTicketComment(ticketId: string, body: string): Promise<Ticket> {
+  const res = await api.post<Ticket>(`/api/v1/feedback-tickets/${ticketId}/comments`, { body })
+  return res.data
+}
+
+// Authenticated CSV download (2026-08-28, super-user only) — a plain <a
+// href> can't carry the Bearer token, so the file is fetched via the
+// shared axios instance and handed to the browser as a Blob download
+// instead, same trick as any other authenticated-export flow in an SPA.
+export async function downloadFeedbackLog(): Promise<void> {
+  const res = await api.get('/api/v1/feedback-tickets/export', { responseType: 'blob' })
+  const url = URL.createObjectURL(res.data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'feedback-ticket-log.csv'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // Direct-to-R2 upload (same three-step presign/PUT flow as siteCaptures.ts's

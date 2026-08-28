@@ -35,5 +35,11 @@ class User(Base, TimestampMixin):
     # get_db_user (only rewritten if >5 min stale) so this stays a rare
     # write, not one on every single request; NULL means never recorded yet.
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Feedback ticket unread-notification tracking (2026-08-28) — set to
+    # now() whenever this user opens the Feedback panel (POST
+    # /feedback-tickets/mark-read); "unread" is computed by comparing this
+    # against feedback_ticket_events.created_at, not stored as a count/flag,
+    # so it's always correct even across multiple tickets/devices.
+    last_viewed_feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organisation: Mapped[Organisation] = relationship(back_populates="users")

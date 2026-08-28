@@ -6,6 +6,7 @@ import { FeedbackPanel } from '@/components/FeedbackPanel'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/CurrentUserContext'
 import { useProject, type Project } from '@/lib/ProjectContext'
+import { useFeedbackUnread } from '@/lib/useFeedbackUnread'
 
 export function ProjectSelector() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -36,6 +37,7 @@ export function ProjectSelector() {
   // Sidebar's own trigger, since this is the first screen after login and
   // shouldn't require picking a project first just to report an issue.
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const { hasUnread: hasUnreadFeedback, refresh: refreshUnreadFeedback } = useFeedbackUnread()
 
   const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
@@ -189,9 +191,10 @@ export function ProjectSelector() {
             <button
               onClick={() => setFeedbackOpen(true)}
               title="Report an issue or leave feedback"
-              className="text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
+              className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper transition-colors"
             >
               💬 Feedback…
+              {hasUnreadFeedback && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
             </button>
             {currentUser?.is_super_user && (
               <button
@@ -205,7 +208,7 @@ export function ProjectSelector() {
           </div>
         </div>
         {accessManagerOpen && <AccessManagerPanel onClose={() => setAccessManagerOpen(false)} />}
-        {feedbackOpen && <FeedbackPanel onClose={() => setFeedbackOpen(false)} />}
+        {feedbackOpen && <FeedbackPanel onClose={() => { setFeedbackOpen(false); refreshUnreadFeedback() }} />}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm flex items-center justify-between gap-3">

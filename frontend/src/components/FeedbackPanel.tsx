@@ -2,8 +2,8 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { useCurrentUser } from '@/lib/CurrentUserContext'
 import {
-  createTicket, listTickets, updateTicketStatus, uploadTicketAttachment,
-  type Ticket, type TicketStatus,
+  addTicketComment, createTicket, downloadFeedbackLog, listTickets, markFeedbackRead, updateTicketStatus,
+  uploadTicketAttachment, type Ticket, type TicketStatus,
 } from '@/lib/feedbackTickets'
 
 const STATUS_LABEL: Record<TicketStatus, string> = { open: 'Open', in_progress: 'In Progress', closed: 'Closed' }
@@ -15,6 +15,10 @@ const STATUS_CLASS: Record<TicketStatus, string> = {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
+
+function formatDateTime(iso: string) {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 function formatSize(bytes: number) {
@@ -30,6 +34,15 @@ function formatSize(bytes: number) {
 // status along). Reachable from both the Sidebar (once inside a project)
 // and the Project Selector page, unlike Access Manager: this is for every
 // approved user, not just super users.
+//
+// Extended 2026-08-28, per Maro ("its a two way comms... i need to be able
+// to keep track of the progress... i can download the log"): each ticket
+// now carries a `events` timeline (comments interleaved with status
+// changes, backend/app/models/feedback_ticket.py's own TicketEvent) that
+// both the ticket's owner and any super user can add comments to; opening
+// this panel marks everything read (see useFeedbackUnread.ts for how the
+// trigger buttons show a dot beforehand); super users get a "Download log"
+// export of every event across every ticket.
 export function FeedbackPanel({ onClose }: { onClose: () => void }) {
   const { currentUser } = useCurrentUser()
   const isSuperUser = !!currentUser?.is_super_user
@@ -38,6 +51,8 @@ export function FeedbackPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null)
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({})
+  const [postingCommentId, setPostingCommentId] = useState<string | null>(null)
 
   const [creating, setCreating] = useState(false)
   const [subject, setSubject] = useState('')
@@ -52,7 +67,10 @@ export function FeedbackPanel({ onClose }: { onClose: () => void }) {
       .catch(() => setError('Could not load tickets.'))
   }
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    refresh()
+    markFeedbackRead().catch(() => {})
+  }, [])
 
   const handleAddFiles = (files: FileList | null) => {
     if (!files) return
@@ -97,6 +115,21 @@ export function FeedbackPanel({ onClose }: { onClose: () => void }) {
       setError('Could not update that ticket.')
     } finally {
       setUpdatingStatusId(null)
+    }
+  }
+
+  const handlePostComment = async (ticketId: string) => {
+    const body = (commentDrafts[ticketId] ?? '').trim()
+    if (!body) return
+    setPostingCommentId(ticketId)
+    try {
+      const updated = await addTicketComment(ticketId, body)
+      setTickets(prev => prev?.map(t => t.id === updated.id ? updated : t) ?? null)
+      setCommentDrafts(prev => ({ ...prev, [ticketId]: '' }))
+    } catch {
+      setError('Could not post that reply.')
+    } finally {
+      setPostingCommentId(null)
     }
   }
 
@@ -175,9 +208,19 @@ export function FeedbackPanel({ onClose }: { onClose: () => void }) {
           </button>
         )}
 
-        <h3 className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">
-          {isSuperUser ? 'All tickets' : 'Your tickets'}{tickets && tickets.length > 0 ? ` (${tickets.length})` : ''}
-        </h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide">
+            {isSuperUser ? 'All tickets' : 'Your tickets'}{tickets && tickets.length > 0 ? ` (${tickets.length})` : ''}
+          </h3>
+          {isSuperUser && (
+            <button
+              onClick={() => downloadFeedbackLog().catch(() => setError('Could not download the log.'))}
+              className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
+            >
+              ⬇ Download log
+            </button>
+          )}
+        </div>
         {tickets === null ? (
           <p className="text-sm text-gray-500 dark:text-prosota-muted">Loading…</p>
         ) : tickets.length === 0 ? (
@@ -227,6 +270,40 @@ export function FeedbackPanel({ onClose }: { onClose: () => void }) {
                           </select>
                         </div>
                       )}
+
+                      {t.events.length > 0 && (
+                        <div className="space-y-2 border-t border-gray-100 dark:border-prosota-line pt-3">
+                          {t.events.map(ev => ev.kind === 'status_change' ? (
+                            <p key={ev.id} className="text-xs text-gray-400 dark:text-prosota-muted italic">
+                              {ev.author_display_name} moved this from {STATUS_LABEL[ev.old_status!]} to {STATUS_LABEL[ev.new_status!]} · {formatDateTime(ev.created_at)}
+                            </p>
+                          ) : (
+                            <div key={ev.id} className="bg-gray-50 dark:bg-prosota-panel2 rounded-md px-3 py-2">
+                              <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                                {ev.author_display_name} <span className="font-normal text-gray-400 dark:text-prosota-muted">· {formatDateTime(ev.created_at)}</span>
+                              </p>
+                              <p className="text-sm text-gray-700 dark:text-prosota-paper whitespace-pre-wrap mt-0.5">{ev.body}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-start gap-2 pt-1">
+                        <textarea
+                          value={commentDrafts[t.id] ?? ''}
+                          onChange={e => setCommentDrafts(prev => ({ ...prev, [t.id]: e.target.value }))}
+                          placeholder={isSuperUser ? 'Reply with guidance or a question…' : 'Add more detail or reply…'}
+                          rows={2}
+                          className="flex-1 min-w-0 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+                        />
+                        <button
+                          onClick={() => handlePostComment(t.id)}
+                          disabled={postingCommentId === t.id || !(commentDrafts[t.id] ?? '').trim()}
+                          className="shrink-0 text-xs px-3 py-2 rounded-md bg-blue-600 dark:bg-prosota-azure text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {postingCommentId === t.id ? 'Sending…' : 'Send'}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

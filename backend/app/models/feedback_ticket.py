@@ -31,3 +31,28 @@ class FeedbackTicket(Base, TimestampMixin):
     # download URL is computed fresh per-response (schemas/feedback_ticket.py),
     # never stored here, since R2 presigned URLs expire.
     attachments: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+
+
+class TicketEvent(Base, TimestampMixin):
+    """A single entry in a ticket's timeline (2026-08-28, per Maro — "so its
+    a two way comms between super user and the user" plus "keep track of
+    the progress ... back and forth"). One table for both comment replies
+    and status changes, not two, so a ticket's full history — who said what
+    and when its status moved — reconstructs from a single ordered query,
+    which is also exactly the shape the super user's downloadable audit
+    log (app/api/feedback_tickets.py's own export_events) needs.
+
+    kind="comment": body set, old_status/new_status both null.
+    kind="status_change": old_status/new_status set (auto-recorded by
+    update_ticket_status, author_id is whoever changed it), body null.
+    """
+
+    __tablename__ = "feedback_ticket_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("feedback_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
