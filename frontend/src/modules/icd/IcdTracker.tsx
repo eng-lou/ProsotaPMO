@@ -15,7 +15,6 @@ import { downloadIcdItemsCsv } from './exportIcdItems'
 import { IcdActionItems } from './IcdActionItems'
 import { IcdComments } from './IcdComments'
 import { IcdCriteriaThresholds } from './IcdCriteriaThresholds'
-import { IcdKpiStrip } from './IcdKpiStrip'
 import { IcdForm, toIcdPayload, type IcdFormValues } from './IcdForm'
 import { buildIcdDraft } from './icdGeneration'
 import { IcdPrintView } from './IcdPrintView'
@@ -391,19 +390,12 @@ export function IcdTracker() {
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">ICD Tracker</h1>
-        {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
-            {period.period_label} · {period.freeze_status}
-          </span>
-        )}
       </div>
       <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">Issues, changes, and decisions for {selectedProject.name}.</p>
 
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
       )}
-
-      <IcdKpiStrip items={items} />
 
       <IcdCriteriaThresholds projectId={selectedProject.id} />
 

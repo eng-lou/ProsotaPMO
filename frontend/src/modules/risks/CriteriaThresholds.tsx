@@ -6,7 +6,7 @@ interface CriteriaThresholdsProps {
   projectId: string
 }
 
-const cellInput = 'w-20 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-1 text-xs'
+const cellInput = 'w-20 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-1 text-xs dark:bg-prosota-panel2 dark:text-prosota-paper'
 
 // Project-level, editable definitions of what each probability/impact level means
 // (e.g. "Medium probability = 25-50%"). Standardises risk ratings across the team —

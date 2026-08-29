@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class TimelineStripUpsert(BaseModel):
     project_id: uuid.UUID
-    visible: bool = True
+    visible: bool = False
     position_x_pct: float = Field(default=10.0, ge=0, le=100)
     position_y_pct: float = Field(default=90.0, ge=0, le=100)
     width_px: float = Field(default=900.0, gt=0)

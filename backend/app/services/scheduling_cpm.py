@@ -1209,3 +1209,11 @@ async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *,
     for a in all_activities:
         if a.id in dirty_ids:
             await db.refresh(a)
+
+    # Deferred import — resource_assignment_spread.py already imports
+    # _build_calendar_lookup/_CalendarLookup from this module at load time,
+    # so importing it back at module level here would be circular. See
+    # prune_orphaned_spreads_for_activities' own header for why this needs
+    # to run after every recompute, not just Resource Leveling's own writes.
+    from app.services.resource_assignment_spread import prune_orphaned_spreads_for_activities
+    await prune_orphaned_spreads_for_activities(db, dirty_ids)

@@ -955,6 +955,14 @@ export function Scheduling() {
             ? `Moved ${movedCount} activit${movedCount === 1 ? 'y' : 'ies'}, but ran out of available float — switch to Leveling for a full fix.`
             : `Moved ${movedCount} activit${movedCount === 1 ? 'y' : 'ies'}; some overallocation may remain.`
       )
+    } catch (err) {
+      // Was silently swallowed before this fix (2026-08-29, per Maro: "I've
+      // not been successful at using it at all") — no catch at all meant a
+      // failed PATCH mid-run just vanished, "Level" looked like it did
+      // nothing. Same axios-error-detail convention as handleCellCommit
+      // above.
+      const message = axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
+      setLevelResultMessage(message ?? 'Could not level that target — see the console for details.')
     } finally {
       setLeveling(false)
     }
@@ -2386,11 +2394,6 @@ export function Scheduling() {
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Scheduling</h1>
-        {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
-            {period.period_label} · {period.freeze_status}
-          </span>
-        )}
       </div>
 
       {(error || periodError) && (

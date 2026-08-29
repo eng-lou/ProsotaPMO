@@ -82,6 +82,7 @@ export function RiskRegister() {
   const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [generatingRisks, setGeneratingRisks] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const [generateRiskMessage, setGenerateRiskMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -269,6 +270,21 @@ export function RiskRegister() {
     await refreshRisks()
   }
 
+  // No bulk-delete endpoint exists for risks (same as Boq.tsx's own
+  // handleDeleteAll — none of this app's per-row CRUD tables have one),
+  // so this loops the same single-delete call handleDelete already uses.
+  const handleDeleteAll = async () => {
+    if (risks.length === 0) return
+    if (!(await confirmWithDontAsk('risk.delete-all', `Delete all ${risks.length} risk(s)? This cannot be undone.`))) return
+    setDeletingAll(true)
+    try {
+      for (const risk of risks) await api.delete(`/api/v1/risks/${risk.id}`)
+      await refreshRisks()
+    } finally {
+      setDeletingAll(false)
+    }
+  }
+
   const handlePrintList = () => {
     setPrintMode('list')
     setPrintTrigger(t => t + 1)
@@ -397,11 +413,6 @@ export function RiskRegister() {
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Risk Register</h1>
-        {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
-            {period.period_label} · {period.freeze_status}
-          </span>
-        )}
       </div>
       <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">
         Risks for {selectedProject.name}. Frozen periods will become read-only once Period Manager is built.
@@ -435,6 +446,14 @@ export function RiskRegister() {
             className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {generatingRisks ? 'Generating…' : 'Generate Risk Register'}
+          </button>
+          <button
+            onClick={handleDeleteAll}
+            disabled={risks.length === 0 || deletingAll}
+            title="Delete every risk in this register."
+            className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-red-50 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {deletingAll ? 'Deleting…' : 'Delete All'}
           </button>
           {generateRiskMessage && <span className="text-xs text-gray-500 dark:text-prosota-muted">{generateRiskMessage}</span>}
         </div>

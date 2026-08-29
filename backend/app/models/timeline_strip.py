@@ -45,7 +45,7 @@ class TimelineStrip(Base, TimestampMixin):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True
     )
-    visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position_x_pct: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
     position_y_pct: Mapped[float] = mapped_column(Float, nullable=False, default=90.0)
     width_px: Mapped[float] = mapped_column(Float, nullable=False, default=900.0)

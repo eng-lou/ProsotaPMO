@@ -5951,13 +5951,6 @@ export function Viewport3D({
           onCommitPosition={onCommitTimelineStripPosition}
         />
       )}
-      {importedObjects.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-sm text-gray-400 dark:text-prosota-muted bg-white/70 px-3 py-1.5 rounded-md">
-            No model loaded — use Import 3D or Import IFC above
-          </p>
-        </div>
-      )}
       {/* Selection count info box (2026-07-09, per Maro: "an info box
           somewhere small in the right corner which tells me how many
           objects I'm selecting") — object count is selectedObjectIds

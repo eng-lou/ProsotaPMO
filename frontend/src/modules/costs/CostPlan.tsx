@@ -749,11 +749,6 @@ export function CostPlan() {
       <div className="p-8 no-print">
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Bill of Quantities</h1>
-          {period && (
-            <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
-              {period.period_label} · {period.freeze_status}
-            </span>
-          )}
         </div>
         <p className="text-gray-500 dark:text-prosota-muted text-sm mb-4">
           Measured-works breakdown for {selectedProject.name} — quantity and rate derived from the committed schedule's own duration and resourced cost.
@@ -877,11 +872,6 @@ export function CostPlan() {
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Cost Plan</h1>
-        {period && (
-          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted font-medium">
-            {period.period_label} · {period.freeze_status}
-          </span>
-        )}
       </div>
       <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">
         Cost elements for {selectedProject.name}. Percentage elements (Prelims, Contingency, etc.) compute automatically from the fixed subtotal.

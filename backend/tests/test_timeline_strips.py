@@ -20,7 +20,7 @@ async def test_get_returns_default_when_nothing_saved(client: AsyncClient, proje
     default = resp.json()
     assert default["id"] is None
     assert default["project_id"] == str(project.id)
-    assert default["visible"] is True
+    assert default["visible"] is False
     assert default["position_x_pct"] == 10.0
     assert default["position_y_pct"] == 90.0
     assert default["width_px"] == 900.0

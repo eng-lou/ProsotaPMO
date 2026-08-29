@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { AccessPendingScreen } from './components/AccessPendingScreen'
+import { HomePage } from './components/HomePage'
 import { Layout } from './components/Layout'
-import { ProsotaLogo } from './components/ProsotaLogo'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ConfirmHost } from './lib/confirmWithDontAsk'
 import { CurrentUserProvider, useCurrentUser } from './lib/CurrentUserContext'
@@ -33,22 +33,20 @@ const RiskRegister = lazy(() => import('./modules/risks/RiskRegister').then(m =>
 const CostPlan = lazy(() => import('./modules/costs/CostPlan').then(m => ({ default: m.CostPlan })))
 const IcdTracker = lazy(() => import('./modules/icd/IcdTracker').then(m => ({ default: m.IcdTracker })))
 
+// The marketing homepage (2026-08-28, per Maro: "create a homepage prior to
+// actual weblogin prosota page") — replaces the old bare "Sign in" card as
+// the very first thing a signed-out visitor sees. onRequestAccess sends new
+// visitors to Auth0's signup tab (screen_hint) rather than login, since
+// that's how someone actually gets an account in this app's trial/beta
+// gate — see AccessGate below for what happens right after (pending
+// approval, or straight into the app).
 function LoginPage() {
   const { loginWithRedirect } = useAuth0()
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink">
-      <div className="text-center">
-        <ProsotaLogo size={40} className="mx-auto mb-3" />
-        <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-prosota-paper mb-1">Prosota</h1>
-        <p className="text-gray-500 dark:text-prosota-muted mb-8">Planning Platform</p>
-        <button
-          onClick={() => loginWithRedirect()}
-          className="bg-blue-600 dark:bg-prosota-azure text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-        >
-          Sign in
-        </button>
-      </div>
-    </div>
+    <HomePage
+      onSignIn={() => loginWithRedirect()}
+      onRequestAccess={() => loginWithRedirect({ authorizationParams: { screen_hint: 'signup' } })}
+    />
   )
 }
 

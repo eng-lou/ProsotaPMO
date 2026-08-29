@@ -9,6 +9,25 @@ export type LevelingMode = 'level' | 'smooth'
 
 interface BucketRange { start: Date; end: Date; label: string }
 
+// Every other constraint_date write in this app sends a naive local-time
+// string with no 'Z'/offset (see ActivityForm.tsx's <input
+// type="datetime-local"> values, which the backend stores/reads as naive
+// datetimes throughout — app/models/activity.py's constraint_date column has
+// no timezone). Date.toISOString() instead formats in UTC and appends 'Z',
+// producing a timezone-*aware* datetime the moment Pydantic parses it —
+// scheduling_cpm.py's constraint comparisons (`max(candidate, a.constraint_date)`)
+// then crash with "can't compare offset-naive and offset-aware datetimes" as
+// soon as they touch that freshly-set value (2026-08-29, per Maro: "I've not
+// been successful at using [leveling] at all" — every Level/Smooth click hit
+// this 500, and because it's an unhandled exception raised after
+// CORSMiddleware's own response wrapper, the browser saw no CORS header on
+// the error and reported it to axios as a bare "Network Error" that
+// Scheduling.tsx's handler had no catch for — silent failure end to end).
+function toNaiveDatetime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 export interface LevelingTarget {
   type: LevelingGranularity
   id: string
@@ -164,7 +183,7 @@ export async function levelTarget(
       }
 
       await api.patch(`/api/v1/activities/${candidate.activity.id}`, {
-        constraint_type: 'snet', constraint_date: newStart.toISOString(),
+        constraint_type: 'snet', constraint_date: toNaiveDatetime(newStart),
       })
       movedActivityIds.push(candidate.activity.id)
       moved = true

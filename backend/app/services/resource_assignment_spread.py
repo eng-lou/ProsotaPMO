@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
@@ -156,6 +156,48 @@ async def get_spread_for_resource(
         )
     results = await get_spreads_for_resources(db, [resource_id], start, end)
     return results.get(resource_id, ([], []))
+
+
+async def prune_orphaned_spreads_for_activities(db: AsyncSession, activity_ids: set[uuid.UUID]) -> None:
+    """Deletes hand-edited ResourceAssignmentSpread rows that have fallen
+    outside their own activity's current Start/Finish (2026-08-29, per Maro:
+    "rolled up data should not be inconsistent with its child"). A spread
+    override is a sparse row pinned to an absolute work_date (see that
+    model's own docstring) — it has no relationship to the activity's dates
+    beyond having been entered while the activity happened to span that day.
+    When the activity's dates move for *any* reason (Resource Leveling's own
+    constraint writes, a manual edit, a calendar change cascading through the
+    network, a relationship edit, ...), an override left behind on its old
+    dates keeps being summed into the resource-level rollup (Resource
+    Tracking's own header row, and recalculate_costs' utilisation_pct) while
+    the activity's own row correctly hides it as out of range — the two
+    silently disagree, which is exactly the class of bug a stray "120,007
+    hours in one bucket" surfaced. Called from scheduling_cpm.recompute_schedule
+    for every activity whose dates it just changed, not just from Resource
+    Leveling specifically, so this can't recur regardless of what moved the
+    activity. Cheap in the common case: most activities have zero or a
+    handful of override rows, and this only runs for activities recompute_
+    schedule actually touched, not the whole schedule every time."""
+    if not activity_ids:
+        return
+    orphaned_ids = (await db.execute(
+        select(ResourceAssignmentSpread.id)
+        .join(ResourceAssignment, ResourceAssignment.id == ResourceAssignmentSpread.resource_assignment_id)
+        .join(Activity, Activity.id == ResourceAssignment.activity_id)
+        .where(
+            Activity.id.in_(activity_ids),
+            Activity.start.is_not(None),
+            Activity.finish.is_not(None),
+            or_(
+                ResourceAssignmentSpread.work_date < func.date(Activity.start),
+                ResourceAssignmentSpread.work_date > func.date(Activity.finish),
+            ),
+        )
+    )).scalars().all()
+    if not orphaned_ids:
+        return
+    await db.execute(delete(ResourceAssignmentSpread).where(ResourceAssignmentSpread.id.in_(orphaned_ids)))
+    await db.commit()
 
 
 async def set_spread_range(
