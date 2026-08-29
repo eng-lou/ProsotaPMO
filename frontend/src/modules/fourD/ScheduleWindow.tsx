@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatDateTime } from '@/modules/scheduling/dateTime'
-import { GANTT_ROW_HEIGHT, HEADER_HEIGHT } from '@/modules/scheduling/GanttChart'
+import { GANTT_ROW_HEIGHT, HEADER_HEIGHT, parseDate } from '@/modules/scheduling/GanttChart'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { ModelElementLink } from './modelElementLinks'
@@ -49,6 +49,43 @@ interface Props {
   // just now also shows the result.
   animationProfiles: AnimationProfile[]
   modelElementLinks: ModelElementLink[]
+  // 4D's Animation Timeline playhead (2026-08-29, per Maro: "the activity
+  // table would also be interactive" as the timeline plays/scrubs) — see
+  // GanttChart.tsx's own subscribeFocusDate Props header for the shared
+  // mechanism. Drives auto-scroll-to-current-row below; omitted wherever
+  // this window isn't paired with a live Animation Timeline.
+  subscribeFocusDate?: (cb: (d: Date) => void) => () => void
+}
+
+// "Active as of `date`" — same inline start<=date<=finish test the Export
+// Video path already uses (exportOverlays.ts's drawActivityTableStrip/
+// selectExportActivities), just against the outline-ordered/collapse-
+// filtered row list this window actually renders. Falls back to the next
+// upcoming activity (first with a start after `date`) when nothing's
+// currently in progress, same fallback selectExportActivities uses; falls
+// back further to the last dated row when everything's already finished.
+// -1 only when nothing in the list has real start/finish dates at all.
+function findCurrentOrNextActivityIndex(list: Activity[], date: Date): number {
+  const ms = date.getTime()
+  let upcoming = -1
+  let lastDated = -1
+  for (let i = 0; i < list.length; i++) {
+    // Skip WBS summary rows (2026-08-29 fix, found via live testing) — a
+    // summary's own start/finish rolls up its entire subtree (e.g. the
+    // top-level "Sample" row spans the whole project), so it always
+    // brackets `date` and would win on the very first iteration, before
+    // ever reaching the actual in-progress leaf activity. Same exclusion
+    // exportOverlays.ts's selectExportActivities already applies for the
+    // identical reason.
+    if (list[i].activity_type === 'wbs_summary') continue
+    const start = parseDate(list[i].start)
+    const finish = parseDate(list[i].finish)
+    if (!start || !finish) continue
+    lastDated = i
+    if (ms >= start.getTime() && ms <= finish.getTime()) return i
+    if (upcoming === -1 && start.getTime() > ms) upcoming = i
+  }
+  return upcoming !== -1 ? upcoming : lastDated
 }
 
 function formatDuration(value: number | string | null): string {
@@ -121,10 +158,38 @@ export function computeVisibleActivities(activities: Activity[], collapsedIds: S
 // WindowChrome.tsx owns the header/dock-toggle/close.
 export function ScheduleWindow({
   activities, visibleActivities, collapsedIds, onToggleCollapsed, selectedActivityIds, onSelectActivity,
-  scrollContainerRef, onScroll, animationProfiles, modelElementLinks,
+  scrollContainerRef, onScroll, animationProfiles, modelElementLinks, subscribeFocusDate,
 }: Props) {
   const hasChildren = new Set<string>()
   for (const a of activities) if (a.parent_id) hasChildren.add(a.parent_id)
+
+  // Auto-scroll-to-current-row (2026-08-29) — deliberately imperative
+  // (direct scrollTop assignment, not React state) for the scroll itself,
+  // matching GanttChart.tsx's own setScrollTop precedent for a per-tick hot
+  // path. currentActivityId IS state, but only changes (and only re-renders
+  // this table) on the rare tick where the *current* activity actually
+  // changes, not on every tick — cheap enough to drive the row highlight
+  // below without reintroducing a per-frame re-render.
+  const [currentActivityId, setCurrentActivityId] = useState<string | null>(null)
+  const currentActivityIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!subscribeFocusDate) return
+    return subscribeFocusDate(date => {
+      const idx = findCurrentOrNextActivityIndex(visibleActivities, date)
+      if (idx === -1) return
+      const activity = visibleActivities[idx]
+      if (currentActivityIdRef.current !== activity.id) {
+        currentActivityIdRef.current = activity.id
+        setCurrentActivityId(activity.id)
+      }
+      const container = scrollContainerRef.current
+      if (!container) return
+      const rowTop = HEADER_HEIGHT + idx * GANTT_ROW_HEIGHT
+      const rowBottom = rowTop + GANTT_ROW_HEIGHT
+      if (rowTop < container.scrollTop) container.scrollTop = rowTop
+      else if (rowBottom > container.scrollTop + container.clientHeight) container.scrollTop = rowBottom - container.clientHeight
+    })
+  }, [subscribeFocusDate, visibleActivities, scrollContainerRef])
 
   const profileNameById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p.name])), [animationProfiles])
   const elementLinksByActivityId = useMemo(() => {
@@ -172,13 +237,14 @@ export function ScheduleWindow({
               const critical = a.is_critical || a.sub_is_critical
               const isCollapsed = collapsedIds.has(a.id)
               const isSelected = selectedActivityIds.has(a.id)
+              const isCurrent = a.id === currentActivityId
               const links = elementLinksByActivityId.get(a.id) ?? []
               return (
                 <tr
                   key={a.id}
                   onClick={e => onSelectActivity(a.id, e.ctrlKey || e.metaKey)}
                   style={{ height: GANTT_ROW_HEIGHT }}
-                  className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''}`}
+                  className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''} ${isCurrent ? 'border-l-2 border-l-amber-500' : ''}`}
                 >
                   <td className={`px-2 border-b border-gray-100 dark:border-prosota-line font-mono ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{a.code}</td>
                   <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${isSummary ? 'font-bold text-gray-800 dark:text-prosota-paper' : critical ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>

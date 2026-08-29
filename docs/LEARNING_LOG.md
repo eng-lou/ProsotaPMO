@@ -4490,3 +4490,105 @@ instead by two dedicated passing backend tests
 (`test_unread_reflects_activity_since_last_viewed`,
 `test_normal_user_sees_unread_when_super_user_replies`) that exercise the
 exact cross-user scenario directly.
+
+---
+
+## 2026-08-29 — 4D's Animation Timeline now drives the Gantt/Activity Table,
+## plus a smaller fix for the frontend's project-switch load time
+
+**Two unrelated pieces landed this session.**
+
+**First, a perf fix**: switching projects (or reloading Scheduling/Risk/
+ICD/Cost/Dashboard/4D — they all share the same schedule-loading hook)
+used to *always* wait on a full fetch of every schedule variant before it
+would even start loading the active one's data, just to check whether a
+previously-picked variant was saved in the browser's own local storage.
+That variant-list fetch was the single slowest step in the whole load, and
+its answer is "no, use the master" almost every time. Fixed by checking
+the saved id first (that part's instant, no network needed) and only
+actually waiting on the full list when the saved choice turns out to be
+something other than the master — the common case now skips a whole
+network round-trip.
+
+**Second, the bigger piece — syncing 4D's Gantt Chart and Activity Table
+panels to the Animation Timeline.** Before today, the Animation Timeline's
+play/scrub controls only drove the 3D viewport; the docked Gantt Chart
+still showed a hardcoded real-world "today" line, and the Activity Table
+never reacted at all. Maro asked for both to track the timeline's current
+position live — the Gantt's dashed line moving with it, the table
+auto-scrolling to whichever activity is actually in progress.
+
+The tricky part was respecting a deliberate existing design choice:
+the timeline's current date lives in a plain React *ref*, not state,
+specifically so that a play-loop tick (or a scrub drag) doesn't
+re-render FourD.tsx's entire 7000-line component tree on every frame.
+Wiring two more panels to react to that same fast-changing value without
+undoing that protection meant adding a small publish/subscribe layer
+next to the ref: FourD.tsx hands out a `subscribe` function, and each of
+the Gantt Chart and Activity Table keeps its *own* local reaction to a
+tick — so only those two panels do any work per frame, never the parent.
+
+**A real bug, caught only by testing with real project data**: the first
+version of "which activity is happening right now" walked the table's
+row list and returned the first one whose start/finish bracketed the
+current date. That works for a normal activity — but WBS *summary* rows
+(the ones that just roll up a whole phase, like the very first "Sample"
+row which spans the entire five-year project) also have a start/finish,
+and being first in the list, always matched immediately — so the
+"current activity" was always the very top summary row, no matter what
+date was showing. Fixed by skipping summary rows in that search, the same
+exclusion the existing Export Video feature's own "what's happening now"
+logic already uses for the identical reason — worth knowing as a general
+rule: any "find the current X" search over a hierarchical list needs to
+explicitly skip the rollup/parent rows, or it'll always match the
+outermost one first.
+
+**A second, unrelated bug Maro spotted mid-testing**: scrolling the 4D
+Gantt Chart down made its own date-interval header (the "Q1 2027"-style
+labels) disappear entirely, leaving just bare gridlines. Turned out the
+header was never actually pinned in place for this particular usage —
+it only stayed fixed in the *other* place this same Gantt component is
+used (Scheduling's own split-pane view) because that one clips and scrolls
+the chart body separately from the header by design. 4D's own usage just
+scrolls the whole thing natively, with nothing holding the header at the
+top. Fixed with a standard CSS `position: sticky`, matching how the
+neighboring Activity Table's own column header already stays pinned the
+same way.
+
+**A live-testing gotcha worth remembering**: driving the app's date input
+by directly setting its value via injected JavaScript (rather than a real
+click/type) looked like it broke the Gantt Chart's own scroll-sync — the
+table scrolled but the Gantt pane didn't mirror it. Re-tested by actually
+pressing Play instead (a real, in-app interaction) and everything mirrored
+correctly. The apparent bug was an artifact of how the injected script's
+events reached the page, not a real bug in the app — a reminder that a
+script-dispatched DOM event isn't always a trustworthy stand-in for a
+real user gesture when testing anything event-driven.
+
+**Verified**: frontend typecheck clean throughout. Live-browser-tested
+end to end against the real "Sample" project data — pressed Play and
+confirmed, via direct inspection of the live page (not just a screenshot),
+that all three numbers moved together in lockstep: the Gantt line's pixel
+position, the Activity Table's scroll offset, and the Gantt pane's own
+mirrored scroll offset — plus confirmed the highlighted "current" row
+was always the correct in-progress leaf activity for whatever date was
+showing. Also confirmed the Scheduling module's own (non-4D) Gantt Chart
+still shows the real wall-clock "today" line exactly as before, untouched
+by any of this.
+
+**A follow-up gap Maro caught after the first pass**: everything above
+was true, but only *vertically* — the table auto-scrolled to the right
+row, and the Gantt line's pixel math was correct, but nothing ever moved
+the Gantt's own *horizontal* scroll position, so during a long Play run
+the line (and the bar it pointed at) would silently scroll off the edge
+of the visible window while the table kept perfect pace underneath it.
+Screenshots made the gap obvious: same moment in time, table showing the
+right activity, Gantt still parked on the calendar's very start. Fixed
+the same way as the table's own auto-scroll — only nudge the Gantt's
+horizontal scroll when the line would actually leave the visible window,
+not recentre it every single tick, so it doesn't fight someone manually
+panning around during a slow playback. Re-verified live the same way as
+before: read the Gantt pane's real `scrollLeft` alongside the line's
+pixel position mid-playback and confirmed the line stays inside the
+visible window throughout, not just at the two hand-picked moments
+checked the first time around.

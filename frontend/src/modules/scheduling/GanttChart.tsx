@@ -1,4 +1,4 @@
-import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '@/lib/ThemeContext'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
 import { groupAssignmentsByActivityId } from '@/lib/resourceLabel'
@@ -79,7 +79,7 @@ const BASELINE_MILESTONE_SIZE = 10
 
 // Phase 10: start/finish/bl_start/bl_finish are full ISO datetimes, not date-only
 // strings — parsed directly rather than forced to midnight.
-function parseDate(value: string | null): Date | null {
+export function parseDate(value: string | null): Date | null {
   if (!value) return null
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? null : d
@@ -189,6 +189,25 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   // membership, matching this session's other multi-select controls.
   selectedActivityIds?: Set<string>
   onSelectActivity?: (id: string, additive: boolean) => void
+  // 4D's Animation Timeline playhead (2026-08-29, per Maro: "when the
+  // animation plays... the current focus line would also be moving too") —
+  // when provided, the dashed "current date" line below tracks this instead
+  // of real wall-clock today, and this component owns its own local
+  // subscription so FourD.tsx never re-renders per play tick/scrub drag
+  // (see FourD.tsx's own subscribeTimelineFocus header). Omitted by
+  // Scheduling.tsx's own usage, which keeps today's real-"today" line as-is.
+  subscribeFocusDate?: (cb: (d: Date) => void) => () => void
+  // 2026-08-29, per Maro: "the gantt chart horizontal scroller wheel
+  // should focus on the relevant bar and not out of focus" — the playhead
+  // line's X position (todayOffset below) was correct all along, but
+  // nothing kept it inside the visible horizontal scroll window, so it
+  // silently drifted off-screen during Play/scrub. FourD.tsx's own native-
+  // scroll wrapper div (ganttScrollRef) owns that scrolling, not this
+  // component, so it's handed in directly here — same reasoning as
+  // ScheduleWindow.tsx's own scrollContainerRef prop, not DOM traversal.
+  // Undefined wherever subscribeFocusDate is (Scheduling.tsx's usage never
+  // needs to auto-follow a moving playhead).
+  horizontalScrollContainerRef?: React.RefObject<HTMLDivElement>
 }>(function GanttChart({
   activities,
   relationships = [],
@@ -199,6 +218,8 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   viewportHeight,
   selectedActivityIds,
   onSelectActivity,
+  subscribeFocusDate,
+  horizontalScrollContainerRef,
 }, ref) {
   const { theme } = useTheme()
   const bodyWrapperRef = useRef<HTMLDivElement>(null)
@@ -332,12 +353,43 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   const width = totalDays * dayWidth
   const height = activities.length * GANTT_ROW_HEIGHT
 
+  // 4D's Animation Timeline playhead (see subscribeFocusDate's own Props
+  // header above) — local state, not lifted to FourD.tsx, specifically so
+  // only this component re-renders per play tick/scrub drag. null until the
+  // first tick arrives (imperceptible — TimelineWindow.tsx publishes an
+  // initial value from its own seed effect within a render of mounting).
+  const [liveFocusDate, setLiveFocusDate] = useState<Date | null>(null)
+  useEffect(() => {
+    if (!subscribeFocusDate) return
+    return subscribeFocusDate(setLiveFocusDate)
+  }, [subscribeFocusDate])
+
   // A "today" marker gives the chart a real anchor point — null (not drawn) if
-  // today falls outside the currently-rendered date range.
+  // today falls outside the currently-rendered date range. In 4D usage
+  // (subscribeFocusDate provided), this is the animation playhead instead of
+  // real wall-clock today, same as the Export Video path's own `now` line.
   const todayOffset = useMemo(() => {
-    const offset = daysBetween(rangeStart, new Date()) * dayWidth
+    const focus = subscribeFocusDate ? liveFocusDate : new Date()
+    if (!focus) return null
+    const offset = daysBetween(rangeStart, focus) * dayWidth
     return offset >= 0 && offset <= width ? offset : null
-  }, [rangeStart, width, dayWidth])
+  }, [rangeStart, width, dayWidth, subscribeFocusDate, liveFocusDate])
+
+  // Follows the playhead horizontally (see horizontalScrollContainerRef's
+  // own Props header above) — only nudges scrollLeft when the line would
+  // actually leave the visible window, not every tick, so it doesn't fight
+  // a manual pan during a slow Play the way a hard recenter-every-frame
+  // would. MARGIN keeps the line from sitting flush against either edge.
+  const GANTT_AUTOSCROLL_MARGIN = 60
+  useEffect(() => {
+    const container = horizontalScrollContainerRef?.current
+    if (!container || todayOffset === null) return
+    if (todayOffset < container.scrollLeft + GANTT_AUTOSCROLL_MARGIN) {
+      container.scrollLeft = Math.max(0, todayOffset - GANTT_AUTOSCROLL_MARGIN)
+    } else if (todayOffset > container.scrollLeft + container.clientWidth - GANTT_AUTOSCROLL_MARGIN) {
+      container.scrollLeft = todayOffset - container.clientWidth + GANTT_AUTOSCROLL_MARGIN
+    }
+  }, [todayOffset, horizontalScrollContainerRef])
 
   const geometry = useMemo(() => {
     const map = new Map<string, BarGeometry>()
@@ -380,7 +432,14 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
 
   const header = (
     <div
-      className="relative border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2"
+      // sticky (2026-08-29 fix, per Maro: "the gantt chart time interval...
+      // is lost" when scrolled) — only actually pins in the plain-`body`
+      // render path below (FourD.tsx's own native-scroll wrapper, no
+      // viewportHeight passed); the other, viewportHeight-clipped path
+      // (Scheduling.tsx) has no scrolling ancestor for `sticky` to attach
+      // to, so this is a no-op there — that branch was already fine, its
+      // header sits outside the transformed/scrolled body entirely.
+      className="sticky top-0 z-10 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2"
       style={{ height: HEADER_HEIGHT, width, cursor: onZoomChange ? 'ew-resize' : undefined }}
       onMouseDown={handleHeaderMouseDown}
       title={onZoomChange ? 'Drag to zoom the timescale' : undefined}

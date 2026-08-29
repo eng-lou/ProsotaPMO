@@ -20,6 +20,11 @@ interface Props {
   // frame. See Viewport3D.tsx's own Props comment for why this is a ref and
   // not lifted React state.
   dateRef: React.MutableRefObject<Date | null>
+  // Fired alongside every dateRef mutation below (2026-08-29) — lets
+  // FourD.tsx notify the docked Gantt/Activity Table windows of the new
+  // playhead without itself re-rendering on every play tick/scrub drag; see
+  // FourD.tsx's own subscribeTimelineFocus header for the full mechanism.
+  onDateChange?: (d: Date) => void
   // Only used to draw the task-bar strip (2026-07-11, per Maro) — which
   // linked activities' start/finish fall where along the scrubber, so
   // scrubbing isn't blind to what's about to trigger. Also project-wide
@@ -123,7 +128,7 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // per real second, continuously advanced via requestAnimationFrame while
 // playing rather than pre-baking discrete keyframes onto each object.
 export function TimelineWindow({
-  scheduleStart, scheduleEnd, dateRef, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
+  scheduleStart, scheduleEnd, dateRef, onDateChange, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
   speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
@@ -213,6 +218,7 @@ export function TimelineWindow({
     if (scheduleStart && dateRef.current === null) {
       dateRef.current = scheduleStart
       setDisplayDate(scheduleStart)
+      onDateChange?.(scheduleStart)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduleStart])
@@ -232,11 +238,13 @@ export function TimelineWindow({
       }
       dateRef.current = next
       setDisplayDate(next)
+      onDateChange?.(next)
       if (stop) { setIsPlaying(false); return }
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, scheduleStart, effectiveScheduleEnd, speedDaysPerSecond, loop, dateRef])
 
   // Task-bar strip data — only activities actually linked to something in
@@ -262,7 +270,8 @@ export function TimelineWindow({
     const clamped = clampToRange(next, scheduleStart, effectiveScheduleEnd)
     dateRef.current = clamped
     setDisplayDate(clamped)
-  }, [scheduleStart, effectiveScheduleEnd, dateRef])
+    onDateChange?.(clamped)
+  }, [scheduleStart, effectiveScheduleEnd, dateRef, onDateChange])
 
   // Keyframe-click-to-seek (2026-08-03) — see this component's own
   // seekRequest prop comment for why a {date, token} pair rather than a

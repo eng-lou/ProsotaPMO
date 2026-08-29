@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
@@ -1687,6 +1687,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // resolve every keyframed object each frame regardless of selection).
   const elementKeyframes = useElementKeyframes(selectedProject?.id)
   const timelineDateRef = useRef<Date | null>(null)
+  // Publishes every timelineDateRef change to the Gantt/Activity Table
+  // windows (2026-08-29, per Maro: "when the animation plays or gets
+  // scrubbed... the activity table and the gantt chart would also be
+  // interactive") without making timelineDateRef itself state — same
+  // per-frame-re-render concern its own header above already documents.
+  // Listeners live in a ref (not state) too, and each subscriber
+  // (GanttChart/ScheduleWindow) owns its own local reaction to a tick, so
+  // this component's own body never re-runs because of playback/scrubbing.
+  const timelineFocusListenersRef = useRef<Set<(d: Date) => void>>(new Set())
+  const subscribeTimelineFocus = useCallback((cb: (d: Date) => void) => {
+    timelineFocusListenersRef.current.add(cb)
+    return () => { timelineFocusListenersRef.current.delete(cb) }
+  }, [])
+  const publishTimelineFocus = useCallback((d: Date) => {
+    timelineDateRef.current = d
+    timelineFocusListenersRef.current.forEach(fn => fn(d))
+  }, [])
   // Orbit camera sync between the main viewport and the Baseline pane
   // (2026-07-24, per Maro: "i'd like to sync the orbit movement. so i get
   // the same camera angles") — see Viewport3D.tsx's own CameraSync header
@@ -6070,6 +6087,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onScroll={handleScheduleScroll}
             animationProfiles={animationProfiles.profiles}
             modelElementLinks={modelElementLinks}
+            subscribeFocusDate={subscribeTimelineFocus}
           />
         )
       case 'gantt':
@@ -6097,6 +6115,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
               onSelectActivity={handleSelectActivity}
               zoom={ganttWindowZoom}
               onZoomChange={setGanttWindowZoom}
+              subscribeFocusDate={subscribeTimelineFocus}
+              horizontalScrollContainerRef={ganttScrollRef}
             />
           </div>
         )
@@ -6144,6 +6164,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             scheduleStart={timelineRange?.start ?? null}
             scheduleEnd={timelineRange?.end ?? null}
             dateRef={timelineDateRef}
+            onDateChange={publishTimelineFocus}
             activities={activities}
             links={modelElementLinks}
             keyframesByDay={activeObjectKeyframesByDay}
