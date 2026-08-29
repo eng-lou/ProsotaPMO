@@ -53,18 +53,32 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
     try {
       setLoading(true)
       setError(null)
-      // Lazily seeds the master (same as before this widget existed), then
-      // pulls the full list for the picker.
+      // Lazily seeds the master (same as before this widget existed). The
+      // full list used to be awaited *before* loading a period — but it
+      // only exists to resolve a sessionStorage-restored variant id, and to
+      // populate the switcher dropdown; the id check itself is synchronous
+      // (2026-08-29, per Maro: "it loads too long" — this list fetch was
+      // the single largest hop in Scheduling's own load-schedule waterfall,
+      // ~500-700ms of pure serial network time on every visit for a lookup
+      // whose answer is "yes, it's the master" the overwhelming majority of
+      // the time). Deciding which branch to take *before* touching the
+      // network at all means loadPeriodFor is still only ever called once —
+      // no risk of a stale-then-corrected flash of the wrong variant's data
+      // the way racing both fetches and reconciling afterward would.
       const { data: master } = await api.post<ScheduleVariant>('/api/v1/schedule-variants/bootstrap', null, {
         params: { project_id: projectId },
       })
-      const list = await refetchVariants()
-
       const storedId = sessionStorage.getItem(STORAGE_PREFIX + projectId)
-      const restored = storedId ? list.find(v => v.id === storedId) : undefined
-      const active = restored ?? master
-      setVariant(active)
-      await loadPeriodFor(active)
+      if (!storedId || storedId === master.id) {
+        setVariant(master)
+        await loadPeriodFor(master)
+        refetchVariants().catch(() => {}) // fire-and-forget — only the picker dropdown needs this
+      } else {
+        const list = await refetchVariants()
+        const active = list.find(v => v.id === storedId) ?? master
+        setVariant(active)
+        await loadPeriodFor(active)
+      }
     } catch {
       setError('Failed to load schedule')
     } finally {
