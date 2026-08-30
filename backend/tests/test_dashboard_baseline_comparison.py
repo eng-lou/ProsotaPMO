@@ -44,9 +44,23 @@ async def _create_icd_item(client: AsyncClient, project: Project, period: Period
     return resp.json()
 
 
-async def _capture_all(client: AsyncClient, project: Project, period: Period, schedule_period: SchedulePeriod, name: str = "Set 1") -> dict:
+async def _capture_all(
+    client: AsyncClient, project: Project, period: Period, schedule_period: SchedulePeriod,
+    name: str = "Set 1", baseline_date: str | None = None,
+) -> dict:
+    # Defaults to "today" rather than a fixed historical literal (2026-08-30
+    # fix — the old hardcoded "2026-07-20" rotted: test_schedule_spi_...
+    # sets the activity's own start/finish relative to datetime.now() (a
+    # real 20-day span straddling "today," per that test's own comment), so
+    # once the suite's simulated "today" moved past mid-2026-07, the fixed
+    # baseline_date fell *before* the activity's start entirely —
+    # elapsed_duration_fraction correctly returns 0 for a data date before
+    # start, giving PV=0 and (correctly, per the pv!=0 guard) SPI=None. Not
+    # a bug in the SPI formula itself, just a date literal that only ever
+    # worked for however long "today" stayed near the day this was written.
     resp = await client.post("/api/v1/baseline-sets/capture-all", json={
-        "project_id": str(project.id), "name": name, "baseline_date": "2026-07-20",
+        "project_id": str(project.id), "name": name,
+        "baseline_date": baseline_date or datetime.now().date().isoformat(),
         "period_id": str(period.id), "schedule_period_id": str(schedule_period.id),
     })
     assert resp.status_code == 201, resp.text
