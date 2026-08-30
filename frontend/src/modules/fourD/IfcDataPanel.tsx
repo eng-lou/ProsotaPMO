@@ -85,9 +85,20 @@ interface Props {
   activities: Activity[]
   links: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
+  // Suppresses this section's own Activity Link block while DataPanel.tsx's
+  // own Bulk Activity Link is showing (2026-08-30, per Maro's screenshot —
+  // both were rendering at once for a multi-selection, showing bulk
+  // controls above and this section's single-element ones below for
+  // whichever one element happened to be "active," reading as duplicated/
+  // conflicting UI rather than two genuinely different actions). Object
+  // Information itself (name/GlobalId/property sets) stays visible during a
+  // multi-select — still useful for inspecting one specific element even
+  // while several are selected, unlike the linking controls, which only
+  // make sense for a single element's own real links.
+  hideActivityLink?: boolean
 }
 
 // Every leaf (no-children) expressID under a spatial-tree node, recursively
@@ -270,7 +281,7 @@ function ModelItem({
   handle, isActiveModel, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
   unloadedCount, onReloadIfc, saved,
   selected, onToggleSelected, onSelectWholeModel, unitDisplay,
-  activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
+  activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile, hideActivityLink,
   expanded, onToggleExpanded,
 }: {
   handle: IfcModelHandle; isActiveModel: boolean
@@ -286,9 +297,10 @@ function ModelItem({
   onSelectWholeModel: (additive: boolean) => void
   unitDisplay: IfcUnitDisplay
   activities: Activity[]; links: ModelElementLink[]; animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
+  hideActivityLink?: boolean
   // Lifted into IfcDataPanel, not local state (2026-07-26, per Maro: "I need
   // this collapsed like this by default instead of all expanded, and in
   // there add a collapse all feature") — same "parent owns the Set, this
@@ -573,27 +585,29 @@ function ModelItem({
                 </div>
               )}
 
-              <div className="space-y-1">
-                <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Activity Link</div>
-                {(() => {
-                  // A slice's globalId here is deliberately its own split
-                  // ref, not a real GlobalId (loadSplitElementInfo above) —
-                  // detecting that is exactly parseSplitElementRef's job,
-                  // real IFC GlobalIds never match it.
-                  const isSlice = parseSplitElementRef(elementInfo.globalId) !== null
-                  const sourceKind = isSlice ? 'ifc_split' : 'ifc'
-                  return (
-                    <ElementLinkFields
-                      activities={activities}
-                      links={links.filter(l => l.source_kind === sourceKind && l.element_ref === elementInfo.globalId)}
-                      animationProfiles={animationProfiles}
-                      onLink={activityId => onLinkElement(sourceKind, elementInfo.globalId, `${elementInfo.type}: ${elementInfo.name}`, activityId)}
-                      onUnlink={onUnlinkElement}
-                      onAssignProfile={onAssignProfile}
-                    />
-                  )
-                })()}
-              </div>
+              {!hideActivityLink && (
+                <div className="space-y-1">
+                  <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Activity Link</div>
+                  {(() => {
+                    // A slice's globalId here is deliberately its own split
+                    // ref, not a real GlobalId (loadSplitElementInfo above) —
+                    // detecting that is exactly parseSplitElementRef's job,
+                    // real IFC GlobalIds never match it.
+                    const isSlice = parseSplitElementRef(elementInfo.globalId) !== null
+                    const sourceKind = isSlice ? 'ifc_split' : 'ifc'
+                    return (
+                      <ElementLinkFields
+                        activities={activities}
+                        links={links.filter(l => l.source_kind === sourceKind && l.element_ref === elementInfo.globalId)}
+                        animationProfiles={animationProfiles}
+                        onLink={(activityId, profileId) => onLinkElement(sourceKind, elementInfo.globalId, `${elementInfo.type}: ${elementInfo.name}`, activityId, profileId)}
+                        onUnlink={onUnlinkElement}
+                        onAssignProfile={onAssignProfile}
+                      />
+                    )
+                  })()}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -628,7 +642,7 @@ export function IfcDataPanel({
   handles, activeObjectId, selectedExpressId, selectedExpressIds, onSelect, onSelectMany, onUnload,
   unloadedCountByModelId, onReloadIfc, unsavedObjectIds,
   selectedObjectIds, onSelectWholeModel, unitDisplay, onUnitDisplayChange,
-  activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
+  activities, links, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile, hideActivityLink,
 }: Props) {
   // Collapsed by default (2026-07-26, per Maro — see ModelItem's own
   // expanded/onToggleExpanded header for the full "why"). Starts empty
@@ -704,6 +718,7 @@ export function IfcDataPanel({
             onLinkElement={onLinkElement}
             onUnlinkElement={onUnlinkElement}
             onAssignProfile={onAssignProfile}
+            hideActivityLink={hideActivityLink}
           />
         )
       })}

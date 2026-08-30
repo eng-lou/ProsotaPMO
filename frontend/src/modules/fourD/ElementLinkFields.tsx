@@ -8,7 +8,11 @@ interface Props {
   activities: Activity[]
   links: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLink: (activityId: string) => void
+  // profileId here is the one picked in the "new link" row below, so a
+  // link can be created with its profile already set instead of needing a
+  // follow-up edit (2026-08-30, per Maro: "why cant i set the profile at
+  // the same time").
+  onLink: (activityId: string, profileId: string | null) => void
   onUnlink: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
@@ -34,6 +38,7 @@ interface Props {
 // schedule work, linking a model element to one wouldn't mean anything.
 export function ElementLinkFields({ activities, links, animationProfiles, onLink, onUnlink, onAssignProfile }: Props) {
   const [picking, setPicking] = useState('')
+  const [pickingProfile, setPickingProfile] = useState('')
   const linkedActivityIds = new Set(links.map(l => l.activity_id))
   const pickable = activities.filter(a => !linkedActivityIds.has(a.id) && a.activity_type !== 'wbs_summary')
 
@@ -71,13 +76,26 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
         )
       })}
       {links.length === 0 && <p className="text-xs text-gray-400 dark:text-prosota-muted">Not linked to any activity.</p>}
-      <ActivityPicker
-        activities={pickable}
-        value={picking}
-        onChange={id => { onLink(id); setPicking('') }}
-        placeholder="Link to activity…"
-        className="w-full"
-      />
+      <div className="space-y-0.5">
+        {animationProfiles.length > 0 && (
+          <select
+            value={pickingProfile}
+            onChange={e => setPickingProfile(e.target.value)}
+            className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
+            title="Animation profile the new link starts with — picking an activity below creates it with this already set, no separate step needed"
+          >
+            <option value="">Default (no animation profile)</option>
+            {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        )}
+        <ActivityPicker
+          activities={pickable}
+          value={picking}
+          onChange={id => { onLink(id, pickingProfile || null); setPicking(''); setPickingProfile('') }}
+          placeholder="Link to activity…"
+          className="w-full"
+        />
+      </div>
     </div>
   )
 }

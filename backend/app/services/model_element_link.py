@@ -39,6 +39,7 @@ async def create_link(db: AsyncSession, data: ModelElementLinkCreate) -> ModelEl
         source_kind=data.source_kind,
         element_ref=data.element_ref,
         element_label=data.element_label,
+        animation_profile_id=data.animation_profile_id,
     )
     db.add(row)
     await db.commit()

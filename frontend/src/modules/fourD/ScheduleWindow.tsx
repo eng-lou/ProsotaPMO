@@ -6,6 +6,15 @@ import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { ModelElementLink } from './modelElementLinks'
 
+// The 3 fields editable inline in this table (2026-08-30, per Maro: "the
+// activity table in the 4d needs edit access... so i can change the
+// duration or activity name easily or even change the profile right
+// there") — deliberately not the Scheduling tab's own full column set;
+// Start/Finish/% Complete/Constraint/etc. still only make sense in that
+// richer grid or the bottom detail panel, which have room for the
+// reassessment-note prompt and other context this narrow window doesn't.
+export type ScheduleWindowEditableField = 'task_name' | 'duration_days' | 'animation_profile_id'
+
 interface Props {
   // Full raw list — only used here to compute hasChildren (which activity
   // rows get an expand/collapse arrow), independent of the current collapse
@@ -40,15 +49,25 @@ interface Props {
   // Profile + Browse columns (2026-07-25, per Maro: "allow me to add the
   // profile and browse columns for the activity table in 4d") — the same
   // two columns Scheduling.tsx's own real Activities grid already has
-  // ("3D Profile"/"Browse Elements"), just not previously surfaced in this
-  // window's own deliberately-slimmer read-only table. Both stay read-only
-  // here (view/browse only, no inline editing) — matching this component's
-  // own already-documented "deliberately read-only" contract above; a
-  // profile can still be *changed* from Scheduling.tsx's real grid or
-  // per-link from the Collections/DataPanel assignment UI, this window
-  // just now also shows the result.
+  // ("3D Profile"/"Browse Elements"). Profile became inline-editable
+  // 2026-08-30 (see onUpdateActivity below); Browse stays a pure popup —
+  // "which elements" isn't something to edit here.
   animationProfiles: AnimationProfile[]
   modelElementLinks: ModelElementLink[]
+  // Inline editing (2026-08-30, per Maro: "the activity table in the 4d
+  // needs edit access... change the duration or activity name easily or
+  // even change the profile right there") — this table was deliberately
+  // read-only until now (see buildOutline's own comment on why a full
+  // Scheduling.tsx-grid-style editor was never extracted/shared); this
+  // doesn't change that call for the *rest* of that grid's editable
+  // columns, just adds these 3 specific fields planners actually asked to
+  // touch without leaving 4D. FourD.tsx owns the actual PATCH + refetch
+  // (same api.patch('/activities/{id}') + full refresh Scheduling.tsx's
+  // own commitEdit already uses, since a duration change can cascade
+  // through CPM to *other* rows' start/finish too, not just this one) —
+  // this component only ever hands back which field changed and its new
+  // raw value, mirroring that same field-name/value shape.
+  onUpdateActivity: (activityId: string, field: ScheduleWindowEditableField, value: string) => Promise<void>
   // 4D's Animation Timeline playhead (2026-08-29, per Maro: "the activity
   // table would also be interactive" as the timeline plays/scrubs) — see
   // GanttChart.tsx's own subscribeFocusDate Props header for the shared
@@ -191,14 +210,18 @@ export function computeVisibleActivities(activities: Activity[], collapsedIds: S
 
 // 2026-07-11, per Maro: "adopt the layout of the activity table in the
 // schedule" — upgraded from a flat list to this WBS-hierarchy tree (indent
-// by depth, bold/shaded summary rows with collapse, critical-path tinting),
-// staying deliberately read-only (Maro's own call, given the Activities
+// by depth, bold/shaded summary rows with collapse, critical-path tinting).
+// Deliberately read-only at first (Maro's own call, given the Activities
 // tab's real table's inline-editing/resize/sort logic isn't extracted into
-// anything reusable — see buildOutline's own note above). Content-only —
+// anything reusable — see buildOutline's own note above) until 2026-08-30,
+// when Name/Duration/Profile specifically became editable in place (see
+// ScheduleWindowEditableField/onUpdateActivity above) — everything else
+// this window shows (Start/Finish/Code/critical-path tint) is still
+// read-only, computed by CPM or fixed at creation. Content-only —
 // WindowChrome.tsx owns the header/dock-toggle/close.
 export function ScheduleWindow({
   activities, visibleActivities, collapsedIds, onToggleCollapsed, selectedActivityIds, onSelectActivity,
-  scrollContainerRef, onScroll, animationProfiles, modelElementLinks, subscribeFocusDate,
+  scrollContainerRef, onScroll, animationProfiles, modelElementLinks, subscribeFocusDate, onUpdateActivity,
 }: Props) {
   const hasChildren = new Set<string>()
   for (const a of activities) if (a.parent_id) hasChildren.add(a.parent_id)
@@ -248,6 +271,34 @@ export function ScheduleWindow({
   // see the popup's own render below for why a portal specifically).
   const [elementsBrowse, setElementsBrowse] = useState<{ activityId: string; x: number; y: number } | null>(null)
 
+  // Inline editing — one active cell at a time, same {id, field}/editingValue
+  // shape as Scheduling.tsx's own commitEdit (its own comment there explains
+  // why: overrideValue lets the animation_profile_id <select>'s onChange
+  // commit immediately with the value straight from the change event,
+  // sidestepping a same-event-pass onChange+blur race that used to silently
+  // re-save the *previous* value).
+  const [editingCell, setEditingCell] = useState<{ id: string; field: ScheduleWindowEditableField } | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+
+  const startEdit = (a: Activity, field: ScheduleWindowEditableField, e: React.MouseEvent) => {
+    e.stopPropagation() // don't also fire the row's own onClick (select activity)
+    if (field === 'duration_days' && a.activity_type === 'wbs_summary') return // rolled up from children, not directly editable
+    setEditingCell({ id: a.id, field })
+    setEditingValue(
+      field === 'task_name' ? a.task_name
+      : field === 'duration_days' ? String(a.duration_days ?? '')
+      : (a.animation_profile_id ?? '')
+    )
+  }
+  const cancelEdit = () => setEditingCell(null)
+  const commitEdit = async (overrideValue?: string) => {
+    if (!editingCell) return
+    const { id, field } = editingCell
+    const value = overrideValue ?? editingValue
+    setEditingCell(null)
+    await onUpdateActivity(id, field, value)
+  }
+
   return (
     <div ref={scrollContainerRef} onScroll={e => onScroll(e.currentTarget.scrollTop)} className="overflow-auto h-full">
       <table className="w-full text-xs border-collapse">
@@ -290,21 +341,80 @@ export function ScheduleWindow({
                   className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''} ${isCurrent ? 'border-l-2 border-l-amber-500' : ''}`}
                 >
                   <td className={`px-2 border-b border-gray-100 dark:border-prosota-line font-mono ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{a.code}</td>
-                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${isSummary ? 'font-bold text-gray-800 dark:text-prosota-paper' : critical ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>
+                  <td
+                    className={`px-2 border-b border-gray-100 dark:border-prosota-line ${isSummary ? 'font-bold text-gray-800 dark:text-prosota-paper' : critical ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}
+                    onDoubleClick={e => startEdit(a, 'task_name', e)}
+                    title="Double-click to rename"
+                  >
                     <span style={{ paddingLeft: depth * 16 }} className="inline-flex items-center gap-1">
                       {hasChildren.has(a.id) ? (
                         <button onClick={e => { e.stopPropagation(); onToggleCollapsed(a.id) }} className="text-gray-400 dark:text-prosota-muted w-3 shrink-0">
                           {isCollapsed ? '▸' : '▾'}
                         </button>
                       ) : <span className="w-3 shrink-0" />}
-                      {a.task_name}
+                      {editingCell?.id === a.id && editingCell.field === 'task_name' ? (
+                        <input
+                          autoFocus
+                          value={editingValue}
+                          onChange={e => setEditingValue(e.target.value)}
+                          onBlur={() => commitEdit()}
+                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
+                          onClick={e => e.stopPropagation()}
+                          className="flex-1 min-w-0 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
+                        />
+                      ) : a.task_name}
                     </span>
                   </td>
-                  <td className={`px-2 border-b border-gray-100 dark:border-prosota-line text-right ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDuration(a.duration_days)}</td>
+                  <td
+                    className={`px-2 border-b border-gray-100 dark:border-prosota-line text-right ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}
+                    onDoubleClick={e => startEdit(a, 'duration_days', e)}
+                    title={isSummary ? 'Rolled up from its children — remove or outdent them to edit directly' : 'Double-click to change'}
+                  >
+                    {editingCell?.id === a.id && editingCell.field === 'duration_days' ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={editingValue}
+                        onChange={e => setEditingValue(e.target.value)}
+                        onBlur={() => commitEdit()}
+                        onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit() }}
+                        onClick={e => e.stopPropagation()}
+                        className="w-14 text-right border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
+                      />
+                    ) : formatDuration(a.duration_days)}
+                  </td>
                   <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDateTime(a.start, false)}</td>
                   <td className={`px-2 border-b border-gray-100 dark:border-prosota-line ${critical ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>{formatDateTime(a.finish, false)}</td>
-                  <td className="px-2 border-b border-gray-100 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap overflow-hidden text-ellipsis">
-                    {a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? 'Default') : <span className="text-gray-300 dark:text-prosota-line">Default</span>}
+                  <td
+                    className="px-2 border-b border-gray-100 dark:border-prosota-line text-gray-500 dark:text-prosota-muted whitespace-nowrap overflow-hidden text-ellipsis"
+                    onDoubleClick={e => startEdit(a, 'animation_profile_id', e)}
+                    title="Double-click to change which animation profile every 3D element linked to this activity uses"
+                  >
+                    {editingCell?.id === a.id && editingCell.field === 'animation_profile_id' ? (
+                      <select
+                        autoFocus
+                        value={editingValue}
+                        // Commits straight from the change event's own value, not
+                        // editingValue state, then only cancels (never re-commits)
+                        // on blur — same race Scheduling.tsx's own animation_profile_id
+                        // editor already found and documented (a native <select>'s
+                        // change+blur can fire back-to-back in one pass; a second
+                        // onBlur-triggered commit reading not-yet-re-rendered state
+                        // silently reverted the correct save).
+                        onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
+                        onBlur={cancelEdit}
+                        onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
+                        onClick={e => e.stopPropagation()}
+                        className="w-full border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
+                      >
+                        <option value="">Default</option>
+                        {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    ) : (
+                      a.animation_profile_id ? (profileNameById.get(a.animation_profile_id) ?? 'Default') : <span className="text-gray-300 dark:text-prosota-line">Default</span>
+                    )}
                   </td>
                   <td className="px-2 border-b border-gray-100 dark:border-prosota-line">
                     <button

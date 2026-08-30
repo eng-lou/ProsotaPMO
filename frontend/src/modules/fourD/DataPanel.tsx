@@ -46,7 +46,7 @@ interface Props {
   activities: Activity[]
   modelElementLinks: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null) => void
   onUnlinkElement: (linkId: string) => void
   // Bulk Activity Link (2026-08-30, per Maro: "I selected multiple
   // elements, seems i'm unable to bulk assign/unassign to an activity,
@@ -57,7 +57,10 @@ interface Props {
   // FourD.tsx's own handleBulkLinkSelectedToActivity, which resolves the
   // *global* selection via resolveSelectionToMemberRefs regardless of
   // which tab happens to be active here).
-  onBulkLinkSelected: (activityId: string) => void
+  // profileId lets Link Selected set every new link's profile in the same
+  // action (2026-08-30, per Maro: "why cant i set the profile at the same
+  // time") — ignored by Unlink, which has no use for one.
+  onBulkLinkSelected: (activityId: string, profileId: string | null) => void
   onBulkUnlinkSelected: (activityId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
@@ -94,6 +97,8 @@ export function DataPanel({
   onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
 }: Props) {
   const [bulkActivityId, setBulkActivityId] = useState('')
+  const [bulkProfileId, setBulkProfileId] = useState('')
+  const isBulkSelection = selectedExpressIds.size + selectedObjectIds.size > 1
 
   if (!open) {
     return (
@@ -145,7 +150,7 @@ export function DataPanel({
         </button>
         <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
-      {selectedExpressIds.size + selectedObjectIds.size > 1 && (
+      {isBulkSelection && (
         <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-1.5 shrink-0">
           <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
             Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
@@ -157,11 +162,22 @@ export function DataPanel({
             placeholder="Choose an activity…"
             className="w-full"
           />
+          {animationProfiles.length > 0 && (
+            <select
+              value={bulkProfileId}
+              onChange={e => setBulkProfileId(e.target.value)}
+              className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
+              title="Animation profile Link Selected sets on every new link — ignored by Unlink Selected"
+            >
+              <option value="">Default (no animation profile)</option>
+              {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
           <div className="flex gap-1.5">
             <button
-              onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId)}
+              onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId, bulkProfileId || null)}
               disabled={!bulkActivityId}
-              title="Link every currently selected element to the chosen activity"
+              title="Link every currently selected element to the chosen activity, with the profile above already set"
               className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
             >
               Link Selected
@@ -199,6 +215,7 @@ export function DataPanel({
           onLinkElement={onLinkElement}
           onUnlinkElement={onUnlinkElement}
           onAssignProfile={onAssignProfile}
+          hideActivityLink={isBulkSelection}
         />
       ) : (
         <MeshDataPanel

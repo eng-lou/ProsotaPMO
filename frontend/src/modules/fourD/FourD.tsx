@@ -4,6 +4,7 @@ import axios from 'axios'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { buildCalendarLookup, resolveHoursPerDay } from '@/modules/scheduling/durationDisplay'
 import { GanttChart } from '@/modules/scheduling/GanttChart'
 import { computePeriodBuckets, loadGanttZoom, saveGanttZoom, type GanttZoom } from '@/modules/scheduling/ganttZoom'
 import { loadResourcesLayout } from '@/modules/scheduling/resourcesLayout'
@@ -67,7 +68,7 @@ import { ensureMaterialized, hasGeometry, materializeAll, removeElementsFromMode
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
-import { computeVisibleActivities, ScheduleWindow } from './ScheduleWindow'
+import { computeVisibleActivities, ScheduleWindow, type ScheduleWindowEditableField } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
 import { computeKeyframeRange, computeScheduleRange, FPS_OPTIONS, padDegenerateRange, unionRanges, type TimeDisplayMode } from './timelinePlayback'
@@ -395,10 +396,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject, hasEverBeenActive])
 
-  const handleLinkElement = async (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => {
+  const handleLinkElement = async (
+    sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null = null,
+  ) => {
     try {
       setLinkError(null)
-      const link = await createModelElementLink({ activity_id: activityId, source_kind: sourceKind, element_ref: elementRef, element_label: elementLabel })
+      const link = await createModelElementLink({
+        activity_id: activityId, source_kind: sourceKind, element_ref: elementRef, element_label: elementLabel,
+        animation_profile_id: profileId,
+      })
       setModelElementLinks(prev => [...prev, link])
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : 'Failed to link element to activity')
@@ -425,7 +431,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // deleteModelElementLink call per element rather than a new bulk
   // endpoint, matching that established pattern instead of inventing a
   // second one.
-  const handleBulkLinkSelectedToActivity = async (activityId: string) => {
+  const handleBulkLinkSelectedToActivity = async (activityId: string, profileId: string | null = null) => {
     const handle = getIfcHandleFor(activeIfcModelId)
     const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
     if (drafts.length === 0) return
@@ -433,7 +439,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const newLinks: ModelElementLink[] = []
     for (const draft of drafts) {
       try {
-        newLinks.push(await createModelElementLink({ activity_id: activityId, ...draft }))
+        newLinks.push(await createModelElementLink({ activity_id: activityId, animation_profile_id: profileId, ...draft }))
       } catch (err) {
         // 409 = this element's already linked to this activity — a benign
         // no-op from the user's perspective (they selected some
@@ -5289,6 +5295,37 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return next
     })
   }
+
+  // ScheduleWindow.tsx's own inline editing (2026-08-30, per Maro: "the
+  // activity table in the 4d needs edit access... so i can change the
+  // duration or activity name easily or even change the profile right
+  // there") — same payload shape per field, and the same "PATCH then a
+  // full refreshSchedule()" convention Scheduling.tsx's own commitEdit
+  // uses for these same 3 fields, not a targeted local splice: a duration
+  // change can cascade through CPM to *other* activities' own start/finish
+  // too, which only a real refetch picks up correctly.
+  const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
+  const handleUpdateScheduleWindowActivity = async (activityId: string, field: ScheduleWindowEditableField, value: string) => {
+    let payload: Record<string, unknown>
+    if (field === 'duration_days') {
+      const days = value.trim() === '' ? null : Number(value)
+      if (days !== null && Number.isNaN(days)) return
+      const activity = activities.find(a => a.id === activityId)
+      const hoursPerDay = activity ? resolveHoursPerDay(activity, calendarLookup) : 8
+      payload = { duration_hours: days !== null ? days * hoursPerDay : null }
+    } else if (field === 'animation_profile_id') {
+      payload = { animation_profile_id: value || null }
+    } else {
+      payload = { task_name: value }
+    }
+    try {
+      await api.patch(`/api/v1/activities/${activityId}`, payload)
+      await refreshSchedule()
+    } catch (err) {
+      const message = axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
+      window.alert(message ?? 'Could not save that change.')
+    }
+  }
   // Respects the same "Hide Archived" preference Scheduling.tsx's own
   // Activities tab already persists (2026-07-26 fix, per Maro: "i hid it
   // but i see still see it in table in 4d" — this window fetches its own
@@ -6162,6 +6199,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             animationProfiles={animationProfiles.profiles}
             modelElementLinks={modelElementLinks}
             subscribeFocusDate={subscribeTimelineFocus}
+            onUpdateActivity={handleUpdateScheduleWindowActivity}
           />
         )
       case 'gantt':
@@ -6274,7 +6312,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       <WindowChrome
         key={key}
         title={WINDOW_LABELS[key]}
-        subtitle={key === 'schedule' ? `${scheduleWindowActivities.length} activit${scheduleWindowActivities.length === 1 ? 'y' : 'ies'} · read-only` : undefined}
+        // "read-only" dropped from this subtitle 2026-08-30 — no longer
+        // accurate once Name/Duration/Profile became inline-editable (see
+        // ScheduleWindow.tsx's own header); everything else here (Start/
+        // Finish/critical-path tint/Code) still is, but that's a nuance a
+        // one-line subtitle can't carry without just becoming noise.
+        subtitle={key === 'schedule' ? `${scheduleWindowActivities.length} activit${scheduleWindowActivities.length === 1 ? 'y' : 'ies'}` : undefined}
         headerActions={(
           <>
             {(key === 'schedule' || key === 'gantt') && (

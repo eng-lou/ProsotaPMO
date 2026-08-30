@@ -50,6 +50,10 @@ export async function createModelElementLink(data: {
   source_kind: ModelElementLinkSourceKind
   element_ref: string
   element_label: string
+  // Optional at create time (2026-08-30, per Maro: "why cant i set the
+  // profile at the same time") — previously only settable via a follow-up
+  // assignAnimationProfile PATCH.
+  animation_profile_id?: string | null
 }): Promise<ModelElementLink> {
   const res = await api.post<ModelElementLink>('/api/v1/model-element-links/', data)
   return res.data

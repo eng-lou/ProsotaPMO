@@ -20,13 +20,21 @@ class ModelElementLinkBase(BaseModel):
 
 
 class ModelElementLinkCreate(ModelElementLinkBase):
-    pass
+    # Optional at create time too (2026-08-30, per Maro: "while i build
+    # activity link, why cant i set the profile at the same time" — this
+    # used to be create-then-a-separate-PATCH-to-set-profile only, since it
+    # was the only field ModelElementLinkUpdate below ever needed to touch).
+    # Still optional, still PATCH-able afterwards via ModelElementLinkUpdate
+    # — this just also lets a caller who already knows which profile they
+    # want skip the extra round trip.
+    animation_profile_id: uuid.UUID | None = None
 
 
-# Assigns/clears which saved AnimationProfile drives this element (2026-07-11,
-# per Maro) — the only thing about a link worth changing after creation;
-# everything else in ModelElementLinkBase is fixed at link time (re-linking
-# to a different activity/element is delete-then-recreate, not an edit).
+# Assigns/clears which saved AnimationProfile drives this element after the
+# fact (2026-07-11, per Maro) — everything else in ModelElementLinkBase is
+# fixed at link time (re-linking to a different activity/element is
+# delete-then-recreate, not an edit); animation_profile_id is the one field
+# both create (above) and update need.
 class ModelElementLinkUpdate(BaseModel):
     animation_profile_id: uuid.UUID | None = None
 

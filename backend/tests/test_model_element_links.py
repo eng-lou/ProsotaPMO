@@ -116,6 +116,22 @@ async def test_deleting_activity_cascades_its_links(client: AsyncClient, project
     assert listing == []
 
 
+async def test_create_link_with_animation_profile_in_one_call(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    """2026-08-30, per Maro: "while i build activity link, why cant i set
+    the profile at the same time" — animation_profile_id is now accepted
+    directly on create, not just via a follow-up PATCH."""
+    activity_id = await _create_activity(client, project, live_schedule_period)
+    profile_resp = await client.post("/api/v1/animation-profiles/", json={"project_id": str(project.id), "name": "Pop Up Y"})
+    profile_id = profile_resp.json()["id"]
+
+    create_resp = await client.post("/api/v1/model-element-links/", json={
+        "activity_id": activity_id, "source_kind": "ifc", "element_ref": "GID-1", "element_label": "Wall",
+        "animation_profile_id": profile_id,
+    })
+    assert create_resp.status_code == 201, create_resp.text
+    assert create_resp.json()["animation_profile_id"] == profile_id
+
+
 async def test_assign_and_clear_animation_profile(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     activity_id = await _create_activity(client, project, live_schedule_period)
     create_resp = await client.post("/api/v1/model-element-links/", json={

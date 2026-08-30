@@ -24,7 +24,7 @@ interface Props {
   activities: Activity[]
   links: ModelElementLink[]
   animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
@@ -34,7 +34,7 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
   selected: boolean; onSelect: (additive: boolean) => void; onToggleSelected: (shiftKey: boolean) => void
   saved: boolean
   activities: Activity[]; links: ModelElementLink[]; animationProfiles: AnimationProfile[]
-  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string) => void
+  onLinkElement: (sourceKind: SourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null) => void
   onUnlinkElement: (linkId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }) {
@@ -82,7 +82,7 @@ function Item({ item, hidden, onToggleVisible, onUnload, selected, onSelect, onT
             activities={activities}
             links={ownLinks}
             animationProfiles={animationProfiles}
-            onLink={activityId => onLinkElement('mesh', item.name, item.name, activityId)}
+            onLink={(activityId, profileId) => onLinkElement('mesh', item.name, item.name, activityId, profileId)}
             onUnlink={onUnlinkElement}
             onAssignProfile={onAssignProfile}
           />
