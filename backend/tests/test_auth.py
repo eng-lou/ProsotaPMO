@@ -145,6 +145,7 @@ async def test_current_users_list_only_shows_approved_not_pending(client: AsyncC
     approved = User(
         org_id=user.org_id, email="another-approved@example.com", auth0_sub="auth0|another-approved",
         display_name="Another Approved", role="member", status="approved",
+        requested_title="Site Manager", requested_organisation="Acme Construction",
     )
     db.add_all([pending, approved])
     await db.commit()
@@ -158,6 +159,41 @@ async def test_current_users_list_only_shows_approved_not_pending(client: AsyncC
     # `user` (the fixture's own super user, status="approved") shows up too
     assert user.email in emails
     assert all("total_active_seconds" in row for row in rows)
+    # requested_title/organisation still come through post-approval — this
+    # is "who has access, what did they tell us about themselves," not
+    # cleared just because status flipped (2026-08-30, per Maro).
+    approved_row = next(r for r in rows if r["email"] == "another-approved@example.com")
+    assert approved_row["requested_title"] == "Site Manager"
+    assert approved_row["requested_organisation"] == "Acme Construction"
+
+
+async def test_export_current_users_csv(client: AsyncClient, user: User, db):
+    approved = User(
+        org_id=user.org_id, email="csv-export@example.com", auth0_sub="auth0|csv-export",
+        display_name="CSV Export Test", role="member", status="approved",
+        requested_title="Engineer", requested_organisation="Acme Construction",
+    )
+    pending = User(
+        org_id=user.org_id, email="csv-pending@example.com", auth0_sub="auth0|csv-pending",
+        display_name="Pending Excluded", role="member", status="pending",
+    )
+    db.add_all([approved, pending])
+    await db.commit()
+
+    resp = await client.get("/api/v1/access-requests/export")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/csv")
+    body = resp.text
+    assert "csv-export@example.com" in body
+    assert "Engineer" in body
+    assert "Acme Construction" in body
+    assert "csv-pending@example.com" not in body
+
+
+async def test_non_super_user_cannot_export_current_users(client: AsyncClient, user: User):
+    user.is_super_user = False
+    resp = await client.get("/api/v1/access-requests/export")
+    assert resp.status_code == 403
 
 
 async def test_non_super_user_cannot_list_current_users(client: AsyncClient, user: User):

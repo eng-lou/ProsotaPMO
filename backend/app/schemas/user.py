@@ -44,8 +44,13 @@ class PendingUserResponse(BaseModel):
 
 class CurrentUserSummaryResponse(BaseModel):
     """Access Manager's "current users" list (2026-08-25) — deliberately
-    lighter than UserResponse (no org_id, requested_*, updated_at): those
-    were the pending-request's own fields, not relevant once approved."""
+    lighter than UserResponse (no org_id, updated_at). requested_title/
+    requested_organisation *are* included despite the name (2026-08-30, per
+    Maro: "i still want to see their role/organisation details" for
+    already-approved users too, not just pending ones) — they're captured
+    once at request time and never cleared on approval, so they're still
+    real, current values for an approved user, just named after how they
+    were originally collected."""
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -53,6 +58,8 @@ class CurrentUserSummaryResponse(BaseModel):
     display_name: str
     role: str
     is_super_user: bool
+    requested_title: str | None
+    requested_organisation: str | None
     last_active_at: datetime | None
     total_active_seconds: int
     created_at: datetime

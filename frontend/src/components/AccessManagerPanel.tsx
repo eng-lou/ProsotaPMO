@@ -18,6 +18,13 @@ interface CurrentUserSummary {
   display_name: string
   role: string
   is_super_user: boolean
+  // Named after how they're originally collected (a pending request's own
+  // fields) but real, current values for an approved user too — never
+  // cleared on approval (2026-08-30, per Maro: "i still want to see their
+  // role/organisation details" for the current-users roster, not just
+  // pending requests).
+  requested_title: string | null
+  requested_organisation: string | null
   last_active_at: string | null
   total_active_seconds: number
   created_at: string
@@ -66,6 +73,22 @@ function formatDuration(totalSeconds: number): string {
   return `${mins}m`
 }
 
+// Authenticated CSV download (2026-08-30, per Maro: "i want to be able to
+// export the log too") — same shape as feedback_tickets.py's own
+// downloadFeedbackLog, the precedent for "download the log" already
+// elsewhere in this app: a plain <a href> can't carry the Bearer token, so
+// the file is fetched via the shared axios instance and handed to the
+// browser as a Blob download instead.
+async function downloadAccessLog(): Promise<void> {
+  const res = await api.get('/api/v1/access-requests/export', { responseType: 'blob' })
+  const url = URL.createObjectURL(res.data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'access-manager-users.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 // Super-user-only admin panel (2026-08-25, trial/beta access gate; renamed
 // and moved 2026-08-27 per Maro — was "Access requests" in the Sidebar,
 // only reachable once inside a project; now "Access Manager" on the
@@ -73,14 +96,30 @@ function formatDuration(totalSeconds: number): string {
 // a project one, and a super user shouldn't need to already be in a
 // project to review who has access). Two sections: pending requests
 // (Approve/Deny, unchanged from the original panel) and a roster of
-// everyone already approved, with when they last used the app and (2026-
-// 08-30, per Maro) how long they've spent in it all-time.
+// everyone already approved, with when they last used the app, how long
+// they've spent in it all-time, and (still 2026-08-30) the same title/
+// organisation a pending request already showed — never actually cleared
+// on approval, just not surfaced here until now. That roster can also be
+// exported as a CSV (same "download the log" pattern feedback_tickets.py's
+// own export already established).
 export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
   const [requests, setRequests] = useState<PendingUser[] | null>(null)
   const [currentUsers, setCurrentUsers] = useState<CurrentUserSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [denyingId, setDenyingId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await downloadAccessLog()
+    } catch {
+      setError('Could not export the current-users log.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const refresh = () => {
     api.get<PendingUser[]>('/api/v1/access-requests/')
@@ -189,9 +228,21 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <h3 className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">
-          Current users{currentUsers && currentUsers.length > 0 ? ` (${currentUsers.length})` : ''}
-        </h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide">
+            Current users{currentUsers && currentUsers.length > 0 ? ` (${currentUsers.length})` : ''}
+          </h3>
+          {currentUsers && currentUsers.length > 0 && (
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              title="Download this roster (email, role, title/organisation, last active, total time) as a CSV"
+              className="text-xs text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper disabled:opacity-50"
+            >
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          )}
+        </div>
         {currentUsers === null ? (
           <p className="text-sm text-gray-500 dark:text-prosota-muted">Loading…</p>
         ) : currentUsers.length === 0 ? (
@@ -199,7 +250,7 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
         ) : (
           <div className="space-y-2">
             {currentUsers.map(u => (
-              <div key={u.id} className="border border-gray-200 dark:border-prosota-line rounded-md p-3 flex items-center justify-between gap-3">
+              <div key={u.id} className="border border-gray-200 dark:border-prosota-line rounded-md p-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-gray-900 dark:text-prosota-paper truncate">
                     {displayName(u.display_name)}
@@ -209,6 +260,11 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
                   </p>
                   {!u.email.endsWith('@prosotapmo.local') && (
                     <p className="text-xs text-gray-500 dark:text-prosota-muted truncate">{u.email}</p>
+                  )}
+                  {u.requested_title && (
+                    <p className="text-xs text-gray-500 dark:text-prosota-muted mt-1 truncate">
+                      {u.requested_title}{u.requested_organisation ? ` · ${u.requested_organisation}` : ''}
+                    </p>
                   )}
                 </div>
                 <div className="shrink-0 text-right">

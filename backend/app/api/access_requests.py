@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import datetime, timezone
 
@@ -56,6 +58,41 @@ async def list_current_users(
         select(User).where(User.status == "approved").order_by(User.last_active_at.desc().nullslast())
     )
     return list(result.scalars().all())
+
+
+# Super-user-only CSV export of the current-users roster (2026-08-30, per
+# Maro: "i want to be able to export the log too" — same request/CSV shape
+# as feedback_tickets.py's own export_events, the precedent for "download
+# the log" in this app). Pending requests aren't included — this is "who
+# has access and how they've used it," not the request queue, matching
+# list_current_users' own scope just above.
+@router.get("/export")
+async def export_current_users(
+    db: AsyncSession = Depends(get_db),
+    _super_user: User = Depends(require_super_user),
+):
+    result = await db.execute(
+        select(User).where(User.status == "approved").order_by(User.last_active_at.desc().nullslast())
+    )
+    users = result.scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "email", "display_name", "role", "is_super_user", "title", "organisation",
+        "last_active_at_utc", "total_active_seconds", "created_at_utc",
+    ])
+    for user in users:
+        writer.writerow([
+            user.email, user.display_name, user.role, user.is_super_user,
+            user.requested_title or "", user.requested_organisation or "",
+            user.last_active_at.isoformat() if user.last_active_at else "",
+            user.total_active_seconds, user.created_at.isoformat(),
+        ])
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=access-manager-users.csv"},
+    )
 
 
 @router.post("/{user_id}/approve", response_model=PendingUserResponse)
