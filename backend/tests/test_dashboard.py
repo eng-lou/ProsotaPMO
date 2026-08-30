@@ -435,14 +435,22 @@ async def test_lookahead_flags_incomplete_predecessor_and_respects_window(
     resp = await client.get("/api/v1/dashboard/overview", params=_overview_params(project, live_period, live_schedule_period))
     body = resp.json()
     items = {i["task_name"]: i for i in body["lookahead_items"]}
-    # Only the in-window activity appears — the 10-week-out one is excluded,
-    # and "Predecessor" itself has no `start` set so was never a candidate.
-    assert list(items.keys()) == ["In window"]
+    # "Predecessor" is link-driven, real CPM behaviour, not a bug (2026-08-30
+    # fix, per Maro — an earlier version of this test wrongly assumed a
+    # never-explicitly-dated activity stays start=None): with no duration/
+    # start of its own and no predecessor to wait on, CPM schedules it ASAP
+    # — start = now (rolled to the next working day-start) — which
+    # genuinely falls inside the 6-week window, so it correctly belongs in
+    # the Look-Ahead alongside "In window". The 10-week-out activity is
+    # still correctly excluded.
+    assert set(items.keys()) == {"Predecessor", "In window"}
     assert items["In window"]["has_incomplete_predecessor"] is True
+    # Predecessor has no predecessor of its own, so it isn't flagged either.
+    assert items["Predecessor"]["has_incomplete_predecessor"] is False
 
     summary = body["lookahead_summary"]
     assert summary["window_weeks"] == 6
-    assert summary["total_in_window"] == 1
+    assert summary["total_in_window"] == 2
     assert summary["incomplete_predecessor_count"] == 1
 
 
