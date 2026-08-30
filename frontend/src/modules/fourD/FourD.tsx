@@ -5261,25 +5261,43 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // transform-based GanttChartHandle trick (that one assumes a fixed-height
   // clipped viewport paired with exactly one partner, matching Scheduling.tsx's
   // dual-pane layout — not the case here, where either window can be closed,
-  // resized, or moved to the other dock independently). syncingScrollRef
-  // guards against the infinite feedback loop that would otherwise happen:
-  // setting one pane's scrollTop programmatically fires *its own* onScroll
-  // too, which would otherwise immediately echo back onto the pane that
-  // triggered it in the first place.
+  // resized, or moved to the other dock independently).
+  //
+  // Last-known-value guards (2026-08-30 fix, per Maro: "jittering... table
+  // trying to scroll down but resisting and staying up") — a boolean
+  // syncingScrollRef used to guard this, but that broke two ways: (1) the
+  // Gantt pane's own container is *also* GanttChart's horizontalScrollContainerRef
+  // (see its own render below), which gets scrollLeft ticked every rAF frame
+  // by that component's playhead-follow effect; a scrollLeft-only change
+  // still fires this container's onScroll with an unchanged scrollTop, which
+  // a boolean-guarded handler would still forward as a fresh assignment onto
+  // the Activity Table pane — and directly assigning scrollTop, even to its
+  // current value, cancels any in-flight scrollTo({behavior:'smooth'}), so
+  // ScheduleWindow's own auto-scroll-to-current-row animation got reset on
+  // every single animation frame and could never actually travel. (2) even
+  // for genuine vertical mirroring, the boolean flag was set true then
+  // false *synchronously* around the scrollTop assignment, but the resulting
+  // 'scroll' event on the other pane fires asynchronously — so the guard was
+  // already false again by the time it needed to suppress the echo,
+  // producing a feedback loop. Tracking each pane's last-known scrollTop
+  // instead fixes both: a same-value scroll event (case 1) is a no-op, and
+  // an echoed value (case 2) is recognized and dropped regardless of when
+  // the async event actually arrives.
   const scheduleScrollRef = useRef<HTMLDivElement>(null)
   const ganttScrollRef = useRef<HTMLDivElement>(null)
-  const syncingScrollRef = useRef(false)
+  const lastScheduleScrollTopRef = useRef(0)
+  const lastGanttScrollTopRef = useRef(0)
   const handleScheduleScroll = (scrollTop: number) => {
-    if (syncingScrollRef.current) return
-    syncingScrollRef.current = true
+    if (scrollTop === lastScheduleScrollTopRef.current) return
+    lastScheduleScrollTopRef.current = scrollTop
+    lastGanttScrollTopRef.current = scrollTop
     if (ganttScrollRef.current) ganttScrollRef.current.scrollTop = scrollTop
-    syncingScrollRef.current = false
   }
   const handleGanttScroll = (scrollTop: number) => {
-    if (syncingScrollRef.current) return
-    syncingScrollRef.current = true
+    if (scrollTop === lastGanttScrollTopRef.current) return
+    lastGanttScrollTopRef.current = scrollTop
+    lastScheduleScrollTopRef.current = scrollTop
     if (scheduleScrollRef.current) scheduleScrollRef.current.scrollTop = scrollTop
-    syncingScrollRef.current = false
   }
 
   const resourcesTabData = useResourcesTabData(

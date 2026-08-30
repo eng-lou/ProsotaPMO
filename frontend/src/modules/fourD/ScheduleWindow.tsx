@@ -65,10 +65,42 @@ interface Props {
 // currently in progress, same fallback selectExportActivities uses; falls
 // back further to the last dated row when everything's already finished.
 // -1 only when nothing in the list has real start/finish dates at all.
+//
+// Critical-path priority, take 2 (2026-08-30, per Maro: still chaotic after
+// the first attempt — "going up and down trying to follow different
+// activities in the same time periods") — the first attempt still picked
+// "first in outline/WBS-array order" as its tie-break, just narrowed to
+// critical activities; real schedules routinely have *several* zero-float
+// activities active at once (parallel critical/near-critical chains, e.g.
+// offsite fabrication running alongside onsite install), so that tie-break
+// kept flipping between unrelated WBS branches for the same reason as
+// before, just less often. Tie-break is now which active activity *started
+// most recently* (largest start <= date) — a date-based comparison that
+// stays consistent regardless of WBS/array position, and matches "what's
+// actually being worked on right now" rather than "whatever the tree
+// happens to list first". Also switched from `is_critical || sub_is_critical`
+// to `is_critical` alone — sub_is_critical is a *different*, per-sub-project
+// float calculation (backend/app/services/scheduling_cpm.py's own
+// "Second, additional float calculation per PM-tagged sub-project branch"
+// pass), not the master critical path; a small tagged branch like an
+// elevator pit can be internally zero-float (sub_is_critical) on its own
+// terms while being finished and irrelevant months before the date actually
+// being followed — that's what sent the row jumping off to an unrelated,
+// already-finished branch. The upcoming/last-done fallbacks (used only when
+// nothing brackets `date` at all) are date-based for the same reason —
+// "first/last in array order" was never actually "next/previous
+// chronologically" once the WBS tree's own branch ordering diverges from
+// the schedule's actual date order, which is most of the time.
 function findCurrentOrNextActivityIndex(list: Activity[], date: Date): number {
   const ms = date.getTime()
-  let upcoming = -1
-  let lastDated = -1
+  let bestActiveIdx = -1
+  let bestActiveStart = -Infinity
+  let bestCriticalIdx = -1
+  let bestCriticalStart = -Infinity
+  let upcomingIdx = -1
+  let upcomingStart = Infinity
+  let lastDoneIdx = -1
+  let lastDoneFinish = -Infinity
   for (let i = 0; i < list.length; i++) {
     // Skip WBS summary rows (2026-08-29 fix, found via live testing) — a
     // summary's own start/finish rolls up its entire subtree (e.g. the
@@ -81,11 +113,19 @@ function findCurrentOrNextActivityIndex(list: Activity[], date: Date): number {
     const start = parseDate(list[i].start)
     const finish = parseDate(list[i].finish)
     if (!start || !finish) continue
-    lastDated = i
-    if (ms >= start.getTime() && ms <= finish.getTime()) return i
-    if (upcoming === -1 && start.getTime() > ms) upcoming = i
+    const startMs = start.getTime()
+    const finishMs = finish.getTime()
+    if (ms >= startMs && ms <= finishMs) {
+      if (startMs > bestActiveStart) { bestActiveStart = startMs; bestActiveIdx = i }
+      if (list[i].is_critical && startMs > bestCriticalStart) { bestCriticalStart = startMs; bestCriticalIdx = i }
+      continue
+    }
+    if (startMs > ms && startMs < upcomingStart) { upcomingStart = startMs; upcomingIdx = i }
+    if (finishMs <= ms && finishMs > lastDoneFinish) { lastDoneFinish = finishMs; lastDoneIdx = i }
   }
-  return upcoming !== -1 ? upcoming : lastDated
+  if (bestCriticalIdx !== -1) return bestCriticalIdx
+  if (bestActiveIdx !== -1) return bestActiveIdx
+  return upcomingIdx !== -1 ? upcomingIdx : lastDoneIdx
 }
 
 function formatDuration(value: number | string | null): string {
@@ -163,31 +203,34 @@ export function ScheduleWindow({
   const hasChildren = new Set<string>()
   for (const a of activities) if (a.parent_id) hasChildren.add(a.parent_id)
 
-  // Auto-scroll-to-current-row (2026-08-29) — deliberately imperative
-  // (direct scrollTop assignment, not React state) for the scroll itself,
-  // matching GanttChart.tsx's own setScrollTop precedent for a per-tick hot
-  // path. currentActivityId IS state, but only changes (and only re-renders
-  // this table) on the rare tick where the *current* activity actually
-  // changes, not on every tick — cheap enough to drive the row highlight
-  // below without reintroducing a per-frame re-render.
+  // Auto-scroll-to-current-row (2026-08-29, revised same day per Maro:
+  // "too jittery... the table move in and out of focus... i just want a
+  // seamless transition") — the first version re-aligned the row flush
+  // against whichever edge it was about to cross, which meant sitting
+  // still and then hard-jumping every time, reading as the table snapping
+  // in and out of focus rather than following smoothly. Unlike the Gantt's
+  // own horizontal follow (which re-anchors every tick because todayOffset
+  // itself changes continuously), which row is "current" only changes on
+  // the rare tick an activity boundary is actually crossed — so the fix
+  // here isn't "follow every tick", it's "only scroll on that real
+  // transition, and make that one scroll itself smooth" via native
+  // scroll-behavior rather than an instant teleport. currentActivityId IS
+  // state, but (like before) only changes on that same rare tick — still
+  // no per-frame re-render of this table.
   const [currentActivityId, setCurrentActivityId] = useState<string | null>(null)
   const currentActivityIdRef = useRef<string | null>(null)
   useEffect(() => {
     if (!subscribeFocusDate) return
     return subscribeFocusDate(date => {
       const idx = findCurrentOrNextActivityIndex(visibleActivities, date)
-      if (idx === -1) return
-      const activity = visibleActivities[idx]
-      if (currentActivityIdRef.current !== activity.id) {
-        currentActivityIdRef.current = activity.id
-        setCurrentActivityId(activity.id)
-      }
+      if (idx === -1 || currentActivityIdRef.current === visibleActivities[idx].id) return
+      currentActivityIdRef.current = visibleActivities[idx].id
+      setCurrentActivityId(visibleActivities[idx].id)
       const container = scrollContainerRef.current
       if (!container) return
       const rowTop = HEADER_HEIGHT + idx * GANTT_ROW_HEIGHT
-      const rowBottom = rowTop + GANTT_ROW_HEIGHT
-      if (rowTop < container.scrollTop) container.scrollTop = rowTop
-      else if (rowBottom > container.scrollTop + container.clientHeight) container.scrollTop = rowBottom - container.clientHeight
+      const target = Math.max(0, rowTop - container.clientHeight * 0.35)
+      container.scrollTo({ top: target, behavior: 'smooth' })
     })
   }, [subscribeFocusDate, visibleActivities, scrollContainerRef])
 

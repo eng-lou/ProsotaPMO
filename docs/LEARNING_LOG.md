@@ -4592,3 +4592,102 @@ before: read the Gantt pane's real `scrollLeft` alongside the line's
 pixel position mid-playback and confirmed the line stays inside the
 visible window throughout, not just at the two hand-picked moments
 checked the first time around.
+
+**A third round, same day**: Maro tried it live and called the result
+"too jittery... the gantt chart bars move in and out of focus... same
+with the table... i just want a seamless transition." The "only scroll
+once it hits the edge" design from the previous round was the actual
+cause — sitting still and then hard-jumping every time something crossed
+the margin reads as snapping in and out of focus, not panning. Replaced
+with two different fixes for two genuinely different situations: the
+Gantt's line position already changes continuously (a few pixels every
+single frame during Play), so its horizontal scroll now just re-anchors
+to it on every tick too — continuous input, continuous output, no
+threshold in between. The table's "current activity" is different: it's
+a genuinely discrete value that only changes on the rare tick an activity
+boundary is actually crossed, so continuous re-anchoring wouldn't even
+make sense there — instead that one, real transition now animates via
+the browser's own native smooth-scroll instead of teleporting, so the
+occasional jump itself reads as a deliberate motion rather than a snap.
+
+**A tooling lesson worth remembering for next time**: tried to verify the
+smoothness fix by sampling the Gantt's scroll position in a tight loop
+from injected JavaScript (many reads a fraction of a second apart). Every
+single reading inside that loop came back completely frozen — looked like
+proof the fix had done nothing. Reading the same value through separate,
+individual tool calls (each with a real wait in between) showed it moving
+exactly as expected. The likely cause: the browser throttles/suspends a
+tab's own animation timing while a devtools-style script is actively mid-
+execution against it, so a tight sampling loop can end up observing a
+paused version of the exact thing it's trying to measure. Lesson: don't
+trust a live-animation reading taken from *inside* a sustained injected
+script — take single point-in-time reads spaced apart by the automation
+tool's own real waits instead, the same category of gotcha as the
+injected-date-input false alarm from the previous round.
+
+**A fourth round, next session**: Maro sent a screenshot — the table was
+"jittering... trying to scroll down but resisting and staying up, while
+the focus line is just moving to the right on the gantt." Root cause
+turned out to be a side effect of the vertical scroll-mirror between the
+Activity Table and Gantt windows (FourD.tsx's own `handleScheduleScroll`/
+`handleGanttScroll`): the Gantt pane's scroll container is *also* the
+`horizontalScrollContainerRef` the previous round's playhead-follow effect
+ticks every rAF frame, and a scrollLeft-only change still fires that
+container's `onScroll` with an (unchanged) `scrollTop` — which the mirror
+was still forwarding onto the Activity Table pane as a fresh assignment.
+Directly assigning `scrollTop`, even to its own current value, cancels any
+in-flight `scrollTo({behavior:'smooth'})` — so the table's smooth
+auto-scroll-to-current-row got reset on every single animation frame and
+could never actually travel, while the Gantt's horizontal follow (a
+different axis, untouched) kept moving the line normally. Separately, the
+mirror's own `syncingScrollRef` boolean guard was set true then false
+*synchronously* around the scrollTop assignment, but the resulting
+`scroll` event on the other pane fires asynchronously — so the guard was
+already false again by the time it needed to suppress the echo, a second,
+independent way the same feedback loop could happen. Fixed both by
+replacing the boolean flag with per-pane last-known-scrollTop tracking: a
+same-value scroll event (the horizontal-only case) is now a no-op, and an
+echoed value is recognized and dropped by comparison regardless of when
+the async event actually arrives.
+
+That fix alone wasn't enough — Maro reported the table still "going up
+and down trying to follow different activities in the same time periods."
+`findCurrentOrNextActivityIndex` (which picks which row counts as
+"current" for a given date) picked the first *matching* row in WBS/outline
+array order among however many activities happened to be active at that
+exact moment — and parallel WBS branches routinely overlap the same date
+range, so which branch's row was first-in-array-order among the
+currently-active set kept changing as each branch's own activities
+started/finished at slightly different times, producing exactly the
+reported up/down hopping between unrelated parts of the tree. First
+attempt: prioritize `is_critical || sub_is_critical` activities over
+non-critical ones when several are active at once, on the theory that the
+critical path is a single throughline. Still wrong — confirmed live with
+two more screenshots at different dates, one showing the table had
+followed the correct steel/slab critical-path row, the next (just over a
+week later in the timeline) showing it had jumped backwards to an already-
+finished elevator-pit foundation task months earlier, tracking nothing
+relevant to the date being played. Two real bugs in that first attempt:
+(1) `sub_is_critical` is a *different*, per-sub-project float calculation
+(`backend/app/services/scheduling_cpm.py`'s own "Second, additional float
+calculation per PM-tagged sub-project branch" pass, explicitly documented
+as never touching the master pass's own `is_critical`) — a small tagged
+branch like an elevator pit can be internally zero-float on its own
+terms while finished and irrelevant months before the date actually being
+played, which is exactly what pulled the followed row off to it; (2) even
+restricted to true `is_critical`, "first in array order" was still the
+tie-break among however many critical activities happened to be
+concurrently active — and real schedules commonly do have more than one
+zero-float activity active at once (parallel critical chains, e.g. offsite
+fabrication running alongside onsite install), so the exact same array-
+order flaw was still there, just triggering less often. Final fix: tie-
+break by which active activity *started most recently* (largest start ≤
+date) instead of array position — a comparison that depends only on the
+schedule's own dates, not on WBS/array ordering, so it can't drift for
+this reason regardless of how many chains are concurrently critical. Applied
+the same date-based reasoning to the upcoming/last-done fallback paths
+(used when nothing brackets the given date at all), which had the
+identical "first/last in array order" flaw standing in for "chronologically
+next/previous" — true only by coincidence, and wrong whenever the WBS
+tree's own branch ordering diverges from the schedule's actual date order,
+which is most of the time. Confirmed working live after this round.

@@ -376,19 +376,22 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   }, [rangeStart, width, dayWidth, subscribeFocusDate, liveFocusDate])
 
   // Follows the playhead horizontally (see horizontalScrollContainerRef's
-  // own Props header above) — only nudges scrollLeft when the line would
-  // actually leave the visible window, not every tick, so it doesn't fight
-  // a manual pan during a slow Play the way a hard recenter-every-frame
-  // would. MARGIN keeps the line from sitting flush against either edge.
-  const GANTT_AUTOSCROLL_MARGIN = 60
+  // own Props header above) — 2026-08-29 fix, per Maro: "too jittery... the
+  // gantt chart bars move in and out of focus... i just want a seamless
+  // transition". The first version only nudged scrollLeft once the line hit
+  // an edge margin, which meant sitting still and then hard-teleporting a
+  // few hundred pixels every time — a real "in and out of focus" snap, not
+  // a pan. todayOffset itself already changes smoothly (a few px per rAF
+  // tick during Play), so pinning scrollLeft to it every tick, at a fixed
+  // fraction of the viewport from the left edge, makes the container's own
+  // native scroll position track it just as smoothly — this IS the pan,
+  // not a threshold correction on top of one. ANCHOR_FRACTION < 0.5 keeps
+  // more of the upcoming schedule in view than the part already passed.
+  const GANTT_AUTOSCROLL_ANCHOR_FRACTION = 0.35
   useEffect(() => {
     const container = horizontalScrollContainerRef?.current
     if (!container || todayOffset === null) return
-    if (todayOffset < container.scrollLeft + GANTT_AUTOSCROLL_MARGIN) {
-      container.scrollLeft = Math.max(0, todayOffset - GANTT_AUTOSCROLL_MARGIN)
-    } else if (todayOffset > container.scrollLeft + container.clientWidth - GANTT_AUTOSCROLL_MARGIN) {
-      container.scrollLeft = todayOffset - container.clientWidth + GANTT_AUTOSCROLL_MARGIN
-    }
+    container.scrollLeft = Math.max(0, todayOffset - container.clientWidth * GANTT_AUTOSCROLL_ANCHOR_FRACTION)
   }, [todayOffset, horizontalScrollContainerRef])
 
   const geometry = useMemo(() => {
