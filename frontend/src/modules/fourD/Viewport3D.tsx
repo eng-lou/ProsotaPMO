@@ -5223,6 +5223,21 @@ export function Viewport3D({
   // whole object for mesh-kind, both gated on .visible so isolated/hidden
   // elements are never offered up), just matched against "not already
   // linked" instead of "inside the dragged rectangle".
+  //
+  // Also reads the shared batch, not just already-materialized individual
+  // meshes (2026-08-30 fix, per Maro: "this is a model that has not been
+  // linked, so if i select unassigned it should select everything. instead
+  // it selected elements i previously selected and deselected" — the exact
+  // same gap handleSelectAllClick below was fixed for on 2026-07-25, this
+  // one just never got the same fix). Most elements in a batched model
+  // never exist as individually traversable Mesh children at all — plain
+  // object.traverse only ever finds whichever ones happened to get
+  // individually materialized as a side effect of some other interaction
+  // (e.g. clicking one to select it), which is exactly why only "elements
+  // previously selected and deselected" turned up instead of the whole
+  // model. batch.byExpressId is the actual complete source of a batched
+  // model's elements — see handleSelectAllClick's own header for the full
+  // "why no materializeAll call" reasoning, identical here.
   const handleSelectUnassigned = () => {
     const matchedObjectIds: string[] = []
     const expressIdsByObject = new Map<string, number[]>()
@@ -5230,12 +5245,22 @@ export function Viewport3D({
       if (!visible) continue
       if (kind === 'ifc') {
         const matchedIds: number[] = []
+        const seen = new Set<number>()
         object.traverse(child => {
           if (!(child instanceof THREE.Mesh) || !child.visible) return
           const expressID = child.userData.expressID as number | undefined
           if (expressID === undefined) return
+          seen.add(expressID)
           if (!linkedElementKeys.has(`${id}::${expressID}`)) matchedIds.push(expressID)
         })
+        const batch = object.userData.batch as BatchState | null | undefined
+        if (batch) {
+          for (const [expressID, infos] of batch.byExpressId) {
+            if (seen.has(expressID)) continue // already covered by the materialized-mesh pass above
+            if (!infos.some(info => batch.mesh.getVisibleAt(info.instanceId))) continue
+            if (!linkedElementKeys.has(`${id}::${expressID}`)) matchedIds.push(expressID)
+          }
+        }
         if (matchedIds.length > 0) expressIdsByObject.set(id, matchedIds)
         continue
       }
