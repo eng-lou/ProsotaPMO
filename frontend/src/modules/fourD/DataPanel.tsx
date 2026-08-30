@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { IfcModelHandle } from './ifcModel'
@@ -46,6 +48,17 @@ interface Props {
   animationProfiles: AnimationProfile[]
   onLinkElement: (sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string) => void
   onUnlinkElement: (linkId: string) => void
+  // Bulk Activity Link (2026-08-30, per Maro: "I selected multiple
+  // elements, seems i'm unable to bulk assign/unassign to an activity,
+  // just the one to one") — lives here, above the IFC/3D tab split, rather
+  // than duplicated inside IfcDataPanel/MeshDataPanel, since the current
+  // selection can span both a mesh and IFC elements at once and this one
+  // action already covers whichever mix is actually selected (see
+  // FourD.tsx's own handleBulkLinkSelectedToActivity, which resolves the
+  // *global* selection via resolveSelectionToMemberRefs regardless of
+  // which tab happens to be active here).
+  onBulkLinkSelected: (activityId: string) => void
+  onBulkUnlinkSelected: (activityId: string) => void
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
 
@@ -77,8 +90,11 @@ export function DataPanel({
   open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
   unloadedCountByModelId, onReloadIfc,
   meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
-  activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement, onAssignProfile,
+  activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
+  onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
 }: Props) {
+  const [bulkActivityId, setBulkActivityId] = useState('')
+
   if (!open) {
     return (
       <button
@@ -129,6 +145,38 @@ export function DataPanel({
         </button>
         <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
+      {selectedExpressIds.size + selectedObjectIds.size > 1 && (
+        <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-1.5 shrink-0">
+          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
+            Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
+          </div>
+          <ActivityPicker
+            activities={activities.filter(a => a.activity_type !== 'wbs_summary')}
+            value={bulkActivityId}
+            onChange={setBulkActivityId}
+            placeholder="Choose an activity…"
+            className="w-full"
+          />
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId)}
+              disabled={!bulkActivityId}
+              title="Link every currently selected element to the chosen activity"
+              className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              Link Selected
+            </button>
+            <button
+              onClick={() => bulkActivityId && onBulkUnlinkSelected(bulkActivityId)}
+              disabled={!bulkActivityId}
+              title="Unlink every currently selected element from the chosen activity"
+              className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              Unlink Selected
+            </button>
+          </div>
+        </div>
+      )}
       {activeTab === 'ifc' ? (
         <IfcDataPanel
           handles={ifcHandles}

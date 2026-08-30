@@ -414,6 +414,62 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Bulk Activity Link (2026-08-30, per Maro: "I selected multiple elements,
+  // seems i'm unable to bulk assign/unassign to an activity, just the one
+  // to one" — IfcDataPanel.tsx's own Activity Link section only ever
+  // operated on the single-element case). Same resolveSelectionToMemberRefs
+  // + per-draft loop shape as handleAddSelectedToCollection/
+  // handleRemoveSelectedFromCollection below (Collections' own bulk
+  // actions) — the current viewport selection resolved to loose
+  // (source_kind, element_ref) refs, one createModelElementLink/
+  // deleteModelElementLink call per element rather than a new bulk
+  // endpoint, matching that established pattern instead of inventing a
+  // second one.
+  const handleBulkLinkSelectedToActivity = async (activityId: string) => {
+    const handle = getIfcHandleFor(activeIfcModelId)
+    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    if (drafts.length === 0) return
+    setLinkError(null)
+    const newLinks: ModelElementLink[] = []
+    for (const draft of drafts) {
+      try {
+        newLinks.push(await createModelElementLink({ activity_id: activityId, ...draft }))
+      } catch (err) {
+        // 409 = this element's already linked to this activity — a benign
+        // no-op from the user's perspective (they selected some
+        // already-linked elements alongside new ones), same treatment as
+        // Collections' own Add Selected.
+        if (axios.isAxiosError(err) && err.response?.status === 409) continue
+        setLinkError(err instanceof Error ? err.message : 'Failed to link some elements to the activity')
+      }
+    }
+    if (newLinks.length > 0) setModelElementLinks(prev => [...prev, ...newLinks])
+  }
+  const handleBulkUnlinkSelectedFromActivity = async (activityId: string) => {
+    const handle = getIfcHandleFor(activeIfcModelId)
+    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    if (drafts.length === 0) return
+    const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
+    // Scoped to this one activity, not "every link this selection has to
+    // any activity" — mirrors Collections' own Remove Selected being
+    // scoped to one collection, and matches Maro's own "unassign to an
+    // activity" framing (a specific activity, chosen the same picker way
+    // as the link side).
+    const toRemove = modelElementLinks.filter(l => l.activity_id === activityId && draftKeys.has(`${l.source_kind}::${l.element_ref}`))
+    if (toRemove.length === 0) return
+    setLinkError(null)
+    const removedIds = new Set<string>()
+    for (const link of toRemove) {
+      try {
+        await deleteModelElementLink(link.id)
+        removedIds.add(link.id)
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : 'Failed to unlink some elements from the activity')
+      }
+    }
+    if (removedIds.size > 0) setModelElementLinks(prev => prev.filter(l => !removedIds.has(l.id)))
+  }
+
   // Section Box (2026-07-09, per Maro's Blender "Section Box" plugin
   // reference, walked through via screenshots) — project-scoped like
   // modelElementLinks above, persisted server-side (section_box.py).
@@ -7167,6 +7223,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           animationProfiles={animationProfiles.profiles}
           onLinkElement={handleLinkElement}
           onUnlinkElement={handleUnlinkElement}
+          onBulkLinkSelected={handleBulkLinkSelectedToActivity}
+          onBulkUnlinkSelected={handleBulkUnlinkSelectedFromActivity}
           onAssignProfile={handleAssignProfile}
         />
       </div>
