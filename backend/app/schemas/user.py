@@ -54,4 +54,5 @@ class CurrentUserSummaryResponse(BaseModel):
     role: str
     is_super_user: bool
     last_active_at: datetime | None
+    total_active_seconds: int
     created_at: datetime

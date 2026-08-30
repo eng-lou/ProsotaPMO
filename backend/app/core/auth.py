@@ -75,6 +75,19 @@ async def get_current_user(
 # enough to be useful while making the write rare in practice.
 _LAST_ACTIVE_THROTTLE = timedelta(minutes=5)
 
+# Access Manager "time spent" (2026-08-30, per Maro: "i also want to see
+# how long they've spent on the app") — accumulates onto this same
+# throttled heartbeat rather than a separate session table, since there's
+# no logout event to close one against (JWT auth is stateless). Each time
+# the throttle above lets a heartbeat through, the gap since the
+# *previous* one is added to total_active_seconds only if it's small
+# enough to plausibly be continuous use; a gap bigger than this means they
+# were away, so that heartbeat credits just the throttle interval itself
+# (a floor estimate for "at least been active since this fired") rather
+# than the whole, mostly-idle gap. Coarse by design, same "glance, not an
+# audit log" framing as last_active_at itself.
+_ACTIVE_GAP_CAP = timedelta(minutes=30)
+
 
 def _is_super_user_email(email: str) -> bool:
     bootstrap = {e.strip().lower() for e in settings.super_user_emails.split(",") if e.strip()}
@@ -172,6 +185,10 @@ async def get_db_user(
             dirty = True
         now = datetime.now(timezone.utc)
         if user.last_active_at is None or now - user.last_active_at > _LAST_ACTIVE_THROTTLE:
+            if user.last_active_at is not None:
+                gap = now - user.last_active_at
+                credit = gap if gap <= _ACTIVE_GAP_CAP else _LAST_ACTIVE_THROTTLE
+                user.total_active_seconds += int(credit.total_seconds())
             user.last_active_at = now
             dirty = True
         if dirty:

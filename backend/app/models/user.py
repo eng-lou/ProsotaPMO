@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +35,11 @@ class User(Base, TimestampMixin):
     # get_db_user (only rewritten if >5 min stale) so this stays a rare
     # write, not one on every single request; NULL means never recorded yet.
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Access Manager "time spent" (2026-08-30) — a running total accumulated
+    # onto last_active_at's own throttled heartbeat in get_db_user, not a
+    # session table (no logout event exists to close one against). See that
+    # function's own comment for the accumulation heuristic.
+    total_active_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Feedback ticket unread-notification tracking (2026-08-28) — set to
     # now() whenever this user opens the Feedback panel (POST
     # /feedback-tickets/mark-read); "unread" is computed by comparing this

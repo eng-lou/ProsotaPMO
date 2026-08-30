@@ -19,6 +19,7 @@ interface CurrentUserSummary {
   role: string
   is_super_user: boolean
   last_active_at: string | null
+  total_active_seconds: number
   created_at: string
 }
 
@@ -50,6 +51,21 @@ function formatRelative(iso: string) {
   return `${Math.floor(months / 12)}y ago`
 }
 
+// Total time spent in the app, all-time (2026-08-30, per Maro: "i also
+// want to see how long they've spent on the app") — accumulated
+// server-side from a throttled activity heartbeat (see get_db_user in
+// app/core/auth.py), not a precise session log, so this stays similarly
+// coarse to formatRelative above: at most two units, biggest first.
+function formatDuration(totalSeconds: number): string {
+  if (totalSeconds < 60) return '<1m'
+  const mins = Math.floor(totalSeconds / 60)
+  const hours = Math.floor(mins / 60)
+  const days = Math.floor(hours / 24)
+  if (days > 0) return `${days}d ${hours % 24}h`
+  if (hours > 0) return `${hours}h ${mins % 60}m`
+  return `${mins}m`
+}
+
 // Super-user-only admin panel (2026-08-25, trial/beta access gate; renamed
 // and moved 2026-08-27 per Maro — was "Access requests" in the Sidebar,
 // only reachable once inside a project; now "Access Manager" on the
@@ -57,7 +73,8 @@ function formatRelative(iso: string) {
 // a project one, and a super user shouldn't need to already be in a
 // project to review who has access). Two sections: pending requests
 // (Approve/Deny, unchanged from the original panel) and a roster of
-// everyone already approved, with when they last used the app.
+// everyone already approved, with when they last used the app and (2026-
+// 08-30, per Maro) how long they've spent in it all-time.
 export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
   const [requests, setRequests] = useState<PendingUser[] | null>(null)
   const [currentUsers, setCurrentUsers] = useState<CurrentUserSummary[] | null>(null)
@@ -203,6 +220,9 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
                   ) : (
                     <p className="text-xs text-gray-400 dark:text-prosota-muted italic">Never</p>
                   )}
+                  <p className="text-[10px] text-gray-400 dark:text-prosota-muted mt-0.5" title="Total time spent in the app, all-time — a coarse estimate, not a precise audit log">
+                    {formatDuration(u.total_active_seconds)} total
+                  </p>
                 </div>
               </div>
             ))}
