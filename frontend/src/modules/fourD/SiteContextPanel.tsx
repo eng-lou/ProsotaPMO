@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { SiteContext } from './siteContext'
+import { useEffect, useState } from 'react'
+import { parseCoordinate, parseCoordinatePair, type SiteContext } from './siteContext'
 
 type SiteContextPatch = Partial<Pick<SiteContext,
   'enabled' | 'lat' | 'lon' | 'label' | 'offset_x' | 'offset_y' | 'offset_z' | 'offset_yaw_deg' | 'scale'
@@ -24,6 +24,10 @@ interface Props {
 // than wiring the existing Move gizmo to a layer that isn't an "imported
 // object." Worth revisiting only if nudging numbers turns out too fiddly
 // in practice.
+function formatCoord(v: number | null): string {
+  return v === null ? '' : String(v)
+}
+
 export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }: Props) {
   const [keyDraft, setKeyDraft] = useState(apiKey ?? '')
   const [savingKey, setSavingKey] = useState(false)
@@ -35,6 +39,44 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }:
     } finally {
       setSavingKey(false)
     }
+  }
+
+  // Latitude/Longitude as free text, not a controlled `type="number"` bound
+  // straight to ctx.lat/lon (2026-08-30, per Maro: "input the latitude/
+  // longitude in this format too 51°21'30.86"N 0°26'33.93"E") — a DMS
+  // string is several characters long and only parses once it's complete,
+  // so a value bound directly to ctx (which only updates once a parse
+  // actually succeeds) would snap back to the last valid number after every
+  // keystroke that doesn't parse on its own, making it impossible to type
+  // one at all. These drafts hold whatever's actually been typed; parsing
+  // (parseCoordinate/parseCoordinatePair below) only happens on blur, once
+  // there's a complete value to parse — not per keystroke like the rest of
+  // this panel's plain numeric fields.
+  const [latDraft, setLatDraft] = useState(() => formatCoord(ctx.lat))
+  const [lonDraft, setLonDraft] = useState(() => formatCoord(ctx.lon))
+  useEffect(() => { setLatDraft(formatCoord(ctx.lat)) }, [ctx.lat])
+  useEffect(() => { setLonDraft(formatCoord(ctx.lon)) }, [ctx.lon])
+
+  // A pair pasted into either field sets both at once (matching how
+  // Google Maps' own "Copy coordinates" gives you both together); a single
+  // coordinate — DMS or plain decimal — sets just the field it was typed
+  // into. Anything unparseable reverts the draft rather than sending
+  // garbage to onUpdate.
+  const commitLat = () => {
+    const pair = parseCoordinatePair(latDraft)
+    if (pair) { onUpdate({ lat: pair.lat, lon: pair.lon }); setLatDraft(formatCoord(pair.lat)); setLonDraft(formatCoord(pair.lon)); return }
+    if (latDraft.trim() === '') { onUpdate({ lat: null }); return }
+    const value = parseCoordinate(latDraft)
+    if (value !== null) { onUpdate({ lat: value }); setLatDraft(formatCoord(value)) }
+    else setLatDraft(formatCoord(ctx.lat))
+  }
+  const commitLon = () => {
+    const pair = parseCoordinatePair(lonDraft)
+    if (pair) { onUpdate({ lat: pair.lat, lon: pair.lon }); setLatDraft(formatCoord(pair.lat)); setLonDraft(formatCoord(pair.lon)); return }
+    if (lonDraft.trim() === '') { onUpdate({ lon: null }); return }
+    const value = parseCoordinate(lonDraft)
+    if (value !== null) { onUpdate({ lon: value }); setLonDraft(formatCoord(value)) }
+    else setLonDraft(formatCoord(ctx.lon))
   }
 
   return (
@@ -87,23 +129,30 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }:
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-20 shrink-0">Latitude</span>
             <input
-              type="number" step="any" value={ctx.lat ?? ''}
-              onChange={e => onUpdate({ lat: e.target.value === '' ? null : Number(e.target.value) })}
+              type="text" inputMode="decimal" placeholder={`51.358572 or 51°21'30.86"N`}
+              value={latDraft}
+              onChange={e => setLatDraft(e.target.value)}
+              onBlur={commitLat}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
               className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <span className="w-20 shrink-0">Longitude</span>
             <input
-              type="number" step="any" value={ctx.lon ?? ''}
-              onChange={e => onUpdate({ lon: e.target.value === '' ? null : Number(e.target.value) })}
+              type="text" inputMode="decimal" placeholder={`0.442758 or 0°26'33.93"E`}
+              value={lonDraft}
+              onChange={e => setLonDraft(e.target.value)}
+              onBlur={commitLon}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
               className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
         </div>
 
         <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
-          The tiles land near the model automatically; nudge these until they line up.
+          The tiles land near the model automatically; nudge these until they line up. Either
+          field also accepts a full DMS pair pasted in one go — e.g. 51°21'30.86"N 0°26'33.93"E.
         </p>
         <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           {(['offset_x', 'offset_y', 'offset_z'] as const).map((field, i) => (
