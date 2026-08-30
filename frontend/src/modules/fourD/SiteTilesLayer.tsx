@@ -141,15 +141,19 @@ export function SiteTilesLayer({ apiKey, ctx, upAxis }: Props) {
   // instance) since a tileset's own `3DTILES_ellipsoid` extension can
   // override it — re-applied on 'load-tileset' for exactly that case,
   // same pattern 3d-tiles-renderer's own EastNorthUpFrame component uses
-  // internally.
+  // internally. getEastNorthUpFrame's third argument is real-world height
+  // above the ellipsoid at that lat/lon (2026-08-30, per Maro: "add
+  // elevation input" — previously always 0/sea level regardless of the
+  // site's actual altitude).
   useEffect(() => {
     if (!tiles || ctx.lat === null || ctx.lon === null) return
     const lat = ctx.lat
     const lon = ctx.lon
+    const elevation = ctx.elevation
     const recentre = () => {
       const matrix = new THREE.Matrix4()
       tiles.ellipsoid.getEastNorthUpFrame(
-        THREE.MathUtils.degToRad(lat), THREE.MathUtils.degToRad(lon), 0, matrix,
+        THREE.MathUtils.degToRad(lat), THREE.MathUtils.degToRad(lon), elevation, matrix,
       )
       tiles.group.matrix.copy(matrix).invert()
       tiles.group.matrixAutoUpdate = false
@@ -181,7 +185,7 @@ export function SiteTilesLayer({ apiKey, ctx, upAxis }: Props) {
         // left to actually unsubscribe from.
       }
     }
-  }, [tiles, ctx.lat, ctx.lon])
+  }, [tiles, ctx.lat, ctx.lon, ctx.elevation])
 
   if (ctx.lat === null || ctx.lon === null) return null
 

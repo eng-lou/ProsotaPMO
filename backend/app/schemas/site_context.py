@@ -11,6 +11,7 @@ class SiteContextUpsert(BaseModel):
     enabled: bool = False
     lat: float | None = Field(default=None, ge=-90, le=90)
     lon: float | None = Field(default=None, ge=-180, le=180)
+    elevation: float = 0.0
     label: str | None = Field(default=None, max_length=300)
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -30,6 +31,7 @@ class SiteContextResponse(BaseModel):
     enabled: bool
     lat: float | None
     lon: float | None
+    elevation: float
     label: str | None
     offset_x: float
     offset_y: float

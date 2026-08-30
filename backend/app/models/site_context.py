@@ -44,6 +44,12 @@ class SiteContext(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Real-world height above the WGS84 ellipsoid, metres, at lat/lon — fed
+    # straight into getEastNorthUpFrame's own height parameter
+    # (SiteTilesLayer.tsx), previously hardcoded to 0. Distinct from
+    # offset_z below, which is a manual local-scene-unit nudge applied on
+    # top of this recentre, not a real-world value.
+    elevation: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     # Free text shown as the panel's own heading — e.g. a site address or
     # "Site boundary," not parsed/validated, purely a label for the
     # planner's own reference.

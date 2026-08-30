@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { parseCoordinate, parseCoordinatePair, type SiteContext } from './siteContext'
 
 type SiteContextPatch = Partial<Pick<SiteContext,
-  'enabled' | 'lat' | 'lon' | 'label' | 'offset_x' | 'offset_y' | 'offset_z' | 'offset_yaw_deg' | 'scale'
+  'enabled' | 'lat' | 'lon' | 'elevation' | 'label' | 'offset_x' | 'offset_y' | 'offset_z' | 'offset_yaw_deg' | 'scale'
 >>
 
 interface Props {
@@ -56,6 +56,27 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }:
   const [lonDraft, setLonDraft] = useState(() => formatCoord(ctx.lon))
   useEffect(() => { setLatDraft(formatCoord(ctx.lat)) }, [ctx.lat])
   useEffect(() => { setLonDraft(formatCoord(ctx.lon)) }, [ctx.lon])
+
+  // Elevation needs the same blur-committed draft as lat/lon above, for a
+  // different reason (2026-08-30 fix, found live-testing "add elevation
+  // input" itself) — every OTHER plain numeric field in this panel
+  // (offset_x/y/z, rotation, scale) fires onUpdate on every keystroke via a
+  // value bound straight to ctx, same as this field started out. That's
+  // fine only because a human typing rarely outruns one save round-trip
+  // per digit; typed fast enough (or against enough latency) that a
+  // response for an early keystroke lands *after* a later one, its
+  // now-stale ctx value re-renders the controlled input and truncates
+  // whatever's been typed since — reproduced live typing "42.7" into
+  // Elevation and getting "4". The other numeric fields below share this
+  // same latent bug (pre-existing, not introduced here) but are out of
+  // scope for this fix.
+  const [elevDraft, setElevDraft] = useState(() => String(ctx.elevation))
+  useEffect(() => { setElevDraft(String(ctx.elevation)) }, [ctx.elevation])
+  const commitElevation = () => {
+    const value = Number(elevDraft)
+    if (elevDraft.trim() !== '' && Number.isFinite(value)) { onUpdate({ elevation: value }); setElevDraft(String(value)) }
+    else setElevDraft(String(ctx.elevation))
+  }
 
   // A pair pasted into either field sets both at once (matching how
   // Google Maps' own "Copy coordinates" gives you both together); a single
@@ -148,11 +169,24 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }:
               className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
+            <span className="w-20 shrink-0">Elevation</span>
+            <input
+              type="number" step="any" value={elevDraft}
+              onChange={e => setElevDraft(e.target.value)}
+              onBlur={commitElevation}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
+            />
+            <span className="text-gray-400 dark:text-prosota-muted">m</span>
+          </label>
         </div>
 
         <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
           The tiles land near the model automatically; nudge these until they line up. Either
-          field also accepts a full DMS pair pasted in one go — e.g. 51°21'30.86"N 0°26'33.93"E.
+          lat/lon field also accepts a full DMS pair pasted in one go — e.g.
+          51°21'30.86"N 0°26'33.93"E. Elevation is real-world height above the ellipsoid, in
+          metres — leave at 0 for sea level.
         </p>
         <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
           {(['offset_x', 'offset_y', 'offset_z'] as const).map((field, i) => (

@@ -17,6 +17,11 @@ export interface SiteContext {
   enabled: boolean
   lat: number | null
   lon: number | null
+  // Real-world height above the WGS84 ellipsoid, metres, at lat/lon — see
+  // SiteTilesLayer.tsx's own recentre effect for where this actually feeds
+  // in. Distinct from offset_z below, a manual local-scene-unit nudge on
+  // top of that recentre, not a real-world value.
+  elevation: number
   label: string | null
   // Manual nudge on top of the tileset's own real-world recentre
   // (SiteTilesLayer.tsx) — local scene units/degrees, not a two-point

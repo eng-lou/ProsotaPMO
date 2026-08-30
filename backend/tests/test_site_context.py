@@ -14,6 +14,7 @@ async def test_get_returns_default_when_nothing_saved(client: AsyncClient, proje
     assert default["enabled"] is False
     assert default["lat"] is None
     assert default["lon"] is None
+    assert default["elevation"] == 0.0
     assert default["label"] is None
     assert default["offset_x"] == 0.0
     assert default["offset_y"] == 0.0
@@ -27,6 +28,7 @@ async def test_upsert_creates_then_updates_the_same_row(client: AsyncClient, pro
         "project_id": str(project.id),
         "enabled": True,
         "lat": 51.5007, "lon": -0.1246,
+        "elevation": 42.7,
         "label": "Site boundary",
         "offset_x": 12.5, "offset_y": 0.0, "offset_z": -4.2,
         "offset_yaw_deg": 37.5,
@@ -38,6 +40,7 @@ async def test_upsert_creates_then_updates_the_same_row(client: AsyncClient, pro
     assert created["enabled"] is True
     assert created["lat"] == 51.5007
     assert created["lon"] == -0.1246
+    assert created["elevation"] == 42.7
     assert created["label"] == "Site boundary"
     assert created["offset_x"] == 12.5
     assert created["offset_z"] == -4.2
@@ -55,6 +58,7 @@ async def test_upsert_creates_then_updates_the_same_row(client: AsyncClient, pro
     # whole payload (unlike Radial Chart/Zone's own PATCH), so an omitted
     # field falls back to its schema default rather than staying set.
     assert updated["lat"] is None
+    assert updated["elevation"] == 0.0
     assert updated["offset_x"] == 0.0
     assert updated["scale"] == 1.0
 
