@@ -414,10 +414,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     try {
       setLinkError(null)
       await deleteModelElementLink(linkId)
-      setModelElementLinks(prev => prev.filter(l => l.id !== linkId))
     } catch (err) {
-      setLinkError(err instanceof Error ? err.message : 'Failed to remove link')
+      // 404 = already gone — a benign no-op (this is exactly the state the
+      // user wants), same treatment createModelElementLink's own 409
+      // already gets below. Real gap this closes (2026-08-30, per Maro:
+      // saw a raw "Request failed with status code 404" banner) — a
+      // second click on the same unlink before the first round-trip
+      // finishes hits this every time, and the local list splice below
+      // still needs to run either way so state actually converges.
+      if (!(axios.isAxiosError(err) && err.response?.status === 404)) {
+        setLinkError(err instanceof Error ? err.message : 'Failed to remove link')
+        return
+      }
     }
+    setModelElementLinks(prev => prev.filter(l => l.id !== linkId))
   }
 
   // Bulk Activity Link (2026-08-30, per Maro: "I selected multiple elements,
@@ -470,6 +480,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         await deleteModelElementLink(link.id)
         removedIds.add(link.id)
       } catch (err) {
+        // 404 = already gone (e.g. a second click on Unlink Selected before
+        // the first round of deletes finished — 38 sequential requests take
+        // a real, noticeable few seconds, a plausible window to click
+        // again) — same benign-no-op treatment as the single-element
+        // unlink above, and still counts as "removed" here so the local
+        // list actually converges instead of hanging onto a row the server
+        // no longer has.
+        if (axios.isAxiosError(err) && err.response?.status === 404) { removedIds.add(link.id); continue }
         setLinkError(err instanceof Error ? err.message : 'Failed to unlink some elements from the activity')
       }
     }
