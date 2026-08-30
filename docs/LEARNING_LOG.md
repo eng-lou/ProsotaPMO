@@ -4691,3 +4691,56 @@ identical "first/last in array order" flaw standing in for "chronologically
 next/previous" — true only by coincidence, and wrong whenever the WBS
 tree's own branch ordering diverges from the schedule's actual date order,
 which is most of the time. Confirmed working live after this round.
+
+---
+
+## 2026-08-30 — Two smaller, unrelated fixes: print views in dark mode, and an autosaving activity panel
+
+**Print views were nearly unreadable in dark mode.** Maro sent a
+screenshot of the Bill of Quantities print preview — almost every row was
+faint gray on white, barely legible. Root cause: `html.dark body { color:
+#E6EDF7 }` (a fix from the 2026-08-03 dark-mode pass, for text that had no
+explicit color class of its own) cascades by inheritance into every
+`*PrintView.tsx` component too — and those always render a fixed white
+"printed page" regardless of the app's own theme, with none of them
+setting their own base text color (they'd always relied on the plain
+browser default). So a bare, unstyled `<td>` in a print view inherited the
+near-white dark-mode color and went nearly invisible against the white
+page, while cells with their own explicit `text-gray-...` class survived
+(a direct rule always beats an inherited one). Fixed by giving
+`.print-only` its own dark-mode override, restoring the same near-black
+default it already renders correctly with in light mode — scoped broadly
+enough (`.print-only`, not just the BOQ one) that it fixed every print
+view in the app in one pass, not just the one that got reported.
+
+**The activity bottom panel dropped its Cancel/Save buttons for
+autosave** ("remove the cancel/save in activity bottom panel. changes are
+automatic"). Rather than inventing a new save cadence, mirrored the real
+Activities grid's own existing `commitEdit` convention: a typed field
+saves on blur, a select/dropdown saves immediately on change. Scoped to
+the embedded (bottom-panel, always-editing-an-existing-activity) case
+only — the standalone "+ Add Activity" dialog path still needs an
+explicit Create/Cancel, since there's nothing to autosave against while
+composing a brand-new record (though in practice, "+ Add Activity" today
+creates the record immediately and opens it in the same autosaving
+embedded panel, so that dialog path turned out to be dead code already).
+
+**Live-verified the autosave, and found a real bug in my own testing
+along the way, not the app.** Confirmed via the network tab that editing
+% Complete (a blur-saving field) and Constraint Type (a change-saving
+select) both actually PATCHed the backend and survived a page reload —
+but the very first attempt at editing % Complete via clicking raw pixel
+coordinates silently did nothing (the click missed the actual input), and
+a follow-up Tab press then landed focus on the *first* focusable field in
+the form instead, which could easily have been misread as "autosave
+doesn't work" if the network tab hadn't been checked. Switched to
+clicking elements by their accessibility-tree ref instead of guessed
+coordinates, which fixed it immediately. Separately, testing the
+"+ Add Activity" flow by typing "New Activity" into what turned out to
+still be a *button's* focus (not the search box the click was aimed at)
+triggered two extra accidental activity creations — a space character in
+that string activates a focused button exactly like a real click, so
+typing it into the wrong target fired the button twice more. Caught via
+the activity count going from 108 to 111, found and deleted the three
+stray rows through the app's own (non-native, safe-to-automate) delete
+confirmation, and confirmed the count was back to 108 afterward.
