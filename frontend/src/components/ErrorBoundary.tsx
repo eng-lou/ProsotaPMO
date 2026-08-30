@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { isStaleChunkError, reloadOnceForStaleChunk } from '@/lib/staleChunkReload'
 
 interface Props {
   children: ReactNode
@@ -22,6 +23,16 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Uncaught render error:', error, info.componentStack)
+    // Fallback path for a stale post-deploy chunk 404 (see
+    // staleChunkReload.ts's own header) — the primary path is that file's
+    // `vite:preloadError` listener, installed in main.tsx; this catches it
+    // here too in case some dynamic import fails without going through
+    // Vite's own preload machinery. reloadOnceForStaleChunk reloads the
+    // tab immediately if it hasn't already tried once this session, so the
+    // static "Something went wrong" UI below never actually gets seen for
+    // this specific case — it stays as the fallback for every other kind
+    // of render error, which this isn't.
+    if (isStaleChunkError(error)) reloadOnceForStaleChunk()
   }
 
   render() {

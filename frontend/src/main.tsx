@@ -3,9 +3,16 @@ import ReactDOM from 'react-dom/client'
 import { Auth0Provider } from '@auth0/auth0-react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { installStaleChunkReload } from './lib/staleChunkReload'
 import { queryClient } from './lib/query'
 import App from './App'
 import './index.css'
+
+// Stale-deploy chunk recovery (2026-08-30, per Maro hitting "Failed to
+// fetch dynamically imported module" live on prosota.com) — see
+// staleChunkReload.ts's own header for the full explanation. Installed
+// before the render call so it's listening from the very first paint.
+installStaleChunkReload()
 
 // Auth0Provider is deliberately OUTSIDE StrictMode, not inside it. StrictMode
 // intentionally double-invokes effects in development, and Auth0Provider's
