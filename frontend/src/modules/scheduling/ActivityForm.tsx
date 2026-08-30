@@ -105,6 +105,39 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
   const set = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) =>
     setValues(v => ({ ...v, [key]: value }))
 
+  // Compared against the form's own initial snapshot (not the raw activity object) —
+  // constraint_date/actual_* are datetime-local values truncated to the minute, while
+  // the activity carries full ISO datetimes with seconds; comparing against the raw
+  // activity would flag every untouched datetime field as "changed". Takes an explicit
+  // snapshot (rather than always reading `values`) so an auto-saving select's onChange
+  // can check the *new* value it's about to commit, not the not-yet-flushed old one.
+  const hasTriggerChangesFor = (snapshot: ActivityFormValues) => activity !== null && REASSESSMENT_TRIGGER_FIELDS.some(
+    field => (initialValues[field] ?? '') !== (snapshot[field] ?? '')
+  )
+
+  // Auto-save for the embedded/bottom-panel case only (2026-08-30, per Maro:
+  // "remove the cancel/save in activity bottom panel. changes are
+  // automatic") — the standalone "+ Add Activity" dialog (embedded=false)
+  // still needs an explicit Create/Cancel, since there's no existing record
+  // to autosave against while composing a brand-new one. Mirrors the real
+  // Activities grid's own commitEdit convention (Scheduling.tsx): a typed
+  // field saves on blur, not on every keystroke; a select/dropdown saves
+  // immediately on change, since there's no "still typing" state for one.
+  const commitValues = async (nextValues: ActivityFormValues) => {
+    setSubmitting(true)
+    try {
+      await onSubmit(nextValues, hasTriggerChangesFor(nextValues) && reassessmentNote.trim() ? reassessmentNote.trim() : null)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+  const setAndCommit = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) => {
+    const next = { ...values, [key]: value }
+    setValues(next)
+    if (embedded) void commitValues(next)
+  }
+  const commitOnBlur = () => { if (embedded) void commitValues(values) }
+
   const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
   // See toActivityPayload's own needsNoDate — alap needs no date either.
@@ -114,22 +147,11 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
   // not the (freely, but ineffectively) editable Type dropdown.
   const isParent = activity?.activity_type === 'wbs_summary'
 
-  // Compared against the form's own initial snapshot (not the raw activity object) —
-  // constraint_date/actual_* are datetime-local values truncated to the minute, while
-  // the activity carries full ISO datetimes with seconds; comparing against the raw
-  // activity would flag every untouched datetime field as "changed".
-  const hasTriggerChanges = activity !== null && REASSESSMENT_TRIGGER_FIELDS.some(
-    field => (initialValues[field] ?? '') !== (values[field] ?? '')
-  )
+  const hasTriggerChanges = hasTriggerChangesFor(values)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setSubmitting(true)
-    try {
-      await onSubmit(values, hasTriggerChanges && reassessmentNote.trim() ? reassessmentNote.trim() : null)
-    } finally {
-      setSubmitting(false)
-    }
+    await commitValues(values)
   }
 
   return (
@@ -142,6 +164,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
         <input
           value={values.task_name}
           onChange={e => set('task_name', e.target.value)}
+          onBlur={commitOnBlur}
           required
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
         />
@@ -154,7 +177,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           value={values.activity_type}
           disabled={isParent}
           title={isParent ? 'A WBS/Project summary is set automatically by having children, not manually chosen — remove them to change this' : undefined}
-          onChange={e => set('activity_type', e.target.value as ActivityType)}
+          onChange={e => setAndCommit('activity_type', e.target.value as ActivityType)}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
@@ -172,6 +195,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           disabled={isMilestone || isParent}
           title={isParent ? 'Rolled up from this WBS/Project summary\'s own children — outdent or remove them to edit this directly' : undefined}
           onChange={e => set('duration_days', e.target.value)}
+          onBlur={commitOnBlur}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
@@ -240,6 +264,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           disabled={isParent}
           title={isParent ? 'A weighted average of this WBS/Project summary\'s own children\'s % Complete' : undefined}
           onChange={e => set('pct_complete', e.target.value)}
+          onBlur={commitOnBlur}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
@@ -251,7 +276,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           value={values.constraint_type}
           disabled={isParent}
           title={isParent ? 'Not used for a WBS/Project summary — demote it to a task (remove its children) to set a constraint' : undefined}
-          onChange={e => set('constraint_type', e.target.value as ConstraintType | '')}
+          onChange={e => setAndCommit('constraint_type', e.target.value as ConstraintType | '')}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           {CONSTRAINT_TYPES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
@@ -264,6 +289,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           value={needsNoDate ? '' : values.constraint_date}
           disabled={needsNoDate || isParent}
           onChange={e => set('constraint_date', e.target.value)}
+          onBlur={commitOnBlur}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
@@ -275,7 +301,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           value={values.calendar_id}
           disabled={isParent}
           title={isParent ? 'Not used for a WBS/Project summary — it isn\'t part of the CPM network itself' : undefined}
-          onChange={e => set('calendar_id', e.target.value)}
+          onChange={e => setAndCommit('calendar_id', e.target.value)}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         >
           <option value="">(inherit project default)</option>
@@ -292,6 +318,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           type="datetime-local"
           value={values.suspend_date}
           onChange={e => set('suspend_date', e.target.value)}
+          onBlur={commitOnBlur}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
         />
       </div>
@@ -301,6 +328,7 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           type="datetime-local"
           value={values.resume_date}
           onChange={e => set('resume_date', e.target.value)}
+          onBlur={commitOnBlur}
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
         />
       </div>
@@ -312,20 +340,28 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           <textarea
             value={reassessmentNote}
             onChange={e => setReassessmentNote(e.target.value)}
+            onBlur={commitOnBlur}
             className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
             rows={2}
             placeholder="e.g. Duration extended from 5 to 8 days following a revised piling sequence."
           />
         </div>
       )}
-      <div className="col-span-2 flex gap-2 justify-end">
-        <button type="button" onClick={onCancel} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
-          Cancel
-        </button>
-        <button type="submit" disabled={submitting} className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50">
-          {activity ? 'Save' : 'Create'}
-        </button>
-      </div>
+      {/* Embedded/bottom-panel mode auto-saves per-field (see commitOnBlur/
+          setAndCommit above) — no Cancel/Save here; the panel's own header
+          already has a ✕ to close it (Scheduling.tsx). The standalone
+          "+ Add Activity" dialog still needs both, since nothing exists to
+          autosave against until Create is actually pressed. */}
+      {!embedded && (
+        <div className="col-span-2 flex gap-2 justify-end">
+          <button type="button" onClick={onCancel} className="text-sm px-4 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
+            Cancel
+          </button>
+          <button type="submit" disabled={submitting} className="text-sm px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50">
+            {activity ? 'Save' : 'Create'}
+          </button>
+        </div>
+      )}
     </form>
   )
 }
