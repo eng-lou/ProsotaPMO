@@ -25,6 +25,23 @@ html.dark body {
   display: none;
 }
 
+/* Undo the dark-mode default text color (immediately above) inside printable
+   views (2026-08-30 fix, per Maro — checked a print preview in dark mode and
+   found most of the text nearly invisible). Every *Print View.tsx component
+   renders a fixed white "printed page" regardless of the app's own theme —
+   none of them set their own base text color, so they've always relied on
+   the plain (unset/black) browser default for their bare, unstyled cells.
+   `html.dark body`'s own color is inherited straight through into that white
+   page too, though, since inheritance only stops at the nearest ancestor
+   with its own directly-matching rule — and `.print-only` never had one.
+   This gives it one, restoring the same near-black default the print views
+   already render correctly with in light mode; any cell with its own
+   explicit text-gray-.../font-* color class is still unaffected, for the
+   same reason the original rule doesn't touch already-themed text either. */
+html.dark .print-only {
+  color: #111827;
+}
+
 /* Solid column separators for the Scheduling activity grid (2026-07-05, per
    Maro — columns ran together with no visible divider). Scoped by class
    rather than repeated on every <td>/<th> in the JSX, since there are 20+
