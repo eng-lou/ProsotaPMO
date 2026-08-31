@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
+import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { buildCalendarLookup, resolveHoursPerDay } from '@/modules/scheduling/durationDisplay'
@@ -3110,14 +3111,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleRunClashTest = async (testId: string) => {
+  // Returns the updated ClashTest (2026-09-01, additive — every existing
+  // caller already ignores the return value, so this can't change any
+  // existing behaviour) so Poe's own run_clash_detection client tool
+  // (see aiFourDBridge.tsx) can report real results back without racing
+  // React's own async state-update timing to read setClashTests' effect
+  // back out of the `clashTests` closure.
+  const handleRunClashTest = async (testId: string): Promise<ClashTest | undefined> => {
     const test = clashTests.find(t => t.id === testId)
-    if (!test) return
+    if (!test) return undefined
     const collectionA = collections.find(c => c.id === test.group_a_collection_id)
     const collectionB = collections.find(c => c.id === test.group_b_collection_id)
     if (!collectionA || !collectionB) {
       setClashError('One of this test\'s Collections no longer exists — pick new ones (delete and recreate the test)')
-      return
+      return undefined
     }
     setClashError(null)
     setClashRunProgress({ testId, done: 0, total: 0 })
@@ -3144,8 +3151,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }))
       const updated = await replaceClashResults(testId, pairs)
       setClashTests(prev => prev.map(t => (t.id === testId ? updated : t)))
+      return updated
     } catch (err) {
       setClashError(clashErrorMessage(err, 'Failed to run clash test'))
+      return undefined
     } finally {
       setClashRunProgress(null)
     }
@@ -6926,6 +6935,111 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onMeasurementHoverPoint={setMeasurementHoverPoint}
     />
   )
+
+  // Poe 4D client tools (2026-09-01) — registers highlight_elements/
+  // isolate_elements/color_by_criteria/run_clash_detection into the shared
+  // bridge (see aiFourDBridge.tsx's own header for why this is a registry,
+  // not a normal top-down Context) whenever this module is mounted, and
+  // unregisters on unmount — Poe only ever offers these tool names to the
+  // model while a real handler exists (PoePanel.tsx's own
+  // client_tools_available), so leaving 4D can't leave a stale, no-longer-
+  // working tool callable. Placed before the `if (!selectedProject)` early
+  // return below, not after — a hook can never come after a conditional
+  // return without breaking React's own rules of hooks.
+  //
+  // highlight/isolate reuse resolveActivityLinksToIsolationTargets
+  // (linkedElements.ts, already imported above) verbatim — the exact same
+  // activity-id -> objectIds/expressIds resolver "Isolate Linked Elements"
+  // already uses — then drive the same selectedObjectIds/selectedExpressIds
+  // or isolatedObjectIds/isolatedExpressIds/isolateMode state a manual
+  // click already would (checked directly against this file's own
+  // declarations, not assumed). color_by_criteria is scoped to the two
+  // real modes this app has (showVarianceColors/showClashColors on
+  // settings) — there's no generic colour-by-arbitrary-criteria system to
+  // hook into. run_clash_detection reuses handleRunClashTest verbatim
+  // (that function's own header explains why it now returns the updated
+  // ClashTest) rather than re-implementing clash geometry here — it runs
+  // whichever test was most recently created if more than one exists,
+  // since this tool's own input takes no arguments to disambiguate.
+  const aiFourDBridge = useAiFourDBridge()
+  useEffect(() => {
+    if (!aiFourDBridge) return
+
+    const resolveActivityIdsByNameOrCode = (names: string[]): Set<string> => {
+      const wanted = new Set(names.map(n => n.trim().toLowerCase()))
+      const ids = new Set<string>()
+      for (const a of activities) {
+        if (wanted.has(a.task_name.trim().toLowerCase()) || wanted.has(a.code.trim().toLowerCase())) ids.add(a.id)
+      }
+      return ids
+    }
+
+    const highlightOrIsolate = async (input: Record<string, unknown>, isolate: boolean) => {
+      const names = Array.isArray(input.activity_names)
+        ? (input.activity_names as unknown[]).filter((n): n is string => typeof n === 'string')
+        : []
+      if (names.length === 0) return { error: 'No activity_names given.' }
+      const activityIds = resolveActivityIdsByNameOrCode(names)
+      if (activityIds.size === 0) return { error: `No activities matched: ${names.join(', ')}` }
+      const targets = await resolveActivityLinksToIsolationTargets(activityIds, modelElementLinks, sceneObjects, ifcHandles)
+      if (targets.objectIds.size === 0) {
+        return { matched_activities: activityIds.size, warning: 'Those activities have no linked 3D elements to show.' }
+      }
+      if (isolate) {
+        setIsolatedObjectIds(targets.objectIds)
+        setIsolatedExpressIds(targets.expressIds)
+        setIsolateMode(true)
+      } else {
+        setSelectedObjectIds(targets.objectIds)
+        setSelectedExpressIds(targets.expressIds)
+      }
+      return {
+        matched_activities: activityIds.size,
+        elements_affected: targets.expressIds.size > 0 ? targets.expressIds.size : targets.objectIds.size,
+      }
+    }
+
+    aiFourDBridge.current.highlight_elements = input => highlightOrIsolate(input, false)
+    aiFourDBridge.current.isolate_elements = input => highlightOrIsolate(input, true)
+
+    aiFourDBridge.current.color_by_criteria = (input: Record<string, unknown>) => {
+      if (input.mode === 'variance') {
+        setSettings({ ...settings, showVarianceColors: true, showClashColors: false })
+        return { applied: 'variance' }
+      }
+      if (input.mode === 'clash') {
+        setSettings({ ...settings, showVarianceColors: false, showClashColors: true })
+        return { applied: 'clash' }
+      }
+      setSettings({ ...settings, showVarianceColors: false, showClashColors: false })
+      return { applied: 'off' }
+    }
+
+    aiFourDBridge.current.run_clash_detection = async () => {
+      if (clashTests.length === 0) {
+        return { error: 'No clash test is configured yet — set up Selection A/B in the Clash Detective panel first.' }
+      }
+      const test = clashTests[clashTests.length - 1]
+      const updated = await handleRunClashTest(test.id)
+      if (!updated) return { error: `Failed to run clash test "${test.name}".` }
+      return {
+        test_name: updated.name,
+        total_results: updated.results.length,
+        unresolved_results: updated.results.filter(r => r.status !== 'approved').length,
+        sample: updated.results.slice(0, 5).map(r => ({
+          a: r.element_a_label, b: r.element_b_label, distance_mm: r.distance_mm, status: r.status,
+        })),
+      }
+    }
+
+    return () => {
+      delete aiFourDBridge.current.highlight_elements
+      delete aiFourDBridge.current.isolate_elements
+      delete aiFourDBridge.current.color_by_criteria
+      delete aiFourDBridge.current.run_clash_detection
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiFourDBridge, activities, modelElementLinks, sceneObjects, ifcHandles, settings, clashTests])
 
   if (!selectedProject) return null
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AiMessage } from '@/lib/aiAssistant'
+import { AiFourDBridgeProvider } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { PoePanel } from './PoePanel'
 import { NAV, Sidebar } from './Sidebar'
@@ -44,33 +45,39 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // across every page), and is only ever lost on a genuine refresh.
   const [poeMessages, setPoeMessages] = useState<AiMessage[]>([])
   return (
-    <div className="flex min-h-screen bg-gray-50 dark:bg-prosota-ink">
-      <Sidebar />
-      {/* Full page-content dark-mode pass (2026-08-03) — every routed page
-          now carries its own dark: variants (see that session's plan), so
-          this can finally follow the outer wrapper's own dark:bg-prosota-ink
-          instead of the light-only bg-gray-50 the original shell-only pass
-          (2026-07-25) deliberately pinned here to avoid dark-on-dark text. */}
-      <main className="flex-1 overflow-auto bg-gray-50 dark:bg-prosota-ink">{children}</main>
-      {selectedProject && !poeOpen && (
-        <button
-          onClick={() => setPoeOpen(true)}
-          aria-label="Open Poe — Planning Optimization Expert"
-          title="Poe — Planning Optimization Expert. Ask about this project's schedule, risk, or ICD status"
-          className="no-print fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-prosota-amber text-prosota-ink pl-4 pr-5 py-3 shadow-lg shadow-black/20 font-display font-semibold text-sm hover:brightness-105 active:brightness-95 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-prosota-amber dark:focus-visible:ring-offset-prosota-ink"
-        >
-          <span aria-hidden="true" className="text-lg leading-none">🪶</span>
-          Poe
-        </button>
-      )}
-      {poeOpen && selectedProject && (
-        <PoePanel
-          projectId={selectedProject.id}
-          onClose={() => setPoeOpen(false)}
-          messages={poeMessages}
-          onMessagesChange={setPoeMessages}
-        />
-      )}
-    </div>
+    // AiFourDBridgeProvider wraps both <main> (where FourD.tsx registers its
+    // own tool handlers when mounted, see aiFourDBridge.tsx's own header on
+    // why this can't be a normal top-down Context) and PoePanel (which
+    // reads them) as siblings under the one shared provider instance.
+    <AiFourDBridgeProvider>
+      <div className="flex min-h-screen bg-gray-50 dark:bg-prosota-ink">
+        <Sidebar />
+        {/* Full page-content dark-mode pass (2026-08-03) — every routed page
+            now carries its own dark: variants (see that session's plan), so
+            this can finally follow the outer wrapper's own dark:bg-prosota-ink
+            instead of the light-only bg-gray-50 the original shell-only pass
+            (2026-07-25) deliberately pinned here to avoid dark-on-dark text. */}
+        <main className="flex-1 overflow-auto bg-gray-50 dark:bg-prosota-ink">{children}</main>
+        {selectedProject && !poeOpen && (
+          <button
+            onClick={() => setPoeOpen(true)}
+            aria-label="Open Poe — Planning Optimization Expert"
+            title="Poe — Planning Optimization Expert. Ask about this project's schedule, risk, or ICD status"
+            className="no-print fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-prosota-amber text-prosota-ink pl-4 pr-5 py-3 shadow-lg shadow-black/20 font-display font-semibold text-sm hover:brightness-105 active:brightness-95 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-prosota-amber dark:focus-visible:ring-offset-prosota-ink"
+          >
+            <span aria-hidden="true" className="text-lg leading-none">🪶</span>
+            Poe
+          </button>
+        )}
+        {poeOpen && selectedProject && (
+          <PoePanel
+            projectId={selectedProject.id}
+            onClose={() => setPoeOpen(false)}
+            messages={poeMessages}
+            onMessagesChange={setPoeMessages}
+          />
+        )}
+      </div>
+    </AiFourDBridgeProvider>
   )
 }

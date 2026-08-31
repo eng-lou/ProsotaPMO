@@ -4,14 +4,17 @@ import ReactMarkdown from 'react-markdown'
 import { ATTACHMENT_NAME_FIELD, prepareAttachment } from '@/lib/aiAttachments'
 import { api } from '@/lib/api'
 import { sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssistant'
+import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 
-// propose_create_risks draft shape (2026-08-31, per Maro's own precedent
-// pointer: "the generate risk register button in risk register") — mirrors
-// backend/app/schemas/risk_bulk_generate.py's own BulkRiskInput field for
-// field, since an approved draft here gets sent to that exact same
-// /risk-bulk-generate/ endpoint, not a bespoke creation path.
+// Proposal draft shapes (2026-08-31/2026-09-01) — each mirrors its own
+// real backend schema field-for-field, since an approved draft gets sent
+// straight to that exact real endpoint, never a bespoke creation path:
+// RiskProposalDraft <-> risk_bulk_generate.py's BulkRiskInput,
+// ActivityProposalDraft/RelationshipProposalDraft <->
+// schedule_bulk_generate.py's BulkActivityInput/BulkRelationshipInput,
+// LinkProposalDraft <-> record_link.py's RecordLinkCreate.
 interface RiskProposalDraft {
   title: string
   category?: string | null
@@ -27,10 +30,40 @@ interface RiskProposalDraft {
   schedule_most_likely_days?: number | null
 }
 
-interface PendingRiskProposal {
-  toolUseId: string
-  risks: RiskProposalDraft[]
+interface ActivityProposalDraft {
+  temp_id: string
+  task_name: string
+  parent_temp_id?: string | null
+  duration_hours?: number | null
+  activity_type?: 'task' | 'start_milestone' | 'finish_milestone'
+  category?: string | null
+  discipline?: string | null
 }
+
+interface RelationshipProposalDraft {
+  predecessor_temp_id: string
+  successor_temp_id: string
+  relationship_type?: string | null
+  lag_hours?: number | null
+}
+
+interface LinkProposalDraft {
+  source_type: string
+  source_id: string
+  target_type: string
+  target_id: string
+  link_type: string
+  note?: string | null
+}
+
+// A discriminated union, not three separate optional fields — only one
+// proposal tool can ever be pending at once (findPendingProposal only
+// looks at the single last message), so "which kind" and "which payload"
+// should never be able to disagree.
+type PendingProposal =
+  | { kind: 'risks'; toolUseId: string; risks: RiskProposalDraft[] }
+  | { kind: 'activities'; toolUseId: string; activities: ActivityProposalDraft[]; relationships: RelationshipProposalDraft[] }
+  | { kind: 'links'; toolUseId: string; links: LinkProposalDraft[] }
 
 // Only the LAST message can hold a genuinely still-pending proposal — the
 // moment one gets resolved, a new user message carrying its tool_result is
@@ -39,14 +72,27 @@ interface PendingRiskProposal {
 // tracking it as separate local state) means it needs no extra
 // bookkeeping to survive Close/reopen — it's already implied by whatever
 // Layout.tsx's own lifted history currently holds.
-function findPendingRiskProposal(messages: AiMessage[]): PendingRiskProposal | null {
+function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
   const last = messages[messages.length - 1]
   if (!last || last.role !== 'assistant') return null
-  const block = last.content.find(b => b.type === 'tool_use' && b.name === 'propose_create_risks')
+  const block = last.content.find(b =>
+    b.type === 'tool_use'
+    && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'),
+  )
   if (!block) return null
-  const input = block.input as { risks?: RiskProposalDraft[] } | undefined
-  if (!input?.risks) return null
-  return { toolUseId: block.id as string, risks: input.risks }
+  const toolUseId = block.id as string
+  const input = block.input as Record<string, unknown>
+  if (block.name === 'propose_create_risks') {
+    return { kind: 'risks', toolUseId, risks: (input.risks as RiskProposalDraft[] | undefined) ?? [] }
+  }
+  if (block.name === 'propose_create_activities') {
+    return {
+      kind: 'activities', toolUseId,
+      activities: (input.activities as ActivityProposalDraft[] | undefined) ?? [],
+      relationships: (input.relationships as RelationshipProposalDraft[] | undefined) ?? [],
+    }
+  }
+  return { kind: 'links', toolUseId, links: (input.links as LinkProposalDraft[] | undefined) ?? [] }
 }
 
 // Poe's own replies are real markdown (headers-as-bold, bullet/numbered
@@ -200,14 +246,29 @@ export function PoePanel({
     id: string; name: string; status: 'preparing' | 'ready' | 'error'; block?: AiContentBlock; error?: string
   }[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  // Which of the pending proposal's own risks are currently checked for
-  // approval (2026-08-31) — transient review-UI state, not conversation
+  // Which items in the pending proposal are currently checked for approval
+  // (2026-08-31/2026-09-01) — transient review-UI state, not conversation
   // history, so it stays local rather than living in Layout.tsx's own
   // lifted `messages`. Defaults to "everything checked" the moment a new
-  // proposal actually appears (below), not on every render.
-  const [selectedRiskIndices, setSelectedRiskIndices] = useState<Set<number>>(new Set())
+  // proposal actually appears (below), not on every render. Shared between
+  // 'risks' and 'links' (both a flat list of independent items, checkbox
+  // per row); 'activities' uses activitiesApproved instead — a schedule
+  // chunk's own relationships reference *other draft activities in the
+  // same proposal* by temp_id, so approving some activities but not others
+  // could leave a relationship dangling on a rejected one. All-or-nothing
+  // is the only choice that can't produce that half-broken state.
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
+  const [activitiesApproved, setActivitiesApproved] = useState(true)
   const [resolvingProposal, setResolvingProposal] = useState(false)
-  const pendingProposal = findPendingRiskProposal(messages)
+  const pendingProposal = findPendingProposal(messages)
+  // 4D client tools (2026-09-01) — see aiFourDBridge.tsx's own header. Only
+  // present (a non-null ref) at all because Layout.tsx wraps this panel in
+  // the same AiFourDBridgeProvider FourD.tsx registers into; the ref's own
+  // *current* contents (which handler names actually exist right now) are
+  // only ever read at the moment a message is sent, never watched
+  // reactively — there's nothing to re-render for when the set of
+  // available tools changes mid-session.
+  const aiFourDBridge = useAiFourDBridge()
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -216,7 +277,10 @@ export function PoePanel({
   }, [onClose])
 
   useEffect(() => {
-    if (pendingProposal) setSelectedRiskIndices(new Set(pendingProposal.risks.map((_, i) => i)))
+    if (!pendingProposal) return
+    if (pendingProposal.kind === 'risks') setSelectedIndices(new Set(pendingProposal.risks.map((_, i) => i)))
+    else if (pendingProposal.kind === 'links') setSelectedIndices(new Set(pendingProposal.links.map((_, i) => i)))
+    else setActivitiesApproved(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingProposal?.toolUseId])
 
@@ -270,6 +334,51 @@ export function PoePanel({
   const readyAttachments = attachments.filter(a => a.status === 'ready' && a.block)
   const hasPendingAttachment = attachments.some(a => a.status === 'preparing')
 
+  // Sends one turn and, if the response comes back with pending_client_tool_calls
+  // (2026-09-01), resolves each via the live 4D bridge and resends — looping
+  // until a turn comes back with none (a normal reply, or a pending
+  // *proposal* instead, which this never touches) or the iteration cap
+  // trips. Shared by handleSend and handleResolveProposal below, both of
+  // which used to call sendChatTurn/onMessagesChange directly with no
+  // client-tool handling at all — that loop didn't exist anywhere before
+  // this, since client_tools_available was always sent empty.
+  //
+  // A handler not existing (aiFourDBridge is null, or this particular tool
+  // name was never registered — e.g. the 4D module got closed between
+  // Poe deciding to call it and this loop actually running) becomes a real
+  // tool_result Poe can see and explain, never a silent drop or a thrown
+  // error — same "a tool failure becomes a tool_result the model sees, not
+  // a 500" convention orchestrator.py's own server-tool dispatch already
+  // follows.
+  const continueConversation = async (startMessages: AiMessage[]) => {
+    let currentMessages = startMessages
+    for (let i = 0; i < 8; i++) {
+      const res = await sendChatTurn({
+        project_id: projectId, schedule_period_id: schedulePeriod?.id ?? null, period_id: period?.id ?? null,
+        messages: currentMessages, client_tools_available: Object.keys(aiFourDBridge?.current ?? {}),
+      })
+      onMessagesChange(res.messages)
+      if (res.pending_client_tool_calls.length === 0) return
+      const handlers = aiFourDBridge?.current ?? {}
+      const toolResults: AiContentBlock[] = []
+      for (const block of res.pending_client_tool_calls) {
+        const name = block.name as string
+        const handler = handlers[name as keyof typeof handlers]
+        let content: unknown
+        try {
+          content = handler
+            ? await handler((block.input as Record<string, unknown>) ?? {})
+            : { error: `${name} isn't available right now — the 4D module may not be open.` }
+        } catch (err) {
+          content = { error: err instanceof Error ? err.message : 'Tool call failed' }
+        }
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(content) })
+      }
+      currentMessages = [...res.messages, { role: 'user', content: toolResults }]
+      onMessagesChange(currentMessages)
+    }
+  }
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
     const text = draft.trim()
@@ -285,14 +394,7 @@ export function PoePanel({
     setSending(true)
     setError(null)
     try {
-      const res = await sendChatTurn({
-        project_id: projectId, schedule_period_id: schedulePeriod?.id ?? null, period_id: period?.id ?? null,
-        messages: nextMessages, client_tools_available: [],
-      })
-      // The backend's own messages array is the new authoritative full
-      // history (it already appended everything it processed internally,
-      // including any tool_use/tool_result turns) — replace, not append.
-      onMessagesChange(res.messages)
+      await continueConversation(nextMessages)
     } catch (err) {
       setError(describeChatError(err))
     } finally {
@@ -300,16 +402,18 @@ export function PoePanel({
     }
   }
 
-  // Resolving a risk proposal (2026-08-31, per Maro's own precedent
-  // pointer: "the generate risk register button in risk register") —
-  // approved drafts go straight to the *same* /risk-bulk-generate/ endpoint
-  // that button already calls, getting its dedupe-by-title and
-  // contingency-rollup behaviour for free rather than a second, bespoke
-  // creation path. Nothing is created at all if every draft was rejected
-  // (an empty risks: [] array is a valid, deliberate no-op call — this app's
-  // own risk_bulk_generate.py already handles zero new risks cleanly,
-  // matching the "leave it blank rather than show a fake number" rule
-  // costGeneration.ts's own precedent already follows).
+  // Resolving a proposal (2026-08-31/2026-09-01, per Maro's own precedent
+  // pointer: "the generate risk register button in risk register") — each
+  // kind's approved subset goes straight to its own *real* existing
+  // endpoint, never a bespoke creation path: risks -> the same
+  // /risk-bulk-generate/ the button itself calls (dedupe-by-title +
+  // contingency-rollup for free); activities -> /schedule-bulk-generate/
+  // (the real "Generate Schedule" endpoint, activities+relationships
+  // created together in one real transaction+CPM pass, same as that flow);
+  // links -> /record-links/, once per approved link — there's no bulk
+  // version of that endpoint (checked directly), so N approved links is N
+  // sequential real POSTs, each independently reporting success/failure
+  // rather than one all-or-nothing call.
   //
   // The tool_use is only ever resolved by sending its own tool_result back
   // through the normal /ai/chat endpoint (never silently dropped) — the
@@ -318,38 +422,66 @@ export function PoePanel({
   // approved/rejected in its own next reply instead of the conversation
   // just going quiet.
   const handleResolveProposal = async () => {
-    if (!pendingProposal || !period || resolvingProposal) return
-    const approved = pendingProposal.risks.filter((_, i) => selectedRiskIndices.has(i))
+    if (!pendingProposal || resolvingProposal) return
     setResolvingProposal(true)
     setError(null)
     try {
       let summary: string
-      if (approved.length > 0) {
-        const { data } = await api.post('/api/v1/risk-bulk-generate/', {
-          project_id: projectId, period_id: period.id, risks: approved,
-          dedupe_by_title: true, sync_contingency: true,
-        })
-        const rejectedCount = pendingProposal.risks.length - approved.length
-        const contingencyNote = data.contingency_cost_element_id
-          ? ` Contingency updated to ${(Number(data.contingency_rate) * 100).toFixed(1)}% of fixed costs.`
-          : ''
-        summary = `Created ${data.risk_count} of ${approved.length} approved risk(s)` +
-          `${data.risk_count < approved.length ? ' (the rest already existed by title)' : ''}` +
-          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.${contingencyNote}`
+
+      if (pendingProposal.kind === 'risks') {
+        if (!period) { setResolvingProposal(false); return }
+        const approved = pendingProposal.risks.filter((_, i) => selectedIndices.has(i))
+        if (approved.length > 0) {
+          const { data } = await api.post('/api/v1/risk-bulk-generate/', {
+            project_id: projectId, period_id: period.id, risks: approved,
+            dedupe_by_title: true, sync_contingency: true,
+          })
+          const rejectedCount = pendingProposal.risks.length - approved.length
+          const contingencyNote = data.contingency_cost_element_id
+            ? ` Contingency updated to ${(Number(data.contingency_rate) * 100).toFixed(1)}% of fixed costs.`
+            : ''
+          summary = `Created ${data.risk_count} of ${approved.length} approved risk(s)` +
+            `${data.risk_count < approved.length ? ' (the rest already existed by title)' : ''}` +
+            `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.${contingencyNote}`
+        } else {
+          summary = 'Every proposed risk was rejected — nothing created.'
+        }
+      } else if (pendingProposal.kind === 'activities') {
+        if (!schedulePeriod) { setResolvingProposal(false); return }
+        if (activitiesApproved && pendingProposal.activities.length > 0) {
+          const { data } = await api.post('/api/v1/schedule-bulk-generate/', {
+            project_id: projectId, schedule_period_id: schedulePeriod.id,
+            activities: pendingProposal.activities, relationships: pendingProposal.relationships,
+          })
+          summary = `Created ${data.activity_count} activity(ies) and ${data.relationship_count} relationship(s).`
+        } else {
+          summary = 'The proposed activities were rejected — nothing created.'
+        }
       } else {
-        summary = 'Every proposed risk was rejected — nothing created.'
+        const approved = pendingProposal.links.filter((_, i) => selectedIndices.has(i))
+        let createdCount = 0
+        let failedCount = 0
+        for (const link of approved) {
+          try {
+            await api.post('/api/v1/record-links/', link)
+            createdCount += 1
+          } catch {
+            failedCount += 1
+          }
+        }
+        const rejectedCount = pendingProposal.links.length - approved.length
+        summary = `Created ${createdCount} of ${approved.length} approved link(s)` +
+          `${failedCount > 0 ? ` (${failedCount} failed — a source/target id likely no longer exists)` : ''}` +
+          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
       }
+
       const nextMessages: AiMessage[] = [
         ...messages,
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: pendingProposal.toolUseId, content: summary }] },
       ]
       onMessagesChange(nextMessages)
       setSending(true)
-      const res = await sendChatTurn({
-        project_id: projectId, schedule_period_id: schedulePeriod?.id ?? null, period_id: period?.id ?? null,
-        messages: nextMessages, client_tools_available: [],
-      })
-      onMessagesChange(res.messages)
+      await continueConversation(nextMessages)
     } catch (err) {
       setError(describeChatError(err))
     } finally {
@@ -455,43 +587,116 @@ export function PoePanel({
             )}
             {pendingProposal && (
               <div className="border border-amber-300 dark:border-prosota-line rounded-lg p-3 space-y-2 bg-white dark:bg-prosota-panel">
-                <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
-                  {pendingProposal.risks.length} risk{pendingProposal.risks.length === 1 ? '' : 's'} proposed — review before creating:
-                </p>
-                {pendingProposal.risks.map((risk, i) => (
-                  <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedRiskIndices.has(i)}
-                      onChange={e => setSelectedRiskIndices(prev => {
-                        const next = new Set(prev)
-                        if (e.target.checked) next.add(i); else next.delete(i)
-                        return next
-                      })}
-                      className="mt-0.5 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium text-gray-900 dark:text-prosota-paper truncate">{risk.title}</span>
-                        <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
-                          risk.risk_type === 'threat'
-                            ? 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
-                            : 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300'
-                        }`}>
-                          {risk.risk_type}
-                        </span>
+                {pendingProposal.kind === 'risks' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.risks.length} risk{pendingProposal.risks.length === 1 ? '' : 's'} proposed — review before creating:
+                    </p>
+                    {pendingProposal.risks.map((risk, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-gray-900 dark:text-prosota-paper truncate">{risk.title}</span>
+                            <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
+                              risk.risk_type === 'threat'
+                                ? 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                                : 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300'
+                            }`}>
+                              {risk.risk_type}
+                            </span>
+                          </div>
+                          {risk.cause && <p className="text-xs text-gray-500 dark:text-prosota-muted">Cause: {risk.cause}</p>}
+                          {risk.effect && <p className="text-xs text-gray-500 dark:text-prosota-muted">Effect: {risk.effect}</p>}
+                          <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                            {risk.probability != null && `P ${risk.probability}`}
+                            {risk.impact != null && ` · I ${risk.impact}`}
+                            {risk.cost_most_likely != null && ` · Cost ${risk.cost_most_likely.toLocaleString()}`}
+                            {risk.schedule_most_likely_days != null && ` · ${risk.schedule_most_likely_days}d`}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'activities' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.activities.length} activit{pendingProposal.activities.length === 1 ? 'y' : 'ies'}
+                      {pendingProposal.relationships.length > 0 && ` + ${pendingProposal.relationships.length} link(s)`} proposed — review before creating:
+                    </p>
+                    {/* All-or-nothing, not per-row checkboxes (see handleResolveProposal's own
+                        comment) — relationships reference other draft activities by temp_id, so
+                        approving some but not others could leave one dangling. */}
+                    <label className="flex items-center gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={activitiesApproved}
+                        onChange={e => setActivitiesApproved(e.target.checked)}
+                        className="shrink-0"
+                      />
+                      <span className="text-xs text-gray-700 dark:text-prosota-paper">Create all of the below together</span>
+                    </label>
+                    {pendingProposal.activities.map((a, i) => (
+                      <div key={i} className="rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium text-gray-900 dark:text-prosota-paper truncate">{a.task_name}</span>
+                          {a.activity_type && a.activity_type !== 'task' && (
+                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                              {a.activity_type === 'start_milestone' ? 'Start Milestone' : 'Finish Milestone'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                          {a.duration_hours != null && `${a.duration_hours}h`}
+                          {a.category && ` · ${a.category}`}
+                          {a.discipline && ` · ${a.discipline}`}
+                        </p>
                       </div>
-                      {risk.cause && <p className="text-xs text-gray-500 dark:text-prosota-muted">Cause: {risk.cause}</p>}
-                      {risk.effect && <p className="text-xs text-gray-500 dark:text-prosota-muted">Effect: {risk.effect}</p>}
-                      <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
-                        {risk.probability != null && `P ${risk.probability}`}
-                        {risk.impact != null && ` · I ${risk.impact}`}
-                        {risk.cost_most_likely != null && ` · Cost ${risk.cost_most_likely.toLocaleString()}`}
-                        {risk.schedule_most_likely_days != null && ` · ${risk.schedule_most_likely_days}d`}
-                      </p>
-                    </div>
-                  </label>
-                ))}
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'links' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.links.length} link{pendingProposal.links.length === 1 ? '' : 's'} proposed — review before creating:
+                    </p>
+                    {pendingProposal.links.map((link, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-prosota-paper">
+                            <span className="font-medium">{link.source_type}</span>
+                            {' '}<span className="text-gray-500 dark:text-prosota-muted">{link.link_type}</span>{' '}
+                            <span className="font-medium">{link.target_type}</span>
+                          </p>
+                          {link.note && <p className="text-xs text-gray-500 dark:text-prosota-muted">{link.note}</p>}
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
                 <button
                   onClick={handleResolveProposal}
                   disabled={resolvingProposal}
@@ -499,9 +704,11 @@ export function PoePanel({
                 >
                   {resolvingProposal
                     ? 'Working…'
-                    : selectedRiskIndices.size === 0
-                      ? 'Reject all'
-                      : `Create ${selectedRiskIndices.size} selected`}
+                    : pendingProposal.kind === 'activities'
+                      ? (activitiesApproved ? 'Create these activities' : 'Reject')
+                      : selectedIndices.size === 0
+                        ? 'Reject all'
+                        : `Create ${selectedIndices.size} selected`}
                 </button>
               </div>
             )}

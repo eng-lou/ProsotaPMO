@@ -8,23 +8,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import run_turn
 from app.ai.context_tools import get_project_snapshot
+from app.ai.record_tools import explain_causal_baseline, find_records
 from app.ai.system_prompt import build_system_prompt
 from app.ai.tools import CLIENT_TOOL_NAMES, PROPOSAL_TOOL_NAMES, TOOLS
 from app.services import object_storage
 
-# Server-side tool dispatch (2026-08-31) — every tool NOT in
+# Server-side tool dispatch (2026-08-31, extended 2026-09-01 with
+# find_records/explain_causal_baseline) — every tool NOT in
 # CLIENT_TOOL_NAMES/PROPOSAL_TOOL_NAMES is executed inline here.
-# get_project_snapshot is the only one so far; later phases add
-# propose_create_activities/propose_link_records/explain_causal_baseline to
-# this table too (propose_create_risks itself never reaches here — see the
-# pending_proposals branch in run_agent_turn below, it's never executed
-# server-side at all).
+# propose_create_risks/propose_create_activities/propose_link_records
+# never reach this function at all — PROPOSAL_TOOL_NAMES makes
+# run_agent_turn's own loop stop and return them as pending_proposals
+# before dispatch is ever considered (see that function's own docstring).
 
 
 async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, project_id: uuid.UUID,
                                 schedule_period_id: uuid.UUID | None, period_id: uuid.UUID | None) -> dict:
     if name == "get_project_snapshot":
         return await get_project_snapshot(db, project_id, schedule_period_id, period_id)
+    if name == "find_records":
+        return await find_records(
+            db, project_id, tool_input["record_type"], tool_input["query"], schedule_period_id, period_id,
+        )
+    if name == "explain_causal_baseline":
+        return await explain_causal_baseline(
+            db, project_id, tool_input["record_type"], uuid.UUID(tool_input["record_id"]),
+        )
     raise ValueError(f"Unknown server tool: {name}")
 
 
