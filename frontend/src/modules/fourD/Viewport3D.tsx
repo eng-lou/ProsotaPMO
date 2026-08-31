@@ -3,6 +3,10 @@ import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+// Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
+// loaded) package never lands in the main bundle" discipline just below —
+// only used to type the composerRef handed into AmbientOcclusionEffect.
+import type { EffectComposer as EffectComposerImpl } from 'postprocessing'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type Axis } from './animationProfiles'
@@ -282,6 +286,56 @@ const AmbientOcclusionEffect = lazy(() =>
         gl.toneMapping = enabled ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping
         if (!enabled) gl.autoClear = true
       }, [enabled, gl])
+      // No capture-time override of `enabled` (2026-08-31, per Maro: a
+      // capture must show exactly the render settings/effects currently
+      // live, not a silently-different version of them) — a previous
+      // `captureAoOverride` forced this false for the duration of every
+      // capture/export, working around a real EffectComposer resize-race
+      // artifact (the composer-resize failsafe below fixes that properly
+      // instead). Forcing AO off for capture also turned out to switch the
+      // whole frame from this component's own EffectComposer render path to
+      // R3F's plain default render — which is what was making captured
+      // shadows disappear too, entirely coincidentally: the real shadow bug
+      // (see ShadowFrustumSync's own header) was the shadow-map resolution
+      // itself never reallocating, unrelated to which render path was
+      // active. Capturing whatever the live composer already shows,
+      // unconditionally, is both simpler and the only way to guarantee a
+      // capture matches live.
+      //
+      // Composer resize failsafe (2026-08-31) — @react-three/postprocessing's
+      // own EffectComposer.js (checked directly) only resizes its composer
+      // in a `useEffect(() => composer.setSize(size.width, size.height),
+      // [composer, size])`, where `size` is R3F's own *CSS*-pixel size. A
+      // capture's own resolution boost (captureDprMultiplier) changes the
+      // renderer's *pixel ratio*, not its CSS size, so that effect silently
+      // never re-fires — the composer keeps rendering into whatever buffers
+      // it was last actually resized to, on the way up (a smaller, stale
+      // buffer during a boosted capture — "a ghost duplicate composited
+      // into the corner") and, just as importantly, on the way back down
+      // once the capture ends (a larger, stale buffer against a now-smaller
+      // renderer — the live-view ghosting Maro reported right after a
+      // capture with AO on). A first attempt fixed only the boost direction
+      // with one deliberate setSize() call timed around the capture, at the
+      // cost of a ~1-second visible mismatch while the two waited-for real
+      // frames caught up — replaced here with a continuous per-frame check
+      // that self-corrects the instant an actual mismatch appears, in
+      // either direction, with no frame-counting/guessing and no visible
+      // gap: canvas.width/height are the real device-pixel drawing-buffer
+      // dimensions (distinct from CSS style size) — exactly what
+      // composer.setSize's own drawing-buffer read would return — checked
+      // directly against inputBuffer's own current size (always in that
+      // same device-pixel space), so this only ever calls setSize on an
+      // actual mismatch, not every single frame.
+      const composerRef = useRef<EffectComposerImpl | null>(null)
+      useFrame(() => {
+        const composer = composerRef.current
+        if (!composer) return
+        const canvas = gl.domElement
+        if (composer.inputBuffer.width !== canvas.width || composer.inputBuffer.height !== canvas.height) {
+          const cssSize = gl.getSize(new THREE.Vector2())
+          composer.setSize(cssSize.width, cssSize.height)
+        }
+      })
       // aoRadius/distanceFalloff scale with modelRadius (2026-08-31, per
       // Maro's own report: AO "seems off" — imperceptible — as soon as a
       // second, much larger IFC model joins the scene. Both were fixed
@@ -297,7 +351,7 @@ const AmbientOcclusionEffect = lazy(() =>
       // currently-loaded models actually span.
       const aoScale = modelRadius / 10
       return (
-        <EffectComposer enabled={enabled}>
+        <EffectComposer ref={composerRef} enabled={enabled}>
           <N8AO
             aoRadius={aoScale} intensity={0.8} distanceFalloff={aoScale}
             aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
@@ -3917,6 +3971,91 @@ export function CameraSync({
   return null
 }
 
+// Camera-distance-driven shadow-camera frustum (2026-08-31, per Maro's own
+// report: adding a much larger site IFC to a scene "wipes the shadow/
+// lighting effects" on both localhost and prosota.com). Earlier the same
+// day (b373d7c) doubled highQualityShadowMapSize for exactly this — a
+// second, larger model ballooning modelRadius (computeModelBounds has no
+// "primary" vs "context" concept, see its own header) so texels-per-
+// world-unit craters — but that commit's own message already flagged it as
+// "a partial mitigation, not a full fix for extreme scale gaps": no fixed
+// map size resolves an arbitrarily large scale gap, since the frustum
+// itself (shadow-camera-left/right/top/bottom) was sized off the *combined*
+// scene radius regardless of what's actually on screen.
+//
+// This replaces that fixed, modelRadius-sized frustum with one sized off
+// how far the camera currently is from its orbit target — zoomed into the
+// building, the frustum shrinks to match (crisp shadows again, same as
+// before the site model ever joined); zoomed out to see the whole site, it
+// grows back toward modelRadius (coarser shadows, but the building is only
+// a few screen pixels at that distance anyway, so the loss isn't visible).
+// distance * tan(fov/2) is the standard "half-height of what's actually
+// visible at this distance" formula; the 2x margin covers the frustum's
+// full width (not just height) plus some slack so panning slightly doesn't
+// immediately clip a shadow at the edge. Floored at 10 (computeModelBounds'
+// own minimum radius for a tiny/empty scene) so this never shrinks to
+// something smaller than the smallest real model this app already treats
+// as valid, and capped at modelRadius so zooming out past the whole scene
+// never asks for a *bigger* frustum than the scene itself.
+//
+// Deliberately imperative (mutating light.shadow.camera directly + one
+// updateProjectionMatrix() call per frame, not a React prop recomputed on
+// every render) — the same "read/write outside React's render cycle"
+// tradeoff CameraSync above already makes, for the same reason: this needs
+// to track every orbit/zoom frame, and a React state update on every one of
+// those would re-render the whole Viewport3D tree every frame.
+// shadow.normalBias scales with the *effective* frustum size (shadowRadius)
+// now, not modelRadius — the old normalBias={modelRadius * 0.002} (see
+// directionalLight's own JSX comment, now removed in favour of this) sized
+// the anti-acne offset for the frustum's real depth range, which is this
+// dynamic shadowRadius now, not the fixed combined-scene radius; left at
+// modelRadius's scale it would over-correct (visible "peter-panning",
+// shadow detached from its object) once zoomed in tight enough that
+// shadowRadius is much smaller than modelRadius.
+export function ShadowFrustumSync({
+  lightRef, controlsRef, modelRadius, sunRadius,
+}: {
+  lightRef: React.MutableRefObject<THREE.DirectionalLight | null>
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+  modelRadius: number
+  sunRadius: number
+}) {
+  const { camera } = useThree()
+  useFrame(() => {
+    const light = lightRef.current
+    const controls = controlsRef.current
+    if (!light || !controls) return
+    const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 50
+    const distance = camera.position.distanceTo(controls.target)
+    const visibleRadius = distance * Math.tan((fov / 2) * (Math.PI / 180)) * 2
+    const shadowRadius = THREE.MathUtils.clamp(visibleRadius, 10, modelRadius)
+    const shadowCam = light.shadow.camera
+    shadowCam.left = -shadowRadius * 2
+    shadowCam.right = shadowRadius * 2
+    shadowCam.top = shadowRadius * 2
+    shadowCam.bottom = -shadowRadius * 2
+    shadowCam.far = sunRadius + shadowRadius * 2
+    shadowCam.updateProjectionMatrix()
+    light.shadow.normalBias = shadowRadius * 0.002
+    // Shadow-map resolution reallocation (checked directly in
+    // node_modules/three's own WebGLShadowMap.js) — it only allocates a
+    // fresh light.shadow.map when the existing one is null; changing
+    // shadow.mapSize afterward (this file's own highQuality boost, JSX
+    // below) is otherwise silently ignored; every subsequent frame renders
+    // the shadow camera into a viewport sized off the NEW mapSize while
+    // still writing into the OLD, differently-sized map, which is why
+    // shadows worked while orbiting (mapSize never changed mid-drag) but
+    // broke the instant boostQuality/a capture bumped it. Disposing and
+    // nulling the map on an actual size mismatch forces three.js to
+    // allocate a correctly-sized one on the very next frame.
+    if (light.shadow.map && (light.shadow.map.width !== light.shadow.mapSize.x || light.shadow.map.height !== light.shadow.mapSize.y)) {
+      light.shadow.map.dispose()
+      light.shadow.map = null
+    }
+  })
+  return null
+}
+
 // "Snap to Surface" (2026-07-23, per Maro: "position an element e.g the
 // car easily on the surface of a second mesh e.g plane e.g road") — casts
 // a ray straight down (along whichever axis upAxis says is up) from well
@@ -4393,9 +4532,36 @@ export function Viewport3D({
   const [boxSelectMode, setBoxSelectMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
+  // WebGL context loss failsafe (2026-08-31, per Maro: "we need failsafes
+  // in case of next time" — a real, hours-long debugging session today
+  // eventually traced a "shadows just stopped rendering, on this app AND
+  // on prosota.com in a brand-new tab" report to actual browser-level
+  // WebGL context loss, not any application code — a well-known Chrome/GPU
+  // driver failure mode after a long session doing a lot of heavy WebGL
+  // work (this session did: dozens of boosted-resolution Capture re-
+  // renders, a city-block-scale IFC import, repeated EffectComposer mount/
+  // resize cycles). Two real, separate problems this addresses:
+  // 1. Without listening for `webglcontextlost` and calling
+  //    preventDefault() on it, the browser has no signal that this page
+  //    even wants to try recovering — on many Chrome/GPU driver
+  //    combinations that means the context stays permanently dead until
+  //    the whole browser process restarts, not just this tab/page (matches
+  //    exactly what today required: a full browser restart, not just a
+  //    reload, before rendering came back).
+  // 2. Even with that fixed, a lost-then-silently-still-broken context
+  //    looks identical to a real rendering bug from the outside — today's
+  //    entire debugging odyssey happened because nothing told us this
+  //    wasn't an app problem. Surfacing it plainly the moment it happens
+  //    (see the banner in the JSX below) turns "mysterious, hours-long
+  //    regression hunt" into "oh, reload the page" immediately.
+  const [webglContextLost, setWebglContextLost] = useState(false)
   const [filterDialogOpen, setFilterDialogOpen] = useState(false)
   const cameraRef = useRef<THREE.Camera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  // Populated by the directionalLight's own `ref` below — ShadowFrustumSync
+  // (see that component's own header) needs direct access to mutate
+  // light.shadow.camera every frame, which no declarative JSX prop can do.
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   // Shared Html-overlay-content registry for Capture/Export Video
   // (2026-07-30, per Maro: "the text boxes and texts dont show up in the
@@ -4544,29 +4710,6 @@ export function Viewport3D({
   // background hidden for a cleaner working view, but wanted in the final
   // output) and clear it back to null afterward.
   const [captureBackgroundOverride, setCaptureBackgroundOverride] = useState<boolean | null>(null)
-  // AO forced off for the duration of a capture/export (2026-08-31, per
-  // Maro's own screenshots: hitting Capture left a smaller, differently-lit
-  // ghost duplicate of the model composited into the corner of the live
-  // viewport). Same root cause the 2026-07-19 fix just above (modelRadius's
-  // own header) already diagnosed and worked around for the orbit-boost
-  // case — @react-three/postprocessing's EffectComposer keeps its own
-  // depth-stencil render target, and resizing the renderer's pixel ratio
-  // races that target's own resize, corrupting the shared buffer for a few
-  // frames. That fix explicitly only covered idle/orbit dpr changes,
-  // deliberately leaving Capture/Export Video's own captureDprMultiplier
-  // resize unguarded — moot at the time since AO didn't exist yet (removed
-  // 2026-07-25), but AO came back 2026-08-22 without this path being
-  // revisited, silently reintroducing the exact same race against every
-  // capture/export. Rather than re-fight the library's own already-flagged
-  // "KNOWN UNRESOLVED ISSUE" (AmbientOcclusionEffect's own header) inside a
-  // one-shot resize window, this sidesteps it the same way the orbit-boost
-  // fix did: don't let the composer be actively resizing while it's also
-  // driving the canvas. AO's `enabled` prop already skips composer.render()
-  // entirely when false (see AmbientOcclusionEffect's own header), so this
-  // is a real, if temporary, quality trade — a capture/export made while AO
-  // is on won't itself show AO shading — in exchange for not corrupting the
-  // frame the way leaving the race in place does.
-  const [captureAoOverride, setCaptureAoOverride] = useState(false)
   // White Background (2026-07-24) — see viewerSettings.ts's own header;
   // never applied during a capture/still-export, same reasoning
   // captureBackgroundOverride's own comment just above already gives for
@@ -4866,11 +5009,9 @@ export function Viewport3D({
         setCaptureBackgroundOverride(null)
         onCaptureBackgroundChange?.(null)
         setHidePathHelpers(false)
-        setCaptureAoOverride(false)
       }, 'image/png')
     }
     const supersample = computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight)
-    setCaptureAoOverride(true)
     setCaptureDprMultiplier(supersample)
     onCaptureQualityChange?.(supersample)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
@@ -5006,7 +5147,6 @@ export function Viewport3D({
       : -1)
 
     setIsExportingVideo(true)
-    setCaptureAoOverride(true)
     setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
     onCaptureQualityChange?.(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
@@ -5142,7 +5282,6 @@ export function Viewport3D({
       setCaptureBackgroundOverride(null)
       onCaptureBackgroundChange?.(null)
       setHidePathHelpers(false)
-      setCaptureAoOverride(false)
     }
   }
 
@@ -5595,6 +5734,20 @@ export function Viewport3D({
         // exactly this — large near:far ratios by design.
         gl={{ stencil: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!boxSelectMode) { onSelect(null); onSelectObject(null) } }}
+        // webglContextLost failsafe (2026-08-31) — see that state's own
+        // header above. preventDefault() on 'lost' is what actually asks
+        // the browser to attempt recovery instead of leaving the context
+        // permanently dead; 'restored' only fires at all because of that.
+        // Three.js's own GPU-side resources (shadow maps, textures,
+        // EffectComposer render targets) are NOT usable again just because
+        // the context object itself came back — a full reload (the
+        // banner's own action, below) is the reliable way to get a truly
+        // clean renderer, not an attempted in-place resource rebuild.
+        onCreated={state => {
+          const canvas = state.gl.domElement
+          canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); setWebglContextLost(true) })
+          canvas.addEventListener('webglcontextrestored', () => setWebglContextLost(false))
+        }}
       >
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
@@ -5629,35 +5782,33 @@ export function Viewport3D({
             sunTarget (mounted below as a real scene object) now points the
             light at modelBounds.center — see sunPosition/sunTarget's own
             comments above — so this frustum is finally centered on the
-            actual model regardless of where it sits in world space. */}
+            actual model regardless of where it sits in world space.
+            2026-08-31 fix (per Maro: adding a much larger site IFC "wipes
+            the shadow/lighting effects") — the frustum's *size* is no
+            longer set here at all: a fixed modelRadius-scaled frustum
+            covers the combined scene including any much-larger site
+            import, tanking texels-per-world-unit for the actual building.
+            ShadowFrustumSync (mounted just below, see its own header)
+            resizes shadow.camera every frame off the camera's current
+            distance from its orbit target instead. */}
         <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
+          ref={sunLightRef}
           position={sunPosition} target={sunTarget} intensity={1} castShadow={settings.shadows}
           shadow-mapSize={highQuality ? [highQualityShadowMapSize, highQualityShadowMapSize] : [2048, 2048]}
           // normalBias, not (only) bias (2026-07-21 fix, per Maro: a real,
           // flat exterior wall self-shadowing with a hard diagonal band
           // that "shouldn't be there at all" — textbook shadow acne, not a
-          // real architectural feature casting it. The old fixed
-          // shadow-bias={-0.0005} was a depth-space constant, implicitly
-          // tuned against whatever real building this app was last tested
-          // against (Snowdon/Hotel, both far bigger than modelRadius's own
-          // 10-unit floor) — shadow-camera-far scales with modelRadius (see
-          // sunRadius above), so the same fixed bias is a different
-          // fraction of the depth buffer's usable precision at a different
-          // model scale, too small exactly on a small model like this one
-          // and producing acne. normalBias offsets along the surface's own
-          // normal in world space instead of light-space depth, so it
-          // scales with real geometry rather than the frustum's far plane —
-          // the standard three.js fix for acne on flat/near-grazing
-          // surfaces (a vertical wall under a fairly low sun elevation is
-          // exactly that case) — proportioned to modelRadius the same way
-          // the frustum itself already is, so it stays correctly scaled
-          // whether this is a small test file or a real full-scale import.
-          shadow-normalBias={modelRadius * 0.002}
-          shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
-          shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}
-          shadow-camera-near={0.5} shadow-camera-far={sunRadius + modelRadius * 2}
+          // real architectural feature casting it). Offsets along the
+          // surface's own normal in world space instead of light-space
+          // depth, the standard three.js fix for acne on flat/near-grazing
+          // surfaces. The actual value is set imperatively by
+          // ShadowFrustumSync below now, proportioned to the *effective*
+          // (camera-distance-driven) frustum size rather than a fixed
+          // modelRadius — see that component's own header for why.
+          shadow-camera-near={0.5}
         />
+        <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
         <Suspense fallback={null}>
           {settings.dynamicSky ? (
             /* Real-Time Sky (2026-08-22, per Maro — see viewerSettings.ts's
@@ -6002,13 +6153,24 @@ export function Viewport3D({
         {mountAmbientOcclusion && (
           <Suspense fallback={null}>
             <AmbientOcclusionEffect
-              enabled={settings.ambientOcclusion && !captureAoOverride}
+              enabled={settings.ambientOcclusion}
               boostQuality={highQuality}
               modelRadius={modelRadius}
             />
           </Suspense>
         )}
       </Canvas>
+      {webglContextLost && (
+        <div className="absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-3 bg-red-600 text-white text-sm px-4 py-2 no-print">
+          <span>⚠ Graphics context lost — rendering has stopped. This is a browser/GPU issue, not a data problem; nothing you've done here is lost.</span>
+          <button
+            onClick={() => window.location.reload()}
+            className="shrink-0 px-3 py-1 rounded bg-white text-red-700 font-medium hover:bg-red-50"
+          >
+            Reload
+          </button>
+        </div>
+      )}
       {activeCamera && (
         <PassepartoutOverlay
           containerRef={containerRef}

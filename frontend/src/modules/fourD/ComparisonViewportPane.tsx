@@ -18,7 +18,7 @@ import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import {
   CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
-  TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
+  ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
 interface Props {
@@ -120,6 +120,10 @@ export function ComparisonViewportPane({
   const zUp = upAxis === 'z'
   const cameraRef = useRef<THREE.Camera | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  // Populated by the directionalLight's own `ref` below — ShadowFrustumSync
+  // (shared from Viewport3D.tsx, see its own header) needs direct access to
+  // mutate light.shadow.camera every frame.
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null)
   const dpr = Math.min(window.devicePixelRatio * (dprMultiplier ?? 1), 4)
   const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
   // Same "background=false during a capture override, else live setting"
@@ -134,6 +138,10 @@ export function ComparisonViewportPane({
   // sits, same "not well placed" bug as the primary viewport had).
   const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects])
   const modelRadius = modelBounds.radius
+  // Mirrors computeSunPosition's own internal sunRadius — see
+  // Viewport3D.tsx's own sunRadius for the full "why" (needed again here
+  // for ShadowFrustumSync's shadow-camera-far calc, below).
+  const sunRadius = modelRadius * 3
   const sunOffset = computeSunPosition(sunAzimuth, sunElevation, modelRadius, zUp)
   const sunPosition: [number, number, number] = [
     modelBounds.center[0] + sunOffset[0],
@@ -285,15 +293,23 @@ export function ComparisonViewportPane({
             at a never-added Object3D stuck at world origin, so the light
             (and its shadow frustum) always pointed past this pane's own
             model instead of at it whenever that model wasn't centered on
-            (0,0,0). */}
+            (0,0,0).
+            2026-08-31 fix (mirrors Viewport3D.tsx's own ShadowFrustumSync,
+            per the same "adding a much larger site IFC wipes the shadow/
+            lighting effects" report) — frustum size is no longer fixed off
+            modelRadius here either, for the same reason: a much-larger
+            site import ballooning the combined bounds tanked this pane's
+            own shadow texel density exactly like the primary viewport's.
+            Shared component, so both panes now resize identically off each
+            one's own camera distance. */}
         <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
+          ref={sunLightRef}
           position={sunPosition} target={sunTarget} intensity={1} castShadow={shadows}
           shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-modelRadius * 2} shadow-camera-right={modelRadius * 2}
-          shadow-camera-top={modelRadius * 2} shadow-camera-bottom={-modelRadius * 2}
-          shadow-camera-near={0.5} shadow-camera-far={modelRadius * 5}
+          shadow-camera-near={0.5}
         />
+        <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
         <Suspense fallback={null}>
           <Environment
             files={activeEnvironmentUrl}
