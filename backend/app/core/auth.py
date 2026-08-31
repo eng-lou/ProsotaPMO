@@ -238,3 +238,36 @@ async def require_super_user(user=Depends(get_db_user)):
     if not user.is_super_user:
         raise HTTPException(status_code=403, detail={"code": "forbidden"})
     return user
+
+
+async def require_ai_quota(user=Depends(get_approved_user), db: AsyncSession = Depends(get_db)):
+    """Per-user daily cap on the AI assistant (2026-08-31, per Maro: "add a
+    user cap, except for superuser" — the Anthropic key never reaches a
+    browser, but every approved user could otherwise trigger unlimited real
+    billing against it). is_super_user bypasses this entirely, per that
+    same ask.
+
+    Resets ai_messages_today the first time this fires on a new UTC
+    calendar date — the same "lazy reset on next use, no scheduled job"
+    approach get_db_user's own last_active_at throttle already takes,
+    rather than a cron/background task just for this. Increments and
+    commits *before* the real Anthropic call happens (app/ai/client.py),
+    not after, so a request that's actually over the cap never reaches the
+    model at all — an eventual over-count by one from two genuinely
+    concurrent requests racing this check is an acceptable trade for not
+    needing a row lock on every single chat message."""
+    if user.is_super_user:
+        return user
+    today = datetime.now(timezone.utc).date()
+    if user.ai_messages_reset_date != today:
+        user.ai_messages_today = 0
+        user.ai_messages_reset_date = today
+    if user.ai_messages_today >= settings.ai_daily_message_cap:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "ai_quota_exceeded", "limit": settings.ai_daily_message_cap},
+        )
+    user.ai_messages_today += 1
+    await db.commit()
+    await db.refresh(user)
+    return user

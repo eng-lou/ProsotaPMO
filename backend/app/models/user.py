@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,5 +46,12 @@ class User(Base, TimestampMixin):
     # against feedback_ticket_events.created_at, not stored as a count/flag,
     # so it's always correct even across multiple tickets/devices.
     last_viewed_feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # AI assistant daily usage cap (2026-08-31) — see require_ai_quota in
+    # app/core/auth.py for how these two are actually enforced/reset.
+    # ai_messages_reset_date NULL means "never used it yet" (treated as
+    # today's date, i.e. 0 used, the first time it's checked) rather than
+    # forcing a migration-time backfill for every existing user row.
+    ai_messages_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    ai_messages_reset_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     organisation: Mapped[Organisation] = relationship(back_populates="users")

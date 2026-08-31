@@ -34,3 +34,13 @@ pye57==0.4.19
 # in aux_functions.py, confirmed) if/when Cloud2BIM moves off pause.
 PyYAML==6.0.3
 tqdm==4.70.0
+# Project Controls Assistant (2026-08-31, per Maro: "cook up the AI
+# features" — one unified assistant that answers questions and takes real
+# actions across every pillar, see backend/app/ai/'s own module header).
+# Anthropic Claude was already this app's decided AI provider (see the
+# vision doc's stack list) — pinned to the latest 0.x release deliberately,
+# not the 1.x line: this app doesn't need 1.x's breaking changes (httpx2,
+# awaited async .with_raw_response), and every feature this module uses
+# (tool use, adaptive thinking, effort) is Messages API surface, not
+# SDK-version-gated.
+anthropic==0.125.0

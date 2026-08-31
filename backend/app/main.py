@@ -5,6 +5,8 @@ from app.api.access_requests import router as access_requests_router
 from app.api.activities import router as activities_router
 from app.api.activity_relationships import router as activity_relationships_router
 from app.api.activity_steps import router as activity_steps_router
+from app.api.ai_attachments import router as ai_attachments_router
+from app.api.ai_chat import router as ai_chat_router
 from app.api.animation_profiles import router as animation_profiles_router
 from app.api.annotations import router as annotations_router
 from app.api.baseline_sets import router as baseline_sets_router
@@ -108,6 +110,8 @@ app.include_router(periods_router, prefix="/api/v1", dependencies=_auth_approved
 app.include_router(activities_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(activity_relationships_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(activity_steps_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(ai_attachments_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(ai_chat_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(calendars_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(calendar_exceptions_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(calendar_breaks_router, prefix="/api/v1", dependencies=_auth_approved)

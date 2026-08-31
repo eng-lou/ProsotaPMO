@@ -79,6 +79,23 @@ class Settings(BaseSettings):
     # day-to-day approvals happen via the DB (a super user clicking Approve
     # in the app), not by editing this env var.
     super_user_emails: str = "sotalouisx@gmail.com,lsota@prosota.com"
+    # Project Controls Assistant (2026-08-31, per Maro: "cook up the AI
+    # features") — Anthropic API key for app/ai/'s own client.py. Empty by
+    # default, same "a fresh checkout doesn't silently ship a real key"
+    # reasoning google_tiles_api_key already gives above; the assistant
+    # endpoint fails clearly (see client.py) rather than silently degrading
+    # when this isn't set.
+    anthropic_api_key: str = ""
+    # Per-user daily cap on the assistant (2026-08-31, per Maro: "add a user
+    # cap, except for superuser" — the key is safe from ever reaching a
+    # browser, but every approved user can trigger real Anthropic billing
+    # against it with no ceiling otherwise). Counted per POST /ai/chat call
+    # (one visible message from the user's own perspective, even though the
+    # orchestrator's own server-tool loop may make more than one Messages
+    # API call underneath it), reset daily — see User.ai_messages_today/
+    # ai_messages_reset_date and require_ai_quota in app/core/auth.py.
+    # Super users (is_super_user) bypass this entirely, per Maro's own ask.
+    ai_daily_message_cap: int = 30
 
 
 settings = Settings()
