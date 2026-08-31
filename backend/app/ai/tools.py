@@ -21,10 +21,12 @@ TOOLS: list[dict] = [
         "description": (
             "Condensed cross-pillar stats for the current project: schedule "
             "project_start/project_finish dates, named milestones with their own "
-            "dates, critical-path activity count and names, open risk count and "
-            "EMV totals, open ICD item counts by type. Call this first to ground "
-            "any answer about project status, dates, or completion — never guess "
-            "IDs, numbers, or dates."
+            "dates, critical-path activity count and names; resources (assignment "
+            "count and the top 10 most cost-committed resources by name/type); cost "
+            "(portfolio BAC/AC/EAC/CPI/SPI — None where there's no cost-linked data "
+            "yet, never a guessed figure); open risk count and EMV totals; open ICD "
+            "item counts by type. Call this first to ground any answer about project "
+            "status, dates, cost, or resourcing — never guess IDs, numbers, or dates."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

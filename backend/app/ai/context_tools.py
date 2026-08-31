@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.icd_item import IcdItem
+from app.models.resource import Resource
+from app.models.resource_assignment import ResourceAssignment
 from app.models.risk import Risk
+from app.services.cost_element import rollup_evm_from_totals
+from app.services.dashboard import _live_schedule_spi, _resolve_bac_ac
+from app.services.resource_costing import compute_assignment_budget
 
 
 async def get_project_snapshot(
@@ -16,12 +22,16 @@ async def get_project_snapshot(
     schedule_period_id: uuid.UUID | None = None,
     period_id: uuid.UUID | None = None,
 ) -> dict:
-    """The assistant's grounding tool (2026-08-31) — condensed cross-pillar
-    stats so it can answer open questions without guessing. schedule_period_id
-    scopes Activity (Schedule's own variant/period split — see Activity's own
-    docstring); period_id scopes Risk/ICD (the shared periods table Cost/Risk/
-    ICD still use). Either may be omitted (e.g. the assistant opened outside
-    a specific pillar's context) — that pillar's stats are simply left out
+    """The assistant's grounding tool (2026-08-31, extended same day per
+    Maro: "educate poe... all modules including resourcing") — condensed
+    cross-pillar stats so it can answer open questions without guessing.
+    schedule_period_id scopes Activity/Resources (Schedule's own variant/
+    period split — see Activity's own docstring; a ResourceAssignment has
+    no period of its own, only an activity_id, so it's scoped through
+    Activity here too); period_id scopes Cost/Risk/ICD (the shared periods
+    table those three still use). Either may be omitted (e.g. the assistant
+    opened outside a specific pillar's context) — that pillar's stats are
+    simply left out
     rather than guessed at from some other period."""
     snapshot: dict = {"project_id": str(project_id)}
 
@@ -91,7 +101,87 @@ async def get_project_snapshot(
             ],
         }
 
+        # Resources (2026-08-31, per Maro: "educate poe... all modules
+        # including resourcing" — Poe's own prior answer had to admit it
+        # had nothing here at all and fall back to inferring a likely
+        # constraint from activity *names*, not real assignment data).
+        # Reuses compute_assignment_budget (app/services/resource_costing.py)
+        # verbatim — the exact same per-assignment cost formula Resource
+        # Usage/Tracking already show — rather than a second, independently
+        # -invented one. Scoped through Activity.schedule_period_id (a
+        # ResourceAssignment has no period of its own, only an activity_id)
+        # so this reads the same schedule variant everything else here does.
+        # "Most committed" ranks by total assigned cost, not headcount or
+        # assignment count alone — a single subcontractor lump sum can
+        # dwarf a dozen small labour assignments, and cost is what actually
+        # answers "which resource matters most." Day-by-day
+        # loading/over-allocation is deliberately NOT attempted here — this
+        # app's own Controls Dashboard already flags that as needing real
+        # captured-over-time usage data it doesn't have yet, not something
+        # a single live query can produce; scoped down to what's actually
+        # answerable from today's data.
+        assignment_rows = (await db.execute(
+            select(ResourceAssignment, Resource, Activity)
+            .join(Resource, ResourceAssignment.resource_id == Resource.id)
+            .join(Activity, ResourceAssignment.activity_id == Activity.id)
+            .where(Activity.schedule_period_id == schedule_period_id, Activity.is_archived.is_(False))
+        )).all()
+        resource_totals: dict[uuid.UUID, dict] = {}
+        for assignment, resource, activity in assignment_rows:
+            entry = resource_totals.setdefault(resource.id, {
+                "name": resource.name, "resource_type": resource.resource_type,
+                "assignment_count": 0, "total_committed_cost": Decimal(0),
+            })
+            entry["assignment_count"] += 1
+            entry["total_committed_cost"] += compute_assignment_budget(resource, activity, assignment)
+        top_committed = sorted(resource_totals.values(), key=lambda r: r["total_committed_cost"], reverse=True)[:10]
+        snapshot["resources"] = {
+            "resource_count": len(resource_totals),
+            "assignment_count": len(assignment_rows),
+            "top_committed": [
+                {
+                    "name": r["name"], "resource_type": r["resource_type"],
+                    "assignment_count": r["assignment_count"], "total_committed_cost": float(r["total_committed_cost"]),
+                }
+                for r in top_committed
+            ],
+        }
+
     if period_id is not None:
+        # Cost/EVM (2026-08-31, per Maro: "educate poe... all modules") —
+        # reuses _live_schedule_spi/_resolve_bac_ac (app/services/dashboard.py,
+        # already imported there from cost_element.py) and
+        # rollup_evm_from_totals verbatim: the *exact* portfolio BAC/AC/EV
+        # rollup and SPI/CPI/EAC formulas the Controls Dashboard's own KPI
+        # strip computes, never a second, independently-derived version —
+        # summed first, then run through one shared rollup (never averaging
+        # per-element CPIs — see that function's own docstring on why that
+        # misrepresents which cost line actually drives the real number).
+        # None across the board when there's no cost-linked data yet ("leave
+        # it blank rather than show a fake number", this app's own rule
+        # everywhere else), not a guessed 0/100%.
+        schedule_spi, cost_elements = await _live_schedule_spi(db, project_id, period_id)
+        bac_total = ac_total = ev_cost_total = Decimal(0)
+        has_cost_evm = False
+        for el in cost_elements:
+            bac, ac = _resolve_bac_ac(el)
+            if bac is None:
+                continue
+            has_cost_evm = True
+            bac_total += bac
+            if ac is not None:
+                ac_total += ac
+            if el.pct_complete is not None:
+                ev_cost_total += bac * Decimal(el.pct_complete) / Decimal(100)
+        cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total) if has_cost_evm else {}
+        snapshot["cost"] = {
+            "bac": float(bac_total) if has_cost_evm else None,
+            "ac": float(ac_total) if has_cost_evm else None,
+            "eac": float(cost_rollup["eac"]) if cost_rollup.get("eac") is not None else None,
+            "cpi": float(cost_rollup["cpi"]) if cost_rollup.get("cpi") is not None else None,
+            "spi": float(schedule_spi) if schedule_spi is not None else None,
+        }
+
         risk_result = await db.execute(
             select(
                 func.count(Risk.id),
