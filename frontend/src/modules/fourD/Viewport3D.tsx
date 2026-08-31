@@ -276,16 +276,30 @@ export interface ResolvedSectionBox {
 // whether or not this component ever unmounts again.
 const AmbientOcclusionEffect = lazy(() =>
   import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
-    default: ({ enabled, boostQuality }: { enabled: boolean; boostQuality: boolean }) => {
+    default: ({ enabled, boostQuality, modelRadius }: { enabled: boolean; boostQuality: boolean; modelRadius: number }) => {
       const { gl } = useThree()
       useEffect(() => {
         gl.toneMapping = enabled ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping
         if (!enabled) gl.autoClear = true
       }, [enabled, gl])
+      // aoRadius/distanceFalloff scale with modelRadius (2026-08-31, per
+      // Maro's own report: AO "seems off" — imperceptible — as soon as a
+      // second, much larger IFC model joins the scene. Both were fixed
+      // world-space units (aoRadius=1, distanceFalloff=1) tuned against
+      // modelRadius's own ~10-unit single-building floor, i.e. a 1:10
+      // ratio — correct for the model this was tuned against, but a
+      // vanishingly small fraction of a much bigger combined bounding
+      // sphere once a second, larger model is loaded alongside it (see
+      // computeModelBounds — it has no notion of "primary" vs "context"
+      // model, so modelRadius is always the combined scene's own radius).
+      // Same 1:10 ratio, now proportional instead of fixed, so contact
+      // occlusion stays visually correct at whatever combined scale the
+      // currently-loaded models actually span.
+      const aoScale = modelRadius / 10
       return (
         <EffectComposer enabled={enabled}>
           <N8AO
-            aoRadius={1} intensity={0.8} distanceFalloff={1}
+            aoRadius={aoScale} intensity={0.8} distanceFalloff={aoScale}
             aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
           />
         </EffectComposer>
@@ -4488,6 +4502,25 @@ export function Viewport3D({
   // captureDprMultiplier, so a forced capture always gets the full quality
   // treatment (shadows included), not just the extra resolution.
   const highQuality = boostQuality || captureDprMultiplier !== null
+  // Shadow-map texel density (2026-08-31, per Maro's own report: shadows
+  // "disappeared" once a second, much larger IFC model — e.g. a site-
+  // context import — joined the scene). The shadow-camera frustum below
+  // already scales its world-space *extent* with modelRadius, but
+  // shadow-mapSize was a flat pixel count — so texels-per-world-unit
+  // shrinks as modelRadius grows, and a small building's own shadow can
+  // fall below one texel once it's a small fraction of a much bigger
+  // combined bounding sphere (computeModelBounds has no "primary" vs
+  // "context" model concept — see that function's own header — so
+  // modelRadius is always the combined scene's radius). Doubling the
+  // highQuality ceiling doubles texel density for exactly that case,
+  // guarded against this GPU's own real maxTextureSize the same way
+  // computeSupersampleMultiplier already guards capture resolution — a
+  // partial mitigation, not a full fix: at a large enough scale gap
+  // between the two models this is still a single, fixed-resolution
+  // shadow map, and no map size alone fully solves that (a real fix would
+  // need cascaded shadow maps or scoping the frustum to just the primary
+  // model, out of scope for this pass).
+  const highQualityShadowMapSize = Math.min(8192, rendererRef.current?.capabilities.maxTextureSize ?? 4096)
   // Mounts AmbientOcclusionEffect's <EffectComposer>/<N8AO> tree at most
   // once per session (2026-08-22 — see that component's own header for the
   // full "why"): latches true the first time settings.ambientOcclusion goes
@@ -4511,6 +4544,29 @@ export function Viewport3D({
   // background hidden for a cleaner working view, but wanted in the final
   // output) and clear it back to null afterward.
   const [captureBackgroundOverride, setCaptureBackgroundOverride] = useState<boolean | null>(null)
+  // AO forced off for the duration of a capture/export (2026-08-31, per
+  // Maro's own screenshots: hitting Capture left a smaller, differently-lit
+  // ghost duplicate of the model composited into the corner of the live
+  // viewport). Same root cause the 2026-07-19 fix just above (modelRadius's
+  // own header) already diagnosed and worked around for the orbit-boost
+  // case — @react-three/postprocessing's EffectComposer keeps its own
+  // depth-stencil render target, and resizing the renderer's pixel ratio
+  // races that target's own resize, corrupting the shared buffer for a few
+  // frames. That fix explicitly only covered idle/orbit dpr changes,
+  // deliberately leaving Capture/Export Video's own captureDprMultiplier
+  // resize unguarded — moot at the time since AO didn't exist yet (removed
+  // 2026-07-25), but AO came back 2026-08-22 without this path being
+  // revisited, silently reintroducing the exact same race against every
+  // capture/export. Rather than re-fight the library's own already-flagged
+  // "KNOWN UNRESOLVED ISSUE" (AmbientOcclusionEffect's own header) inside a
+  // one-shot resize window, this sidesteps it the same way the orbit-boost
+  // fix did: don't let the composer be actively resizing while it's also
+  // driving the canvas. AO's `enabled` prop already skips composer.render()
+  // entirely when false (see AmbientOcclusionEffect's own header), so this
+  // is a real, if temporary, quality trade — a capture/export made while AO
+  // is on won't itself show AO shading — in exchange for not corrupting the
+  // frame the way leaving the race in place does.
+  const [captureAoOverride, setCaptureAoOverride] = useState(false)
   // White Background (2026-07-24) — see viewerSettings.ts's own header;
   // never applied during a capture/still-export, same reasoning
   // captureBackgroundOverride's own comment just above already gives for
@@ -4810,9 +4866,11 @@ export function Viewport3D({
         setCaptureBackgroundOverride(null)
         onCaptureBackgroundChange?.(null)
         setHidePathHelpers(false)
+        setCaptureAoOverride(false)
       }, 'image/png')
     }
     const supersample = computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight)
+    setCaptureAoOverride(true)
     setCaptureDprMultiplier(supersample)
     onCaptureQualityChange?.(supersample)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
@@ -4948,6 +5006,7 @@ export function Viewport3D({
       : -1)
 
     setIsExportingVideo(true)
+    setCaptureAoOverride(true)
     setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
     onCaptureQualityChange?.(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
@@ -5083,6 +5142,7 @@ export function Viewport3D({
       setCaptureBackgroundOverride(null)
       onCaptureBackgroundChange?.(null)
       setHidePathHelpers(false)
+      setCaptureAoOverride(false)
     }
   }
 
@@ -5573,7 +5633,7 @@ export function Viewport3D({
         <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
           position={sunPosition} target={sunTarget} intensity={1} castShadow={settings.shadows}
-          shadow-mapSize={highQuality ? [4096, 4096] : [2048, 2048]}
+          shadow-mapSize={highQuality ? [highQualityShadowMapSize, highQualityShadowMapSize] : [2048, 2048]}
           // normalBias, not (only) bias (2026-07-21 fix, per Maro: a real,
           // flat exterior wall self-shadowing with a hard diagonal band
           // that "shouldn't be there at all" — textbook shadow acne, not a
@@ -5941,7 +6001,11 @@ export function Viewport3D({
         )}
         {mountAmbientOcclusion && (
           <Suspense fallback={null}>
-            <AmbientOcclusionEffect enabled={settings.ambientOcclusion} boostQuality={highQuality} />
+            <AmbientOcclusionEffect
+              enabled={settings.ambientOcclusion && !captureAoOverride}
+              boostQuality={highQuality}
+              modelRadius={modelRadius}
+            />
           </Suspense>
         )}
       </Canvas>

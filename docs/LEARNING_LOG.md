@@ -4744,3 +4744,68 @@ typing it into the wrong target fired the button twice more. Caught via
 the activity count going from 108 to 111, found and deleted the three
 stray rows through the app's own (non-native, safe-to-automate) delete
 confirmation, and confirmed the count was back to 108 afterward.
+
+---
+
+## 2026-08-31 — Two 4D rendering bugs, both traced through comments the codebase had already left for itself
+
+Maro sent screenshots of two separate problems: hitting Capture left a
+smaller, differently-lit ghost duplicate of the model stuck in the corner
+of the live viewport, and loading a second IFC model (a site-context
+import) made the first model's shadows and ambient occlusion basically
+vanish, even though both checkboxes still showed enabled. Neither was
+guessed at from scratch — Viewport3D.tsx's own extensive prior comments
+around the AO/shadow code already contained the answer to both, just
+never connected to these specific triggers.
+
+**The Capture ghost was a already-diagnosed race, just never re-checked
+after AO came back.** A 2026-07-19 comment on `dprMultiplier` describes an
+almost identical earlier bug: resizing the renderer's pixel ratio while
+the AO EffectComposer is active races that composer's own depth-stencil
+render target resize, corrupting the shared buffer for a few frames
+(`GL_INVALID_OPERATION: glBlitFramebuffer`, checked directly in the
+browser console at the time). The fix back then was to stop varying dpr
+for the idle/orbit-boost case — but its own comment explicitly says it
+left Capture/Export Video's dpr resize alone, since that was "a deliberate
+user action." That was fine at the time because AO didn't exist yet (it
+had just been ripped out, 2026-07-25, over an unrelated mount/unmount
+corruption bug). AO came back 2026-08-22 with a real fix for *that* bug —
+but nobody revisited whether the original dpr-race fix needed to cover
+Capture too, since AO simply hadn't existed to race against in the
+meantime. So the exact same race quietly came back the moment AO was
+reinstated, just on a different trigger (Capture, not orbit) than the one
+it was originally diagnosed against. Fixed the same way the orbit case
+was: force AO's `enabled` prop off for the duration of a capture/export
+(same override pattern the file already uses for hiding path helpers and
+forcing the HDR background), so the composer never resizes while it's
+actively driving the canvas. Real trade-off, stated in the code: a
+capture/export made while AO is on won't itself show AO shading anymore —
+better than a corrupted frame, but not free.
+
+**Shadows/AO "disappearing" after a second model loads was a scale
+mismatch, not a broken toggle.** `computeModelBounds` has no concept of
+"primary" vs "context" model — it just expands one bounding box over
+every currently-imported object. The shadow camera's frustum *extent*
+and N8AO's own sampling radius were both tuned once, by hand, against a
+single ~10-unit building (`aoRadius={1}`, `distanceFalloff={1}` — a 1:10
+ratio to `modelRadius`'s own floor). Add a second, much larger model and
+`modelRadius` balloons for the whole combined scene, at which point both
+effects are still technically running, just at a scale where they're
+imperceptible: N8AO's sampling radius is now a vanishing fraction of the
+scene, and the shadow map's fixed pixel budget (2048/4096px) is spread
+over a vastly larger world-space area, pushing a small building's own
+shadow below one texel. Fixed the AO half by making `aoRadius`/
+`distanceFalloff` scale with `modelRadius` (the same ratio, just
+proportional instead of fixed) — a complete fix. Partially mitigated the
+shadow half by doubling the high-quality shadow-map ceiling to 8192px
+(guarded against the GPU's real `maxTextureSize`, same pattern the file
+already uses for capture supersampling) — genuinely better, but not a
+full fix: a single fixed-resolution shadow map has an inherent
+texel-density ceiling once two models differ enough in scale, and said so
+directly in the code rather than presenting the resolution bump as a
+complete answer.
+
+**Type-checked, not yet browser-verified.** Both fixes pass
+`tsc --noEmit` clean, but neither has been exercised live — the Capture
+fix needs an actual capture click to confirm the ghost is gone, and the
+shadow fix needs the real two-model scene from the screenshots.
