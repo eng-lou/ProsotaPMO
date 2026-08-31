@@ -30,7 +30,17 @@ async def get_project_snapshot(
             select(
                 func.count(Activity.id),
                 func.count(Activity.id).filter(Activity.is_critical.is_(True)),
-                func.count(Activity.id).filter(Activity.activity_type == "milestone"),
+                # "milestone" was never a real activity_type value (checked
+                # directly in app/schemas/activity.py's own ActivityType
+                # Literal — split into start_milestone/finish_milestone back
+                # on 2026-07-07) — this filter matched zero rows from the
+                # day it was written, which is exactly what produced Poe's
+                # own wrong "0 milestones defined" report (caught 2026-08-31
+                # by Maro cross-checking against the real M-0001..M-0003
+                # rows in Scheduling — see dashboard.py's own
+                # start_milestone/finish_milestone check for the same
+                # pattern this now matches).
+                func.count(Activity.id).filter(Activity.activity_type.in_(("start_milestone", "finish_milestone"))),
                 func.avg(Activity.pct_complete),
                 # Project start/finish (2026-08-31, per Maro's own report: asked
                 # for "the substantial completion or planned finish date" and
@@ -63,7 +73,7 @@ async def get_project_snapshot(
         milestones_result = await db.execute(
             select(Activity.task_name, Activity.finish).where(
                 Activity.schedule_period_id == schedule_period_id,
-                Activity.activity_type == "milestone",
+                Activity.activity_type.in_(("start_milestone", "finish_milestone")),
                 Activity.is_archived.is_(False),
             ).order_by(Activity.finish)
         )
