@@ -3594,7 +3594,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ? draggingSectionBoxRotation.rotation
       : { rot_x: box.rot_x, rot_y: box.rot_y, rot_z: box.rot_z }
     return [{
-      id: box.id, sceneObjectId: sceneObject.id, active: box.active, visible: box.visible, bounds, rotation,
+      // pivotBounds is always `box` itself — the last-*committed* bounds,
+      // never draggingSectionBox's own live preview (2026-09-01 fix — see
+      // ResolvedSectionBox's own pivotBounds header, Viewport3D.tsx, for
+      // why a live resize drag must not feed the rotation pivot's centre).
+      id: box.id, sceneObjectId: sceneObject.id, active: box.active, visible: box.visible, bounds, pivotBounds: box, rotation,
       elementExpressId: box.element_ref !== null ? sectionBoxElementIds[box.id] : undefined,
     }]
   })

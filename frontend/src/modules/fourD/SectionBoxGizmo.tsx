@@ -121,7 +121,14 @@ function SectionBoxGizmo({
     // themselves using bounds' plain absolute min_x/max_x etc, unchanged —
     // pivotMatrix rotates *around the box's own centre*, so nothing here
     // needs to be redefined relative to that centre.
-    groupRef.current.matrix.copy(target.matrixWorld).multiply(sectionBoxPivotMatrix(box.bounds, box.rotation))
+    //
+    // box.pivotBounds, not box.bounds (2026-09-01 fix — see
+    // sectionBoxPivotMatrix's own header for the full "resize after rotate
+    // swings the whole box" story): pivotBounds stays pinned to the box's
+    // last-committed extent for the whole of an in-progress resize drag, so
+    // the wireframe's own rotation centre doesn't wander every frame right
+    // along with the very face being dragged.
+    groupRef.current.matrix.copy(target.matrixWorld).multiply(sectionBoxPivotMatrix(box.pivotBounds, box.rotation))
     groupRef.current.matrixAutoUpdate = false
     groupRef.current.matrixWorldNeedsUpdate = true
   })
@@ -231,9 +238,16 @@ function SectionBoxGizmo({
   useFrame(() => {
     if (!pivotGroupRef.current) return
     target.updateMatrixWorld(true)
-    const cx = (bounds.min_x + bounds.max_x) / 2
-    const cy = (bounds.min_y + bounds.max_y) / 2
-    const cz = (bounds.min_z + bounds.max_z) / 2
+    // box.pivotBounds, not box.bounds — see groupRef's own useFrame above
+    // for why (2026-09-01 fix); harmless here since the two are identical
+    // whenever no resize drag is in progress, which is always true while
+    // this rotate-only proxy is even mounted, but keeping both pivot
+    // computations sourced from the same field avoids a future edge case
+    // (e.g. a resize commit landing mid-tool-switch) reintroducing the
+    // exact same class of bug in just this one spot.
+    const cx = (box.pivotBounds.min_x + box.pivotBounds.max_x) / 2
+    const cy = (box.pivotBounds.min_y + box.pivotBounds.max_y) / 2
+    const cz = (box.pivotBounds.min_z + box.pivotBounds.max_z) / 2
     pivotGroupRef.current.matrix.copy(target.matrixWorld).multiply(new THREE.Matrix4().makeTranslation(cx, cy, cz))
     pivotGroupRef.current.matrixAutoUpdate = false
     pivotGroupRef.current.matrixWorldNeedsUpdate = true

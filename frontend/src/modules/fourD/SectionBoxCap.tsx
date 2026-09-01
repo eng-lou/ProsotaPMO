@@ -102,10 +102,14 @@ function meshColor(mesh: THREE.Mesh): THREE.Color {
 // applying that one shared plane set uniformly to every mesh under it).
 // `colorMesh` only supplies a representative color and is never used for
 // any transform math.
-function SectionBoxCapSet({ anchor, colorMesh, bounds, rotation, skipBox }: {
+function SectionBoxCapSet({ anchor, colorMesh, bounds, pivotBounds, rotation, skipBox }: {
   anchor: THREE.Object3D
   colorMesh: THREE.Mesh | null
   bounds: SectionBoxBounds
+  // Separate from `bounds` — see sectionBoxPivotMatrix's own header
+  // (sectionBoxGeometry.ts) for the full "resize after rotate swings the
+  // whole box" story this pins down.
+  pivotBounds: SectionBoxBounds
   rotation: SectionBoxRotation
   skipBox: THREE.Box3 | null
 }) {
@@ -123,9 +127,13 @@ function SectionBoxCapSet({ anchor, colorMesh, bounds, rotation, skipBox }: {
   const faces = useMemo(() => {
     const all = facesFor(bounds)
     if (!skipBox) return all
-    const pivot = sectionBoxPivotMatrix(bounds, rotation)
+    const pivot = sectionBoxPivotMatrix(pivotBounds, rotation)
     return all.filter(f => planeIntersectsBox(f.localPlane.clone().applyMatrix4(pivot), skipBox))
-  }, [skipBox, bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z, rotation.rot_x, rotation.rot_y, rotation.rot_z])
+  }, [
+    skipBox, bounds.min_x, bounds.min_y, bounds.min_z, bounds.max_x, bounds.max_y, bounds.max_z,
+    pivotBounds.min_x, pivotBounds.min_y, pivotBounds.min_z, pivotBounds.max_x, pivotBounds.max_y, pivotBounds.max_z,
+    rotation.rot_x, rotation.rot_y, rotation.rot_z,
+  ])
 
   // Unlit (MeshBasicMaterial), deliberately — a cap face isn't real
   // material, and an unlit flat color can't pick up environment-map noise
@@ -154,11 +162,11 @@ function SectionBoxCapSet({ anchor, colorMesh, bounds, rotation, skipBox }: {
     // SectionBoxGizmo.tsx's own group and computeWorldClipPlanes below
     // both use, so the visible cap quads, the wireframe/handles, and the
     // actual clip all agree on where the box currently sits.
-    groupRef.current.matrix.copy(anchor.matrixWorld).multiply(sectionBoxPivotMatrix(bounds, rotation))
+    groupRef.current.matrix.copy(anchor.matrixWorld).multiply(sectionBoxPivotMatrix(pivotBounds, rotation))
     groupRef.current.matrixAutoUpdate = false
     groupRef.current.matrixWorldNeedsUpdate = true
 
-    const worldPlanes = computeWorldClipPlanes(bounds, rotation, anchor.matrixWorld)
+    const worldPlanes = computeWorldClipPlanes(bounds, pivotBounds, rotation, anchor.matrixWorld)
     const color = colorMesh ? meshColor(colorMesh) : new THREE.Color(0xffffff)
     faces.forEach((face, i) => {
       materials[i].color.copy(color)
@@ -222,7 +230,7 @@ export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]
           const mesh: THREE.Mesh = found
           mesh.geometry.computeBoundingBox()
           const skipBox = mesh.geometry.boundingBox ?? new THREE.Box3().setFromObject(mesh)
-          return [<SectionBoxCapSet key={box.id} anchor={mesh} colorMesh={mesh} bounds={box.bounds} rotation={box.rotation} skipBox={skipBox} />]
+          return [<SectionBoxCapSet key={box.id} anchor={mesh} colorMesh={mesh} bounds={box.bounds} pivotBounds={box.pivotBounds} rotation={box.rotation} skipBox={skipBox} />]
         }
         let colorMesh: THREE.Mesh | null = null
         let meshCount = 0
@@ -236,7 +244,7 @@ export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]
         // isn't something any single mesh's own geometry.boundingBox can
         // give directly across a multi-mesh object. Rendering all (up to)
         // 6 faces unconditionally here is the correctness-first tradeoff.
-        return [<SectionBoxCapSet key={box.id} anchor={entry.object} colorMesh={colorMesh} bounds={box.bounds} rotation={box.rotation} skipBox={null} />]
+        return [<SectionBoxCapSet key={box.id} anchor={entry.object} colorMesh={colorMesh} bounds={box.bounds} pivotBounds={box.pivotBounds} rotation={box.rotation} skipBox={null} />]
       })}
     </>
   )

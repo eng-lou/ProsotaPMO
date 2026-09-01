@@ -135,6 +135,14 @@ export interface ResolvedSectionBox {
   // vice versa), matching the reference's own checkbox-vs-eye distinction.
   visible: boolean
   bounds: SectionBoxBounds
+  // Always the box's last-*committed* bounds (never a live resize-drag
+  // preview) — feeds ONLY the rotation pivot's own centre, kept separate
+  // from `bounds` above specifically so an in-progress resize drag can't
+  // make the box's own rotation swing every other face around while one is
+  // being dragged (2026-09-01 fix — see sectionBoxPivotMatrix's own header,
+  // sectionBoxGeometry.ts, for the full math). Identical to `bounds`
+  // whenever nothing's actively being resize-dragged.
+  pivotBounds: SectionBoxBounds
   // The box's own additional rotation on top of bounds' axis-aligned extent
   // (2026-07-17, per Maro: "I'd like to rotate the bounding box") — see
   // sectionBoxPivotMatrix's own header (sectionBoxGeometry.ts) for how this
@@ -2078,6 +2086,22 @@ function ModelObjects({
   // computed planes stuck on the mesh forever once it drops out of
   // sectionBoxes entirely.
   const prevTrackedIds = useRef<Set<string>>(new Set())
+  // Per-object signature of "everything that actually feeds this frame's
+  // clip computation" (2026-09-01 perf fix, per Maro live: "noticeable lag
+  // when section box is active") — the traverse+mergeClipPlanes work below
+  // was still unconditional every single frame for any tracked object,
+  // same as before this file's own clippingPlanes ownership fixes, but
+  // those fixes added a real per-mesh cost on top (an array filter + spread
+  // in mergeClipPlanes, twice per mesh) that wasn't there when this was
+  // just a plain reassignment — for a model with many individually-
+  // materialized meshes, redoing that every frame even while nothing about
+  // the box or the object has actually moved added up to visible lag.
+  // Skipping when the signature is unchanged preserves the exact behaviour
+  // this effect exists for (moving the *target* object, or dragging the
+  // box itself, both still change the signature and still update every
+  // frame) while eliminating the steady-state cost of a static box sitting
+  // there during ordinary orbiting.
+  const prevSignatureRef = useRef<Map<string, string>>(new Map())
   useFrame(() => {
     const currentIds = new Set(sectionBoxes.map(b => b.sceneObjectId))
     const idsToProcess = new Set([...prevTrackedIds.current, ...currentIds])
@@ -2085,6 +2109,9 @@ function ModelObjects({
       if (!idsToProcess.has(id)) continue
       object.updateMatrixWorld(true)
       const boxesForObject = sectionBoxes.filter(b => b.sceneObjectId === id && b.active)
+      const signature = JSON.stringify({ boxes: boxesForObject, matrix: object.matrixWorld.elements })
+      if (prevSignatureRef.current.get(id) === signature) continue
+      prevSignatureRef.current.set(id, signature)
       // Whole-object boxes (elementExpressId undefined) apply to every mesh
       // under this object, computed once against the object's own
       // matrixWorld. Element-scoped boxes (2026-07-09, per-element scoping)
@@ -2099,7 +2126,7 @@ function ModelObjects({
       // boxes already have.
       const wholeObjectPlanes = boxesForObject
         .filter(b => b.elementExpressId === undefined)
-        .flatMap(b => computeWorldClipPlanes(b.bounds, b.rotation, object.matrixWorld))
+        .flatMap(b => computeWorldClipPlanes(b.bounds, b.pivotBounds, b.rotation, object.matrixWorld))
       const elementBoxes = boxesForObject.filter(b => b.elementExpressId !== undefined)
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
@@ -2108,7 +2135,7 @@ function ModelObjects({
           const matching = elementBoxes.filter(b => b.elementExpressId === child.userData.expressID)
           if (matching.length > 0) {
             child.updateMatrixWorld(true)
-            clipPlanes = [...wholeObjectPlanes, ...matching.flatMap(b => computeWorldClipPlanes(b.bounds, b.rotation, child.matrixWorld))]
+            clipPlanes = [...wholeObjectPlanes, ...matching.flatMap(b => computeWorldClipPlanes(b.bounds, b.pivotBounds, b.rotation, child.matrixWorld))]
           }
         }
         // mergeClipPlanes, not a plain overwrite (2026-09-01 fix — see this

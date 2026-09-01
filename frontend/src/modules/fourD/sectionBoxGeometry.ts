@@ -103,10 +103,30 @@ function localClipPlanes(bounds: SectionBoxBounds): THREE.Plane[] {
 // handle placement (composed onto the target's matrixWorld the exact same
 // way) and computeWorldClipPlanes below, so the visible gizmo and the
 // actual clip always agree.
-export function sectionBoxPivotMatrix(bounds: SectionBoxBounds, rotation: SectionBoxRotation): THREE.Matrix4 {
-  const cx = (bounds.min_x + bounds.max_x) / 2
-  const cy = (bounds.min_y + bounds.max_y) / 2
-  const cz = (bounds.min_z + bounds.max_z) / 2
+//
+// Takes `pivotBounds` as a SEPARATE argument from whatever bounds actually
+// define the box's own faces (2026-09-01 fix, per Maro live: "toggle to
+// rotate and rotate and go back to resize... drag[ging one handle]...
+// affect[s] the whole shape not just that handle face") — recomputing
+// centre from the box's own LIVE (currently-dragging) bounds every frame is
+// exactly what breaks resize-after-rotate: with rotation R != identity, a
+// face's own world position is `centre + R*(facePos - centre)` — differentiate
+// that with respect to a centre shift `d` and every OTHER face's world
+// position moves by `d*(I - R)`, which is zero only when R is the identity
+// (no rotation ever applied). So the instant a box has any rotation, moving
+// ONE face (which shifts the min/max midpoint) makes every *other* face
+// visibly swing in world space too, purely because this matrix's own centre
+// was being recomputed from those same live bounds. Callers now pass the
+// box's last-*committed* bounds for `pivotBounds` (unaffected by an
+// in-progress resize drag's own live preview) so the rotation pivot stays
+// anchored for the whole gesture — the dragged face still slides correctly
+// along its own rotated axis (see the math above with the dragged face's
+// own facePos changing), but the other 5 stay exactly where they were,
+// matching the no-rotation case's already-correct behaviour.
+export function sectionBoxPivotMatrix(pivotBounds: SectionBoxBounds, rotation: SectionBoxRotation): THREE.Matrix4 {
+  const cx = (pivotBounds.min_x + pivotBounds.max_x) / 2
+  const cy = (pivotBounds.min_y + pivotBounds.max_y) / 2
+  const cz = (pivotBounds.min_z + pivotBounds.max_z) / 2
   const euler = new THREE.Euler(rotation.rot_x, rotation.rot_y, rotation.rot_z, 'XYZ')
   return new THREE.Matrix4()
     .makeTranslation(cx, cy, cz)
@@ -124,8 +144,16 @@ export function sectionBoxPivotMatrix(bounds: SectionBoxBounds, rotation: Sectio
 // Plane in place would silently go stale on any mesh whose material later
 // gets cloned by Viewport3D.tsx's own texture-override scheme; building
 // fresh arrays on every call sidesteps that entirely).
-export function computeWorldClipPlanes(bounds: SectionBoxBounds, rotation: SectionBoxRotation, matrixWorld: THREE.Matrix4): THREE.Plane[] {
-  const composed = matrixWorld.clone().multiply(sectionBoxPivotMatrix(bounds, rotation))
+//
+// `bounds` and `pivotBounds` are deliberately separate (see
+// sectionBoxPivotMatrix's own header just above) — `bounds` still defines
+// where the 6 planes themselves actually sit (so a live resize drag's own
+// face keeps moving as expected), `pivotBounds` only ever feeds the
+// rotation's own centre.
+export function computeWorldClipPlanes(
+  bounds: SectionBoxBounds, pivotBounds: SectionBoxBounds, rotation: SectionBoxRotation, matrixWorld: THREE.Matrix4,
+): THREE.Plane[] {
+  const composed = matrixWorld.clone().multiply(sectionBoxPivotMatrix(pivotBounds, rotation))
   return localClipPlanes(bounds).map(p => p.applyMatrix4(composed))
 }
 
