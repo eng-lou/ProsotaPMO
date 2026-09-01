@@ -388,11 +388,60 @@ export const GanttChart = memo(forwardRef<GanttChartHandle, {
   // not a threshold correction on top of one. ANCHOR_FRACTION < 0.5 keeps
   // more of the upcoming schedule in view than the part already passed.
   const GANTT_AUTOSCROLL_ANCHOR_FRACTION = 0.35
+  // Single-activity focus (Linked Activities widget click, or a row selected
+  // while Isolate Linked is active) takes priority over the playhead — see
+  // the centering effect right below for why these two auto-scrolls can't
+  // both be live at once. `focusedActivityId` gates both.
+  const focusedActivityId = selectedActivityIds && selectedActivityIds.size === 1 ? [...selectedActivityIds][0] : null
   useEffect(() => {
     const container = horizontalScrollContainerRef?.current
-    if (!container || todayOffset === null) return
+    if (!container || todayOffset === null || focusedActivityId !== null) return
     container.scrollLeft = Math.max(0, todayOffset - container.clientWidth * GANTT_AUTOSCROLL_ANCHOR_FRACTION)
-  }, [todayOffset, horizontalScrollContainerRef])
+  }, [todayOffset, horizontalScrollContainerRef, focusedActivityId])
+
+  // Center horizontally on a newly-selected activity's bar (2026-09-01, per
+  // Maro: focusing an activity — from the Linked Activities widget, or via
+  // Isolate Linked — was already scrolling the row into view vertically
+  // (FourD.tsx's own scroll-to-selected effect), but that's a different axis
+  // entirely from where the bar actually sits along the date timeline; the
+  // horizontal scroller stayed wherever it happened to be, which could be
+  // months away from the selected activity's own bar.
+  //
+  // Originally just an id-keyed guard racing against the playhead-follow
+  // effect above — found live not to be enough even after keying it on
+  // id+rangeStart+dayWidth too: with the Animation Timeline window open,
+  // liveFocusDate keeps ticking on its own live subscription regardless of
+  // whether anything is actually selected, so todayOffset keeps changing and
+  // the playhead effect kept re-winning on renders *after* this one instead
+  // of losing a single one-time race. The real fix is the `focusedActivityId`
+  // gate above: the playhead effect now doesn't touch scrollLeft at all while
+  // a single activity is focused, so there's no race left to key a guard
+  // against — this effect owns the horizontal scroll exclusively during
+  // focus, and playhead-follow resumes cleanly the moment focus clears.
+  //
+  // lastCenteredKeyRef still guards against redundant recentering (same
+  // activity, same geometry) so this doesn't restart the smooth-scroll
+  // animation on every unrelated re-render, and skips silently (without
+  // updating the key) if the activity isn't in `activities` yet or has no
+  // start date, so it retries once dependencies catch up instead of getting
+  // stuck on a stale miss.
+  const lastCenteredKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    const container = horizontalScrollContainerRef?.current
+    if (!container || !focusedActivityId) return
+    const id = focusedActivityId
+    const key = `${id}:${rangeStart.getTime()}:${dayWidth}`
+    if (key === lastCenteredKeyRef.current) return
+    const activity = activities.find(a => a.id === id)
+    const start = activity ? parseDate(activity.start) : null
+    if (!activity || !start) return
+    lastCenteredKeyRef.current = key
+    const finish = parseDate(activity.finish)
+    const left = daysBetween(rangeStart, start) * dayWidth
+    const right = finish ? left + Math.max(daysBetween(start, finish) * dayWidth, 6) : left
+    const barCenter = (left + right) / 2
+    container.scrollTo({ left: Math.max(0, barCenter - container.clientWidth / 2), behavior: 'smooth' })
+  }, [focusedActivityId, activities, rangeStart, dayWidth, horizontalScrollContainerRef])
 
   const geometry = useMemo(() => {
     const map = new Map<string, BarGeometry>()

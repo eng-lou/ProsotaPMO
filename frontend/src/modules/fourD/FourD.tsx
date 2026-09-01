@@ -6,7 +6,7 @@ import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { buildCalendarLookup, resolveHoursPerDay } from '@/modules/scheduling/durationDisplay'
-import { GanttChart } from '@/modules/scheduling/GanttChart'
+import { GANTT_ROW_HEIGHT, GanttChart, HEADER_HEIGHT } from '@/modules/scheduling/GanttChart'
 import { computePeriodBuckets, loadGanttZoom, saveGanttZoom, type GanttZoom } from '@/modules/scheduling/ganttZoom'
 import { loadResourcesLayout } from '@/modules/scheduling/resourcesLayout'
 import { ResourceTrackingWidget } from '@/modules/scheduling/ResourceTrackingWidget'
@@ -5388,10 +5388,39 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     () => (hideArchivedInViewport ? activities.filter(a => !a.is_archived && !a.is_archive_container) : activities),
     [activities, hideArchivedInViewport],
   )
-  const scheduleVisibleActivities = useMemo(
-    () => computeVisibleActivities(scheduleWindowActivities, scheduleCollapsedIds),
-    [scheduleWindowActivities, scheduleCollapsedIds],
-  )
+  // Isolate Linked, mirrored into the Activity Table/Gantt (2026-09-01, per
+  // Maro: "isolate linked should also isolate that activity in table and
+  // gantt") — isolatedLinkedActivityIds (above) already resolves whatever's
+  // isolated in the viewport back to activities for the Linked Activities
+  // widget; this reuses that exact same set to narrow scheduleVisibleActivities
+  // down to just those activities, the schedule-side equivalent of the
+  // viewport's own Isolate hiding everything else. Keeps each kept activity's
+  // WBS ancestor chain too (not just the leaf) so the surviving rows still
+  // read as a tree instead of a flat, context-free list — and deliberately
+  // ignores scheduleCollapsedIds entirely while isolating (computed against
+  // an empty collapse set below) so a leaf the user is being shown isn't
+  // accidentally hidden by whatever collapse state happened to predate this
+  // isolate action.
+  const isolatedScheduleActivityIds = useMemo(() => {
+    if (!isolateMode || isolatedLinkedActivityIds.size === 0) return null
+    const byId = new Map(scheduleWindowActivities.map(a => [a.id, a]))
+    const keep = new Set(isolatedLinkedActivityIds)
+    for (const id of isolatedLinkedActivityIds) {
+      let current = byId.get(id)?.parent_id ? byId.get(byId.get(id)!.parent_id!) : undefined
+      while (current) {
+        keep.add(current.id)
+        current = current.parent_id ? byId.get(current.parent_id) : undefined
+      }
+    }
+    return keep
+  }, [isolateMode, isolatedLinkedActivityIds, scheduleWindowActivities])
+  const scheduleVisibleActivities = useMemo(() => {
+    const base = computeVisibleActivities(
+      scheduleWindowActivities,
+      isolatedScheduleActivityIds ? new Set<string>() : scheduleCollapsedIds,
+    )
+    return isolatedScheduleActivityIds ? base.filter(a => isolatedScheduleActivityIds.has(a.id)) : base
+  }, [scheduleWindowActivities, scheduleCollapsedIds, isolatedScheduleActivityIds])
 
   // Native scrollTop mirroring between the Activity Table and Gantt windows
   // (2026-07-09, per Maro) — plain DOM scroll-sync between two independent,
@@ -5437,6 +5466,60 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     lastScheduleScrollTopRef.current = scrollTop
     if (scheduleScrollRef.current) scheduleScrollRef.current.scrollTop = scrollTop
   }
+
+  // Focus the Activity Table/Gantt on whatever gets selected elsewhere
+  // (2026-09-01, per Maro: "if i select the activity in the linked
+  // activities in the viewport. it should be focused in the activity
+  // table/gantt if activated") — the Linked Activities widget's own row
+  // click calls this same handleSelectActivity/selectedActivityIds the
+  // Activity Table's row click already uses, so keying this off "exactly
+  // one activity is selected" covers that widget without needing to thread
+  // a separate "where did this selection come from" flag through. Only
+  // scrolls the panes whose ref is actually mounted (scheduleScrollRef.current/
+  // ganttScrollRef.current is null when that WindowChrome pane isn't docked
+  // anywhere — "if activated") — the other pane then follows automatically
+  // via the scrollTop mirror above, same as ScheduleWindow.tsx's own
+  // existing auto-scroll-to-current-row effect already relies on.
+  //
+  // If the target activity is nested under a collapsed WBS summary it won't
+  // be in scheduleVisibleActivities yet — this expands every collapsed
+  // ancestor first (via scheduleCollapsedIds) so the row actually exists to
+  // scroll to; the resulting scheduleVisibleActivities recompute re-fires
+  // this same effect (it's a dependency), which then finds the row and
+  // performs the real scroll on that second pass.
+  const lastFocusedActivityIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (selectedActivityIds.size !== 1) return
+    const [id] = selectedActivityIds
+    const idx = scheduleVisibleActivities.findIndex(a => a.id === id)
+    if (idx === -1) {
+      const byId = new Map(scheduleWindowActivities.map(a => [a.id, a]))
+      const target = byId.get(id)
+      const toExpand: string[] = []
+      let current = target?.parent_id ? byId.get(target.parent_id) : undefined
+      while (current) {
+        if (scheduleCollapsedIds.has(current.id)) toExpand.push(current.id)
+        current = current.parent_id ? byId.get(current.parent_id) : undefined
+      }
+      if (toExpand.length > 0) {
+        setScheduleCollapsedIds(prev => {
+          const next = new Set(prev)
+          for (const aId of toExpand) next.delete(aId)
+          return next
+        })
+      }
+      return
+    }
+    if (id === lastFocusedActivityIdRef.current) return
+    lastFocusedActivityIdRef.current = id
+    const rowTop = HEADER_HEIGHT + idx * GANTT_ROW_HEIGHT
+    for (const ref of [scheduleScrollRef, ganttScrollRef]) {
+      const container = ref.current
+      if (!container) continue
+      const target = Math.max(0, rowTop - container.clientHeight * 0.35)
+      container.scrollTo({ top: target, behavior: 'smooth' })
+    }
+  }, [selectedActivityIds, scheduleVisibleActivities, scheduleWindowActivities, scheduleCollapsedIds])
 
   const resourcesTabData = useResourcesTabData(
     resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null,
