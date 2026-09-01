@@ -4875,3 +4875,94 @@ other" check — it was recognizing these two behaviors shouldn't run at
 the same time at all: while a specific activity is focused, the
 timeline-following behavior now steps aside completely, and resumes
 automatically the moment nothing's focused anymore.
+
+## 2026-09-01 — Section Box: a long chase through seven real bugs stacked on top of each other
+
+Maro asked to test the Section Box feature (a Blender-style clipping box
+that cuts through a 3D model so you can see inside it) and it turned out
+to be broken in several different ways at once. This ended up being one
+of the longest single-feature debugging threads of the project, mostly
+because the bugs were layered: fixing one revealed the next one underneath
+it, and getting the diagnosis wrong twice in a row along the way was a
+useful lesson in its own right.
+
+**What was actually broken, in the order it was found and fixed:**
+
+1. **Creating a box was slow and broke the model's appearance.** Creating
+   a section box after selecting a lot of the model (e.g. via Select All)
+   was converting *every* element in the whole model into its own
+   individually-drawn piece, not just the selected ones — expensive for no
+   reason, since only the selected elements' positions were actually
+   needed. Fixed to only convert what's actually selected.
+
+2. Doing that conversion also skipped a step that's supposed to re-apply
+   the current render mode, shadows, and ambient occlusion to newly
+   individual elements — so right after creating a box, the model would
+   flatten out to a plain, shadowless, textureless grey. Fixed by
+   correctly wiring up that re-apply step.
+
+3. **The box didn't actually cut anything, no matter how far you dragged a
+   face in.** This took two wrong guesses on my part first (asking Maro to
+   confirm he'd actually resized the box, when he'd already told me twice
+   he had — a mistake worth remembering: when someone describes exactly
+   what they did, believe them and go look at the code, don't ask them to
+   redo it). The real cause, once actually found, was two separate,
+   unrelated pieces of code — the section box's own cutting logic, and a
+   completely different feature that reveals building elements bit-by-bit
+   as a construction activity plays out — both quietly overwriting the
+   exact same piece of state on every single screen refresh, with zero
+   awareness of each other. Whichever one happened to run last always won,
+   forever, silently erasing the other's work. And even after fixing that
+   race, the cut *still* didn't show, because of a second, separate
+   problem: the app's default 3D display style secretly swaps in a
+   stand-in copy of each element's material for rendering, and the section
+   box's cut was being applied to the *original* material, not the
+   stand-in actually on screen — like writing an instruction on the
+   original document after everyone's already switched to reading from a
+   photocopy.
+
+4. Once the cut was finally visible, three smaller problems showed up
+   right away: the cut didn't appear until you toggled an unrelated
+   setting like Shadows off and on (a model with no active construction
+   animation never got the same continuous "keep the display copy in
+   sync" treatment that animated models get for free); the shadows of
+   already-cut-away material were still showing on the ground (a
+   completely separate, one-line switch on materials controls whether
+   *shadows* respect a cut, independent of whether the visible geometry
+   respects it); and hiding the box's wireframe editing handles left the
+   solid "cut face" overlay still on screen, because that overlay was
+   only ever tied to whether the cut itself was on, not whether the user
+   had asked to hide the box's controls.
+
+5. **Switching between the box's Resize and Rotate tools broke resizing.**
+   After rotating the box and switching back to resize, dragging one
+   corner handle would visibly distort the *entire* box, not just move
+   that one face. The box's rotation is defined as "spin around the box's
+   own centre point" — but the centre point was being recalculated live
+   from whatever the box's current size happened to be at that instant,
+   including mid-drag. The moment the box has any rotation at all, that
+   makes the centre itself wobble as you drag, which drags every other
+   face along with it even though only one face's position was actually
+   supposed to change. Fixed by locking the rotation's centre point to the
+   box's last confirmed size for the duration of a drag, so only the face
+   actually being dragged moves.
+
+6. **The whole feature felt laggy while a box was active.** Some of the
+   fixes above added a small amount of extra work that now had to run on
+   every single screen refresh, for every visible element, even when
+   absolutely nothing about the box had changed since the last refresh.
+   Added a quick "did anything actually change" check that skips all of
+   that work on the (very common) frames where nothing did, while still
+   updating immediately the moment the box, or the model it's attached to,
+   actually moves.
+
+**Why this took so long.** Nearly every fix in this list revealed the
+*next* bug rather than solving the whole thing outright — a genuinely
+unusual amount of live back-and-forth for one feature. The most useful
+takeaway to carry forward: two unrelated pieces of code that both
+casually reassign the same shared piece of state every frame, each
+written independently and each individually reasonable in isolation, is a
+real and recurring failure pattern in this codebase's 3D rendering layer
+— worth specifically checking for whenever a "the effect just doesn't
+show up" bug involves anything that updates continuously (shadows,
+animation, live-dragged transforms).
