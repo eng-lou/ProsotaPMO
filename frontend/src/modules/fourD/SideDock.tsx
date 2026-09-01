@@ -13,6 +13,15 @@ export interface DockedPanel {
 interface Props {
   side: PanelSide
   panels: DockedPanel[]
+  // Resizable (2026-09-01, per Maro: "allow me increase the width of this
+  // contextual side panel" — Clash Detective's own A/B columns were
+  // truncating hard at the old fixed w-72/288px). FourD.tsx owns the
+  // actual number (persisted the same way top/bottom dock heights already
+  // are, see dockLayouts.ts's own left_dock_width/right_dock_width) and
+  // renders the drag handle itself, right alongside this component, same
+  // "this component doesn't own layout, just renders what it's told"
+  // split DockDivider already has with topDockHeight/bottomDockHeight.
+  width: number
 }
 
 // A shared side-dock slot (2026-07-09, per Maro: "make section contextual
@@ -20,12 +29,12 @@ interface Props {
 // effectively sharing a side dock if i want") — Animation Profiles and
 // Section Box are each independently dockable (own open/close toggle in
 // the toolbar, own left/right preference), but when two of them land on
-// the *same* side they'd otherwise stack up as two separate w-72 columns
-// eating a lot of width. This renders whichever panels are currently open
-// AND docked to `side` as one shared w-72 slot — a single header (no tab
-// bar) when there's only one, a small tab strip when there's more than
-// one, so "sharing a dock" only costs anything visually once it's actually
-// happening.
+// the *same* side they'd otherwise stack up as two separate columns eating
+// a lot of width. This renders whichever panels are currently open AND
+// docked to `side` as one shared, resizable-width slot — a single header
+// (no tab bar) when there's only one, a small tab strip when there's more
+// than one, so "sharing a dock" only costs anything visually once it's
+// actually happening.
 //
 // The dock-toggle (▸/◂) and close (✕) buttons act on whichever tab is
 // currently active, not on the dock as a whole — moving one shared
@@ -36,14 +45,17 @@ interface Props {
 // falls back to the first panel whenever the currently-active one isn't
 // in the list any more (e.g. it just closed), rather than tracking that
 // as an effect.
-export function SideDock({ side, panels }: Props) {
+export function SideDock({ side, panels, width }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null)
   if (panels.length === 0) return null
 
   const active = panels.find(p => p.id === activeId) ?? panels[0]
 
   return (
-    <div className={`w-72 shrink-0 bg-white dark:bg-prosota-panel flex flex-col overflow-hidden ${side === 'left' ? 'border-r' : 'border-l'} border-gray-200 dark:border-prosota-line`}>
+    <div
+      style={{ width }}
+      className={`shrink-0 bg-white dark:bg-prosota-panel flex flex-col overflow-hidden ${side === 'left' ? 'border-r' : 'border-l'} border-gray-200 dark:border-prosota-line`}
+    >
       {panels.length > 1 ? (
         <div className="flex items-center border-b border-gray-200 dark:border-prosota-line shrink-0">
           {panels.map(p => (

@@ -163,6 +163,81 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    # find_relationships (2026-09-01, per Maro: "if i ask poe to reassign
+    # relationships... how best to describe for best results" — a real gap:
+    # propose_create_activities's own `relationships` field only ever wires
+    # together temp_ids from brand-new activities in the *same* proposal,
+    # never an existing schedule's real links. "Reassign" is delete-then-
+    # recreate (ActivityRelationshipUpdate's own docstring — predecessor_id/
+    # successor_id aren't editable in place), so Poe needs this to find the
+    # real relationship_id to remove before propose_edit_relationships can
+    # remove+add one, same "never guess an id" rule as find_records.
+    {
+        "name": "find_relationships",
+        "description": (
+            "Look up one activity's own real predecessor/successor relationships (with their "
+            "real relationship ids) — call this before propose_edit_relationships whenever "
+            "removing or reassigning an existing link, since a relationship can only be removed "
+            "by its real id, never guessed from the two activity names alone."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string", "description": "Real activity UUID from get_project_snapshot or find_records."},
+            },
+            "required": ["activity_id"],
+            "additionalProperties": False,
+        },
+    },
+    # propose_edit_relationships (2026-09-01) — mirrors
+    # backend/app/schemas/activity_relationship.py's own
+    # ActivityRelationshipCreate field-for-field for "add"; "remove" only
+    # ever needs the real relationship_id (from find_relationships). Real
+    # server-side validation (cycle detection, WBS-summary rejection,
+    # milestone-type rules, duplicate/reverse-pair checks — all in
+    # app/services/activity_relationship.py's own create_relationship,
+    # checked directly) already exists and runs unconditionally on
+    # approval; this tool doesn't re-implement any of it, it only shapes
+    # the draft for review.
+    {
+        "name": "propose_edit_relationships",
+        "description": (
+            "Draft adding and/or removing schedule relationships between EXISTING activities, "
+            "for human review — nothing is saved until explicitly approved. Use this for "
+            "'reassign this relationship' (propose removing the old one by its real "
+            "relationship_id from find_relationships, and adding the new one in the same "
+            "proposal) or for linking/unlinking already-real activities. predecessor_id/"
+            "successor_id/relationship_id must be real ids from get_project_snapshot, "
+            "find_records, or find_relationships — never invented. This is NOT for relationships "
+            "between activities you're drafting in the same conversation — use "
+            "propose_create_activities' own relationships field for that instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["add", "remove"]},
+                            "predecessor_id": {"type": "string", "description": "Required for action=add. Real activity UUID."},
+                            "predecessor_name": {"type": "string", "description": "The predecessor's real task_name — for display in the review card only, not saved."},
+                            "successor_id": {"type": "string", "description": "Required for action=add. Real activity UUID."},
+                            "successor_name": {"type": "string", "description": "The successor's real task_name — for display in the review card only, not saved."},
+                            "relationship_type": {"type": "string", "enum": ["FS", "SS", "FF", "SF"]},
+                            "lag_hours": {"type": "number"},
+                            "relationship_id": {"type": "string", "description": "Required for action=remove. Real relationship UUID from find_relationships."},
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["operations"],
+            "additionalProperties": False,
+        },
+    },
     # propose_create_activities (2026-09-01) — mirrors
     # backend/app/schemas/schedule_bulk_generate.py's own BulkActivityInput/
     # BulkRelationshipInput field-for-field (checked directly), scoped down
@@ -270,6 +345,146 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    # propose_link_elements (2026-09-01, per Maro: "can poe assign elements
+    # to an activity" — a real gap: unlike RecordLink/propose_link_records,
+    # ModelElementLink's own element_ref is an opaque IFC GlobalId or mesh
+    # filename (checked directly, model_element_link.py's own schema) —
+    # nothing a user would ever type in chat, and nothing Poe could resolve
+    # from a name the way find_records resolves an Activity/Risk/ICD title.
+    # The only real source of truth for "which elements" is the live 4D
+    # viewport's own current selection, so this tool's `elements` array must
+    # come verbatim from a prior get_selected_elements call (that client
+    # tool's own header explains why) — never invented, never guessed from
+    # an element's visible name in the model.
+    {
+        "name": "propose_link_elements",
+        "description": (
+            "Draft assigning the 3D elements CURRENTLY SELECTED in the 4D viewport to an "
+            "activity, for human review — nothing is saved until explicitly approved. You must "
+            "call get_selected_elements first and pass its own `elements` array through here "
+            "verbatim — there is no other way to identify which elements, since an element's "
+            "real id (IFC GlobalId or mesh filename) isn't something you can see or guess from "
+            "chat alone. If get_selected_elements returns nothing selected, tell the user to "
+            "select the elements in the 4D viewport first rather than proposing an empty link."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string", "description": "Real activity UUID from get_project_snapshot or find_records."},
+                "activity_name": {"type": "string", "description": "The activity's real task_name — for display in the review card only, not saved."},
+                "elements": {
+                    "type": "array",
+                    "description": "Verbatim from get_selected_elements's own `elements` result — never invented.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_kind": {"type": "string", "enum": ["ifc", "mesh", "ifc_split"]},
+                            "element_ref": {"type": "string"},
+                            "element_label": {"type": "string"},
+                        },
+                        "required": ["source_kind", "element_ref", "element_label"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["activity_id", "elements"],
+            "additionalProperties": False,
+        },
+    },
+    # get_selected_elements (2026-09-01) — client tool: the backend never
+    # executes this, it only stops the loop and hands the raw call to the
+    # frontend, which resolves the CURRENT selectedObjectIds/
+    # selectedExpressIds into real (source_kind, element_ref, element_label)
+    # triples via collectionResolvers.ts's own resolveSelectionToMemberRefs
+    # — the exact same resolver FourD.tsx's own "bulk link selected
+    # elements to an activity" toolbar action already uses, not a new
+    # resolution path. Read-only (no DB write, unlike propose_link_elements
+    # right above) — reports live selection state, doesn't create anything.
+    {
+        "name": "get_selected_elements",
+        "description": (
+            "Read which 3D elements are currently selected in the 4D viewport, resolved to their "
+            "real (source_kind, element_ref, element_label) identity. Call this before "
+            "propose_link_elements whenever asked to assign/link elements to an activity — there "
+            "is no way to identify specific elements from chat text alone; the user must select "
+            "them in the viewport first. Only available while the 4D module is open."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    # propose_clash_test (2026-09-01, per Maro: "perform a clash test and
+    # show between all columns and L2 beams", then, once told the tool
+    # gap, describing the real desired flow himself: "select the requested
+    # elements, put them in their respective collections then run the
+    # clash test on those collections then show with the clash color
+    # toggled"). A clash test's own Group A/B (ClashTestBase's own
+    # group_a_collection_id/group_b_collection_id, checked directly) are
+    # real Collections, not an ad-hoc live selection — so this needs BOTH
+    # groups' elements identified via get_selected_elements (once per
+    # group; ask the user to select Group A, capture it, then select
+    # Group B, capture that too) before it can even be drafted. On
+    # approval the frontend creates both real Collections, creates the
+    # real ClashTest referencing them, and actually runs it client-side
+    # (clash geometry computation needs the live loaded model — this is
+    # NOT a plain DB write like every other proposal tool) — see
+    # aiFourDBridge.tsx's own execute_clash_test_proposal for the "why"
+    # this one specific proposal's approval action runs through the
+    # bridge instead of a plain REST call. Once this returns a real
+    # clash_test_id and results, follow up with color_by_criteria(mode=
+    # 'clash') to actually show them, per Maro's own "show with the clash
+    # color toggled" — that tool already exists, no new one needed.
+    {
+        "name": "propose_clash_test",
+        "description": (
+            "Draft creating two Collections from two already-selected element groups, then "
+            "creating and running a clash test between them, for human review — nothing is "
+            "saved until explicitly approved. You must call get_selected_elements TWICE — once "
+            "after asking the user to select Group A's elements in the 4D viewport, once after "
+            "asking them to select Group B's — and pass each result through here verbatim as "
+            "group_a_elements/group_b_elements. There is no other way to identify 'all columns' "
+            "or similar groups; nothing lets you resolve that from an IFC type or name alone. "
+            "Once approved, the tool_result reports real clash counts — follow up with "
+            "color_by_criteria(mode='clash') to actually show them in the viewport, if asked to."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "group_a_name": {"type": "string", "description": "Short display name for Group A, e.g. 'Columns'."},
+                "group_a_elements": {
+                    "type": "array",
+                    "description": "Verbatim from get_selected_elements — never invented.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_kind": {"type": "string", "enum": ["ifc", "mesh", "ifc_split"]},
+                            "element_ref": {"type": "string"},
+                            "element_label": {"type": "string"},
+                        },
+                        "required": ["source_kind", "element_ref", "element_label"],
+                        "additionalProperties": False,
+                    },
+                },
+                "group_b_name": {"type": "string", "description": "Short display name for Group B, e.g. 'Level 2 Beams'."},
+                "group_b_elements": {
+                    "type": "array",
+                    "description": "Verbatim from a second get_selected_elements call — never invented.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_kind": {"type": "string", "enum": ["ifc", "mesh", "ifc_split"]},
+                            "element_ref": {"type": "string"},
+                            "element_label": {"type": "string"},
+                        },
+                        "required": ["source_kind", "element_ref", "element_label"],
+                        "additionalProperties": False,
+                    },
+                },
+                "test_name": {"type": "string", "description": "Optional — defaults to '<Group A> vs <Group B>'."},
+                "tolerance_mm": {"type": "number", "description": "Optional clearance tolerance in mm — 0 for a hard clash test (the default)."},
+            },
+            "required": ["group_a_name", "group_a_elements", "group_b_name", "group_b_elements"],
+            "additionalProperties": False,
+        },
+    },
     # highlight_elements / isolate_elements (2026-09-01) — client tools:
     # the backend never executes these (see CLIENT_TOOL_NAMES below), it
     # only stops the loop and hands the raw call to the frontend, which
@@ -367,7 +582,7 @@ TOOLS: list[dict] = [
 # client_tools_available, orchestrator.py's own `tools` filter), since
 # these only mean anything while the 4D module is open.
 CLIENT_TOOL_NAMES: frozenset[str] = frozenset({
-    "highlight_elements", "isolate_elements", "color_by_criteria", "run_clash_detection",
+    "highlight_elements", "isolate_elements", "color_by_criteria", "run_clash_detection", "get_selected_elements",
 })
 
 # Tools whose result is a structured proposal (no DB write) rather than a
@@ -377,4 +592,5 @@ CLIENT_TOOL_NAMES: frozenset[str] = frozenset({
 # record is a fundamentally different frontend job than a viewport action.
 PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
     "propose_create_risks", "propose_create_activities", "propose_link_records",
+    "propose_edit_relationships", "propose_link_elements", "propose_clash_test",
 })

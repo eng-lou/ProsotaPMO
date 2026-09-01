@@ -2573,6 +2573,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // scrolling inside its own window. A real height fixes both.
   const [topDockHeight, setTopDockHeight] = useState(320)
   const [bottomDockHeight, setBottomDockHeight] = useState(320)
+  // Side-dock widths (2026-09-01, per Maro: "allow me increase the width
+  // of this contextual side panel" — Clash Detective's own A/B element
+  // columns were truncating hard at the old fixed 288px/w-72). Same
+  // save/apply/reset lifecycle as topDockHeight/bottomDockHeight above.
+  const [leftDockWidth, setLeftDockWidth] = useState(288)
+  const [rightDockWidth, setRightDockWidth] = useState(288)
   // Split ratios for each dock's SplitRow — lifted here (rather than local
   // to SplitRow) so a saved DockLayout can capture/restore them (2026-07-11,
   // per Maro: "create different dockable layouts sizes etc."). Empty until
@@ -2644,6 +2650,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setBottomSplitRatios(config.bottom_split_ratios)
     setPropertiesOpen(config.properties_open)
     setDataPanelOpen(config.data_panel_open)
+    setLeftDockWidth(config.left_dock_width)
+    setRightDockWidth(config.right_dock_width)
   }
   // Applies once the active layout resolves on mount (or whenever the
   // selected project changes) — not on every activeDockConfig.config
@@ -2663,6 +2671,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     bottom_split_ratios: bottomSplitRatios,
     properties_open: propertiesOpen,
     data_panel_open: dataPanelOpen,
+    left_dock_width: leftDockWidth,
+    right_dock_width: rightDockWidth,
   })
   const handleApplyDockLayout = async (id: string) => applyDockConfig(await dockLayouts.apply(id))
   const handleSaveDockLayout = (name: string) => dockLayouts.create(name, captureCurrentDockConfig())
@@ -3111,6 +3121,56 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
+  // Extracted (2026-09-01, additive) from the old handleRunClashTest so
+  // Poe's own execute_clash_test_proposal bridge handler (see
+  // aiFourDBridge.tsx) can run a clash test against Collections it just
+  // created a moment ago, without needing them to already be in
+  // `collections`/`clashTests` React state — setState is always deferred
+  // to the next render, so a freshly-created Collection/ClashTest is
+  // guaranteed NOT to be found there yet if looked up synchronously in the
+  // same handler that created them. Every existing caller (handleRunClashTest
+  // below) still looks its own test/collections up from real state first,
+  // same as before this refactor — this only pulls the actual compute-and-
+  // submit logic out into something callable either way.
+  const runClashTestFor = async (
+    test: { id: string; test_type: 'hard' | 'clearance'; tolerance_mm: number },
+    collectionA: { id: string; members: CollectionMember[] },
+    collectionB: { id: string; members: CollectionMember[] },
+  ): Promise<ClashTest | undefined> => {
+    setClashError(null)
+    setClashRunProgress({ testId: test.id, done: 0, total: 0 })
+    try {
+      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
+      // Clash Detective doesn't understand level-slices yet (2026-07-15,
+      // deliberately out of scope for that feature's own first pass — see
+      // elementSplitTargets.ts's own header) — filtered out here rather
+      // than widening sceneClash.ts's own real/mesh-only element type, so a
+      // slice-containing Collection degrades to "clash-test its non-slice
+      // members" instead of a type error or a runtime crash.
+      const nonSplitMembers = (members: CollectionMember[]) =>
+        members.filter((m): m is typeof m & { source_kind: 'ifc' | 'mesh' } => m.source_kind !== 'ifc_split')
+      const elementsA = await resolveMembersToElements(nonSplitMembers(collectionA.members), clashSceneObjects, ifcHandles)
+      const selfTest = collectionA.id === collectionB.id
+      const elementsB = selfTest ? elementsA : await resolveMembersToElements(nonSplitMembers(collectionB.members), clashSceneObjects, ifcHandles)
+      const found = await findClashes(elementsA, elementsB, test.test_type, test.tolerance_mm, selfTest, (done, total) => {
+        setClashRunProgress({ testId: test.id, done, total })
+      })
+      const pairs: ClashResultPair[] = found.map(f => ({
+        element_a_source_kind: f.elementA.sourceKind, element_a_ref: f.elementA.ref, element_a_label: f.elementA.label,
+        element_b_source_kind: f.elementB.sourceKind, element_b_ref: f.elementB.ref, element_b_label: f.elementB.label,
+        distance_mm: f.distanceMm,
+      }))
+      const updated = await replaceClashResults(test.id, pairs)
+      setClashTests(prev => prev.map(t => (t.id === test.id ? updated : t)))
+      return updated
+    } catch (err) {
+      setClashError(clashErrorMessage(err, 'Failed to run clash test'))
+      return undefined
+    } finally {
+      setClashRunProgress(null)
+    }
+  }
+
   // Returns the updated ClashTest (2026-09-01, additive — every existing
   // caller already ignores the return value, so this can't change any
   // existing behaviour) so Poe's own run_clash_detection client tool
@@ -3126,38 +3186,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setClashError('One of this test\'s Collections no longer exists — pick new ones (delete and recreate the test)')
       return undefined
     }
-    setClashError(null)
-    setClashRunProgress({ testId, done: 0, total: 0 })
-    try {
-      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
-      // Clash Detective doesn't understand level-slices yet (2026-07-15,
-      // deliberately out of scope for that feature's own first pass — see
-      // elementSplitTargets.ts's own header) — filtered out here rather
-      // than widening sceneClash.ts's own real/mesh-only element type, so a
-      // slice-containing Collection degrades to "clash-test its non-slice
-      // members" instead of a type error or a runtime crash.
-      const nonSplitMembers = (members: typeof collectionA.members) =>
-        members.filter((m): m is typeof m & { source_kind: 'ifc' | 'mesh' } => m.source_kind !== 'ifc_split')
-      const elementsA = await resolveMembersToElements(nonSplitMembers(collectionA.members), clashSceneObjects, ifcHandles)
-      const selfTest = collectionA.id === collectionB.id
-      const elementsB = selfTest ? elementsA : await resolveMembersToElements(nonSplitMembers(collectionB.members), clashSceneObjects, ifcHandles)
-      const found = await findClashes(elementsA, elementsB, test.test_type, test.tolerance_mm, selfTest, (done, total) => {
-        setClashRunProgress({ testId, done, total })
-      })
-      const pairs: ClashResultPair[] = found.map(f => ({
-        element_a_source_kind: f.elementA.sourceKind, element_a_ref: f.elementA.ref, element_a_label: f.elementA.label,
-        element_b_source_kind: f.elementB.sourceKind, element_b_ref: f.elementB.ref, element_b_label: f.elementB.label,
-        distance_mm: f.distanceMm,
-      }))
-      const updated = await replaceClashResults(testId, pairs)
-      setClashTests(prev => prev.map(t => (t.id === testId ? updated : t)))
-      return updated
-    } catch (err) {
-      setClashError(clashErrorMessage(err, 'Failed to run clash test'))
-      return undefined
-    } finally {
-      setClashRunProgress(null)
-    }
+    return runClashTestFor(test, collectionA, collectionB)
   }
 
   const handleSelectClashPair = async (
@@ -6942,9 +6971,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   )
 
   // Poe 4D client tools (2026-09-01) — registers highlight_elements/
-  // isolate_elements/color_by_criteria/run_clash_detection into the shared
-  // bridge (see aiFourDBridge.tsx's own header for why this is a registry,
-  // not a normal top-down Context) whenever this module is mounted, and
+  // isolate_elements/color_by_criteria/run_clash_detection/
+  // get_selected_elements into the shared bridge (see aiFourDBridge.tsx's
+  // own header for why this is a registry, not a normal top-down Context)
+  // whenever this module is mounted, and
   // unregisters on unmount — Poe only ever offers these tool names to the
   // model while a real handler exists (PoePanel.tsx's own
   // client_tools_available), so leaving 4D can't leave a stale, no-longer-
@@ -7020,6 +7050,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return { applied: 'off' }
     }
 
+    // get_selected_elements (2026-09-01, per Maro: "can poe assign elements
+    // to an activity") — reuses resolveSelectionToMemberRefs verbatim, the
+    // exact same resolver handleBulkLinkSelectedToActivity's own toolbar
+    // action already uses to turn the live selection into real
+    // (source_kind, element_ref, element_label) triples. Read-only — this
+    // never itself creates a ModelElementLink; propose_link_elements
+    // (approved via the chat card) is what actually does, using this
+    // result verbatim.
+    aiFourDBridge.current.get_selected_elements = async () => {
+      const handle = getIfcHandleFor(activeIfcModelId)
+      const elements = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+      if (elements.length === 0) return { elements: [], warning: 'Nothing is currently selected in the 4D viewport.' }
+      return { elements }
+    }
+
     aiFourDBridge.current.run_clash_detection = async () => {
       if (clashTests.length === 0) {
         return { error: 'No clash test is configured yet — set up Selection A/B in the Clash Detective panel first.' }
@@ -7037,14 +7082,74 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
     }
 
+    // execute_clash_test_proposal (2026-09-01, PoePanel-internal only —
+    // see aiFourDBridge.tsx's own header on why this is never a real
+    // Poe-callable tool) — the approval action for propose_clash_test.
+    // Creates both real Collections (+ their members) and the real
+    // ClashTest via the exact same endpoints/state-setters
+    // handleCreateCollection/handleAddSelectedToCollection/
+    // handleCreateClashTest already use, then runs it immediately via
+    // runClashTestFor — called with the freshly-created collection/test
+    // objects directly, NOT looked up from `collections`/`clashTests`
+    // state (which can't possibly contain them yet at this point in the
+    // same tick — see that function's own header for why this mattered
+    // enough to extract it).
+    aiFourDBridge.current.execute_clash_test_proposal = async (input: Record<string, unknown>) => {
+      if (!selectedProject) return { error: 'No project selected.' }
+      const groupAElements = (input.group_a_elements as { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string; element_label: string }[] | undefined) ?? []
+      const groupBElements = (input.group_b_elements as { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string; element_label: string }[] | undefined) ?? []
+      const groupAName = (input.group_a_name as string | undefined) || 'Group A'
+      const groupBName = (input.group_b_name as string | undefined) || 'Group B'
+      if (groupAElements.length === 0 || groupBElements.length === 0) {
+        return { error: 'Both groups need at least one element — nothing was created.' }
+      }
+      try {
+        setCollectionError(null)
+        const collectionA = await createCollection({ project_id: selectedProject.id, name: groupAName })
+        const membersA = []
+        for (const el of groupAElements) membersA.push(await addCollectionMember({ collection_id: collectionA.id, ...el }))
+        const fullCollectionA = { ...collectionA, members: membersA }
+        const collectionB = await createCollection({ project_id: selectedProject.id, name: groupBName })
+        const membersB = []
+        for (const el of groupBElements) membersB.push(await addCollectionMember({ collection_id: collectionB.id, ...el }))
+        const fullCollectionB = { ...collectionB, members: membersB }
+        setCollections(prev => [...prev, fullCollectionA, fullCollectionB])
+
+        setClashError(null)
+        const testName = (input.test_name as string | undefined) || `${groupAName} vs ${groupBName}`
+        const toleranceMm = typeof input.tolerance_mm === 'number' ? input.tolerance_mm : 0
+        const test = await createClashTest({
+          project_id: selectedProject.id, name: testName,
+          group_a_collection_id: collectionA.id, group_b_collection_id: collectionB.id,
+          test_type: 'hard', tolerance_mm: toleranceMm,
+        })
+        setClashTests(prev => [...prev, test])
+
+        const updated = await runClashTestFor(test, fullCollectionA, fullCollectionB)
+        if (!updated) return { error: `Created "${testName}" but failed to run it — check the Clash Detective panel.` }
+        return {
+          collection_a_id: collectionA.id, collection_b_id: collectionB.id, clash_test_id: test.id,
+          test_name: updated.name, total_results: updated.results.length,
+          unresolved_results: updated.results.filter(r => r.status !== 'approved').length,
+          sample: updated.results.slice(0, 5).map(r => ({
+            a: r.element_a_label, b: r.element_b_label, distance_mm: r.distance_mm, status: r.status,
+          })),
+        }
+      } catch (err) {
+        return { error: collectionErrorMessage(err, 'Failed to create the collections/clash test') }
+      }
+    }
+
     return () => {
       delete aiFourDBridge.current.highlight_elements
       delete aiFourDBridge.current.isolate_elements
       delete aiFourDBridge.current.color_by_criteria
       delete aiFourDBridge.current.run_clash_detection
+      delete aiFourDBridge.current.get_selected_elements
+      delete aiFourDBridge.current.execute_clash_test_proposal
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiFourDBridge, activities, modelElementLinks, sceneObjects, ifcHandles, settings, clashTests])
+  }, [aiFourDBridge, activities, modelElementLinks, sceneObjects, ifcHandles, settings, clashTests, selectedObjectIds, selectedExpressIds, activeIfcModelId, selectedProject, collections])
 
   if (!selectedProject) return null
 
@@ -7334,7 +7439,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           pivotRotation={pivotRotationSupport}
           onChangeSourceUpAxis={axis => { if (activeObjectId) handleSetSourceUpAxis(activeObjectId, axis) }}
         />
-        <SideDock side="left" panels={leftDockPanels} />
+        {leftDockPanels.length > 0 && (
+          <>
+            <SideDock side="left" panels={leftDockPanels} width={leftDockWidth} />
+            <DockDivider axis="x" onDrag={dx => setLeftDockWidth(w => Math.max(200, w + dx))} />
+          </>
+        )}
 
         <div className="flex-1 flex flex-col min-w-0 p-3">
           {topWindows.length > 0 && (
@@ -7371,7 +7481,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           )}
         </div>
 
-        <SideDock side="right" panels={rightDockPanels} />
+        {rightDockPanels.length > 0 && (
+          <>
+            <DockDivider axis="x" onDrag={dx => setRightDockWidth(w => Math.max(200, w - dx))} />
+            <SideDock side="right" panels={rightDockPanels} width={rightDockWidth} />
+          </>
+        )}
         <DataPanel
           open={dataPanelOpen}
           onToggle={toggleDataPanel}

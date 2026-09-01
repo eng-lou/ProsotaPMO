@@ -25,9 +25,28 @@ import { createContext, useContext, useRef, type ReactNode } from 'react'
 // all simple top-down global state) — none already solved "a module
 // exposes live capabilities to something mounted elsewhere," so this is a
 // genuinely new pattern, not a reuse of an existing bridge.
-export type AiFourDToolName = 'highlight_elements' | 'isolate_elements' | 'color_by_criteria' | 'run_clash_detection'
+export type AiFourDToolName = 'highlight_elements' | 'isolate_elements' | 'color_by_criteria' | 'run_clash_detection' | 'get_selected_elements'
 
-export type AiFourDHandlers = Partial<Record<AiFourDToolName, (input: Record<string, unknown>) => Promise<unknown> | unknown>>
+// execute_clash_test_proposal (2026-09-01, per Maro's own described flow:
+// "select the requested elements, put them in their respective
+// collections then run the clash test on those collections then show
+// with the clash color toggled") — a real, deliberate exception to the
+// rule the name AiFourDToolName above implies: this key is NEVER added to
+// backend/app/ai/tools.py's own TOOLS list or CLIENT_TOOL_NAMES, so it is
+// never offered to the model as a callable tool at all — Poe cannot call
+// it directly, by design. It exists purely so PoePanel.tsx's own
+// handleResolveProposal (approving a propose_clash_test proposal) can
+// reach into FourD.tsx's real Collection/ClashTest-creation logic
+// directly, bypassing the normal Messages-API tool-loop entirely, because
+// this is the one proposal whose approval action needs to (a) create
+// real Collections/a real ClashTest via the same endpoints every other
+// proposal tool already uses, AND (b) actually *run* that test — which
+// needs live loaded-model geometry (sceneClash.ts's own findClashes),
+// something only FourD.tsx's own client-side code can do, not a plain
+// REST call the way every other proposal's approval action already is.
+type AiFourDInternalName = 'execute_clash_test_proposal'
+
+export type AiFourDHandlers = Partial<Record<AiFourDToolName | AiFourDInternalName, (input: Record<string, unknown>) => Promise<unknown> | unknown>>
 
 export interface AiFourDBridgeHandle {
   current: AiFourDHandlers

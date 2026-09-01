@@ -8,16 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import run_turn
 from app.ai.context_tools import get_project_snapshot
-from app.ai.record_tools import explain_causal_baseline, find_records
+from app.ai.record_tools import explain_causal_baseline, find_records, find_relationships
 from app.ai.system_prompt import build_system_prompt
 from app.ai.tools import CLIENT_TOOL_NAMES, PROPOSAL_TOOL_NAMES, TOOLS
 from app.services import object_storage
 
 # Server-side tool dispatch (2026-08-31, extended 2026-09-01 with
-# find_records/explain_causal_baseline) — every tool NOT in
-# CLIENT_TOOL_NAMES/PROPOSAL_TOOL_NAMES is executed inline here.
-# propose_create_risks/propose_create_activities/propose_link_records
-# never reach this function at all — PROPOSAL_TOOL_NAMES makes
+# find_records/explain_causal_baseline, then find_relationships) — every
+# tool NOT in CLIENT_TOOL_NAMES/PROPOSAL_TOOL_NAMES is executed inline
+# here. Every propose_* tool (propose_create_risks/propose_create_activities/
+# propose_link_records/propose_edit_relationships/propose_link_elements)
+# never reaches this function at all — PROPOSAL_TOOL_NAMES makes
 # run_agent_turn's own loop stop and return them as pending_proposals
 # before dispatch is ever considered (see that function's own docstring).
 
@@ -34,6 +35,8 @@ async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, pr
         return await explain_causal_baseline(
             db, project_id, tool_input["record_type"], uuid.UUID(tool_input["record_id"]),
         )
+    if name == "find_relationships":
+        return await find_relationships(db, uuid.UUID(tool_input["activity_id"]))
     raise ValueError(f"Unknown server tool: {name}")
 
 

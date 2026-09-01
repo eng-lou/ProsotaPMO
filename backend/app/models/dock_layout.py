@@ -17,6 +17,8 @@ DEFAULT_CONFIG = {
     "bottom_split_ratios": [],
     "properties_open": True,
     "data_panel_open": True,
+    "left_dock_width": 288,
+    "right_dock_width": 288,
 }
 
 

@@ -11,6 +11,11 @@ export interface DockLayoutConfig {
   bottom_split_ratios: number[]
   properties_open: boolean
   data_panel_open: boolean
+  // Side-dock widths (2026-09-01, per Maro: "allow me increase the width
+  // of this contextual side panel") — same save/apply/reset lifecycle as
+  // every other size in this config.
+  left_dock_width: number
+  right_dock_width: number
 }
 
 export const DEFAULT_DOCK_CONFIG: DockLayoutConfig = {
@@ -22,6 +27,8 @@ export const DEFAULT_DOCK_CONFIG: DockLayoutConfig = {
   bottom_split_ratios: [],
   properties_open: true,
   data_panel_open: true,
+  left_dock_width: 288,
+  right_dock_width: 288,
 }
 
 export interface DockLayout {

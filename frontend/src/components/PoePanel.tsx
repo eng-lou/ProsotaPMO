@@ -56,6 +56,56 @@ interface LinkProposalDraft {
   note?: string | null
 }
 
+// RelationshipEditOperationDraft <-> propose_edit_relationships' own
+// per-op shape (2026-09-01, per Maro: "if i ask poe to reassign
+// relationships... can they do it") — mirrors
+// activity_relationship.py's ActivityRelationshipCreate for action="add"
+// (predecessor_id/successor_id/relationship_type/lag_hours); action="remove"
+// only ever needs relationship_id (find_relationships' own real id — see
+// that tool's header on why "reassign" is delete-then-recreate).
+// predecessor_name/successor_name are display-only (never sent to the
+// real endpoint) — the same "let the model supply human-readable text
+// alongside the real id" convention RiskProposalDraft.title already
+// established, just needed here since neither endpoint returns activity
+// names on its own.
+interface RelationshipEditOperationDraft {
+  action: 'add' | 'remove'
+  predecessor_id?: string
+  predecessor_name?: string
+  successor_id?: string
+  successor_name?: string
+  relationship_type?: string | null
+  lag_hours?: number | null
+  relationship_id?: string
+}
+
+// ElementLinkDraft <-> get_selected_elements' own result shape, passed
+// through propose_link_elements verbatim (2026-09-01, per Maro: "can poe
+// assign elements to an activity") — never independently invented by Poe,
+// since element_ref (an IFC GlobalId or mesh filename) isn't something
+// chat text could ever supply.
+interface ElementLinkDraft {
+  source_kind: string
+  element_ref: string
+  element_label: string
+}
+
+// ClashTestProposalDraft <-> propose_clash_test's own input shape
+// (2026-09-01, per Maro's own described flow: "select the requested
+// elements, put them in their respective collections then run the clash
+// test on those collections then show with the clash color toggled").
+// group_a_elements/group_b_elements are each get_selected_elements'
+// own result, captured once per group — never invented, same "opaque IFC
+// identity" reasoning as ElementLinkDraft above.
+interface ClashTestProposalDraft {
+  group_a_name: string
+  group_a_elements: ElementLinkDraft[]
+  group_b_name: string
+  group_b_elements: ElementLinkDraft[]
+  test_name?: string
+  tolerance_mm?: number
+}
+
 // A discriminated union, not three separate optional fields — only one
 // proposal tool can ever be pending at once (findPendingProposal only
 // looks at the single last message), so "which kind" and "which payload"
@@ -64,6 +114,9 @@ type PendingProposal =
   | { kind: 'risks'; toolUseId: string; risks: RiskProposalDraft[] }
   | { kind: 'activities'; toolUseId: string; activities: ActivityProposalDraft[]; relationships: RelationshipProposalDraft[] }
   | { kind: 'links'; toolUseId: string; links: LinkProposalDraft[] }
+  | { kind: 'edit_relationships'; toolUseId: string; operations: RelationshipEditOperationDraft[] }
+  | { kind: 'link_elements'; toolUseId: string; activityId: string; activityName?: string; elements: ElementLinkDraft[] }
+  | { kind: 'clash_test'; toolUseId: string; draft: ClashTestProposalDraft }
 
 // Only the LAST message can hold a genuinely still-pending proposal — the
 // moment one gets resolved, a new user message carrying its tool_result is
@@ -77,7 +130,8 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
   if (!last || last.role !== 'assistant') return null
   const block = last.content.find(b =>
     b.type === 'tool_use'
-    && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'),
+    && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'
+      || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'),
   )
   if (!block) return null
   const toolUseId = block.id as string
@@ -90,6 +144,29 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
       kind: 'activities', toolUseId,
       activities: (input.activities as ActivityProposalDraft[] | undefined) ?? [],
       relationships: (input.relationships as RelationshipProposalDraft[] | undefined) ?? [],
+    }
+  }
+  if (block.name === 'propose_edit_relationships') {
+    return { kind: 'edit_relationships', toolUseId, operations: (input.operations as RelationshipEditOperationDraft[] | undefined) ?? [] }
+  }
+  if (block.name === 'propose_link_elements') {
+    return {
+      kind: 'link_elements', toolUseId,
+      activityId: input.activity_id as string, activityName: input.activity_name as string | undefined,
+      elements: (input.elements as ElementLinkDraft[] | undefined) ?? [],
+    }
+  }
+  if (block.name === 'propose_clash_test') {
+    return {
+      kind: 'clash_test', toolUseId,
+      draft: {
+        group_a_name: (input.group_a_name as string | undefined) ?? 'Group A',
+        group_a_elements: (input.group_a_elements as ElementLinkDraft[] | undefined) ?? [],
+        group_b_name: (input.group_b_name as string | undefined) ?? 'Group B',
+        group_b_elements: (input.group_b_elements as ElementLinkDraft[] | undefined) ?? [],
+        test_name: input.test_name as string | undefined,
+        tolerance_mm: input.tolerance_mm as number | undefined,
+      },
     }
   }
   return { kind: 'links', toolUseId, links: (input.links as LinkProposalDraft[] | undefined) ?? [] }
@@ -180,8 +257,8 @@ const POE_CAPABILITY_LINES = [
   'Cost and earned value (CPI/SPI, EAC)',
   'ICD — issues, changes, decisions',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
-  'On the 4D page: highlight, isolate, colour, or run a clash check',
-  'Ask it to draft new risks, activities, or links — you approve before anything saves',
+  'On the 4D page: highlight, isolate, colour, or set up and run a clash test between two selections',
+  'Ask it to draft new risks, activities, links, relationships, or element assignments — you approve before anything saves',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 
@@ -268,14 +345,19 @@ export function PoePanel({
   // history, so it stays local rather than living in Layout.tsx's own
   // lifted `messages`. Defaults to "everything checked" the moment a new
   // proposal actually appears (below), not on every render. Shared between
-  // 'risks' and 'links' (both a flat list of independent items, checkbox
-  // per row); 'activities' uses activitiesApproved instead — a schedule
-  // chunk's own relationships reference *other draft activities in the
-  // same proposal* by temp_id, so approving some activities but not others
-  // could leave a relationship dangling on a rejected one. All-or-nothing
-  // is the only choice that can't produce that half-broken state.
+  // 'risks', 'links', 'edit_relationships', and 'link_elements' (all a
+  // flat list of independent items, checkbox per row); 'activities' uses
+  // activitiesApproved instead — a schedule chunk's own relationships
+  // reference *other draft activities in the same proposal* by temp_id,
+  // so approving some activities but not others could leave a
+  // relationship dangling on a rejected one. All-or-nothing is the only
+  // choice that can't produce that half-broken state. 'clash_test'
+  // (2026-09-01) uses its own clashTestApproved for the same all-or-
+  // nothing reason — Group A and Group B only mean anything together, one
+  // clash test between the two, not independently-approvable rows.
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
   const [activitiesApproved, setActivitiesApproved] = useState(true)
+  const [clashTestApproved, setClashTestApproved] = useState(true)
   const [resolvingProposal, setResolvingProposal] = useState(false)
   const pendingProposal = findPendingProposal(messages)
   // 4D client tools (2026-09-01) — see aiFourDBridge.tsx's own header. Only
@@ -297,6 +379,9 @@ export function PoePanel({
     if (!pendingProposal) return
     if (pendingProposal.kind === 'risks') setSelectedIndices(new Set(pendingProposal.risks.map((_, i) => i)))
     else if (pendingProposal.kind === 'links') setSelectedIndices(new Set(pendingProposal.links.map((_, i) => i)))
+    else if (pendingProposal.kind === 'edit_relationships') setSelectedIndices(new Set(pendingProposal.operations.map((_, i) => i)))
+    else if (pendingProposal.kind === 'link_elements') setSelectedIndices(new Set(pendingProposal.elements.map((_, i) => i)))
+    else if (pendingProposal.kind === 'clash_test') setClashTestApproved(true)
     else setActivitiesApproved(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingProposal?.toolUseId])
@@ -430,7 +515,17 @@ export function PoePanel({
   // links -> /record-links/, once per approved link — there's no bulk
   // version of that endpoint (checked directly), so N approved links is N
   // sequential real POSTs, each independently reporting success/failure
-  // rather than one all-or-nothing call.
+  // rather than one all-or-nothing call. edit_relationships (2026-09-01) ->
+  // /activity-relationships/ POST (add) or DELETE (remove) per approved
+  // operation, the same real endpoint (and its own cycle/WBS-summary/
+  // milestone-type validation) the Scheduling module's relationship UI
+  // already calls. link_elements (2026-09-01) -> /model-element-links/
+  // POST per approved element, same shape FourD.tsx's own
+  // handleBulkLinkSelectedToActivity already posts. clash_test (2026-09-01)
+  // is the one exception to "plain REST call(s)" — running the actual
+  // clash geometry computation needs the live loaded model, so its
+  // approval goes through aiFourDBridge's own execute_clash_test_proposal
+  // instead (see that handler's own header in aiFourDBridge.tsx).
   //
   // The tool_use is only ever resolved by sending its own tool_result back
   // through the normal /ai/chat endpoint (never silently dropped) — the
@@ -474,7 +569,7 @@ export function PoePanel({
         } else {
           summary = 'The proposed activities were rejected — nothing created.'
         }
-      } else {
+      } else if (pendingProposal.kind === 'links') {
         const approved = pendingProposal.links.filter((_, i) => selectedIndices.has(i))
         let createdCount = 0
         let failedCount = 0
@@ -490,6 +585,82 @@ export function PoePanel({
         summary = `Created ${createdCount} of ${approved.length} approved link(s)` +
           `${failedCount > 0 ? ` (${failedCount} failed — a source/target id likely no longer exists)` : ''}` +
           `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+      } else if (pendingProposal.kind === 'edit_relationships') {
+        // add -> the real /activity-relationships/ POST (same endpoint the
+        // Scheduling module's own relationship UI calls — every real
+        // validation, cycle detection included, runs there unconditionally);
+        // remove -> DELETE by the real relationship_id find_relationships
+        // supplied. "Reassign" is just one remove + one add in the same
+        // approved batch, same as a human would do it by hand.
+        const approved = pendingProposal.operations.filter((_, i) => selectedIndices.has(i))
+        let doneCount = 0
+        let failedCount = 0
+        for (const op of approved) {
+          try {
+            if (op.action === 'add') {
+              await api.post('/api/v1/activity-relationships/', {
+                predecessor_id: op.predecessor_id, successor_id: op.successor_id,
+                relationship_type: op.relationship_type ?? 'FS', lag_hours: op.lag_hours ?? 0,
+              })
+            } else {
+              await api.delete(`/api/v1/activity-relationships/${op.relationship_id}`)
+            }
+            doneCount += 1
+          } catch {
+            failedCount += 1
+          }
+        }
+        const rejectedCount = pendingProposal.operations.length - approved.length
+        summary = `Applied ${doneCount} of ${approved.length} approved relationship change(s)` +
+          `${failedCount > 0 ? ` (${failedCount} failed — a validation rule or a stale id)` : ''}` +
+          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+      } else if (pendingProposal.kind === 'link_elements') {
+        // link_elements — the real /model-element-links/ POST, one per
+        // approved element (same shape FourD.tsx's own
+        // handleBulkLinkSelectedToActivity already posts, just triggered
+        // from this card instead of the toolbar).
+        const approved = pendingProposal.elements.filter((_, i) => selectedIndices.has(i))
+        let createdCount = 0
+        let failedCount = 0
+        for (const el of approved) {
+          try {
+            await api.post('/api/v1/model-element-links/', {
+              activity_id: pendingProposal.activityId,
+              source_kind: el.source_kind, element_ref: el.element_ref, element_label: el.element_label,
+            })
+            createdCount += 1
+          } catch {
+            failedCount += 1
+          }
+        }
+        const rejectedCount = pendingProposal.elements.length - approved.length
+        summary = `Linked ${createdCount} of ${approved.length} approved element(s)` +
+          `${failedCount > 0 ? ` (${failedCount} failed)` : ''}` +
+          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+      } else {
+        // clash_test — NOT a plain REST call like every kind above (see
+        // aiFourDBridge.tsx's own execute_clash_test_proposal header for
+        // the full "why": running the actual clash geometry computation
+        // needs the live loaded model, so this one routes through the 4D
+        // bridge instead of a direct api.post).
+        if (!clashTestApproved) {
+          summary = 'The proposed clash test was rejected — nothing created.'
+        } else {
+          const handler = aiFourDBridge?.current.execute_clash_test_proposal
+          if (!handler) {
+            summary = 'Could not run this — the 4D module needs to be open.'
+          } else {
+            const result = await handler(pendingProposal.draft as unknown as Record<string, unknown>) as Record<string, unknown>
+            if (result.error) {
+              summary = `Failed: ${result.error as string}`
+            } else {
+              const total = result.total_results as number
+              const unresolved = result.unresolved_results as number
+              summary = `Created "${result.test_name as string}" and ran it: ${total} clash(es) found` +
+                `${unresolved !== total ? ` (${unresolved} unresolved)` : ''}.`
+            }
+          }
+        }
       }
 
       const nextMessages: AiMessage[] = [
@@ -727,6 +898,104 @@ export function PoePanel({
                   </>
                 )}
 
+                {pendingProposal.kind === 'edit_relationships' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.operations.length} relationship change{pendingProposal.operations.length === 1 ? '' : 's'} proposed — review before applying:
+                    </p>
+                    {pendingProposal.operations.map((op, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
+                              op.action === 'add'
+                                ? 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300'
+                                : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                            }`}>
+                              {op.action === 'add' ? 'Add' : 'Remove'}
+                            </span>
+                            <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">
+                              {op.predecessor_name ?? op.predecessor_id ?? '—'}
+                              {' → '}
+                              {op.successor_name ?? op.successor_id ?? '—'}
+                            </p>
+                          </div>
+                          {op.action === 'add' && (
+                            <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                              {op.relationship_type ?? 'FS'}{op.lag_hours ? ` · lag ${op.lag_hours}h` : ''}
+                            </p>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'link_elements' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      Link {pendingProposal.elements.length} selected element{pendingProposal.elements.length === 1 ? '' : 's'} to{' '}
+                      <span className="font-semibold">{pendingProposal.activityName ?? pendingProposal.activityId}</span> — review before saving:
+                    </p>
+                    {pendingProposal.elements.map((el, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">{el.element_label}</p>
+                          <p className="text-[11px] text-gray-400 dark:text-prosota-muted">{el.source_kind}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'clash_test' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      Clash test proposed — review before creating:
+                    </p>
+                    <label className="flex items-center gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={clashTestApproved}
+                        onChange={e => setClashTestApproved(e.target.checked)}
+                        className="shrink-0"
+                      />
+                      <span className="text-xs text-gray-700 dark:text-prosota-paper">Create both collections and run the test</span>
+                    </label>
+                    <div className="rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5">
+                      <p className="text-sm font-medium text-gray-900 dark:text-prosota-paper">{pendingProposal.draft.group_a_name}</p>
+                      <p className="text-[11px] text-gray-400 dark:text-prosota-muted">{pendingProposal.draft.group_a_elements.length} element(s)</p>
+                    </div>
+                    <div className="rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5">
+                      <p className="text-sm font-medium text-gray-900 dark:text-prosota-paper">{pendingProposal.draft.group_b_name}</p>
+                      <p className="text-[11px] text-gray-400 dark:text-prosota-muted">{pendingProposal.draft.group_b_elements.length} element(s)</p>
+                    </div>
+                    {pendingProposal.draft.test_name && (
+                      <p className="text-[11px] text-gray-400 dark:text-prosota-muted">Test name: {pendingProposal.draft.test_name}</p>
+                    )}
+                  </>
+                )}
+
                 <button
                   onClick={handleResolveProposal}
                   disabled={resolvingProposal}
@@ -736,9 +1005,15 @@ export function PoePanel({
                     ? 'Working…'
                     : pendingProposal.kind === 'activities'
                       ? (activitiesApproved ? 'Create these activities' : 'Reject')
-                      : selectedIndices.size === 0
-                        ? 'Reject all'
-                        : `Create ${selectedIndices.size} selected`}
+                      : pendingProposal.kind === 'clash_test'
+                        ? (clashTestApproved ? 'Create and run this test' : 'Reject')
+                        : selectedIndices.size === 0
+                          ? 'Reject all'
+                          : pendingProposal.kind === 'edit_relationships'
+                            ? `Apply ${selectedIndices.size} selected`
+                            : pendingProposal.kind === 'link_elements'
+                              ? `Link ${selectedIndices.size} selected`
+                              : `Create ${selectedIndices.size} selected`}
                 </button>
               </div>
             )}

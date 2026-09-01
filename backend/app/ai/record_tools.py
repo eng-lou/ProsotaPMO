@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.activity_relationship import ActivityRelationship
 from app.models.cost_element import CostElement
 from app.models.icd_item import IcdItem
 from app.models.record_link import RecordLink
@@ -175,4 +176,54 @@ async def explain_causal_baseline(
              "target": {**edge["target"], "name": names.get((edge["target"]["type"], edge["target"]["id"]))}}
             for edge in edges
         ],
+    }
+
+
+async def find_relationships(db: AsyncSession, activity_id: uuid.UUID) -> dict:
+    """One activity's own real predecessor/successor links (2026-09-01, for
+    propose_edit_relationships) — exists to close the same gap
+    find_records/explain_causal_baseline exist for: "reassigning" a
+    relationship is delete-then-recreate (ActivityRelationshipUpdate's own
+    docstring — predecessor_id/successor_id aren't editable in place), so
+    Poe needs a real relationship_id to delete before it can propose a
+    replacement, never guessed or inferred from the two activity names
+    alone. Returns both directions (this activity as predecessor, and as
+    successor) since either could be the one a user means by "its
+    relationship" without saying which."""
+    activity = await db.get(Activity, activity_id)
+    if activity is None:
+        return {"activity_id": str(activity_id), "activity_name": None, "as_predecessor": [], "as_successor": []}
+
+    rows = (await db.execute(
+        select(
+            ActivityRelationship.id, ActivityRelationship.predecessor_id, ActivityRelationship.successor_id,
+            ActivityRelationship.relationship_type, ActivityRelationship.lag_hours,
+        ).where(
+            (ActivityRelationship.predecessor_id == activity_id) | (ActivityRelationship.successor_id == activity_id),
+        )
+    )).all()
+
+    other_ids = {r.successor_id if r.predecessor_id == activity_id else r.predecessor_id for r in rows}
+    other_names: dict[uuid.UUID, str] = {}
+    if other_ids:
+        name_rows = (await db.execute(select(Activity.id, Activity.task_name).where(Activity.id.in_(other_ids)))).all()
+        other_names = dict(name_rows)
+
+    as_predecessor, as_successor = [], []
+    for r in rows:
+        if r.predecessor_id == activity_id:
+            as_predecessor.append({
+                "relationship_id": str(r.id), "successor_id": str(r.successor_id),
+                "successor_name": other_names.get(r.successor_id), "relationship_type": r.relationship_type,
+                "lag_hours": float(r.lag_hours),
+            })
+        else:
+            as_successor.append({
+                "relationship_id": str(r.id), "predecessor_id": str(r.predecessor_id),
+                "predecessor_name": other_names.get(r.predecessor_id), "relationship_type": r.relationship_type,
+                "lag_hours": float(r.lag_hours),
+            })
+    return {
+        "activity_id": str(activity_id), "activity_name": activity.task_name,
+        "as_predecessor": as_predecessor, "as_successor": as_successor,
     }

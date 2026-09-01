@@ -21,6 +21,15 @@ class DockLayoutConfig(BaseModel):
     bottom_split_ratios: list[float] = Field(default_factory=list)
     properties_open: bool = True
     data_panel_open: bool = True
+    # Side-dock widths (2026-09-01, per Maro: "allow me increase the width
+    # of this contextual side panel" — Clash Detective's own A/B element
+    # columns were truncating hard at the old fixed w-72). Missing on any
+    # row saved before this field existed — Pydantic's own default (not a
+    # migration; config is a plain JSONB blob, see DockLayout's own model
+    # docstring) fills it in exactly like every other field here already
+    # does for an older saved layout.
+    left_dock_width: float = 288
+    right_dock_width: float = 288
 
 
 class DockLayoutCreate(BaseModel):
