@@ -44,3 +44,10 @@ tqdm==4.70.0
 # (tool use, adaptive thinking, effort) is Messages API surface, not
 # SDK-version-gated.
 anthropic==0.125.0
+# AI Render Enhancement (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md) —
+# fal.ai's own official client, used by app/services/ai_upscale.py to call
+# Real-ESRGAN (faithful super-resolution) on the 3D viewport's raw render
+# at still-capture time only. Chosen over Gemini's generative image-editing
+# (logged-not-built, see memory) specifically because it can't hallucinate
+# materials/detail that aren't in the actual IFC/Tiles data.
+fal-client==1.0.1

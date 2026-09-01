@@ -29,6 +29,16 @@ export interface RenderCaptureSettings {
   // it, the same "force a state, wait a few real frames, capture, revert"
   // pattern boostQuality already established.
   showHdrBackground: boolean
+  // AI Enhance (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md) — runs the
+  // raw 3D render (before Capture's own overlay compositing) through
+  // fal.ai's Real-ESRGAN faithful super-resolution before it's composited
+  // into the final PNG. Stills only — Capture Image reads this; Export
+  // Video does not (naive per-frame upscaling has no inter-frame memory
+  // and flickers, see the scope doc's own "Video walkthroughs" section).
+  // Off by default, same opt-in-cost reasoning as includeBaseline —  this
+  // makes a real network call (fal.ai) that isn't free and takes a few
+  // real seconds, unlike every other toggle in this file.
+  aiEnhance: boolean
   // Explicit output resolution (2026-07-25 rework, per Maro: "the
   // resolution options we have are very simplistic and insufficient
   // compared to blender" — the old `resolutionMultiplier: 1|2|4` just
@@ -138,6 +148,7 @@ export interface RenderCaptureSettings {
 
 export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   showHdrBackground: true,
+  aiEnhance: false,
   resolutionWidth: RESOLUTION_PRESETS['1080p'].width,
   resolutionHeight: RESOLUTION_PRESETS['1080p'].height,
   resolutionPreset: '1080p',

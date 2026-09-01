@@ -72,6 +72,15 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
               Show HDR Background
             </label>
 
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted" title="Capture Image only (not Export Video) — runs the raw 3D render through AI faithful super-resolution before compositing, sharpening IFC materials and Site Context tiles. Adds a few real seconds and a small per-image cost.">
+              <input
+                type="checkbox"
+                checked={settings.aiEnhance}
+                onChange={e => set('aiEnhance', e.target.checked)}
+              />
+              AI Enhance (stills only)
+            </label>
+
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted">
                 <span title="The exact output pixel dimensions for Capture/Export Video — independent of how big this browser window happens to be. If the on-screen 3D pane's own aspect ratio doesn't match, the content is cropped to fill, never stretched.">Resolution</span>

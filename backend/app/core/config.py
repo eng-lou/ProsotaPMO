@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     # ai_messages_reset_date and require_ai_quota in app/core/auth.py.
     # Super users (is_super_user) bypass this entirely, per Maro's own ask.
     ai_daily_message_cap: int = 30
+    # AI Render Enhancement (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md)
+    # — fal.ai key for app/services/ai_upscale.py's Real-ESRGAN calls
+    # (faithful super-resolution on the 3D viewport's own raw render at
+    # still-capture time only; never used during normal interactive
+    # rendering). Same "empty by default, fails clearly at call time"
+    # reasoning as anthropic_api_key above.
+    fal_key: str = ""
 
 
 settings = Settings()

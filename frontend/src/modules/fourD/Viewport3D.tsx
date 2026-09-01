@@ -60,6 +60,7 @@ import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptur
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
+import { upscaleCanvasBlob } from './aiUpscale'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
 import { ZoneGizmos } from './ZoneGizmo'
@@ -4696,6 +4697,7 @@ export function Viewport3D({
   const [boxSelectMode, setBoxSelectMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
+  const [isEnhancingCapture, setIsEnhancingCapture] = useState(false)
   // WebGL context loss failsafe (2026-08-31, per Maro: "we need failsafes
   // in case of next time" — a real, hours-long debugging session today
   // eventually traced a "shadows just stopped rendering, on this app AND
@@ -5142,7 +5144,7 @@ export function Viewport3D({
     const playheadIndexFor = (date: Date | null) => (date && timelineStripCells.length > 0
       ? timelineStripCells.findIndex(c => c.year === date.getFullYear() && c.month === date.getMonth())
       : -1)
-    const doCapture = () => {
+    const doCapture = async () => {
       // Computed fresh here, not from any outer const (2026-07-25 fix, per
       // Maro: "at 4x resolution it needs scale adjustments" — the same
       // stale-closure trap as before: doCapture only actually runs after 3
@@ -5164,6 +5166,36 @@ export function Viewport3D({
           exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
         },
       )
+      // AI Enhance (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md) — runs
+      // on the raw 3D canvas only, before drawCoverFit/composeExportFrame
+      // below draw anything else on top, so overlay text/HUD elements
+      // (Gantt/Table/titles/labels) stay at native sharpness rather than
+      // getting run through the AI model themselves — only the actual
+      // IFC/Tiles render content is a candidate for AI-added detail.
+      // Best-effort: any failure here (network error, fal.ai down, key not
+      // configured server-side) falls back to the un-enhanced capture
+      // rather than losing the whole export.
+      let mainSource: HTMLCanvasElement = canvas
+      if (renderCaptureSettings.aiEnhance) {
+        setIsEnhancingCapture(true)
+        try {
+          const rawBlob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+          if (rawBlob) {
+            const enhancedBlob = await upscaleCanvasBlob(rawBlob)
+            const bitmap = await createImageBitmap(enhancedBlob)
+            const enhancedCanvas = document.createElement('canvas')
+            enhancedCanvas.width = bitmap.width
+            enhancedCanvas.height = bitmap.height
+            enhancedCanvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+            bitmap.close()
+            mainSource = enhancedCanvas
+          }
+        } catch (err) {
+          window.alert(`AI Enhance failed — capturing without it.\n${err instanceof Error ? err.message : String(err)}`)
+        } finally {
+          setIsEnhancingCapture(false)
+        }
+      }
       const composite = document.createElement('canvas')
       composite.width = layout.totalWidth
       composite.height = layout.totalHeight
@@ -5173,7 +5205,7 @@ export function Viewport3D({
           c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), timelineDateRef.current ?? new Date()),
         ]))
         composeExportFrame(ctx, layout, {
-          mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
+          mainCanvas: mainSource, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
           now: timelineDateRef.current, scheduleStart, scheduleEnd,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
@@ -5815,10 +5847,11 @@ export function Viewport3D({
         </button>
         <button
           onClick={handleCaptureImage}
+          disabled={isEnhancingCapture}
           title={`Capture Image — downloads a ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight} PNG of the current view (see ⚙ Render/Capture Settings)`}
-          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Capture
+          {isEnhancingCapture ? 'Enhancing…' : 'Capture'}
         </button>
         <button
           onClick={handleSaveCameraView}
