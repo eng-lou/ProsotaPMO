@@ -4809,3 +4809,69 @@ complete answer.
 `tsc --noEmit` clean, but neither has been exercised live — the Capture
 fix needs an actual capture click to confirm the ghost is gone, and the
 shadow fix needs the real two-model scene from the screenshots.
+
+## 2026-09-01 — Speeding up bulk selection actions, and making the 4D module's "Linked Activities" widget actually useful
+
+**Part 1: "Selecting the whole model and filtering took too long. Adding
+selected elements to a collection did too."** The slow part wasn't
+selecting or filtering itself — both of those were already fast. The real
+problem was what happened *after*: adding thousands of selected elements
+to a Collection, or linking them to a schedule activity, sent one network
+request per element, one at a time, waiting for each to finish before
+starting the next. For a few thousand elements that's a few thousand
+round trips to the server. Fixed by adding two new "bulk" endpoints that
+accept the whole list in a single request and insert everything in one
+database operation — 2000 elements went from what would have been minutes
+down to under a tenth of a second, confirmed against the real database.
+
+Along the way, the Filter dialog turned out to have its own separate slow
+step — scanning every element's properties, which could take 16+ seconds
+on a big building model. That scan was already about as fast as it could
+be (an earlier session had already tested the alternatives), it just
+never remembered its own answer — opening the dialog a second time redid
+the whole scan from scratch even though nothing had changed. Fixed by
+caching the result per loaded model. That fix then exposed a second,
+older bug: the dialog was quietly being told "the selection changed" on
+almost every frame (not just when it actually changed), which used to be
+invisible because the 16-second scan almost never finished before being
+cancelled and restarted. Once the scan became instant, that restart
+started completing every time instead, which looked like the dialog
+"glitching" — resetting itself dozens of times a second. Fixed by making
+sure that "did the selection change" check only fires when it actually
+did.
+
+**Part 2: making "Linked Activities" (the little widget that shows which
+schedule activities the currently-isolated 3D elements belong to) do more
+than just list names.** Two things were missing: clicking an activity in
+that list didn't do anything visible in the Activity Table or Gantt Chart
+windows — it selected the activity internally, but if that row was
+scrolled off-screen or hidden under a collapsed group, you'd never see it
+happen. And using "Isolate" in the 3D view (via this widget's own
+direction — isolating elements down to just the ones linked to an
+activity) had no equivalent effect on the schedule windows themselves;
+the Activity Table still showed all 105 activities regardless.
+
+Both are fixed now. Selecting an activity anywhere (including from this
+widget) scrolls the Activity Table to that row — auto-opening any
+collapsed group above it so the row actually exists to scroll to — and
+pans the Gantt Chart's timeline sideways to center on that activity's own
+bar. And isolating a set of 3D elements now narrows the Activity Table
+and Gantt Chart down to just the activities linked to what's isolated
+(keeping their parent groups visible for context), the same way isolating
+narrows the 3D view itself.
+
+The Gantt Chart's horizontal centering fix took three attempts to get
+right, and it's a good example of two well-intentioned automatic
+behaviors quietly fighting each other. The Gantt Chart already had logic
+to keep the Animation Timeline's current-date marker in view by
+auto-scrolling sideways as the timeline plays. The new "center on the
+selected activity" logic used that exact same scroll position. Whichever
+one wrote to the scroll position *last* would win — and because the
+Animation Timeline's current-date marker updates continuously in the
+background (even while paused, whenever that window is open), it kept
+winning on some later render, undoing the activity-centering a moment
+after it happened. The real fix wasn't a smarter "don't overwrite each
+other" check — it was recognizing these two behaviors shouldn't run at
+the same time at all: while a specific activity is focused, the
+timeline-following behavior now steps aside completely, and resumes
+automatically the moment nothing's focused anymore.
