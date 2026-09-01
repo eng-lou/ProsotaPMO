@@ -2111,15 +2111,22 @@ function ModelObjects({
             clipPlanes = [...wholeObjectPlanes, ...matching.flatMap(b => computeWorldClipPlanes(b.bounds, b.rotation, child.matrixWorld))]
           }
         }
+        // mergeClipPlanes, not a plain overwrite (2026-09-01 fix — see this
+        // file's own mergeClipPlanes header for the full "Section Box never
+        // actually clipped a schedule-linked model" story): TimelinePlayback's
+        // Grow X/Y useFrame writes this exact same property every frame too,
+        // for the same materials, whenever this model has schedule-linked
+        // elements — an outright overwrite here would erase whichever grow
+        // plane it had just set, the same bug in the other direction.
         const materials = Array.isArray(child.material) ? child.material : [child.material]
-        materials.forEach(mat => { mat.clippingPlanes = clipPlanes.length > 0 ? clipPlanes : null })
+        materials.forEach(mat => { mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', clipPlanes) })
 
         // The edges overlay's own LineBasicMaterial was never included
         // here (2026-07-13, per Maro: "i noticed it was the case with
         // sections as well") — a section box cut the shaded faces but left
         // the black wireframe sticking out past the cut plane untouched.
         const edges = child.userData.edgesHelper as THREE.LineSegments | undefined
-        if (edges) (edges.material as THREE.LineBasicMaterial).clippingPlanes = clipPlanes.length > 0 ? clipPlanes : null
+        if (edges) (edges.material as THREE.LineBasicMaterial).clippingPlanes = mergeClipPlanes((edges.material as THREE.LineBasicMaterial).clippingPlanes, 'sectionBox', clipPlanes)
       })
     }
     prevTrackedIds.current = currentIds
@@ -2720,6 +2727,31 @@ function EmbeddedAnimationLoop({
   })
 
   return null
+}
+
+// Merges one feature's own clip planes into a material's existing
+// `clippingPlanes` without disturbing whatever a *different* feature put
+// there (2026-09-01, found live: creating a Section Box on a schedule-linked
+// model never visibly clipped anything, no matter how far a face was
+// dragged in) — root cause was ModelObjects' own Section Box useFrame and
+// TimelinePlayback's Grow X/Y useFrame both unconditionally overwriting the
+// exact same `material.clippingPlanes` every single frame, each completely
+// unaware the other exists. Whichever ran last in a given R3F frame won
+// outright, every frame, forever, for any element both effects manage —
+// which for a real 4D model (every element schedule-linked) meant Section
+// Box's clip was getting silently erased on every frame it lost that race.
+//
+// Each owner tags the planes it installs (a plain `__clipOwner` marker
+// property — THREE.Plane has no userData of its own) so a later call by
+// either owner can tell "planes I own and should replace/remove" apart from
+// "planes some other owner is managing and I must leave alone" — this makes
+// the two effects' clips compose (both active at once) regardless of which
+// one happens to run first in any given frame, rather than racing.
+function mergeClipPlanes(existing: THREE.Plane[] | null, owner: string, ownPlanes: THREE.Plane[]): THREE.Plane[] | null {
+  const foreign = (existing ?? []).filter(p => (p as THREE.Plane & { __clipOwner?: string }).__clipOwner !== owner)
+  for (const p of ownPlanes) (p as THREE.Plane & { __clipOwner?: string }).__clipOwner = owner
+  const combined = [...foreign, ...ownPlanes]
+  return combined.length > 0 ? combined : null
 }
 
 // Exported (2026-07-12, per Maro's "advanced 4D" baseline-vs-actual
@@ -3515,6 +3547,19 @@ export function TimelinePlayback({
         // useFrame above — no material.needsUpdate needed, confirmed
         // against real working code already doing exactly that every
         // frame for every section-boxed object).
+        //
+        // 2026-09-01 fix, found live: creating a Section Box on a schedule-
+        // linked model never actually clipped anything, on any browser,
+        // regardless of how far a face was dragged in. Root cause: this
+        // block and ModelObjects' own Section Box useFrame above BOTH
+        // unconditionally overwrote the exact same `material.clippingPlanes`
+        // every single frame, completely unaware of each other — whichever
+        // one ran last in a given R3F frame won outright, every frame,
+        // forever, for any element this component manages (which is every
+        // schedule-linked element, i.e. most or all of a real 4D model). Now
+        // uses mergeClipPlanes (this file's own header, just above
+        // TimelinePlayback) so the two features' clips compose instead of
+        // racing, regardless of which effect happens to run first.
         let growClipPlane: THREE.Plane | null = null
         if (state.growProgress !== null && activeLink) {
           if (!target.worldBBox) target.worldBBox = new THREE.Box3().setFromObject(target.object)
@@ -3553,7 +3598,7 @@ export function TimelinePlayback({
           // matches this file's own Section Box useFrame precedent exactly
           // (see growClipPlane's own header above); clipping-plane VALUE
           // changes are cheap and don't touch needsUpdate at all.
-          material.clippingPlanes = growClipPlane ? [growClipPlane] : null
+          material.clippingPlanes = mergeClipPlanes(material.clippingPlanes, 'grow', growClipPlane ? [growClipPlane] : [])
           const nextTransparent = state.opacity < 1
           // state.color is a hex string (profile config), originalColor a
           // real, untinted THREE.Color — normalized through one reused
@@ -3656,7 +3701,7 @@ export function TimelinePlayback({
             // cut the shaded faces but left the black wireframe sticking
             // out past the cut plane untouched") — identical failure mode
             // here otherwise.
-            edgesMaterial.clippingPlanes = growClipPlane ? [growClipPlane] : null
+            edgesMaterial.clippingPlanes = mergeClipPlanes(edgesMaterial.clippingPlanes, 'grow', growClipPlane ? [growClipPlane] : [])
           }
         }
       }
