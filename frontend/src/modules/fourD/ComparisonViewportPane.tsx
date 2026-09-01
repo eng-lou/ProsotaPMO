@@ -373,6 +373,18 @@ export function ComparisonViewportPane({
       <Canvas
         frameloop={active ? 'always' : 'never'}
         dpr={dpr}
+        // The real, root cause of "no shadow, ever" (2026-09-01) — R3F's
+        // own `shadows` prop on <Canvas> is what actually sets
+        // gl.shadowMap.enabled = true on the underlying WebGLRenderer
+        // (confirmed live: light.shadow.map stayed null indefinitely
+        // without this, regardless of every light/mesh castShadow/
+        // receiveShadow flag already being correctly set — three.js never
+        // allocates a shadow map at all while the renderer's own
+        // shadowMap.enabled is off). Missing since this pane's original
+        // 2026-07-12 creation — mirrors Viewport3D.tsx's own
+        // <Canvas shadows={settings.shadows}>, which is the only reason
+        // the primary viewport's shadows ever worked.
+        shadows={shadows}
         camera={{ position: [8, 8, 8], up: [0, zUp ? 0 : 1, zUp ? 1 : 0], fov: fieldOfView, near: clipStart, far: clipEnd }}
       >
         <CaptureCamera cameraRef={cameraRef} />
