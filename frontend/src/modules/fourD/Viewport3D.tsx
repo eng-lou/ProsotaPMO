@@ -5179,7 +5179,28 @@ export function Viewport3D({
       if (renderCaptureSettings.aiEnhance) {
         setIsEnhancingCapture(true)
         try {
-          const rawBlob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+          // Flattened onto opaque white first (2026-09-02 fix, per Maro's
+          // own live test: a solid black background came back from fal.ai
+          // instead of the expected sky/blank). This canvas's own GL
+          // context defaults to a transparent (0,0,0,0) clear color
+          // wherever nothing else is drawn — invisible in every other use
+          // of this same canvas (drawImage onto composite, which is also
+          // transparent by default, so the transparency just carries
+          // through harmlessly), but fal.ai's own esrgan endpoint flattens
+          // the upload to plain RGB before running the model, which
+          // exposes that invisible black RGB as a solid opaque black fill.
+          // Flattening onto white ourselves first means there's no alpha
+          // channel left for fal.ai to silently drop.
+          const flattened = document.createElement('canvas')
+          flattened.width = canvas.width
+          flattened.height = canvas.height
+          const flattenedCtx = flattened.getContext('2d')
+          if (flattenedCtx) {
+            flattenedCtx.fillStyle = '#ffffff'
+            flattenedCtx.fillRect(0, 0, flattened.width, flattened.height)
+            flattenedCtx.drawImage(canvas, 0, 0)
+          }
+          const rawBlob = await new Promise<Blob | null>(resolve => flattened.toBlob(resolve, 'image/png'))
           if (rawBlob) {
             const enhancedBlob = await upscaleCanvasBlob(rawBlob)
             const bitmap = await createImageBitmap(enhancedBlob)
