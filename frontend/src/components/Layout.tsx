@@ -61,8 +61,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {selectedProject && !poeOpen && (
           <button
             onClick={() => setPoeOpen(true)}
-            aria-label="Open Poe — Planning Optimization Expert"
-            title="Poe — Planning Optimization Expert. Ask about this project's schedule, risk, or ICD status"
+            aria-label="Open Poe — Planning Operations Expert"
+            title="Poe — Planning Operations Expert. Ask about this project's schedule, risk, resources, cost, or ICD status — or ask it to review site photos, PDFs, and spreadsheets you attach"
             className="no-print fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-prosota-amber text-prosota-ink pl-4 pr-5 py-3 shadow-lg shadow-black/20 font-display font-semibold text-sm hover:brightness-105 active:brightness-95 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-prosota-amber dark:focus-visible:ring-offset-prosota-ink"
           >
             <span aria-hidden="true" className="text-lg leading-none">🪶</span>

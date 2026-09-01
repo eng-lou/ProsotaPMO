@@ -168,6 +168,23 @@ const SIZE = {
   expanded: { width: 620, height: 760 },
 }
 
+// One list, used both as the header info button's native tooltip and as
+// the empty-state message (2026-09-01, per Maro: "add tool tips so users
+// know what Poe can do") — kept as plain lines rather than markdown since
+// the native title attribute can't render it, and the empty state reuses
+// the exact same wording so the two never drift apart.
+const POE_CAPABILITY_LINES = [
+  'Schedule — dates, milestones, critical path',
+  'Risk register and risk scoring',
+  'Resources — assignments and committed cost',
+  'Cost and earned value (CPI/SPI, EAC)',
+  'ICD — issues, changes, decisions',
+  'Attach a photo, PDF, or spreadsheet for Poe to read',
+  'On the 4D page: highlight, isolate, colour, or run a clash check',
+  'Ask it to draft new risks, activities, or links — you approve before anything saves',
+]
+const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
+
 // Poe (2026-08-31, per Maro: named after Altered Carbon's Poe
 // — https://altered-carbon.fandom.com/wiki/Poe — an eccentric, literary AI
 // concierge; the quill icon and amber accent below are the visual nod to
@@ -507,7 +524,7 @@ export function PoePanel({
     <div
       ref={panelRef}
       role="dialog"
-      aria-label="Poe — Planning Optimization Expert"
+      aria-label="Poe — Planning Operations Expert"
       style={{ ...positionStyle, width: size.width, height: minimized ? 'auto' : size.height }}
       className="fixed z-50 flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-2xl shadow-black/30 border-t-4 border-prosota-amber overflow-hidden no-print"
     >
@@ -519,10 +536,18 @@ export function PoePanel({
           <span aria-hidden="true" className="text-xl leading-none">🪶</span>
           <div className="min-w-0">
             <h2 className="font-display text-sm font-bold text-gray-900 dark:text-prosota-paper leading-tight">Poe</h2>
-            <p className="text-[11px] text-gray-500 dark:text-prosota-muted leading-tight truncate">Planning Optimization Expert</p>
+            <p className="text-[11px] text-gray-500 dark:text-prosota-muted leading-tight truncate">Planning Operations Expert</p>
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <span
+            role="img"
+            aria-label="What Poe can do"
+            title={POE_CAPABILITIES_TITLE}
+            className="text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper rounded px-1.5 py-1 text-xs leading-none cursor-help select-none"
+          >
+            ⓘ
+          </span>
           <button
             onClick={() => setMinimized(m => !m)}
             aria-label={minimized ? 'Restore Poe' : 'Minimize Poe'}
@@ -556,9 +581,14 @@ export function PoePanel({
         <>
           <div className="flex-1 overflow-y-auto space-y-3 px-4 py-3 min-h-0">
             {visibleTurns.length === 0 ? (
-              <p className="text-sm text-gray-500 dark:text-prosota-muted">
-                Ask Poe about this project's schedule, risk, or ICD status.
-              </p>
+              <div className="text-sm text-gray-500 dark:text-prosota-muted space-y-1.5">
+                <p>Ask Poe about this project. A few things it can help with:</p>
+                <ul className="list-disc pl-4 space-y-0.5 text-[13px]">
+                  {POE_CAPABILITY_LINES.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              </div>
             ) : (
               visibleTurns.map((t, i) => (
                 t.role === 'user' ? (
