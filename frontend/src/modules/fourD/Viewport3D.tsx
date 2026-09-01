@@ -6287,7 +6287,21 @@ export function Viewport3D({
             pose when the timeline date itself actually changes, so it
             never fights a live drag at a static date). */}
         <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
-        {activeObject && (
+        {/* Suppressed while the active object has a visible Section Box
+            (2026-09-01, per Maro live: "after i click rotate and rotate
+            and go back to resize, i'm unable to manipulate the individual
+            handles... it goes to resize which scales") — this gizmo was
+            never gated on Section Box editing at all, so it sat rendered
+            at the exact same object, in whatever Move/Rotate/Scale mode
+            was last picked in the left panel, the entire time a Section
+            Box's own resize cones/rotate rings were also shown for that
+            same object. Two independent drei TransformControls-family
+            gizmos overlapping the same target is exactly the kind of
+            thing that steals clicks from one another — a click meant for
+            one of the box's own per-face cone handles could land on this
+            gizmo's own arm instead, especially in Scale mode, matching
+            the reported "scales the whole thing" symptom exactly. */}
+        {activeObject && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
           <TransformControls
             object={activeObject.object}
             mode={gizmoMode}
