@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     # rendering). Same "empty by default, fails clearly at call time"
     # reasoning as anthropic_api_key above.
     fal_key: str = ""
+    # AI Concept Render (2026-09-02, per Maro's own live A/B test against
+    # fal.ai's faithful-only Real-ESRGAN — see
+    # app/services/ai_concept_render.py's own header) — Google AI Studio key
+    # for Gemini's image-generation model. Separate, clearly-labeled
+    # generative mode alongside (not replacing) fal.ai's faithful upscaler.
+    gemini_api_key: str = ""
 
 
 settings = Settings()

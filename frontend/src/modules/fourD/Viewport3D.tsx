@@ -61,6 +61,7 @@ import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
 import { upscaleCanvasBlob } from './aiUpscale'
+import { generateConceptRenderBlob } from './aiConceptRender'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
 import { ZoneGizmos } from './ZoneGizmo'
@@ -5176,7 +5177,11 @@ export function Viewport3D({
       // configured server-side) falls back to the un-enhanced capture
       // rather than losing the whole export.
       let mainSource: HTMLCanvasElement = canvas
-      if (renderCaptureSettings.aiEnhance) {
+      // Only 'concept' output gets the visible label below — 'faithful'
+      // (fal.ai) genuinely can't invent content, so it's not held to the
+      // same "never mistaken for a real capture" labeling requirement.
+      let isConceptRender = false
+      if (renderCaptureSettings.aiEnhanceMode !== 'off') {
         setIsEnhancingCapture(true)
         try {
           // Flattened onto opaque white first (2026-09-02 fix, per Maro's
@@ -5186,11 +5191,11 @@ export function Viewport3D({
           // wherever nothing else is drawn — invisible in every other use
           // of this same canvas (drawImage onto composite, which is also
           // transparent by default, so the transparency just carries
-          // through harmlessly), but fal.ai's own esrgan endpoint flattens
-          // the upload to plain RGB before running the model, which
-          // exposes that invisible black RGB as a solid opaque black fill.
-          // Flattening onto white ourselves first means there's no alpha
-          // channel left for fal.ai to silently drop.
+          // through harmlessly), but both fal.ai's esrgan endpoint and
+          // Gemini flatten the upload to plain RGB before running their
+          // own model, which exposes that invisible black RGB as a solid
+          // opaque black fill. Flattening onto white ourselves first means
+          // there's no alpha channel left for either to silently drop.
           const flattened = document.createElement('canvas')
           flattened.width = canvas.width
           flattened.height = canvas.height
@@ -5202,7 +5207,9 @@ export function Viewport3D({
           }
           const rawBlob = await new Promise<Blob | null>(resolve => flattened.toBlob(resolve, 'image/png'))
           if (rawBlob) {
-            const enhancedBlob = await upscaleCanvasBlob(rawBlob)
+            const enhancedBlob = renderCaptureSettings.aiEnhanceMode === 'concept'
+              ? await generateConceptRenderBlob(rawBlob, renderCaptureSettings.conceptPrompt, renderCaptureSettings.conceptAlsoUpscale)
+              : await upscaleCanvasBlob(rawBlob)
             const bitmap = await createImageBitmap(enhancedBlob)
             const enhancedCanvas = document.createElement('canvas')
             enhancedCanvas.width = bitmap.width
@@ -5210,6 +5217,7 @@ export function Viewport3D({
             enhancedCanvas.getContext('2d')?.drawImage(bitmap, 0, 0)
             bitmap.close()
             mainSource = enhancedCanvas
+            isConceptRender = renderCaptureSettings.aiEnhanceMode === 'concept'
           }
         } catch (err) {
           window.alert(`AI Enhance failed — capturing without it.\n${err instanceof Error ? err.message : String(err)}`)
@@ -5237,6 +5245,27 @@ export function Viewport3D({
           includeTimelineStrip, timelineStrip, timelineStripCells, timelineStripYearGroups,
           timelineStripPlayheadIndex: playheadIndexFor(timelineDateRef.current),
         })
+        // AI Concept Render label (2026-09-02, per Maro's own chosen
+        // option: "clearly labeled" was the explicit condition for
+        // building this generative mode at all — see
+        // ai_concept_render.py's own guardrail-prompt header for the full
+        // "why"). Drawn last, directly onto the finished composite, so it
+        // can never be covered by an overlay drawn afterward and can't be
+        // skipped by any composeExportFrame option — this capture is
+        // either labeled or it isn't 'concept' mode at all.
+        if (isConceptRender) {
+          const bannerHeight = Math.round(layout.totalHeight * 0.035)
+          ctx.fillStyle = 'rgba(0,0,0,0.72)'
+          ctx.fillRect(0, layout.totalHeight - bannerHeight, layout.totalWidth, bannerHeight)
+          ctx.fillStyle = '#ffffff'
+          ctx.font = `bold ${Math.round(bannerHeight * 0.5)}px sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(
+            'AI-GENERATED CONCEPT — NOT MODEL DATA',
+            layout.totalWidth / 2, layout.totalHeight - bannerHeight / 2,
+          )
+        }
       }
       composite.toBlob(blob => {
         if (!blob) return
