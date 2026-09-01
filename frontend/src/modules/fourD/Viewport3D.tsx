@@ -278,7 +278,19 @@ export interface ResolvedSectionBox {
 // against while AO is genuinely on, restored to this app's real defaults
 // (ACESFilmicToneMapping, autoClear true) the instant it's switched off,
 // whether or not this component ever unmounts again.
-const AmbientOcclusionEffect = lazy(() =>
+// Exported (2026-09-01, per Maro) so ComparisonViewportPane.tsx can mount
+// the exact same AO tree, with the exact same mount-once/never-unmount
+// safety and composer-resize failsafe documented below, rather than a
+// second hand-rolled copy of either. A first attempt at this (same day)
+// produced visibly broken rendering in that pane and was reverted — root
+// cause was that pane's <Canvas> missing the same gl={{...}} context
+// attributes (in particular logarithmicDepthBuffer) this file's own
+// <Canvas> already sets, now added there to match before re-attempting
+// this export. The KNOWN UNRESOLVED depth-stencil blit error documented
+// just below is real and already present in THIS viewport's own console
+// too (confirmed, not assumed) — an accepted, pre-existing trade-off,
+// not something newly introduced by sharing this component a second time.
+export const AmbientOcclusionEffect = lazy(() =>
   import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
     default: ({ enabled, boostQuality, modelRadius }: { enabled: boolean; boostQuality: boolean; modelRadius: number }) => {
       const { gl } = useThree()

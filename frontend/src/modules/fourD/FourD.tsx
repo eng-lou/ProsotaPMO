@@ -6424,6 +6424,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         captureBackgroundOverride={baselineBackgroundOverride}
         renderMode={settings.renderMode}
         showEdges={settings.showEdges}
+        ambientOcclusion={settings.ambientOcclusion}
         dynamicSky={settings.dynamicSky}
         showGrid={settings.showGrid}
         timelineDateRef={timelineDateRef}

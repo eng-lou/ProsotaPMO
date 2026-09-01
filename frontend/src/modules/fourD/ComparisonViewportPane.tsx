@@ -19,7 +19,7 @@ import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import type { RenderMode } from './viewerSettings'
 import {
-  CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
+  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
   ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
@@ -58,6 +58,7 @@ interface Props {
   // has neither.
   renderMode: RenderMode
   showEdges: boolean
+  ambientOcclusion: boolean
   dynamicSky: boolean
   showGrid: boolean
   // Same "drop to frameloop='never' while the 4D tab itself is hidden"
@@ -129,7 +130,7 @@ export function ComparisonViewportPane({
   importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
-  renderMode, showEdges, dynamicSky, showGrid,
+  renderMode, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
 }: Props) {
   const zUp = upAxis === 'z'
@@ -292,25 +293,22 @@ export function ComparisonViewportPane({
     }
   }, [clonesByOriginal, renderMode, showEdges])
 
-  // Ambient Occlusion — REVERTED (2026-09-01), same session it was added.
-  // Mounting Viewport3D.tsx's own AmbientOcclusionEffect a second time (one
-  // EffectComposer/N8AO tree per Canvas, one per WebGL context) hit that
-  // component's own documented, still-unresolved depth-stencil blit bug
-  // (see its header in Viewport3D.tsx: "the original 'unfixable' verdict
-  // may genuinely have been right") — except here, unlike the primary
-  // viewport, it manifested as thousands of back-to-back
-  // `glBlitFramebuffer: Read and write depth stencil attachments cannot be
-  // the same image` GL_INVALID_OPERATION errors (confirmed directly in
-  // Maro's own browser console), which appears to corrupt this pane's own
-  // render output badly enough to also explain the shadow-catcher plane
-  // never showing and isolation visibility changes never reaching the
-  // screen — even though the diagnostic logging below proved the
-  // isolation *data* itself resolves correctly (756/3706 real elements
-  // matched). Pulled out entirely rather than "fixed" — the underlying
-  // bug is Viewport3D.tsx's own pre-existing, already-flagged gap, not
-  // something to chase down again here. Render mode/edges/Real-Time
-  // Sky/shadow-catcher all stay; those are unaffected (confirmed live —
-  // render mode now genuinely matches between panes).
+  // Ambient Occlusion (2026-09-01, second attempt — a first attempt the
+  // same day was reverted after producing visibly broken rendering; see
+  // AmbientOcclusionEffect's own header in Viewport3D.tsx for the real
+  // "why" this pane's <Canvas> was missing the same gl={{...}} context
+  // attributes the primary viewport already sets, now added above). Same
+  // mount-once/never-unmount safety as Viewport3D.tsx's own
+  // mountAmbientOcclusion — toggling via the mounted tree's own `enabled`
+  // prop, not by mounting/unmounting the tree itself, is the documented-
+  // safe way to flip this after the real 2026-07-25 EffectComposer
+  // corruption bug (unrelated to, and already fixed before, the
+  // depth-stencil blit issue that caused this pane's own first attempt to
+  // fail).
+  const [mountAmbientOcclusion, setMountAmbientOcclusion] = useState(ambientOcclusion)
+  useEffect(() => {
+    if (ambientOcclusion) setMountAmbientOcclusion(true)
+  }, [ambientOcclusion])
 
   // Isolation visibility (2026-08-03) — re-applied whenever the clone set
   // or the resolved isolation target itself changes; a fresh clone always
@@ -386,6 +384,18 @@ export function ComparisonViewportPane({
         // the primary viewport's shadows ever worked.
         shadows={shadows}
         camera={{ position: [8, 8, 8], up: [0, zUp ? 0 : 1, zUp ? 1 : 0], fov: fieldOfView, near: clipStart, far: clipEnd }}
+        // Matches Viewport3D.tsx's own <Canvas> context attributes
+        // (2026-09-01) — this pane had none of these explicitly set before,
+        // defaulting to whatever R3F/three.js picks. logarithmicDepthBuffer
+        // in particular affects how the GPU's depth buffer is encoded,
+        // which AmbientOcclusionEffect's own depth-texture sampling reads
+        // from directly — bringing this pane's context attributes in line
+        // with the primary viewport's before re-attempting AO here, rather
+        // than assuming its default context is equivalent. stencil/
+        // preserveDrawingBuffer carried over for the same "match the known-
+        // working config" reasoning, though neither is load-bearing for
+        // anything this read-only pane currently does.
+        gl={{ stencil: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
       >
         <CaptureCamera cameraRef={cameraRef} />
         <CaptureCanvas canvasRef={canvasRef} />
@@ -489,6 +499,15 @@ export function ComparisonViewportPane({
           )}
         </Suspense>
         <OrbitControls ref={controlsRef} makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
+        {mountAmbientOcclusion && (
+          <Suspense fallback={null}>
+            {/* boostQuality always false (2026-09-01) — that flag only ever
+                exists to raise AO sample counts during a capture/export's
+                resolution boost (Viewport3D.tsx's own `highQuality`); this
+                pane has no capture/export of its own. */}
+            <AmbientOcclusionEffect enabled={ambientOcclusion} boostQuality={false} modelRadius={modelRadius} />
+          </Suspense>
+        )}
       </Canvas>
     </div>
   )
