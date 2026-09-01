@@ -961,7 +961,7 @@ function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   customOpacity,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
-  varianceByElementKey, clashByElementKey, elementParents,
+  varianceByElementKey, clashByElementKey, elementParents, materializeVersion,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -1013,6 +1013,11 @@ function ModelObjects({
   // against `objects` below the same way every other loose-ref relationship
   // in this file already is.
   elementParents: ElementParent[]
+  // Bumped after any ensureMaterialized/materializeAll call anywhere in the
+  // app (2026-09-01 — see this component's own heavyDeps header below for
+  // why the render-mode/shadow/AO/selection material effect needs to know
+  // about it, not just TimelinePlayback).
+  materializeVersion: number
 }) {
   const upAxis = settings.upAxis
 
@@ -1130,6 +1135,7 @@ function ModelObjects({
       objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
       settings.showClashColors, settings.shadows, settings.xrayUnselected, hasSelection, upAxis, customTextures,
       customOpacity, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
+      materializeVersion,
     ]
     const heavyChanged = heavyDepsRef.current === null
       || heavyDeps.length !== heavyDepsRef.current.length
@@ -2024,10 +2030,28 @@ function ModelObjects({
     // unrelated setting (Field of View, Clip Start/End, Grid, Axis
     // Indicator — none of which this effect touches at all) still forced a
     // full re-pass over every mesh in the loaded model(s).
+    //
+    // materializeVersion (2026-09-01 fix, found live: creating a Section Box
+    // from a large multi-element selection left the whole model looking
+    // flat/untextured with no shadows or AO) — ensureMaterialized/
+    // materializeAll build each newly-real mesh with buildElementMaterial's
+    // own bare, settings-unaware material (elementBatching.ts), then bump
+    // this counter expecting *something* to re-style it properly. Nothing
+    // ever did: this effect is the only thing that applies the current
+    // render mode/shadows/AO/selection tint/texture overrides per mesh, and
+    // materializeVersion wasn't wired into it at all — every other call site
+    // of this same "materialize then bump" pattern only ever happened to
+    // look fine because it also changed a *real* dependency of this effect
+    // in the same action (Apply to Linked Material also touches
+    // customTextures; Select All never materializes to begin with). Also
+    // added to heavyDeps above so this isn't just re-run but actually forces
+    // its full per-mesh pass — the cheap "touched selection only" path this
+    // effect otherwise takes wouldn't ever visit meshes whose *materialize*
+    // state changed without their *selection* membership also changing.
   }, [
     objects, selectedExpressId, selectedExpressIds, selectedObjectIds, hasSelection, customTextures, customOpacity,
     isolateMode, hiddenExpressIds, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
-    settings.showClashColors, settings.shadows, settings.xrayUnselected, upAxis,
+    settings.showClashColors, settings.shadows, settings.xrayUnselected, upAxis, materializeVersion,
   ])
 
   // Section Box clipping is applied every frame here, not inside the
@@ -6000,6 +6024,7 @@ export function Viewport3D({
             varianceByElementKey={varianceByElementKey}
             clashByElementKey={clashByElementKey}
             elementParents={elementParents}
+            materializeVersion={materializeVersion}
           />
           <SectionBoxGizmos
             boxes={sectionBoxes}

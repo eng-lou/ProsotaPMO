@@ -65,7 +65,7 @@ import type { IfcModelHandle } from './ifcModel'
 // site like the rest of ifcModel.ts) because the render-body TransformPanel
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
-import { ensureMaterialized, hasGeometry, materializeAll, removeElementsFromModel } from './elementBatching'
+import { ensureMaterialized, hasGeometry, removeElementsFromModel } from './elementBatching'
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
@@ -581,21 +581,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         const handle = getIfcHandleFor(target.id)
         const found: Object3D[] = []
         if (handle) {
-          // materializeAll first (2026-07-17 fix) — this branch used to be
-          // unreachable for any multi-select (see this function's own
-          // header above), so its missing materialize call never mattered
-          // until now: a plain traverse only ever sees real individual
-          // meshes, silently skipping every element still sitting in the
-          // shared THREE.BatchedMesh untouched, which for a large Select
-          // All is most of them — same "materialize first" convention
-          // elementBatching.ts's own header documents for every other
-          // whole-model scan in this app.
-          materializeAll(handle.object)
-          // Same TimelinePlayback re-derive trigger Select All's own
-          // materializeAll needs — see materializeVersion's own state
-          // comment for why this call site needs it too.
+          // Materialize only the selected elements, not materializeAll
+          // (2026-09-01 perf fix, found live: Select-All-then-+Add on a
+          // ~3600-element model was badly laggy) — this branch's original
+          // 2026-07-17 fix reached for materializeAll (the "whole-model
+          // scan" convention elementBatching.ts documents for things like
+          // Select Linked, which genuinely has to touch every element to
+          // search it), but a section box's bounds only ever need the
+          // elements actually in `selectedExpressIds` — materializing
+          // every *other*, unselected element in the model for a bounds
+          // computation was pure waste. Same "materialize exactly what
+          // this action needs" convention handleApplyToLinkedMaterial
+          // already uses for the identical reason.
+          for (const expressID of selectedExpressIds) {
+            const mesh = ensureMaterialized(handle.object, expressID)
+            if (mesh) found.push(mesh)
+          }
+          // Same TimelinePlayback re-derive (and, since 2026-09-01, render-
+          // mode/shadow/AO/selection-material re-apply — see this effect's
+          // own heavyDeps header in Viewport3D.tsx) trigger every other
+          // materialize-then-bump call site already uses.
           setMaterializeVersion(v => v + 1)
-          handle.object.traverse(child => { if (selectedExpressIds.has(child.userData.expressID)) found.push(child) })
         }
         bounds = found.length > 0 ? computeLocalBoundsForObjects(target.object, found) : computeLocalBoundsForObject(target.object)
       } else {
