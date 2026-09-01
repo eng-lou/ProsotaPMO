@@ -6422,6 +6422,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         sunAzimuth={settings.sunAzimuth}
         sunElevation={settings.sunElevation}
         captureBackgroundOverride={baselineBackgroundOverride}
+        renderMode={settings.renderMode}
+        showEdges={settings.showEdges}
+        dynamicSky={settings.dynamicSky}
+        showGrid={settings.showGrid}
         timelineDateRef={timelineDateRef}
         cameraSyncRef={cameraSyncRef}
         canvasRef={comparisonCanvasRefs[index]}

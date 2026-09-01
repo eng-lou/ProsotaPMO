@@ -127,17 +127,47 @@ export function applyPaneIsolationVisibility(
   if (!isolation) return
   for (const { id, kind, object } of clonedImportedObjects) {
     if (kind === 'mesh') {
-      object.visible = isolation.objectIds.has(id)
+      // Same baseVisible convention as the 'ifc' branch below — see that
+      // branch's own comment for the real "why" (2026-09-01 fix).
+      const shown = isolation.objectIds.has(id)
+      object.visible = shown
+      object.userData.baseVisible = shown
       continue
     }
     if (!isolation.objectIds.has(id)) {
       object.visible = false
+      object.userData.baseVisible = false
       continue
     }
     object.visible = true
+    object.userData.baseVisible = true
     object.traverse(child => {
       if (child instanceof THREE.Mesh && child.userData.expressID !== undefined) {
-        child.visible = isolation.expressIds.has(child.userData.expressID)
+        const shown = isolation.expressIds.has(child.userData.expressID)
+        child.visible = shown
+        // The real fix (2026-09-01, per Maro: isolation resolved correctly
+        // — confirmed live via diagnostic logging, 756/3706 real elements
+        // matched, and this mutation genuinely did run — yet nothing ever
+        // showed on screen) — TimelinePlayback (mounted in this same pane,
+        // just below) runs a real per-*frame* pass over every schedule-
+        // linked mesh: `mesh.visible = (mesh.userData.baseVisible ?? true)
+        // && state.opacity > ANIMATION_VISIBILITY_EPSILON` (Viewport3D.tsx,
+        // its own comment: "Every frame, so leaving the 'before start'
+        // pose... reliably re-hides a mesh some other effect had last set
+        // visible"). That convention exists specifically so the *primary*
+        // viewport's own Isolate mode survives TimelinePlayback's
+        // continuous overwrite — Viewport3D.tsx's ModelObjects effect
+        // caches its own isolate-aware verdict into this exact
+        // `userData.baseVisible` field, which is the only reason Isolate
+        // and the Animation Timeline coexist there at all. This pane's own
+        // isolation effect never adopted that same convention — it set
+        // `.visible` directly and nothing else, so on the very next
+        // animation frame TimelinePlayback read `baseVisible ?? true`
+        // (never set, always the `true` fallback) and stomped every
+        // schedule-linked mesh straight back to fully visible, forever,
+        // even though this function's own mutation was — and always
+        // had been — completely correct in isolation.
+        child.userData.baseVisible = shown
       }
     })
   }

@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useThree } from '@react-three/fiber'
-import { Environment, Grid, OrbitControls } from '@react-three/drei'
+import { Environment, Grid, OrbitControls, Sky } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
@@ -13,9 +13,11 @@ import type { ResolvedIsolationTarget } from './linkedElements'
 import type { ModelElementLink } from './modelElementLinks'
 import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
+import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
+import type { RenderMode } from './viewerSettings'
 import {
   CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
   ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
@@ -46,6 +48,18 @@ interface Props {
   sunAzimuth: number
   sunElevation: number
   captureBackgroundOverride: boolean | null
+  // Full render-mode/effects parity with the primary viewport (2026-09-01,
+  // per Maro: "baseline viewport isnt using the the same render mode and
+  // effects settings") — a deliberate reversal of this pane's original
+  // 2026-07-12 "always real PBR, ignore render mode" design (see
+  // sceneClone.ts's own updated header). Variance/clash colours stay out
+  // of scope on purpose — those are schedule-status overlays tied to the
+  // live selection/date context, not a rendering setting, and this pane
+  // has neither.
+  renderMode: RenderMode
+  showEdges: boolean
+  dynamicSky: boolean
+  showGrid: boolean
   // Same "drop to frameloop='never' while the 4D tab itself is hidden"
   // gating the primary Viewport3D already has (2026-08-03 fix — this pane
   // used to unconditionally run frameloop="always" regardless of tab
@@ -115,6 +129,7 @@ export function ComparisonViewportPane({
   importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
+  renderMode, showEdges, dynamicSky, showGrid,
   active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
 }: Props) {
   const zUp = upAxis === 'z'
@@ -149,6 +164,26 @@ export function ComparisonViewportPane({
     modelBounds.center[2] + sunOffset[2],
   ]
   const [sunTarget] = useState(() => new THREE.Object3D())
+  // Mirrors Viewport3D.tsx's own skySunPosition exactly (2026-09-01) —
+  // always modelRadius=1/zUp=false, same reasoning as that file's own
+  // comment: three-stdlib's Sky shader normalizes sunPosition and dots it
+  // against a hardcoded Y-up `up` vector, independent of upAxis/scale.
+  const skySunPosition = computeSunPosition(sunAzimuth, sunElevation, 1, false)
+  // Shadow-catcher ground plane (2026-09-01, per Maro: "baseline doesnt
+  // show the shadow detail/effects") — this pane never had one at all, a
+  // pre-existing gap distinct from the render-mode/AO/sky parity work
+  // above: Grid is a decorative shader overlay with no real geometry to
+  // receive a shadow, so with no other object under an imported model,
+  // `shadows` being on had nothing to actually show a shadow *on* here —
+  // exactly the same "looked like the setting did nothing" report
+  // Viewport3D.tsx's own shadow-catcher (2026-07-09, extended 2026-08-22
+  // for model-relative placement) already solved; same math, reused as-is.
+  const groundEpsilon = modelRadius * 0.001
+  const groundSize = modelRadius * 8
+  const groundPosition: [number, number, number] = zUp
+    ? [modelBounds.center[0], modelBounds.center[1], modelBounds.min[2] - groundEpsilon]
+    : [modelBounds.center[0], modelBounds.min[1] - groundEpsilon, modelBounds.center[2]]
+  const groundRotation: [number, number, number] = zUp ? [0, 0, 0] : [-Math.PI / 2, 0, 0]
 
   // Cloned once per source-object identity change (2026-07-12) — a plain
   // Map keyed by the *original* Object3D, rebuilt whenever the set of
@@ -212,6 +247,70 @@ export function ComparisonViewportPane({
       })
     }
   }, [clonesByOriginal, shadows])
+
+  // Render mode + Edges (2026-09-01, per Maro: "baseline viewport isnt
+  // using the the same render mode and effects settings") — a scoped-down
+  // mirror of Viewport3D.tsx's own ModelObjects material-swap block: no
+  // selection tint, texture overrides, or xray fade (this pane has none of
+  // those concepts), just the same render-mode material class swap and the
+  // same Edges overlay, driven off the same shared MeshStandardMaterial
+  // instance sceneClone.ts's own `userData.standardMaterial` tag captures
+  // (see that file's header — always the real material, never a
+  // previously-swapped stand-in, so switching Gouraud -> Hidden Line ->
+  // Shaded never stacks one variant on top of another). getGouraudVariant/
+  // getHiddenLineMaterial cache their built variant on that same shared
+  // source material's own userData, so if the primary viewport has already
+  // built one for this exact render mode, this reuses that same cached
+  // instance rather than building a second one.
+  useEffect(() => {
+    for (const clone of clonesByOriginal.values()) {
+      clone.traverse(child => {
+        if (!(child instanceof THREE.Mesh)) return
+        const base = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
+        const materials = Array.isArray(base) ? base : [base]
+        const display = materials.map(mat => {
+          if (!(mat instanceof THREE.MeshStandardMaterial)) return mat
+          if (renderMode === 'gouraud') return getGouraudVariant(mat)
+          if (renderMode === 'hiddenLine') return getHiddenLineMaterial(mat, HIDDEN_LINE_BASE_COLOR)
+          return mat
+        })
+        child.material = display.length > 1 ? display : display[0]
+
+        let edges = child.userData.edgesHelper as THREE.LineSegments | undefined
+        const wantsEdges = showEdges || renderMode === 'hiddenLine'
+        if (wantsEdges) {
+          if (!edges) {
+            edges = new THREE.LineSegments(new THREE.EdgesGeometry(child.geometry), new THREE.LineBasicMaterial({ color: 0x1f2937 }))
+            child.userData.edgesHelper = edges
+            child.add(edges)
+          }
+          edges.visible = true
+        } else if (edges) {
+          edges.visible = false
+        }
+      })
+    }
+  }, [clonesByOriginal, renderMode, showEdges])
+
+  // Ambient Occlusion — REVERTED (2026-09-01), same session it was added.
+  // Mounting Viewport3D.tsx's own AmbientOcclusionEffect a second time (one
+  // EffectComposer/N8AO tree per Canvas, one per WebGL context) hit that
+  // component's own documented, still-unresolved depth-stencil blit bug
+  // (see its header in Viewport3D.tsx: "the original 'unfixable' verdict
+  // may genuinely have been right") — except here, unlike the primary
+  // viewport, it manifested as thousands of back-to-back
+  // `glBlitFramebuffer: Read and write depth stencil attachments cannot be
+  // the same image` GL_INVALID_OPERATION errors (confirmed directly in
+  // Maro's own browser console), which appears to corrupt this pane's own
+  // render output badly enough to also explain the shadow-catcher plane
+  // never showing and isolation visibility changes never reaching the
+  // screen — even though the diagnostic logging below proved the
+  // isolation *data* itself resolves correctly (756/3706 real elements
+  // matched). Pulled out entirely rather than "fixed" — the underlying
+  // bug is Viewport3D.tsx's own pre-existing, already-flagged gap, not
+  // something to chase down again here. Render mode/edges/Real-Time
+  // Sky/shadow-catcher all stay; those are unaffected (confirmed live —
+  // render mode now genuinely matches between panes).
 
   // Isolation visibility (2026-08-03) — re-applied whenever the clone set
   // or the resolved isolation target itself changes; a fresh clone always
@@ -311,13 +410,36 @@ export function ComparisonViewportPane({
         />
         <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
         <Suspense fallback={null}>
-          <Environment
-            files={activeEnvironmentUrl}
-            background={showEnvironmentBackground}
-            backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
-            environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
-          />
+          {dynamicSky ? (
+            // Real-Time Sky (2026-09-01) — same Environment-with-children
+            // cubemap-capture trick as Viewport3D.tsx's own dynamicSky
+            // branch; see that file's own comment for the full "why"
+            // (Sky's shader hardcodes a Y-up sun-direction dot product, so
+            // reorienting happens via backgroundRotation/environmentRotation
+            // after capture, never a rotated <Sky> itself).
+            <Environment
+              resolution={256} frames={Infinity} far={2000}
+              background={showEnvironmentBackground}
+              backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+              environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+            >
+              <Sky sunPosition={skySunPosition} />
+            </Environment>
+          ) : (
+            <Environment
+              files={activeEnvironmentUrl}
+              background={showEnvironmentBackground}
+              backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+              environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+            />
+          )}
           {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
+          {shadows && (
+            <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
+              <planeGeometry args={[groundSize, groundSize]} />
+              <shadowMaterial transparent opacity={0.35} />
+            </mesh>
+          )}
           {clonedImportedObjects.map(({ id, sourceUpAxis, object, visible }) => (
             <group key={id} rotation={axisCorrectionRotation(sourceUpAxis, upAxis)}>
               <primitive object={object} visible={visible} />
@@ -348,9 +470,11 @@ export function ComparisonViewportPane({
             // there's never a bulk materializeAll to react to.
             materializeVersion={0}
           />
-          <group rotation={axisCorrectionRotation('y', upAxis)}>
-            <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />
-          </group>
+          {showGrid && (
+            <group rotation={axisCorrectionRotation('y', upAxis)}>
+              <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />
+            </group>
+          )}
         </Suspense>
         <OrbitControls ref={controlsRef} makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
       </Canvas>

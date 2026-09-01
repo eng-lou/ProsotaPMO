@@ -25,9 +25,15 @@ import { buildElementMaterial, type BatchState } from './elementBatching'
 // primary viewport has already captured it (see ModelObjects' own header
 // on why that capture exists), else `.material` itself if it hasn't run
 // yet — not whatever render-mode stand-in (Gouraud/Phong/Hidden Line)
-// might currently be swapped onto `.material`. The baseline pane always
-// shows real PBR shading; it doesn't mirror the primary viewport's own
-// render-mode setting.
+// might currently be swapped onto `.material`. This clone's own material
+// (or the exploded-batch material below) is re-tagged the same way, into
+// its own `userData.standardMaterial` — see that assignment's own comment
+// for why: ComparisonViewportPane.tsx now DOES mirror the primary
+// viewport's render mode (2026-09-01, per Maro — full parity was a
+// deliberate reversal of this file's own original 2026-07-12 "always PBR"
+// choice, see that pane's own render-mode effect), and needs a stable
+// handle on the real material to swap the display material *from* every
+// time the setting changes, not just once.
 //
 // Public entry point — thin wrapper around buildClone's own recursive
 // descent (2026-07-24 restructure, for the BatchedMesh fix below): after
@@ -92,6 +98,10 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null): THREE.Obj
           const mesh = new THREE.Mesh(geometry, buildElementMaterial({ x: info.color.r, y: info.color.g, z: info.color.b, w: info.colorAlpha }))
           mesh.applyMatrix4(info.matrix)
           mesh.userData.expressID = expressID
+          // Same standardMaterial tag as the plain-Mesh branch below — see
+          // that branch's own comment for why this has to be captured here,
+          // at construction, rather than read off `.material` later.
+          mesh.userData.standardMaterial = mesh.material
           group.add(mesh)
         }
       }
@@ -102,6 +112,19 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null): THREE.Obj
   const clone: THREE.Object3D = object instanceof THREE.Mesh
     ? new THREE.Mesh(object.geometry, (object.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? object.material)
     : new THREE.Group()
+
+  // Tag the clone's own real PBR material (2026-09-01, per Maro: "baseline
+  // viewport isnt using the same render mode and effects settings") — a
+  // stable reference ComparisonViewportPane.tsx's own render-mode effect
+  // reads every time it re-swaps `.material` to a Gouraud/Hidden Line
+  // stand-in, so switching *back* to Shaded/Flat later restores the real
+  // material instead of stacking a stand-in built from the *previous*
+  // stand-in. Same key/idiom as Viewport3D.tsx's own
+  // `child.userData.standardMaterial = child.material` capture, deliberately
+  // reused rather than a pane-local name, since it means the exact same
+  // thing here: "the real material, regardless of what render mode has
+  // since put on screen."
+  if (clone instanceof THREE.Mesh) clone.userData.standardMaterial = clone.material
 
   clone.name = object.name
   clone.position.copy(object.position)
