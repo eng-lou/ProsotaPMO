@@ -4985,7 +4985,10 @@ export function Viewport3D({
       const overlayScale = resolutionHeight / 1080
       const layout = computeExportLayout(
         resolutionWidth, resolutionHeight,
-        overlayScale, { includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile },
+        overlayScale, {
+          includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
+          exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+        },
       )
       const composite = document.createElement('canvas')
       composite.width = layout.totalWidth
@@ -5000,7 +5003,7 @@ export function Viewport3D({
           activities: timelineActivities, profiles: timelineProfiles,
           now: timelineDateRef.current, scheduleStart, scheduleEnd,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
-          mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
+          mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
           camera: cameraRef.current, exportLabels: exportLabelsRef.current,
           includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
@@ -5195,7 +5198,10 @@ export function Viewport3D({
       const overlayScale = resolutionHeight / 1080
       const layout = computeExportLayout(
         resolutionWidth, resolutionHeight,
-        overlayScale, { includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile },
+        overlayScale, {
+          includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
+          exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+        },
       )
       const composite = document.createElement('canvas')
       composite.width = layout.totalWidth
@@ -5261,7 +5267,7 @@ export function Viewport3D({
               activities: timelineActivities, profiles: timelineProfiles,
               now, scheduleStart, scheduleEnd,
               scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
-              mainViewTitle: renderCaptureSettings.mainViewTitle, baselineViewTitle: renderCaptureSettings.baselineViewTitle,
+              mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
               includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
               camera: cameraRef.current, exportLabels: exportLabelsRef.current,
               includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
@@ -5667,7 +5673,7 @@ export function Viewport3D({
         >
           {isExportingVideo ? 'Recording…' : 'Export Video'}
         </button>
-        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPanesOpen={comparisonCanvasRefs.length > 0} />
+        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length} />
       </div>
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while

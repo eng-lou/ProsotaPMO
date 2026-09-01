@@ -10,8 +10,12 @@ interface Props {
   // still persists/toggles normally) but reads as disabled while no
   // comparison pane is open, since there's nothing to composite in that
   // state. Every currently-open pane gets composited when this is on —
-  // there's no per-pane opt-out.
-  comparisonPanesOpen: boolean
+  // there's no per-pane opt-out. The real live count (2026-09-01, was a
+  // plain boolean) — also drives how many of the three View Titles fields
+  // below render as enabled, per Maro: "i can have three comparison
+  // windows max so i should [see] three titles... if they are actively
+  // used."
+  comparisonPaneCount: number
 }
 
 // Small gear-triggered popover for Capture/Export Video's own render
@@ -26,10 +30,16 @@ interface Props {
 // full-screen invisible button behind it (lower z-index than the popover,
 // higher than everything else) catches an outside click to close it,
 // rather than a focus-trap library.
-export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPanesOpen }: Props) {
+export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPaneCount }: Props) {
   const [open, setOpen] = useState(false)
+  const comparisonPanesOpen = comparisonPaneCount > 0
   const set = <K extends keyof RenderCaptureSettings>(key: K, value: RenderCaptureSettings[K]) =>
     onChange({ ...settings, [key]: value })
+  const setComparisonTitle = (index: number, value: string) => {
+    const next = [...settings.comparisonViewTitles]
+    next[index] = value
+    onChange({ ...settings, comparisonViewTitles: next })
+  }
 
   return (
     <div className="relative">
@@ -189,55 +199,63 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
                   className="w-24 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
                 />
               </label>
-              <label
-                className={`flex items-center justify-between gap-2 text-xs ${comparisonPanesOpen ? 'text-gray-600 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line'}`}
-                title={comparisonPanesOpen
-                  ? 'Label shown over every comparison pane — clear it to hide the label entirely'
-                  : 'Only shows once Compare Baseline is open and Include Comparison Panes is on'}
-              >
-                <span>Right (comparison)</span>
-                <input
-                  type="text"
-                  value={settings.baselineViewTitle}
-                  disabled={!comparisonPanesOpen}
-                  onChange={e => set('baselineViewTitle', e.target.value)}
-                  className="w-24 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 disabled:bg-gray-50"
-                />
-              </label>
+              {/* One field per currently-open comparison pane (2026-09-01,
+                  replaces a single always-shared "Right (comparison)"
+                  field — per Maro: "i can have three comparison windows
+                  max so i should [see] three titles... if they are
+                  actively used"). With none open yet, a single greyed
+                  placeholder keeps the feature discoverable, same as the
+                  old field's own disabled state. */}
+              {(comparisonPaneCount > 0 ? Array.from({ length: comparisonPaneCount }) : [null]).map((_, i) => (
+                <label
+                  key={i}
+                  className={`flex items-center justify-between gap-2 text-xs ${comparisonPanesOpen ? 'text-gray-600 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line'}`}
+                  title={comparisonPanesOpen
+                    ? 'Label shown over this comparison pane — clear it to hide the label entirely'
+                    : 'Only shows once a comparison pane is open and Include Comparison Panes is on'}
+                >
+                  <span>Comparison {i + 1}</span>
+                  <input
+                    type="text"
+                    value={settings.comparisonViewTitles[i] ?? ''}
+                    disabled={!comparisonPanesOpen}
+                    onChange={e => setComparisonTitle(i, e.target.value)}
+                    className="w-24 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 disabled:bg-gray-50"
+                  />
+                </label>
+              ))}
             </div>
 
             <div className="border-t border-gray-100 dark:border-prosota-line pt-2.5 space-y-2.5">
               <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Title &amp; Narrative</div>
-              {(() => {
-                const cornerAvailable = settings.includeGanttChart && settings.includeActivityTable
-                const cornerTitle = cornerAvailable
-                  ? undefined
-                  : 'Needs both Gantt Chart and Activity Table on — together they leave the top-left corner this fills'
-                return (
-                  <>
-                    <label className={`flex flex-col gap-1 text-xs ${cornerAvailable ? 'text-gray-600 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line'}`} title={cornerTitle}>
-                      <span>Project Title</span>
-                      <input
-                        type="text"
-                        value={settings.exportTitle}
-                        disabled={!cornerAvailable}
-                        onChange={e => set('exportTitle', e.target.value)}
-                        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 disabled:bg-gray-50"
-                      />
-                    </label>
-                    <label className={`flex flex-col gap-1 text-xs ${cornerAvailable ? 'text-gray-600 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line'}`} title={cornerTitle}>
-                      <span>Narrative</span>
-                      <textarea
-                        value={settings.exportNarrative}
-                        disabled={!cornerAvailable}
-                        onChange={e => set('exportNarrative', e.target.value)}
-                        rows={3}
-                        className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 resize-none disabled:bg-gray-50"
-                      />
-                    </label>
-                  </>
-                )
-              })()}
+              {/* Independent of Gantt Chart/Activity Table (2026-09-01,
+                  per Maro: "the title & narrative is currently tied to
+                  the activity table which shouldn't be the case... I
+                  should be able to use [it] independently") — used to be
+                  disabled unless both those overlays were also on, since
+                  this only ever drew into the corner their intersection
+                  happened to leave empty. computeExportLayout
+                  (exportOverlays.ts) now reserves that same corner on its
+                  own whenever this text is non-blank, so there's nothing
+                  left to gate here. */}
+              <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-prosota-muted">
+                <span>Project Title</span>
+                <input
+                  type="text"
+                  value={settings.exportTitle}
+                  onChange={e => set('exportTitle', e.target.value)}
+                  className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-prosota-muted">
+                <span>Narrative</span>
+                <textarea
+                  value={settings.exportNarrative}
+                  onChange={e => set('exportNarrative', e.target.value)}
+                  rows={3}
+                  className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 resize-none"
+                />
+              </label>
             </div>
 
             <div className="border-t border-gray-100 dark:border-prosota-line pt-2.5 space-y-2.5">

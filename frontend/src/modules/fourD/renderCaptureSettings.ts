@@ -103,11 +103,19 @@ export interface RenderCaptureSettings {
   // Current for the left and Baseline for the right, allow me to name the
   // titles") — always drawn when non-blank (not behind a separate on/off
   // toggle like the other overlays above: clearing the text is itself
-  // "off"). mainViewTitle labels the primary viewport; baselineViewTitle
-  // only ever actually appears when Include Baseline is also on, since
-  // that's the only time there's a second view to label at all.
+  // "off"). mainViewTitle labels the primary viewport.
   mainViewTitle: string
-  baselineViewTitle: string
+  // One title per comparison-pane *slot* (2026-09-01, per Maro: "i can
+  // have three comparison windows max so i should [see] three titles...
+  // if they are actively used" — replaces the old single
+  // `baselineViewTitle: string`, which labeled every open comparison pane
+  // identically regardless of how many were open). Index-aligned with
+  // FourD.tsx's own paneConfigs/comparisonCanvasRefs slots, same as
+  // ExportLayout.comparisonViewRects — comparisonViewTitles[i] only ever
+  // actually appears in an export when slot i is genuinely open with
+  // Include Comparison Panes on, same "only appears when there's a real
+  // view to label" behaviour the old single field had.
+  comparisonViewTitles: string[]
   // Cost Profile (2026-07-25, per Maro: "include... the cost profile over
   // time at the bottom" — pointed at the Resource Usage tab's own "cost"
   // unit as the reference, not a bespoke calculation. See
@@ -115,11 +123,15 @@ export interface RenderCaptureSettings {
   includeCostProfile: boolean
   // Title/narrative block (2026-07-25, per Maro: "there's a corner at left
   // which is empty. Allow me to add a title (e.g project title) and a
-  // description or narrative so i can utilise the space properly") — draws
-  // into the corner left blank by Gantt Chart + Activity Table both being
-  // on (see exportOverlays.ts's own computeExportLayout, titleBlockRect);
-  // no separate on/off toggle, same "blank text = off" convention as the
-  // view titles above.
+  // description or narrative so i can utilise the space properly") — no
+  // separate on/off toggle, same "blank text = off" convention as the view
+  // titles above. Originally only ever drew into the corner left blank by
+  // Gantt Chart + Activity Table both being on; per Maro 2026-09-01 ("the
+  // title & narrative is currently tied to the activity table which
+  // shouldn't be the case... I should be able to use [it] independently"),
+  // computeExportLayout (exportOverlays.ts) now reserves that same
+  // top-left footprint on its own whenever this text is non-blank, whether
+  // or not Gantt Chart/Activity Table are also on.
   exportTitle: string
   exportNarrative: string
 }
@@ -140,7 +152,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   includeRadialCharts: false,
   includeTimelineStrip: false,
   mainViewTitle: 'Current',
-  baselineViewTitle: 'Baseline',
+  comparisonViewTitles: ['Baseline', 'Comparison 2', 'Comparison 3'],
   includeCostProfile: false,
   exportTitle: '',
   exportNarrative: '',

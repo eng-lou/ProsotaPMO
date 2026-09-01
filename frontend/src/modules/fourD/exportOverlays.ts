@@ -143,10 +143,27 @@ export function selectExportActivities(activities: Activity[], now: Date | null,
 export function computeExportLayout(
   resolutionWidth: number, resolutionHeight: number,
   scale: number,
-  opts: { includeGanttChart: boolean; includeActivityTable: boolean; comparisonPaneCount: number; includeCostProfile: boolean },
+  opts: {
+    includeGanttChart: boolean; includeActivityTable: boolean; comparisonPaneCount: number; includeCostProfile: boolean
+    // Title & Narrative independence (2026-09-01, per Maro: "the title &
+    // narrative is currently tied to the activity table which shouldn't
+    // be the case") — see titleBlockRect's own comment below for how
+    // these two now drive the same corner reservation Gantt Chart/
+    // Activity Table used to be the only way to get.
+    exportTitle: string; exportNarrative: string
+  },
 ): ExportLayout {
-  const ganttHeight = opts.includeGanttChart ? Math.round((GANTT_BAND_HEIGHT + TIME_AXIS_HEIGHT) * scale) : 0
-  const tableWidth = opts.includeActivityTable ? Math.round(TABLE_COLUMN_WIDTH * scale) : 0
+  // Reserves the same corner size (tableWidth x ganttHeight) whenever
+  // Title/Narrative wants it, even with Gantt Chart and/or Activity Table
+  // both off — previously this corner only ever existed as leftover space
+  // when both those bands were independently on, wrongly coupling an
+  // unrelated feature to two others. Gantt/Table still only ever *draw*
+  // their own content when their own toggle is on (see composeExportFrame
+  // below) — this only changes how much space gets reserved for the
+  // corner, never what fills the rest of a reserved-but-toggle-off band.
+  const titleBlockWantsSpace = opts.exportTitle.trim() !== '' || opts.exportNarrative.trim() !== ''
+  const ganttHeight = (opts.includeGanttChart || titleBlockWantsSpace) ? Math.round((GANTT_BAND_HEIGHT + TIME_AXIS_HEIGHT) * scale) : 0
+  const tableWidth = (opts.includeActivityTable || titleBlockWantsSpace) ? Math.round(TABLE_COLUMN_WIDTH * scale) : 0
   const costHeight = opts.includeCostProfile ? Math.round(COST_BAND_HEIGHT * scale) : 0
 
   // Explicit target output size (2026-07-25 rework, per Maro: "the
@@ -199,14 +216,16 @@ export function computeExportLayout(
   const costRect: Rect | null = opts.includeCostProfile
     ? { x: 0, y: ganttHeight + viewportHeight, width: totalWidth, height: costHeight }
     : null
-  // The empty corner above the table/left of the Gantt strip (2026-07-25,
-  // per Maro: "there's a corner at left which is empty. Allow me to add a
-  // title... and a description or narrative") — only ever exists when both
-  // bands are on, since it's exactly their intersection (ganttRect stops
-  // at x: tableWidth, tableRect starts at y: ganttHeight — the rectangle
-  // neither one claims). No dedicated space to draw into otherwise, so
-  // this stays null rather than inventing a new band just for it.
-  const titleBlockRect: Rect | null = opts.includeGanttChart && opts.includeActivityTable
+  // The corner above the table/left of the Gantt strip (2026-07-25, per
+  // Maro: "there's a corner at left which is empty. Allow me to add a
+  // title... and a description or narrative") — originally only ever
+  // existed when both bands were on, since it was exactly their
+  // intersection. Independent since 2026-09-01 (titleBlockWantsSpace
+  // above already forces ganttHeight/tableWidth to reserve this same
+  // corner size even with Gantt Chart/Activity Table both off), so this
+  // now only needs to check the text itself, matching the "blank text is
+  // off" convention every other title field already uses.
+  const titleBlockRect: Rect | null = titleBlockWantsSpace
     ? { x: 0, y: 0, width: tableWidth, height: ganttHeight }
     : null
 
@@ -902,7 +921,7 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 // ExportLayout.titleBlockRect exists (see computeExportLayout's own
 // header on when that corner is actually available). Draws nothing if
 // both fields are blank, same "empty text = off" convention
-// RenderCaptureSettings.mainViewTitle/baselineViewTitle already established.
+// RenderCaptureSettings.mainViewTitle/comparisonViewTitles already established.
 function drawTitleBlock(ctx: CanvasRenderingContext2D, rect: Rect, title: string, narrative: string, scale: number): void {
   const trimmedTitle = title.trim()
   const trimmedNarrative = narrative.trim()
@@ -949,7 +968,7 @@ function drawTitleBlock(ctx: CanvasRenderingContext2D, rect: Rect, title: string
 // Small centred label badge along the top of a 3D view rect — "Current"/
 // "Baseline" by default (2026-07-25, per Maro: "add a title for both 3d
 // views... allow me to name the titles"), but whatever text
-// RenderCaptureSettings.mainViewTitle/baselineViewTitle actually holds.
+// RenderCaptureSettings.mainViewTitle/comparisonViewTitles actually holds.
 // Always drawn when non-blank rather than behind its own separate
 // checkbox — see RenderCaptureSettings' own header on that call — and
 // deliberately top-*centre*, not top-left, so it never collides with the
@@ -997,7 +1016,11 @@ export interface ComposeExportFrameOptions {
   includeAppearanceLegend: boolean
   includeDateOverlay: boolean
   mainViewTitle: string
-  baselineViewTitle: string
+  // Index-aligned with ExportLayout.comparisonViewRects (2026-09-01,
+  // replaces the old single `baselineViewTitle: string` — see
+  // RenderCaptureSettings.comparisonViewTitles's own header for the full
+  // "why").
+  comparisonViewTitles: string[]
   includeCostProfile: boolean
   costProfileBuckets: { start: Date; end: Date; label: string }[]
   costProfileValues: number[]
@@ -1209,15 +1232,14 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   drawCoverFit(ctx, opts.mainCanvas, mv)
   if (opts.camera) drawExportLabels(ctx, mv, opts.exportLabels, opts.camera, opts.mainCanvas.width, opts.mainCanvas.height, opts.scale)
   drawViewTitle(ctx, mv, opts.mainViewTitle, opts.scale)
-  // Same shared baselineViewTitle for every open comparison pane
-  // (2026-08-03) — deliberately not a per-pane title field; see
-  // comparisonPane.ts's own header on keeping RenderCaptureSettings
-  // untouched by this generalization.
+  // Per-pane title (2026-09-01, replaces the old single shared
+  // baselineViewTitle applied identically to every open pane) — index i
+  // lines up with FourD.tsx's own paneConfigs/comparisonCanvasRefs slots.
   layout.comparisonViewRects.forEach((rect, i) => {
     const canvas = opts.comparisonCanvases[i]
     if (!canvas) return
     drawCoverFit(ctx, canvas, rect)
-    drawViewTitle(ctx, rect, opts.baselineViewTitle, opts.scale)
+    drawViewTitle(ctx, rect, opts.comparisonViewTitles[i] ?? '', opts.scale)
   })
 
   const padding = OVERLAY_PADDING * opts.scale
