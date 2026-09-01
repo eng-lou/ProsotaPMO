@@ -2138,7 +2138,38 @@ function ModelObjects({
         // real, not a rare-mode edge case.
         const standardMaterial = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
         const materials = Array.isArray(standardMaterial) ? standardMaterial : [standardMaterial]
-        materials.forEach(mat => { mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', clipPlanes) })
+        materials.forEach(mat => {
+          mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', clipPlanes)
+          // clipShadows (2026-09-01, found live: "i see the shadows of the
+          // elements that got clipped") — three.js's shadow pass renders
+          // through an auto-generated MeshDepthMaterial that does NOT
+          // inherit the real material's clippingPlanes unless this flag is
+          // explicitly set (confirmed in three.js's own WebGLShadowMap
+          // source, not assumed) — a clipped-away chunk of geometry was
+          // still fully opaque as far as the shadow map was concerned, so
+          // it kept casting its pre-cut shadow. Always set to true here
+          // (harmless/no-op whenever clippingPlanes is actually empty) —
+          // simpler than tracking whether this specific material has ever
+          // had a real cut.
+          mat.clipShadows = true
+          // Immediately propagate to whichever display variant is
+          // currently cached (2026-09-01, found live: the clip only ever
+          // appeared after toggling an unrelated setting like Shadows) —
+          // TimelinePlayback's own per-frame Play sync already does this
+          // same propagation, but only for elements under active schedule
+          // animation (`if (state)`); a model with no animated actors at
+          // all (this bug's own repro) never gets that sync, and the big
+          // selection/material effect that rebuilds these variants
+          // (getGouraudVariant/getHiddenLineMaterial, renderModeMaterials.ts)
+          // only reruns on its own settings/selection dependencies, not on
+          // every Section Box change — so without this, the variant a
+          // Gouraud-mode viewer actually sees stayed stale until *something
+          // else* happened to force that heavier effect to rerun.
+          const lambertVariant = mat.userData.lambertVariant as THREE.Material | undefined
+          if (lambertVariant) { lambertVariant.clippingPlanes = mat.clippingPlanes; lambertVariant.clipShadows = true }
+          const hiddenLineVariant = mat.userData.hiddenLineVariant as THREE.Material | undefined
+          if (hiddenLineVariant) { hiddenLineVariant.clippingPlanes = mat.clippingPlanes; hiddenLineVariant.clipShadows = true }
+        })
 
         // The edges overlay's own LineBasicMaterial was never included
         // here (2026-07-13, per Maro: "i noticed it was the case with
@@ -3618,6 +3649,10 @@ export function TimelinePlayback({
           // (see growClipPlane's own header above); clipping-plane VALUE
           // changes are cheap and don't touch needsUpdate at all.
           material.clippingPlanes = mergeClipPlanes(material.clippingPlanes, 'grow', growClipPlane ? [growClipPlane] : [])
+          // clipShadows (2026-09-01 — see ModelObjects' own Section Box
+          // useFrame header above for the full "shadows of clipped-away
+          // geometry still show" story; same fix, same reason, here too).
+          material.clipShadows = true
           const nextTransparent = state.opacity < 1
           // state.color is a hex string (profile config), originalColor a
           // real, untinted THREE.Color — normalized through one reused
@@ -3687,6 +3722,7 @@ export function TimelinePlayback({
             lambertVariant.opacity = material.opacity
             lambertVariant.color.copy(material.color)
             lambertVariant.clippingPlanes = material.clippingPlanes
+            lambertVariant.clipShadows = true
           }
           const hiddenLineVariant = material.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
           if (hiddenLineVariant) {
@@ -3696,6 +3732,7 @@ export function TimelinePlayback({
             hiddenLineVariant.transparent = material.transparent
             hiddenLineVariant.opacity = material.opacity
             hiddenLineVariant.clippingPlanes = material.clippingPlanes
+            hiddenLineVariant.clipShadows = true
           }
 
           // The black EdgesGeometry overlay (ModelObjects' own effect

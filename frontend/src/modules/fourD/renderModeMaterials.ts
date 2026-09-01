@@ -81,6 +81,13 @@ export function getGouraudVariant(source: THREE.MeshStandardMaterial, forBatch =
   // clone — clippingPlanes are already swapped wholesale (never mutated in
   // place) by both callers above, so sharing the array is safe.
   variant.clippingPlanes = source.clippingPlanes
+  // clipShadows (2026-09-01, per Maro live: "i see the shadows of the
+  // elements that got clipped") — same gap as clippingPlanes just above,
+  // same fix: three.js's shadow pass ignores a material's clippingPlanes
+  // entirely unless clipShadows is also true (confirmed in three.js's own
+  // WebGLShadowMap source), so copying clippingPlanes alone still left a
+  // clipped-away chunk of geometry casting its full, pre-cut shadow.
+  variant.clipShadows = source.clipShadows
   return variant
 }
 
@@ -111,6 +118,7 @@ export function getHiddenLineMaterial(
   variant.side = source.side
   // Same clippingPlanes gap as getGouraudVariant above, same fix.
   variant.clippingPlanes = source.clippingPlanes
+  variant.clipShadows = source.clipShadows
   return variant
 }
 

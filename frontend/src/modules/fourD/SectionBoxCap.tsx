@@ -202,7 +202,16 @@ const WHOLE_OBJECT_CAP_MESH_LIMIT = 150
 export function SectionBoxCaps({ boxes, objects }: { boxes: ResolvedSectionBox[]; objects: ImportedObject[] }) {
   return (
     <>
-      {boxes.filter(b => b.active).flatMap(box => {
+      {/* Also gated on `visible`, not just `active` (2026-09-01, per Maro
+          live: "when i hide the section box, i actually still see the
+          overlay although the handles are hidden") — the solid cap faces
+          are as much a part of "the section box's own visual presence" as
+          the wireframe/handles SectionBoxGizmos already hides on `visible`,
+          so hiding one without the other read as broken, not intentional.
+          The clip itself (the geometry actually being cut away) still
+          tracks `active` alone, unaffected by this — this only controls the
+          solid-fill overlay's own visibility. */}
+      {boxes.filter(b => b.active && b.visible).flatMap(box => {
         const entry = objects.find(o => o.id === box.sceneObjectId)
         if (!entry) return []
         if (box.elementExpressId !== undefined) {
