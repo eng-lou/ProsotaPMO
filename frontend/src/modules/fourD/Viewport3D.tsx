@@ -2118,7 +2118,26 @@ function ModelObjects({
         // for the same materials, whenever this model has schedule-linked
         // elements — an outright overwrite here would erase whichever grow
         // plane it had just set, the same bug in the other direction.
-        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        //
+        // child.userData.standardMaterial, not child.material (2026-09-01,
+        // second pass on the same live bug — mergeClipPlanes alone wasn't
+        // enough) — in Gouraud/Hidden Line render mode, child.material is a
+        // *display variant* (getGouraudVariant/getHiddenLineMaterial,
+        // renderModeMaterials.ts), rebuilt from the real underlying material
+        // (child.userData.standardMaterial — see the big selection/material
+        // effect's own header above on exactly why that stable reference
+        // exists) every time that effect reruns, and TimelinePlayback's own
+        // per-frame Play sync (`lambertVariant.clippingPlanes =
+        // material.clippingPlanes`) copies FROM that same underlying
+        // material onto the variant every single frame regardless. Writing
+        // clippingPlanes onto child.material directly meant it landed on a
+        // transient variant object that either got rebuilt from the
+        // (untouched, always-null) real material, or had its clippingPlanes
+        // overwritten right back from it by that same per-frame Play sync —
+        // this app's default render mode is Gouraud Shaded, so this was
+        // real, not a rare-mode edge case.
+        const standardMaterial = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
+        const materials = Array.isArray(standardMaterial) ? standardMaterial : [standardMaterial]
         materials.forEach(mat => { mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', clipPlanes) })
 
         // The edges overlay's own LineBasicMaterial was never included
