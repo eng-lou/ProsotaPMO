@@ -328,6 +328,28 @@ export function PropertiesPanel({
         <input type="checkbox" checked={settings.showAxisIndicator} onChange={e => set('showAxisIndicator', e.target.checked)} />
       </Row>
 
+      <SectionHeader label="Site Context (Tiles)" />
+      <Row label="Tile Detail">
+        <div className="flex items-center gap-1.5 w-full" title="Google Photorealistic 3D Tiles' own screen-space error target — lower forces finer, more detailed tiles to load at close zoom (more download/GPU cost); higher accepts coarser geometry sooner. Doesn't fix mesh decimation entirely (Google may simply not have finer tiles for a given spot) but reduces how aggressively it settles for a coarse one.">
+          <input
+            type="range" min={2} max={32} step={1} value={settings.tilesErrorTarget}
+            onChange={e => set('tilesErrorTarget', Number(e.target.value))}
+            className="flex-1 w-0"
+          />
+          <span className="text-xs text-gray-500 dark:text-prosota-muted w-16 text-right shrink-0">{settings.tilesErrorTarget}px</span>
+        </div>
+      </Row>
+      <Row label="Tile Cache">
+        <div className="flex items-center gap-1.5 w-full" title="How much loaded tile geometry stays resident in memory before older tiles are evicted. A larger cache keeps high-detail tiles loaded while orbiting a small area instead of re-downloading/re-coarsening them.">
+          <input
+            type="range" min={200} max={2000} step={100} value={settings.tilesCacheSizeMb}
+            onChange={e => set('tilesCacheSizeMb', Number(e.target.value))}
+            className="flex-1 w-0"
+          />
+          <span className="text-xs text-gray-500 dark:text-prosota-muted w-16 text-right shrink-0">{settings.tilesCacheSizeMb} MB</span>
+        </div>
+      </Row>
+
       {activeObject && (
         <>
           <SectionHeader label={isElementTransform ? `Selected element (in ${activeObject.name || 'model'})` : `Selected: ${activeObject.name || 'Object'}`} />

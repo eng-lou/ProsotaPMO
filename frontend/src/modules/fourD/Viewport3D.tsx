@@ -6168,7 +6168,7 @@ export function Viewport3D({
               the layer's enabled AND a key's actually been fetched — no
               point instantiating a TilesRenderer that can't authenticate. */}
           {siteContext?.enabled && siteTilesApiKey && (
-            <SiteTilesLayer apiKey={siteTilesApiKey} ctx={siteContext} upAxis={settings.upAxis} />
+            <SiteTilesLayer apiKey={siteTilesApiKey} ctx={siteContext} upAxis={settings.upAxis} errorTarget={settings.tilesErrorTarget} cacheSizeMb={settings.tilesCacheSizeMb} />
           )}
           {/* Grid is Y-up by its own native convention (it's our own
               geometry) — this wrapper corrects it to match upAxis, same as

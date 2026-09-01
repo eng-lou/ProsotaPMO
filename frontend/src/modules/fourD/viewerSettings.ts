@@ -151,6 +151,32 @@ export interface ViewerSettings {
   // occluding IFC building is the thing that needs to fade) works exactly
   // as expected either way.
   xrayUnselected: boolean
+  // Site Context tile detail (2026-09-02, per Maro: "look into the lod
+  // improvement/controls for the tiles" — a real, confirmed limitation:
+  // Google Photorealistic 3D Tiles serve simplified/decimated geometry at
+  // close zoom, visible as faceted/crystalline trees etc. in a live test;
+  // no AI upscaler can fix this since it's geometry, not resolution — see
+  // AI_RENDER_ENHANCEMENT_SCOPE.md's own "Tiles mesh decimation" section).
+  // Maps directly to 3d-tiles-renderer's own TilesRenderer.errorTarget (a
+  // screen-space error in pixels — confirmed against that library's own
+  // installed source, not guessed): LOWER means a tile must look sharper
+  // before the renderer accepts it, so it keeps requesting finer child
+  // tiles instead — more real geometric/texture detail at close zoom, at
+  // the cost of more tile downloads and GPU load. The library's own
+  // default is 16; exposed here as a plain slider rather than a fixed
+  // on/off, since there's no single right answer independent of the
+  // user's own GPU/bandwidth and how close they actually work to a site.
+  tilesErrorTarget: number
+  // Site Context tile cache size, in MB — 3d-tiles-renderer's own
+  // TilesRenderer.lruCache.maxBytesSize (minBytesSize set to 75% of this,
+  // matching the library's own default 0.3GB/0.4GB ratio). A tile cache
+  // that's too small evicts already-loaded high-detail tiles while simply
+  // orbiting around the same small area, forcing them to reload (and
+  // briefly show a coarser LOD again) even though tilesErrorTarget above
+  // would otherwise have kept them loaded. The library's own default is
+  // ~400MB; raised a user's own choice to trade browser memory for fewer
+  // LOD pop-ins while working a small area repeatedly.
+  tilesCacheSizeMb: number
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -173,6 +199,8 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   showVarianceColors: false,
   showClashColors: false,
   xrayUnselected: false,
+  tilesErrorTarget: 16,
+  tilesCacheSizeMb: 400,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

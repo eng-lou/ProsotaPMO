@@ -9,6 +9,14 @@ interface Props {
   apiKey: string
   ctx: SiteContext
   upAxis: UpAxis
+  // LOD/cache controls (2026-09-02, see viewerSettings.ts's own header on
+  // tilesErrorTarget/tilesCacheSizeMb for the full "why") — passed straight
+  // through to <TilesRenderer> below via its own dot-notation prop
+  // convention (confirmed against the installed library's TilesRenderer.jsx
+  // doc comment: "properties on the TilesRenderer instance can be set as
+  // props using dot-notation for nested properties, e.g. lruCache-minSize").
+  errorTarget: number
+  cacheSizeMb: number
 }
 
 // Stands in for 3d-tiles-renderer/plugins' own GoogleCloudAuthPlugin
@@ -126,7 +134,7 @@ class SimpleGoogleTilesAuthPlugin {
 // internally by <TilesRenderer>'s own useFrame — it automatically respects
 // whatever frameloop mode the parent <Canvas> is in, so this needs no
 // separate `active` gating of its own.
-export function SiteTilesLayer({ apiKey, ctx, upAxis }: Props) {
+export function SiteTilesLayer({ apiKey, ctx, upAxis, errorTarget, cacheSizeMb }: Props) {
   const [tiles, setTiles] = useState<TilesRendererImpl | null>(null)
 
   // Recentres the tileset's own root group so the saved lat/lon lands at
@@ -197,7 +205,12 @@ export function SiteTilesLayer({ apiKey, ctx, upAxis }: Props) {
       scale={[ctx.scale, ctx.scale, ctx.scale]}
     >
       <group rotation={axisCorrectionRotation('z', upAxis)}>
-        <TilesRenderer ref={setTiles}>
+        <TilesRenderer
+          ref={setTiles}
+          errorTarget={errorTarget}
+          lruCache-maxBytesSize={cacheSizeMb * 1024 * 1024}
+          lruCache-minBytesSize={cacheSizeMb * 1024 * 1024 * 0.75}
+        >
           <TilesPlugin plugin={SimpleGoogleTilesAuthPlugin} args={[{ apiToken: apiKey }]} />
           {/* Required, not decorative — Google's terms require on-screen
               attribution whenever their Photorealistic 3D Tiles are shown.
