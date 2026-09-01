@@ -64,6 +64,21 @@ export async function addCollectionMember(data: {
   return res.data
 }
 
+// Bulk add (2026-09-01, per Maro: "optimise and reduce waste, improve
+// speed... adding selected elements to a collection... took too long") —
+// one request instead of one POST per element (see the backend's own
+// add_members_bulk docstring for the full "why"). Already-in-this-
+// collection elements are silently skipped server-side, not an error —
+// same "benign no-op" precedent addCollectionMember's own one-at-a-time
+// 409-catching callers already established.
+export async function addCollectionMembersBulk(data: {
+  collection_id: string
+  members: { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string; element_label: string }[]
+}): Promise<{ created: CollectionMember[]; skipped_duplicates: number }> {
+  const res = await api.post<{ created: CollectionMember[]; skipped_duplicates: number }>('/api/v1/collection-members/bulk', data)
+  return res.data
+}
+
 export async function removeCollectionMember(id: string): Promise<void> {
   await api.delete(`/api/v1/collection-members/${id}`)
 }

@@ -22,7 +22,7 @@ import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from 
 import { findLinkedExpressIds } from './linkedMaterials'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
-import { assignAnimationProfile, createModelElementLink, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind } from './modelElementLinks'
+import { assignAnimationProfile, createModelElementLink, createModelElementLinksBulk, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind } from './modelElementLinks'
 import {
   deleteModel3DFile, downloadModel3DFile, listModel3DFiles, updateUnloadedElements, uploadModel3DFile,
   type Model3DKind, type UnloadedElementInfo,
@@ -38,7 +38,7 @@ import { uploadFourDVideo } from './fourDVideos'
 import { CameraViewPanel } from './CameraViewPanel'
 import { CamerasPanel } from './CamerasPanel'
 import {
-  addCollectionMember, createCollection, deleteCollection, flattenCollectionMemberRefs, listCollections, removeCollectionMember, updateCollection,
+  addCollectionMembersBulk, createCollection, deleteCollection, flattenCollectionMemberRefs, listCollections, removeCollectionMember, updateCollection,
   type Collection as CollectionType, type CollectionMember,
 } from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
@@ -434,33 +434,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Bulk Activity Link (2026-08-30, per Maro: "I selected multiple elements,
   // seems i'm unable to bulk assign/unassign to an activity, just the one
   // to one" — IfcDataPanel.tsx's own Activity Link section only ever
-  // operated on the single-element case). Same resolveSelectionToMemberRefs
-  // + per-draft loop shape as handleAddSelectedToCollection/
-  // handleRemoveSelectedFromCollection below (Collections' own bulk
-  // actions) — the current viewport selection resolved to loose
-  // (source_kind, element_ref) refs, one createModelElementLink/
-  // deleteModelElementLink call per element rather than a new bulk
-  // endpoint, matching that established pattern instead of inventing a
-  // second one.
+  // operated on the single-element case). One bulk POST, not one per
+  // element (2026-09-01 fix, per Maro: "optimise and reduce waste, improve
+  // speed" — see createModelElementLinksBulk's own header). Already-
+  // linked elements come back silently skipped server-side, same "benign
+  // no-op" meaning the old per-element 409 catch had.
   const handleBulkLinkSelectedToActivity = async (activityId: string, profileId: string | null = null) => {
     const handle = getIfcHandleFor(activeIfcModelId)
     const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
     if (drafts.length === 0) return
     setLinkError(null)
-    const newLinks: ModelElementLink[] = []
-    for (const draft of drafts) {
-      try {
-        newLinks.push(await createModelElementLink({ activity_id: activityId, animation_profile_id: profileId, ...draft }))
-      } catch (err) {
-        // 409 = this element's already linked to this activity — a benign
-        // no-op from the user's perspective (they selected some
-        // already-linked elements alongside new ones), same treatment as
-        // Collections' own Add Selected.
-        if (axios.isAxiosError(err) && err.response?.status === 409) continue
-        setLinkError(err instanceof Error ? err.message : 'Failed to link some elements to the activity')
-      }
+    try {
+      const { created } = await createModelElementLinksBulk({ activity_id: activityId, animation_profile_id: profileId, members: drafts })
+      if (created.length > 0) setModelElementLinks(prev => [...prev, ...created])
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Failed to link the selected elements to the activity')
     }
-    if (newLinks.length > 0) setModelElementLinks(prev => [...prev, ...newLinks])
   }
   const handleBulkUnlinkSelectedFromActivity = async (activityId: string) => {
     const handle = getIfcHandleFor(activeIfcModelId)
@@ -770,25 +759,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // loose (source_kind, element_ref) refs. getIfcHandleFor(activeIfcModelId)
   // is the same handle selectedExpressIds is already implicitly scoped to
   // (see collectionResolvers.ts's own header) — no re-derivation needed.
+  // One bulk POST, not one per element (2026-09-01 fix, per Maro:
+  // "optimise and reduce waste, improve speed... adding selected elements
+  // to a collection... took too long" — a whole-model selection is
+  // thousands of elements, and this used to be that many sequential HTTP
+  // round trips, each its own commit. Already-in-this-collection elements
+  // come back silently skipped server-side, same "benign no-op" meaning
+  // the old per-element 409 catch had.
   const handleAddSelectedToCollection = async (collectionId: string) => {
     const handle = getIfcHandleFor(activeIfcModelId)
     const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
     if (drafts.length === 0) return
     setCollectionError(null)
-    const newMembers: CollectionMember[] = []
-    for (const draft of drafts) {
-      try {
-        newMembers.push(await addCollectionMember({ collection_id: collectionId, ...draft }))
-      } catch (err) {
-        // 409 = this element's already in this collection — a benign no-op
-        // from the user's perspective (they selected some already-grouped
-        // elements alongside new ones), not worth surfacing per-element.
-        if (axios.isAxiosError(err) && err.response?.status === 409) continue
-        setCollectionError(collectionErrorMessage(err, 'Failed to add some elements to the collection'))
+    try {
+      const { created } = await addCollectionMembersBulk({ collection_id: collectionId, members: drafts })
+      if (created.length > 0) {
+        setCollections(prev => prev.map(c => (c.id === collectionId ? { ...c, members: [...c.members, ...created] } : c)))
       }
-    }
-    if (newMembers.length > 0) {
-      setCollections(prev => prev.map(c => (c.id === collectionId ? { ...c, members: [...c.members, ...newMembers] } : c)))
+    } catch (err) {
+      setCollectionError(collectionErrorMessage(err, 'Failed to add the selected elements to the collection'))
     }
   }
 
@@ -7105,13 +7094,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
       try {
         setCollectionError(null)
+        // Bulk add (2026-09-01), not one POST per element — a clash test
+        // between two large groups (e.g. "all columns") used to mean
+        // thousands of sequential round trips before it could even run.
         const collectionA = await createCollection({ project_id: selectedProject.id, name: groupAName })
-        const membersA = []
-        for (const el of groupAElements) membersA.push(await addCollectionMember({ collection_id: collectionA.id, ...el }))
+        const { created: membersA } = await addCollectionMembersBulk({ collection_id: collectionA.id, members: groupAElements })
         const fullCollectionA = { ...collectionA, members: membersA }
         const collectionB = await createCollection({ project_id: selectedProject.id, name: groupBName })
-        const membersB = []
-        for (const el of groupBElements) membersB.push(await addCollectionMember({ collection_id: collectionB.id, ...el }))
+        const { created: membersB } = await addCollectionMembersBulk({ collection_id: collectionB.id, members: groupBElements })
         const fullCollectionB = { ...collectionB, members: membersB }
         setCollections(prev => [...prev, fullCollectionA, fullCollectionB])
 

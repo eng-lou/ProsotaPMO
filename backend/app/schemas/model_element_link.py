@@ -47,3 +47,31 @@ class ModelElementLinkResponse(ModelElementLinkBase):
     animation_profile_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+# Bulk link (2026-09-01, per Maro: "optimise and reduce waste, improve
+# speed") — same "one request instead of N" fix as CollectionMemberBulkCreate
+# (collection.py), for the same underlying reason: FourD.tsx's own "Bulk
+# Link Selected to Activity" and Poe's own propose_link_elements approval
+# both used to POST once per element. All elements here always share the
+# same activity_id (a "link this whole selection to one activity" action
+# has no reason to target more than one), so this only needs one Activity
+# lookup for the whole batch, not one per element.
+class ModelElementLinkBulkMember(BaseModel):
+    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split"]
+    element_ref: str = Field(min_length=1, max_length=300)
+    element_label: str = Field(min_length=1, max_length=300)
+
+
+class ModelElementLinkBulkCreate(BaseModel):
+    activity_id: uuid.UUID
+    members: list[ModelElementLinkBulkMember]
+    animation_profile_id: uuid.UUID | None = None
+
+
+class ModelElementLinkBulkResponse(BaseModel):
+    created: list[ModelElementLinkResponse]
+    # Already-linked-to-this-activity elements are silently skipped, not
+    # an error — same "benign no-op" precedent the old one-at-a-time 409
+    # catch already established in FourD.tsx.
+    skipped_duplicates: int

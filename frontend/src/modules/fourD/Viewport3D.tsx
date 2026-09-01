@@ -4568,6 +4568,28 @@ export function Viewport3D({
   //    regression hunt" into "oh, reload the page" immediately.
   const [webglContextLost, setWebglContextLost] = useState(false)
   const [filterDialogOpen, setFilterDialogOpen] = useState(false)
+  // Stable array identity for ElementFilterDialog's own `expressIds` prop
+  // (2026-09-01 fix, real bug since the Filter feature's own 2026-07-26
+  // creation, per Maro: "filter selection box is glitching like crazy") —
+  // the JSX below used to spread `[...selectedExpressIds]` fresh inline on
+  // every single render of this component (this file's own huge, very
+  // frequently re-rendering component — camera movement, hover state,
+  // dozens of other things), so ElementFilterDialog's own
+  // useEffect([handle, expressIds]) saw a "changed" prop and reran its
+  // whole scan-then-reset-state cycle on nearly every render, wiping
+  // rows/checkedCategories/checkedStoreys back to defaults each time. This
+  // was invisible before today's caching fix (ifcModel.ts's own
+  // buildElementPropertyData/buildIfcTypeByExpressId) simply because the
+  // scan itself took up to 16.5s — by the time any one run would have
+  // finished, a newer render had already superseded it (`cancelled=true`),
+  // so it just looked permanently "stuck," never visibly reset anything.
+  // Now that the scan is near-instant, the exact same re-trigger loop
+  // completes every time — dozens of resets per second, exactly the
+  // reported "glitching." useMemo keyed on the real Set (a stable
+  // reference across unrelated re-renders — only setSelectedExpressIds
+  // itself changes it) is the actual fix; the underlying re-render
+  // frequency was never the bug.
+  const filterExpressIds = useMemo(() => [...selectedExpressIds], [selectedExpressIds])
   const cameraRef = useRef<THREE.Camera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   // Populated by the directionalLight's own `ref` below — ShadowFrustumSync
@@ -5702,7 +5724,7 @@ export function Viewport3D({
         return (
           <ElementFilterDialog
             handle={handle}
-            expressIds={[...selectedExpressIds]}
+            expressIds={filterExpressIds}
             onApply={onFilterApply}
             onClose={() => setFilterDialogOpen(false)}
           />

@@ -585,6 +585,29 @@ export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): 
   return out
 }
 
+// Per-handle memoization for buildIfcTypeByExpressId/buildElementPropertyData
+// below (2026-09-01, per Maro: "optimise and reduce waste, improve speed" —
+// a real, already-measured cost, not a guess: buildElementPropertyData's
+// own header below documents a *confirmed* 16.5s scan on a real 131k-
+// element high-rise, and it was being recomputed from scratch every time
+// either the Schedule Wizard (ifcScheduleExtraction.ts) or the Filter
+// dialog (ElementFilterDialog.tsx) called it — on a project that already
+// ran Generate Schedule (which calls this exact function), opening Filter
+// afterward paid that same 16.5s again for data that hadn't changed at
+// all. WeakMap-keyed on the handle itself: nothing to invalidate, since a
+// loaded IFC model's own psets/types never change after import, and a
+// handle that gets unloaded/GC'd takes its cache entry with it for free —
+// no manual cleanup needed on Unload/re-import. Caches the *Promise* (not
+// just the eventual value) so two near-simultaneous callers — e.g.
+// opening Filter right as Generate Schedule finishes — share the one real
+// in-flight scan instead of racing two of them.
+const ifcTypeByExpressIdCache = new WeakMap<IfcModelHandle, Map<number, string>>()
+const elementPropertyDataCache = new WeakMap<IfcModelHandle, Promise<{
+  quantityAreaByExpressId: Map<number, number>
+  categoryByExpressId: Map<number, string>
+  loadBearingByExpressId: Map<number, boolean>
+}>>()
+
 // The inverse of getExpressIdsForType — every real element's own IFC type
 // name, in one bulk pass (2026-07-26, for the Filter dialog's Category
 // fallback — ElementFilterDialog.tsx) — iterates GetAllTypesOfModel's own
@@ -592,12 +615,15 @@ export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): 
 // element) exactly like getTypeCounts above already does, just keeping the
 // ids themselves instead of only their count.
 export function buildIfcTypeByExpressId(handle: IfcModelHandle): Map<number, string> {
+  const cached = ifcTypeByExpressIdCache.get(handle)
+  if (cached) return cached
   const result = new Map<number, string>()
   const types = handle.api.GetAllTypesOfModel(handle.modelID)
   for (const { typeID, typeName } of types) {
     const ids = handle.api.GetLineIDsWithType(handle.modelID, typeID)
     for (let i = 0; i < ids.size(); i++) result.set(ids.get(i), typeName)
   }
+  ifcTypeByExpressIdCache.set(handle, result)
   return result
 }
 
@@ -968,7 +994,27 @@ export function getElementNamesAndPredefinedTypes(
 // 'Non-Structural Walls' classification (extractScheduleElements) for how
 // this reclassifies a wall out of the structural-climb-gating 'Walls'
 // category.
-export async function buildElementPropertyData(handle: IfcModelHandle): Promise<{
+export function buildElementPropertyData(handle: IfcModelHandle): Promise<{
+  quantityAreaByExpressId: Map<number, number>
+  categoryByExpressId: Map<number, string>
+  loadBearingByExpressId: Map<number, boolean>
+}> {
+  const cached = elementPropertyDataCache.get(handle)
+  if (cached) return cached
+  // Evicted on rejection (2026-09-01) — this is a pure computation over
+  // already-loaded, static WASM data, so a failure would almost certainly
+  // repeat on retry anyway, but there's no reason to *guarantee* every
+  // future call permanently re-throws the same cached rejection instead
+  // of getting a fresh attempt.
+  const promise = buildElementPropertyDataUncached(handle).catch(err => {
+    elementPropertyDataCache.delete(handle)
+    throw err
+  })
+  elementPropertyDataCache.set(handle, promise)
+  return promise
+}
+
+async function buildElementPropertyDataUncached(handle: IfcModelHandle): Promise<{
   quantityAreaByExpressId: Map<number, number>
   categoryByExpressId: Map<number, string>
   loadBearingByExpressId: Map<number, boolean>

@@ -63,6 +63,21 @@ export async function deleteModelElementLink(id: string): Promise<void> {
   await api.delete(`/api/v1/model-element-links/${id}`)
 }
 
+// Bulk link (2026-09-01, per Maro: "optimise and reduce waste, improve
+// speed") — one request instead of one POST per element (see the
+// backend's own create_links_bulk docstring). Already-linked-to-this-
+// activity elements are silently skipped server-side, same "benign
+// no-op" precedent createModelElementLink's own one-at-a-time 409-
+// catching callers already established.
+export async function createModelElementLinksBulk(data: {
+  activity_id: string
+  members: { source_kind: ModelElementLinkSourceKind; element_ref: string; element_label: string }[]
+  animation_profile_id?: string | null
+}): Promise<{ created: ModelElementLink[]; skipped_duplicates: number }> {
+  const res = await api.post<{ created: ModelElementLink[]; skipped_duplicates: number }>('/api/v1/model-element-links/bulk', data)
+  return res.data
+}
+
 // Assigns/clears which AnimationProfile drives this link (2026-07-11, per
 // Maro) — the only thing about a link worth changing after creation.
 export async function assignAnimationProfile(linkId: string, animationProfileId: string | null): Promise<ModelElementLink> {

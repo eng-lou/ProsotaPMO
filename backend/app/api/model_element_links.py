@@ -6,7 +6,13 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.model_element_link import ModelElementLinkCreate, ModelElementLinkResponse, ModelElementLinkUpdate
+from app.schemas.model_element_link import (
+    ModelElementLinkBulkCreate,
+    ModelElementLinkBulkResponse,
+    ModelElementLinkCreate,
+    ModelElementLinkResponse,
+    ModelElementLinkUpdate,
+)
 from app.services import model_element_link as svc
 
 router = APIRouter(prefix="/model-element-links", tags=["model-element-links"])
@@ -26,6 +32,17 @@ async def create_model_element_link(
     db: AsyncSession = Depends(get_db),
 ):
     return await svc.create_link(db, data)
+
+
+# Bulk create (2026-09-01) — see create_links_bulk's own docstring. A
+# distinct route (not an overload of "/") since it takes an activity_id +
+# list shape rather than one flat ModelElementLinkCreate.
+@router.post("/bulk", response_model=ModelElementLinkBulkResponse, status_code=201)
+async def create_model_element_links_bulk(
+    data: ModelElementLinkBulkCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    return await svc.create_links_bulk(db, data)
 
 
 @router.patch("/{link_id}", response_model=ModelElementLinkResponse)

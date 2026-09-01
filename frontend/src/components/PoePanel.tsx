@@ -615,28 +615,28 @@ export function PoePanel({
           `${failedCount > 0 ? ` (${failedCount} failed — a validation rule or a stale id)` : ''}` +
           `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
       } else if (pendingProposal.kind === 'link_elements') {
-        // link_elements — the real /model-element-links/ POST, one per
-        // approved element (same shape FourD.tsx's own
-        // handleBulkLinkSelectedToActivity already posts, just triggered
-        // from this card instead of the toolbar).
+        // link_elements — one bulk POST /model-element-links/bulk
+        // (2026-09-01, replaces one POST per approved element — see
+        // that endpoint's own create_links_bulk docstring for the real
+        // "why": a large approved selection used to mean that many
+        // sequential round trips).
         const approved = pendingProposal.elements.filter((_, i) => selectedIndices.has(i))
-        let createdCount = 0
-        let failedCount = 0
-        for (const el of approved) {
+        const rejectedCount = pendingProposal.elements.length - approved.length
+        if (approved.length === 0) {
+          summary = 'Every proposed element was rejected — nothing linked.'
+        } else {
           try {
-            await api.post('/api/v1/model-element-links/', {
-              activity_id: pendingProposal.activityId,
-              source_kind: el.source_kind, element_ref: el.element_ref, element_label: el.element_label,
+            const { data } = await api.post('/api/v1/model-element-links/bulk', {
+              activity_id: pendingProposal.activityId, members: approved,
             })
-            createdCount += 1
-          } catch {
-            failedCount += 1
+            summary = `Linked ${data.created.length} of ${approved.length} approved element(s)` +
+              `${data.skipped_duplicates > 0 ? ` (${data.skipped_duplicates} already linked)` : ''}` +
+              `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+          } catch (err) {
+            const detail = axios.isAxiosError(err) ? err.response?.data?.detail : null
+            summary = `Failed to link the approved elements: ${typeof detail === 'string' ? detail : 'unknown error'}`
           }
         }
-        const rejectedCount = pendingProposal.elements.length - approved.length
-        summary = `Linked ${createdCount} of ${approved.length} approved element(s)` +
-          `${failedCount > 0 ? ` (${failedCount} failed)` : ''}` +
-          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
       } else {
         // clash_test — NOT a plain REST call like every kind above (see
         // aiFourDBridge.tsx's own execute_clash_test_proposal header for
