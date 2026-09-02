@@ -126,7 +126,7 @@ TOOLS: list[dict] = [
             "properties": {
                 "record_type": {
                     "type": "string",
-                    "enum": ["activity", "risk", "cost_element", "issue", "change", "decision"],
+                    "enum": ["activity", "risk", "cost_element", "issue", "change", "decision", "resource"],
                 },
                 "query": {"type": "string", "description": "Partial or full name/title to search for."},
             },
@@ -297,6 +297,52 @@ TOOLS: list[dict] = [
                 },
             },
             "required": ["activities"],
+            "additionalProperties": False,
+        },
+    },
+    # propose_create_resource_assignments (2026-09-02, per Maro: "can poe
+    # also work on resources" — a real gap: get_project_snapshot already
+    # reads resource/committed-cost data, but no proposal tool could ever
+    # create a ResourceAssignment; Risk and Scheduling both had create
+    # support, Resources didn't). Mirrors
+    # backend/app/schemas/resource.py's own ResourceAssignmentCreate
+    # field-for-field. resource_id/activity_id must be real ids —
+    # find_records now supports record_type="resource" specifically to
+    # close this (see that tool's own updated enum + record_tools.py).
+    {
+        "name": "propose_create_resource_assignments",
+        "description": (
+            "Draft one or more resource assignments (assigning a Resource to an Activity) for "
+            "human review — nothing is saved until explicitly approved. Call find_records with "
+            "record_type='resource' and record_type='activity' first to resolve real ids from "
+            "names — never invent one. Which of quantity/utilisation_pct to set depends on the "
+            "resource's own type (check get_project_snapshot's resources or ask if unsure): "
+            "labour/equipment/crew use utilisation_pct (0-100, % of the activity's own duration "
+            "spent on this); material uses quantity (e.g. 267 for '267 piles'); subcontractor "
+            "uses neither (its budget is always a flat rate, set at the resource itself)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "assignments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "activity_id": {"type": "string", "description": "Real activity UUID from get_project_snapshot or find_records."},
+                            "activity_name": {"type": "string", "description": "The activity's real task_name — display only, not saved."},
+                            "resource_id": {"type": "string", "description": "Real resource UUID from find_records(record_type='resource')."},
+                            "resource_name": {"type": "string", "description": "The resource's real name — display only, not saved."},
+                            "role": {"type": "string", "description": "Free text, e.g. 'Site Engineer' — independent of the resource's own name."},
+                            "quantity": {"type": "number", "description": "Material resources only."},
+                            "utilisation_pct": {"type": "number", "minimum": 0, "maximum": 100, "description": "Labour/equipment/crew only."},
+                        },
+                        "required": ["activity_id", "resource_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["assignments"],
             "additionalProperties": False,
         },
     },
@@ -593,4 +639,5 @@ CLIENT_TOOL_NAMES: frozenset[str] = frozenset({
 PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
     "propose_create_risks", "propose_create_activities", "propose_link_records",
     "propose_edit_relationships", "propose_link_elements", "propose_clash_test",
+    "propose_create_resource_assignments",
 })

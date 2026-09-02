@@ -56,6 +56,23 @@ interface LinkProposalDraft {
   note?: string | null
 }
 
+// ResourceAssignmentProposalDraft <-> propose_create_resource_assignments'
+// own per-item shape (2026-09-02, per Maro: "can poe also work on
+// resources") — mirrors resource.py's own ResourceAssignmentCreate.
+// activity_name/resource_name are display-only (never sent to the real
+// endpoint) — same convention as RelationshipEditOperationDraft's own
+// predecessor_name/successor_name, needed since POST /resource-assignments/
+// doesn't return either name on its own.
+interface ResourceAssignmentProposalDraft {
+  activity_id: string
+  activity_name?: string
+  resource_id: string
+  resource_name?: string
+  role?: string | null
+  quantity?: number | null
+  utilisation_pct?: number | null
+}
+
 // RelationshipEditOperationDraft <-> propose_edit_relationships' own
 // per-op shape (2026-09-01, per Maro: "if i ask poe to reassign
 // relationships... can they do it") — mirrors
@@ -117,6 +134,7 @@ type PendingProposal =
   | { kind: 'edit_relationships'; toolUseId: string; operations: RelationshipEditOperationDraft[] }
   | { kind: 'link_elements'; toolUseId: string; activityId: string; activityName?: string; elements: ElementLinkDraft[] }
   | { kind: 'clash_test'; toolUseId: string; draft: ClashTestProposalDraft }
+  | { kind: 'resource_assignments'; toolUseId: string; assignments: ResourceAssignmentProposalDraft[] }
 
 // Only the LAST message can hold a genuinely still-pending proposal — the
 // moment one gets resolved, a new user message carrying its tool_result is
@@ -131,7 +149,8 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
   const block = last.content.find(b =>
     b.type === 'tool_use'
     && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'
-      || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'),
+      || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'
+      || b.name === 'propose_create_resource_assignments'),
   )
   if (!block) return null
   const toolUseId = block.id as string
@@ -154,6 +173,12 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
       kind: 'link_elements', toolUseId,
       activityId: input.activity_id as string, activityName: input.activity_name as string | undefined,
       elements: (input.elements as ElementLinkDraft[] | undefined) ?? [],
+    }
+  }
+  if (block.name === 'propose_create_resource_assignments') {
+    return {
+      kind: 'resource_assignments', toolUseId,
+      assignments: (input.assignments as ResourceAssignmentProposalDraft[] | undefined) ?? [],
     }
   }
   if (block.name === 'propose_clash_test') {
@@ -254,11 +279,12 @@ const POE_CAPABILITY_LINES = [
   'Schedule — dates, milestones, critical path',
   'Risk Register — risk scoring, EMV, threats vs opportunities',
   'Resources — assignments and committed cost',
-  'Cost & Quantity Takeoff — earned value (CPI/SPI, EAC), BOQ',
+  'Cost & Quantity Takeoff — earned value (CPI/SPI, EAC), BOQ — reads only, can\'t draft new cost elements yet',
   'Issues, Changes & Decisions — reads only for now, can\'t draft new ones yet',
+  'Explain WHY something happened — trace real linked Issues/Changes/Decisions/Risks back through Activities/Cost Elements, e.g. behind a Baseline Comparison variance',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
   'On the BIM/Reality Capture page: highlight, isolate, colour, or set up and run a clash test between two selections',
-  'Ask it to draft new risks, activities, relationships, or links between records/3D elements and an activity — you approve before anything saves',
+  'Ask it to draft new risks, activities, resource assignments, relationships, or links between records/3D elements and an activity — you approve before anything saves',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 
@@ -381,6 +407,7 @@ export function PoePanel({
     else if (pendingProposal.kind === 'links') setSelectedIndices(new Set(pendingProposal.links.map((_, i) => i)))
     else if (pendingProposal.kind === 'edit_relationships') setSelectedIndices(new Set(pendingProposal.operations.map((_, i) => i)))
     else if (pendingProposal.kind === 'link_elements') setSelectedIndices(new Set(pendingProposal.elements.map((_, i) => i)))
+    else if (pendingProposal.kind === 'resource_assignments') setSelectedIndices(new Set(pendingProposal.assignments.map((_, i) => i)))
     else if (pendingProposal.kind === 'clash_test') setClashTestApproved(true)
     else setActivitiesApproved(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -637,6 +664,29 @@ export function PoePanel({
             summary = `Failed to link the approved elements: ${typeof detail === 'string' ? detail : 'unknown error'}`
           }
         }
+      } else if (pendingProposal.kind === 'resource_assignments') {
+        // resource_assignments (2026-09-02) — one POST /resource-assignments/
+        // per approved item, same per-item try/catch loop as
+        // edit_relationships above (no bulk endpoint exists for this one,
+        // unlike link_elements).
+        const approved = pendingProposal.assignments.filter((_, i) => selectedIndices.has(i))
+        let createdCount = 0
+        let failedCount = 0
+        for (const a of approved) {
+          try {
+            await api.post('/api/v1/resource-assignments/', {
+              activity_id: a.activity_id, resource_id: a.resource_id, role: a.role ?? null,
+              quantity: a.quantity ?? null, utilisation_pct: a.utilisation_pct ?? null,
+            })
+            createdCount += 1
+          } catch {
+            failedCount += 1
+          }
+        }
+        const rejectedCount = pendingProposal.assignments.length - approved.length
+        summary = `Created ${createdCount} of ${approved.length} approved assignment(s)` +
+          `${failedCount > 0 ? ` (${failedCount} failed — a stale id or an invalid quantity/utilisation for that resource's type)` : ''}` +
+          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
       } else {
         // clash_test — NOT a plain REST call like every kind above (see
         // aiFourDBridge.tsx's own execute_clash_test_proposal header for
@@ -648,7 +698,7 @@ export function PoePanel({
         } else {
           const handler = aiFourDBridge?.current.execute_clash_test_proposal
           if (!handler) {
-            summary = 'Could not run this — the 4D module needs to be open.'
+            summary = 'Could not run this — the BIM, Simulations & Reality Capture module needs to be open.'
           } else {
             const result = await handler(pendingProposal.draft as unknown as Record<string, unknown>) as Record<string, unknown>
             if (result.error) {
@@ -962,6 +1012,37 @@ export function PoePanel({
                         <div className="min-w-0 flex-1">
                           <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">{el.element_label}</p>
                           <p className="text-[11px] text-gray-400 dark:text-prosota-muted">{el.source_kind}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'resource_assignments' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.assignments.length} resource assignment{pendingProposal.assignments.length === 1 ? '' : 's'} proposed — review before saving:
+                    </p>
+                    {pendingProposal.assignments.map((a, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">
+                            {a.resource_name ?? a.resource_id} → {a.activity_name ?? a.activity_id}
+                          </p>
+                          <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                            {[a.role, a.quantity != null ? `qty ${a.quantity}` : null, a.utilisation_pct != null ? `${a.utilisation_pct}% utilisation` : null]
+                              .filter(Boolean).join(' · ') || 'No role/quantity/utilisation set'}
+                          </p>
                         </div>
                       </label>
                     ))}

@@ -10,6 +10,7 @@ from app.models.activity_relationship import ActivityRelationship
 from app.models.cost_element import CostElement
 from app.models.icd_item import IcdItem
 from app.models.record_link import RecordLink
+from app.models.resource import Resource
 from app.models.risk import Risk
 from app.services.record_link import list_links
 
@@ -62,6 +63,20 @@ async def find_records(
                 Activity.schedule_period_id == schedule_period_id,
                 Activity.task_name.ilike(like),
                 Activity.is_archived.is_(False),
+            ).limit(20)
+        )).all()
+        return {"record_type": record_type, "matches": [{"id": str(i), "name": n} for i, n in rows]}
+
+    if record_type == "resource":
+        # Resource (2026-09-02, per Maro: "can poe also work on resources")
+        # — project_id-scoped only, no period concept (see resource.py's own
+        # docstring: "a reusable, project-scoped resource pool entry"),
+        # unlike everything else find_records handles, which is why this
+        # gets its own branch rather than joining _NAME_COLUMN's
+        # period_id-scoped shape below.
+        rows = (await db.execute(
+            select(Resource.id, Resource.name).where(
+                Resource.project_id == project_id, Resource.name.ilike(like),
             ).limit(20)
         )).all()
         return {"record_type": record_type, "matches": [{"id": str(i), "name": n} for i, n in rows]}
