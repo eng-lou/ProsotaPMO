@@ -5262,10 +5262,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!handle || !activeObjectId || selectedExpressId === null) return
     // findLinkedExpressIds (2026-08-24 perf fix) no longer materializeAll's
     // the whole model just to search — it scans still-batched elements
-    // straight off their own batch data, so nothing here changes the set of
-    // real meshes and no materializeVersion bump is needed (unlike Apply to
-    // Linked just below, which does).
+    // straight off their own batch data, so finding the matches themselves
+    // changes nothing about the set of real meshes.
     const matches = findLinkedExpressIds(handle, activeObjectId, slot, selectedExpressId, customTextures)
+    // Materializes every match up front (2026-09-02 fix, per Maro: "select
+    // linked... reduce opacity... the individual element gets transparent
+    // but [the rest don't]") — a still-batched instance shares ONE
+    // material across the whole THREE.BatchedMesh (elementBatching.ts), so
+    // Opacity's own bulk-apply-to-selection write (handleOpacityChange
+    // below) had nothing individual to actually render onto for any match
+    // that wasn't already a real, individually-materialized mesh; only
+    // the originally-active element (materialized by ordinary selection)
+    // was ever visibly affected. Done here — a single discrete click —
+    // rather than inside handleOpacityChange itself, which fires
+    // continuously while a slider is dragged (see that function's own
+    // updated comment for the "why not there" perf reasoning). Apply to
+    // Linked (just below) already does its own equivalent materialization
+    // at write-time for whichever elements it's actually touching, so this
+    // doesn't change that path's behaviour, just extends the same
+    // real-mesh guarantee to the moment of selection instead of only at
+    // the moment of a texture write.
+    for (const expressID of matches) ensureMaterialized(handle.object, expressID)
+    setMaterializeVersion(v => v + 1)
     setSelectedExpressIds(new Set(matches))
   }
   const handleApplyToLinkedMaterial = (slot: TextureSlot) => {
@@ -6145,7 +6163,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   // See customOpacity's own declaration header for the full "why a bulk,
-  // no-separate-apply-step slider" reasoning.
+  // no-separate-apply-step slider" reasoning. Materializing the selected
+  // elements first happens in handleSelectLinkedMaterial below, not here —
+  // opacity fires continuously while a slider is dragged, so doing it on
+  // every tick (even though ensureMaterialized itself is a cheap O(1)
+  // no-op past the first call) would still bump materializeVersion on
+  // every tick, re-running the big per-frame selection/material effect
+  // repeatedly — the exact "viewport laggy" regression the 2026-08-24 perf
+  // fix already had to fix once for Apply to Linked's own single-click
+  // materialization.
   const handleOpacityChange = (value: number) => {
     const keys = resolveActiveTextureKeys()
     if (keys.length === 0) return
