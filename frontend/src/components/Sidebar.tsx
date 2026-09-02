@@ -15,7 +15,7 @@ import { ProsotaLogo } from './ProsotaLogo'
 export const NAV = [
   { to: '/dashboard', label: 'Reporting & Controls' },
   { to: '/scheduling', label: 'Scheduling & Resourcing' },
-  { to: '/4d', label: 'BIM Coordination & Animations' },
+  { to: '/4d', label: 'BIM, Simulations & Reality Capture' },
   { to: '/risks', label: 'Risk Register & Analysis' },
   { to: '/costs', label: 'Cost & Quantity Takeoff' },
   { to: '/icd', label: 'Issues, Changes & Decisions' },

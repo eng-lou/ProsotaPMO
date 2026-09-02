@@ -263,7 +263,7 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
               <ul className="timeline">
                 <li className="now">
                   <div className="stage">Shipped</div>
-                  <p>Full CPM scheduling &amp; resourcing (WBS, calendars, constraints, baselines, resource levelling &amp; smoothing, P6 XML exchange), Reporting &amp; Controls with 45+ configurable widgets, Cost &amp; Quantity Takeoff with model-driven BOQ and earned value, a schedule-linked Risk Register &amp; Analysis, an Issues, Changes &amp; Decisions tracker, and BIM Coordination &amp; Animations with IFC/FBX/glTF support, clash detection and activity-linked timeline playback.</p>
+                  <p>Full CPM scheduling &amp; resourcing (WBS, calendars, constraints, baselines, resource levelling &amp; smoothing, P6 XML exchange), Reporting &amp; Controls with 45+ configurable widgets, Cost &amp; Quantity Takeoff with model-driven BOQ and earned value, a schedule-linked Risk Register &amp; Analysis, an Issues, Changes &amp; Decisions tracker, and BIM, Simulations &amp; Reality Capture with IFC/FBX/glTF support, clash detection, activity-linked 4D/5D timeline playback, point clouds and Google Photorealistic 3D Tiles.</p>
                 </li>
                 <li>
                   <div className="stage">Next</div>

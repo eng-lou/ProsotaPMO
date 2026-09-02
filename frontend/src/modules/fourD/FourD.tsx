@@ -7255,7 +7255,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   return (
     <div className="h-screen flex flex-col">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel shrink-0 flex-wrap">
-        <h1 className="text-sm font-bold text-gray-900 dark:text-prosota-paper mr-2">BIM Coordination &amp; Animations</h1>
+        <h1 className="text-sm font-bold text-gray-900 dark:text-prosota-paper mr-2">BIM, Simulations &amp; Reality Capture</h1>
         {ALL_WINDOW_KEYS.map(key => (
           <button
             key={key}
