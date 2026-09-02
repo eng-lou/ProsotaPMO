@@ -24,6 +24,7 @@ from app.models.risk_mitigation_action import RiskMitigationAction
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
+from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.dashboard import (
     BaselineComparisonResponse,
     ClashByTest,
@@ -194,14 +195,46 @@ def _milestones(activities: list[Activity]) -> list[MilestoneTimelineItem]:
     return items
 
 
-def _cost_element_summaries(elements: list) -> list[CostElementSummary]:
+# UDF values by record, keyed by the definition's own real NAME (2026-09-02,
+# per Maro: "in the 4d, baseline comparison. there's a filter for discipline.
+# also the radial chart?....there's precedent" — Radial Chart/Timeline Strip
+# already scope by a UDF value (scheduleScope.ts's own udf_field_definition_id
+# + udf_value, resolved via stringifyUdfValue there); this reuses the exact
+# same real UserDefinedFieldValue data for dashboard widget filtering instead
+# of treating UDFs as an unreachable gap. Keyed by name, not the definition's
+# own UUID, since a filter condition's field should read "udf.Discipline",
+# something a human/Poe can actually type, never a UUID they'd have to look
+# up first. Stringifies whichever of the four value_* columns is actually
+# populated — same "generic across data_type" reasoning stringifyUdfValue
+# (frontend) already established, just the backend's own copy of it, since
+# this dict is serialized straight into the dashboard response, not consumed
+# by more Python after this.
+async def _udf_values_by_record(db: AsyncSession, project_id: uuid.UUID, entity_type: str) -> dict[uuid.UUID, dict[str, str]]:
+    rows = (await db.execute(
+        select(UserDefinedFieldValue.record_id, UserDefinedFieldDefinition.name, UserDefinedFieldValue.value_text,
+               UserDefinedFieldValue.value_number, UserDefinedFieldValue.value_date, UserDefinedFieldValue.value_indicator)
+        .join(UserDefinedFieldDefinition, UserDefinedFieldValue.field_definition_id == UserDefinedFieldDefinition.id)
+        .where(UserDefinedFieldDefinition.project_id == project_id, UserDefinedFieldDefinition.entity_type == entity_type)
+    )).all()
+    result: dict[uuid.UUID, dict[str, str]] = {}
+    for record_id, name, value_text, value_number, value_date, value_indicator in rows:
+        stringified = value_text or (str(value_number) if value_number is not None else None) or \
+            (value_date.isoformat() if value_date is not None else None) or value_indicator
+        if stringified is None:
+            continue
+        result.setdefault(record_id, {})[name] = stringified
+    return result
+
+
+def _cost_element_summaries(elements: list, udf_by_record: dict[uuid.UUID, dict[str, str]] | None = None) -> list[CostElementSummary]:
+    udf_by_record = udf_by_record or {}
     summaries = []
     for el in elements:
         bac, ac = _resolve_bac_ac(el)
         summaries.append(CostElementSummary(
             id=el.id, code=el.code, description=el.description, element_group=el.element_group,
             cost_owner=el.cost_owner, status=el.status, bac=bac, ac=ac, pct_complete=el.pct_complete,
-            cpi=el.cpi, eac=el.eac, vac=el.vac,
+            cpi=el.cpi, eac=el.eac, vac=el.vac, udf=udf_by_record.get(el.id, {}),
         ))
     return summaries
 
@@ -292,7 +325,9 @@ async def _project_info(
     return info, period, list(relationships)
 
 
-async def _resource_assignment_summaries(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[ResourceAssignmentSummary]:
+async def _resource_assignment_summaries(
+    db: AsyncSession, schedule_period_id: uuid.UUID, udf_by_record: dict[uuid.UUID, dict[str, str]] | None = None,
+) -> list[ResourceAssignmentSummary]:
     """Same join/denormalize shape as resource_assignment.py's own
     list_assignments_for_period/_attach_resource_fields, reimplemented
     directly here (rather than importing those) because this needs
@@ -317,6 +352,7 @@ async def _resource_assignment_summaries(db: AsyncSession, schedule_period_id: u
         a.id: a for a in (await db.execute(select(Activity).where(Activity.id.in_(activity_ids)))).scalars().all()
     }
 
+    udf_by_record = udf_by_record or {}
     summaries = []
     for a in assignments:
         resource = resources_by_id.get(a.resource_id)
@@ -329,6 +365,11 @@ async def _resource_assignment_summaries(db: AsyncSession, schedule_period_id: u
             budget=compute_assignment_budget(resource, activity, a),
             activity_id=a.activity_id,
             activity_task_name=activity.task_name if activity is not None else "Unknown",
+            # Keyed by the RESOURCE's own id, not the assignment's — UDFs
+            # with entity_type="resource" are attached to the Resource
+            # itself (user_defined_field.py's own docstring), same record a
+            # resource_name filter already identifies.
+            udf=udf_by_record.get(a.resource_id, {}),
         ))
     return summaries
 
@@ -346,7 +387,9 @@ def _icd_item_summaries(items: list[IcdItem]) -> list[IcdItemSummary]:
     ]
 
 
-def _schedule_activities(activities: list[Activity]) -> list[ScheduleActivitySummary]:
+def _schedule_activities(
+    activities: list[Activity], udf_by_record: dict[uuid.UUID, dict[str, str]] | None = None,
+) -> list[ScheduleActivitySummary]:
     """Raw per-task rows for Batch 1's dashboard widgets (float distribution,
     activities-by-category, baseline variance, critical activities) — one
     shared fetch they each aggregate client-side, same split _milestones/
@@ -354,12 +397,14 @@ def _schedule_activities(activities: list[Activity]) -> list[ScheduleActivitySum
     they're what _milestones/milestone_timeline already cover, and
     wbs_summary rows never carry float/criticality (outside the CPM
     network) so they'd only pollute every aggregation below."""
+    udf_by_record = udf_by_record or {}
     return [
         ScheduleActivitySummary(
             id=a.id, code=a.code, task_name=a.task_name, start=a.start, finish=a.finish, bl_finish=a.bl_finish,
             variance_days=a.variance_days, total_float_hours=a.total_float_hours,
             is_critical=a.is_critical, pct_complete=a.pct_complete, schedule_category=a.schedule_category,
             suspend_date=a.suspend_date, resume_date=a.resume_date, wbs_path=a.wbs_path,
+            udf=udf_by_record.get(a.id, {}),
         )
         for a in activities
         if a.activity_type == "task"
@@ -541,10 +586,19 @@ async def get_overview(
     kpis, cost_elements = await _kpis(db, project_id, period_id, all_activities, icd_items)
     schedule_buckets = _schedule_buckets(bucket_activities)
     milestones = _milestones(scoped_activities)
-    schedule_activities = _schedule_activities(scoped_activities)
-    cost_element_summaries = _cost_element_summaries(cost_elements)
+    # UDF values, fetched once per entity_type and threaded into each
+    # summary builder (2026-09-02, see _udf_values_by_record's own header) —
+    # a project with no UDFs configured for a given entity_type just gets an
+    # empty dict, same "no filter, no penalty" shape everything else here
+    # already has.
+    activity_udf = await _udf_values_by_record(db, project_id, "activity")
+    cost_element_udf = await _udf_values_by_record(db, project_id, "cost_element")
+    resource_udf = await _udf_values_by_record(db, project_id, "resource")
+
+    schedule_activities = _schedule_activities(scoped_activities, activity_udf)
+    cost_element_summaries = _cost_element_summaries(cost_elements, cost_element_udf)
     icd_item_summaries = _icd_item_summaries(icd_items)
-    resource_assignment_summaries = await _resource_assignment_summaries(db, schedule_period_id)
+    resource_assignment_summaries = await _resource_assignment_summaries(db, schedule_period_id, resource_udf)
 
     risks_result = await db.execute(select(Risk).where(Risk.period_id == period_id))
     risks = list(risks_result.scalars().all())

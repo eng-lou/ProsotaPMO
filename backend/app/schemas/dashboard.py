@@ -149,6 +149,16 @@ class ScheduleActivitySummary(BaseModel):
     # mechanism, since the real answer to "is this activity under WBS node
     # X" was already solved once.
     wbs_path: str | None
+    # 2026-09-02, per Maro: "in the 4d, baseline comparison. there's a
+    # filter for discipline. also the radial chart?....there's precedent" —
+    # Radial Chart/Timeline Strip already scope by a real UDF value
+    # (frontend scheduleScope.ts's own udf_field_definition_id/udf_value);
+    # {definition_name: stringified_value} here reuses that same real data
+    # for dashboard widget filtering, keyed by the definition's own NAME
+    # (not its UUID) so a filter condition can read e.g. "udf.Discipline",
+    # something typeable, not a UUID that would need looking up first.
+    # Empty for a project with no "activity"-scoped UDFs configured.
+    udf: dict[str, str] = {}
 
 
 class LookaheadItem(BaseModel):
@@ -225,6 +235,10 @@ class CostElementSummary(BaseModel):
     cpi: Decimal | None
     eac: Decimal | None
     vac: Decimal | None
+    # 2026-09-02, same "real UDF-scoping precedent" as ScheduleActivitySummary's
+    # own udf field below — {definition_name: stringified_value}, empty for a
+    # project with no "cost_element"-scoped UDFs configured.
+    udf: dict[str, str] = {}
 
 
 class ResourceAssignmentSummary(BaseModel):
@@ -247,6 +261,10 @@ class ResourceAssignmentSummary(BaseModel):
     budget: Decimal
     activity_id: uuid.UUID
     activity_task_name: str
+    # 2026-09-02 — {definition_name: stringified_value} for this assignment's
+    # own RESOURCE (entity_type="resource" UDFs are attached to Resource, not
+    # ResourceAssignment), empty for a project with none configured.
+    udf: dict[str, str] = {}
 
 
 class IcdItemSummary(BaseModel):

@@ -59,9 +59,25 @@ function fieldType(field: string): FieldType {
 // that's null for this record (e.g. bl_finish on an activity with no
 // baseline yet) evaluates false rather than throwing or silently coercing
 // null to 0/empty-string.
+// "udf.<Definition Name>" reads record.udf[name] instead of a same-named
+// top-level field (2026-09-02, per Maro: "in the 4d, baseline comparison.
+// there's a filter for discipline. also the radial chart?....there's
+// precedent" — Radial Chart/Timeline Strip already scope by a real UDF
+// value, so this reuses that same UDF data rather than treating it as an
+// unreachable gap; see the backend ScheduleActivitySummary.udf/
+// CostElementSummary.udf/ResourceAssignmentSummary.udf schema comments
+// for where that dict actually comes from). Always text-typed — UDF
+// values are already stringified server-side regardless of the
+// definition's own data_type, same "generic across data_type" convention
+// stringifyUdfValue (scheduleScope.ts) already established.
+const UDF_FIELD_PREFIX = 'udf.'
+
 export function evaluateDashboardCondition<T extends object>(record: T, condition: DashboardFilterCondition): boolean {
-  const raw = (record as Record<string, unknown>)[condition.field]
-  const type = fieldType(condition.field)
+  const isUdf = condition.field.startsWith(UDF_FIELD_PREFIX)
+  const raw = isUdf
+    ? ((record as Record<string, unknown>).udf as Record<string, string> | undefined)?.[condition.field.slice(UDF_FIELD_PREFIX.length)]
+    : (record as Record<string, unknown>)[condition.field]
+  const type = isUdf ? 'text' : fieldType(condition.field)
 
   if (type === 'boolean') {
     const boolVal = raw === true

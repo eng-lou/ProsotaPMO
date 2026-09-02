@@ -90,6 +90,7 @@ export interface ScheduleActivitySummary {
   suspend_date: string | null
   resume_date: string | null
   wbs_path: string | null
+  udf: Record<string, string>
 }
 
 export interface LookaheadItem {
@@ -139,6 +140,7 @@ export interface CostElementSummary {
   cpi: string | null
   eac: string | null
   vac: string | null
+  udf: Record<string, string>
 }
 
 export interface ResourceAssignmentSummary {
@@ -151,6 +153,7 @@ export interface ResourceAssignmentSummary {
   budget: string
   activity_id: string
   activity_task_name: string
+  udf: Record<string, string>
 }
 
 export interface IcdItemSummary {

@@ -399,14 +399,15 @@ TOOLS: list[dict] = [
             "operator:'eq', value:'Cost'}; risks over £50k EMV: {field:'emv_cost', "
             "operator:'gt', value:'50000'}.\n"
             "- cost_elements_table — fields on a Cost Element: id, code, description, "
-            "element_group, cost_owner, status, bac, ac, pct_complete, cpi, eac, vac.\n"
+            "element_group, cost_owner, status, bac, ac, pct_complete, cpi, eac, vac, plus any "
+            "User Defined Field configured for entity_type='cost_element' (see udf. below).\n"
             "- resource_assignments_table — fields on a Resource Assignment: id, resource_name, "
             "resource_type ('labour'|'equipment'|'material'|'subcontractor'|'cost'|'crew'), "
-            "discipline, company, role, budget, activity_id, activity_task_name. A request for "
-            "one NAMED resource (not a whole type) means {field:'resource_name', operator:'eq', "
-            "value:'<its exact name>'} — resolve the exact name/type first via "
-            "find_records(record_type='resource') or get_project_snapshot, never guessed or "
-            "partially matched.\n"
+            "discipline, company, role, budget, activity_id, activity_task_name, plus any UDF "
+            "configured for entity_type='resource'. A request for one NAMED resource (not a "
+            "whole type) means {field:'resource_name', operator:'eq', value:'<its exact name>'} "
+            "— resolve the exact name/type first via find_records(record_type='resource') or "
+            "get_project_snapshot, never guessed or partially matched.\n"
             "- open_items_by_owner — fields on an ICD item: id, code, title, item_type "
             "('issue'|'change'|'decision'), status, priority, owner, raised_date, due_date, "
             "closed_date, severity, decision_maker, required_by, ccb_decision, cost_impact, "
@@ -417,14 +418,22 @@ TOOLS: list[dict] = [
             "suspend_date, resume_date, wbs_path (a dotted path like '1.2.3' — "
             "{field:'wbs_path', operator:'starts_with', value:'1.2'} scopes to EVERYTHING under "
             "WBS node 1.2, the exact same convention Scheduling's own Filters/Highlights already "
-            "use for this same field; a plain 'eq' would only ever match one exact activity). A "
-            "specific activity: {field:'code', operator:'eq', value:'T-0074'}.\n"
+            "use for this same field; a plain 'eq' would only ever match one exact activity), "
+            "plus any UDF configured for entity_type='activity' (see udf. below). A specific "
+            "activity: {field:'code', operator:'eq', value:'T-0074'}.\n"
             "- milestones_table — fields on a Milestone: id, task_name, finish, bl_finish, "
-            "is_critical, variance_days.\n"
+            "is_critical, variance_days (no UDF support — milestones aren't a UDF entity_type).\n"
+            "User Defined Fields — a project can define custom fields for entity_type "
+            "'activity'/'cost_element'/'resource' (Scheduling/Cost Plan/Resources' own \"UDF\" "
+            "screens, e.g. a text field literally named \"Discipline\" — the same field Radial "
+            "Chart/Timeline Strip already scope by). Filter on one with field='udf.<exact "
+            "definition name>', e.g. {field:'udf.Discipline', operator:'eq', value:'MEP'} on any "
+            "of the widgets that support it above. Get the exact definition name right (it's "
+            "case-sensitive and project-specific, not a fixed field) — check "
+            "get_project_snapshot/ask rather than guess one exists.\n"
             "Any id/code/name value must be a real one from get_project_snapshot or find_records "
             "— never invented. If a specific field you'd want to filter on genuinely isn't in "
-            "these lists (e.g. a custom UDF value isn't filterable today), say so rather than "
-            "picking the closest-sounding field name."
+            "these lists, say so rather than picking the closest-sounding field name."
         ),
         "input_schema": {
             "type": "object",
@@ -465,7 +474,7 @@ TOOLS: list[dict] = [
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "field": {"type": "string", "description": "A real field name on that widget's own underlying record — see the exact lists above."},
+                                        "field": {"type": "string", "description": "A real field name on that widget's own underlying record — see the exact lists above. For a User Defined Field, use 'udf.<exact definition name>' (case-sensitive)."},
                                         "operator": {
                                             "type": "string",
                                             "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "is_true", "is_false", "contains", "starts_with"],
