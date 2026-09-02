@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
+import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
 import { MilestoneTrack } from './MilestoneTrack'
 import { formatCurrency, formatDate } from './Overview'
 import type { DashboardOverviewResponse, ResourceAssignmentSummary } from './types'
@@ -23,40 +24,23 @@ export interface WidgetProps {
   // while no project is selected yet, same case that component already handles.
   projectId: string | undefined
   // Per-widget filter (2026-09-02, per Maro: "what if you allowed
-  // flexibility to those widgets", generalized same day per Maro: "any
-  // structured field should be queryable/sliceable/filterable... not just
-  // resource related") — a plain string-keyed dict, matched generically
-  // against whichever record a filterable widget iterates via
-  // matchesFilter below, rather than each widget hand-picking a fixed set
-  // of named keys. Undefined = no filter, same as never having narrowed
-  // the widget at all. Currently wired into TopRisksWidget/
-  // RiskRegisterTableWidget/CostElementsTableWidget/
-  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget — everything
-  // else ignores it.
-  filter?: Record<string, string>
-}
-
-// Generic per-record filter match (2026-09-02, per Maro: "any structured
-// field should be queryable/sliceable/filterable especially key ones" —
-// replaces this file's own first-pass hand-coded field-by-field .filter()
-// chains, e.g. "only risk_type and category", which only ever covered
-// whichever fields got explicitly wired in and left every other real
-// field on the same record un-filterable). Every key in `filter` must
-// match the record's own same-named field (String-compared, since a
-// filter value is always a plain string but the underlying field can be
-// a number/enum/nullable string) for the record to pass — an unknown key
-// (not a real field on this record type) can never match anything, so it
-// silently excludes everything rather than silently matching everything,
-// same "fail closed" instinct as every other unrecognised-input case in
-// this app. Generic over T so one function serves every summary type
-// (RiskSummary, CostElementSummary, ResourceAssignmentSummary,
-// IcdItemSummary) without a cast at each call site.
-function matchesFilter<T extends object>(record: T, filter: Record<string, string> | undefined): boolean {
-  if (!filter) return true
-  return Object.entries(filter).every(([key, value]) => {
-    const fieldValue = (record as Record<string, unknown>)[key]
-    return fieldValue !== undefined && String(fieldValue) === value
-  })
+  // flexibility to those widgets" -> "any structured field should be
+  // queryable/sliceable/filterable" -> "see how we use the filters/
+  // highlights in the schedule. functionality is definitely there" — this
+  // is now the exact same {field, operator, value} condition language as
+  // Scheduling's own Filters/Highlights (lib/dashboardFilters.ts's own
+  // header explains why it's a sibling of, not a reuse of,
+  // lib/schedulingFilters.ts's evaluateCondition), not a flat equals-only
+  // dict — this app's first-pass dashboard filter shape, which couldn't
+  // express a numeric/date comparison or a WBS-subtree scope
+  // (wbs_path+starts_with). Undefined/empty = no filter. Currently wired
+  // into TopRisksWidget/RiskRegisterTableWidget/CostElementsTableWidget/
+  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget/
+  // BaselineVarianceTableWidget/MilestonesTableWidget/
+  // CriticalActivitiesTableWidget/NearCriticalWatchListWidget —
+  // everything else ignores both fields.
+  filterConditions?: DashboardFilterCondition[]
+  filterMatchMode?: 'all' | 'any'
 }
 
 const RISK_BAND_COLORS: Record<string, string> = { Low: '#16a34a', Medium: '#d97706', High: '#dc2626' }
@@ -163,18 +147,18 @@ export function RiskExposureWidget({ data }: WidgetProps) {
   )
 }
 
-export function TopRisksWidget({ data, onNavigateToRisks, filter }: WidgetProps) {
+export function TopRisksWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable (2026-09-02) — recomputed from data.risks (the raw list)
   // rather than data.top_risks (a fixed, unfiltered server-side top-5) so
   // an optional risk_type narrowing can apply before picking the top 5;
   // same rating-desc ordering data.top_risks itself uses server-side
   // (dashboard.py), just reproduced client-side here so filtering doesn't
   // need a second backend field.
-  // Filterable on any RiskSummary field (2026-09-02, matchesFilter's own
+  // Filterable on any RiskSummary field (2026-09-02, evaluateDashboardFilter's own (lib/dashboardFilters.ts)
   // header) — e.g. filter={risk_type:'threat'}, {category:'Cost'},
   // {code:'R-004'}, {area:'Site'}, or any combination.
   const topRisks = [...data.risks]
-    .filter(r => matchesFilter(r, filter))
+    .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
     .slice(0, 5)
   return (
@@ -268,16 +252,16 @@ export function ActivitiesByCategoryWidget({ data }: WidgetProps) {
   )
 }
 
-export function BaselineVarianceTableWidget({ data, filter }: WidgetProps) {
+export function BaselineVarianceTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
-  // matchesFilter's own header) — applied before the top-10-by-variance
+  // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)) — applied before the top-10-by-variance
   // slice below, same "specific-entity filter guarantees inclusion
   // regardless of ranking" fix TopRisksWidget already needed, e.g. a
   // single {code:'T-0074'} would otherwise silently vanish if that
   // activity's own variance isn't in the top 10.
   const ranked = data.schedule_activities
     .filter(a => a.variance_days !== null && a.variance_days !== 0)
-    .filter(a => matchesFilter(a, filter))
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
     .sort((a, b) => Math.abs(b.variance_days!) - Math.abs(a.variance_days!))
     .slice(0, 10)
   return (
@@ -311,10 +295,10 @@ export function BaselineVarianceTableWidget({ data, filter }: WidgetProps) {
   )
 }
 
-export function MilestonesTableWidget({ data, filter }: WidgetProps) {
-  // Filterable on any MilestoneTimelineItem field (2026-09-02, matchesFilter's
+export function MilestonesTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  // Filterable on any MilestoneTimelineItem field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. a specific milestone by {id:'<real uuid>'}.
-  const milestones = data.milestones.filter(m => matchesFilter(m, filter))
+  const milestones = data.milestones.filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -344,10 +328,10 @@ export function MilestonesTableWidget({ data, filter }: WidgetProps) {
   )
 }
 
-export function CriticalActivitiesTableWidget({ data, filter }: WidgetProps) {
+export function CriticalActivitiesTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
-  // matchesFilter's own header), on top of the existing is_critical filter.
-  const critical = data.schedule_activities.filter(a => a.is_critical === true).filter(a => matchesFilter(a, filter))
+  // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)), on top of the existing is_critical filter.
+  const critical = data.schedule_activities.filter(a => a.is_critical === true).filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -476,14 +460,14 @@ export function ResponseStrategyBreakdownWidget({ data }: WidgetProps) {
   )
 }
 
-export function RiskRegisterTableWidget({ data, onNavigateToRisks, filter }: WidgetProps) {
+export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable (2026-09-02) — risk_type/category narrowing on top of the
   // existing open-only filter, e.g. "Cost risks only" or "opportunities only".
   // Filterable on any RiskSummary field, on top of the existing open-only
-  // filter (2026-09-02, matchesFilter's own header).
+  // filter (2026-09-02, evaluateDashboardFilter's own header (lib/dashboardFilters.ts)).
   const open = data.risks
     .filter(r => r.status !== 'closed')
-    .filter(r => matchesFilter(r, filter))
+    .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
   return (
     <table className="w-full text-xs">
@@ -621,12 +605,12 @@ export function BacVsEacByGroupWidget({ data }: WidgetProps) {
   )
 }
 
-export function CostElementsTableWidget({ data, filter }: WidgetProps) {
+export function CostElementsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable (2026-09-02) — narrow to one cost group, e.g. "Prelims only".
-  // Filterable on any CostElementSummary field (2026-09-02, matchesFilter's
+  // Filterable on any CostElementSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={element_group:'Prelims'} or {code:'C-012'}.
   const rows = data.cost_elements
-    .filter(el => matchesFilter(el, filter))
+    .filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
     .sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
   return (
     <table className="w-full text-xs">
@@ -728,13 +712,13 @@ export function IssuesAgeingTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function OpenItemsByOwnerWidget({ data, filter }: WidgetProps) {
-  // Filterable on any IcdItemSummary field (2026-09-02, matchesFilter's
+export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  // Filterable on any IcdItemSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={item_type:'issue'} or {code:'I-014'}.
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.status === 'closed') continue
-    if (!matchesFilter(i, filter)) continue
+    if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     const key = i.owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -878,14 +862,14 @@ export function ResourceBudgetByCompanyWidget({ data }: WidgetProps) {
   )
 }
 
-export function ResourceAssignmentsTableWidget({ data, filter }: WidgetProps) {
+export function ResourceAssignmentsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable on any ResourceAssignmentSummary field (2026-09-02,
-  // matchesFilter's own header) — e.g. filter={resource_type:'labour'} or
+  // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)) — e.g. filter={resource_type:'labour'} or
   // {resource_name:'Concrete Finishing Crew'} (a real gap Poe hit live:
   // could only offer a resource_type slice before this, no way to narrow
   // to one named resource specifically).
   const rows = data.resource_assignments
-    .filter(a => matchesFilter(a, filter))
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
     .sort((a, b) => Number(b.budget) - Number(a.budget))
   return (
     <table className="w-full text-xs">
@@ -1134,14 +1118,14 @@ export function EarnedValueSummaryTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function NearCriticalWatchListWidget({ data, filter }: WidgetProps) {
+export function NearCriticalWatchListWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
-  // matchesFilter's own header), applied before the top-10-by-float
+  // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)), applied before the top-10-by-float
   // slice — same "specific-entity filter guarantees inclusion" reasoning
   // as BaselineVarianceTableWidget above.
   const rows = data.schedule_activities
     .filter(a => a.total_float_hours !== null && Number(a.total_float_hours) > 0 && Number(a.total_float_hours) <= 80)
-    .filter(a => matchesFilter(a, filter))
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
     .sort((a, b) => Number(a.total_float_hours) - Number(b.total_float_hours))
     .slice(0, 10)
   return (

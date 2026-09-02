@@ -26,9 +26,14 @@ interface DashboardGridProps {
 // widgetProps reference — and therefore a wasted re-render — on all ~45 of
 // them every time any one widget's filter changes.
 const MemoWidget = memo(function MemoWidget(
-  { renderFn, widgetProps, filter }: { renderFn: (props: WidgetProps) => React.ReactNode; widgetProps: WidgetProps; filter: Record<string, string> | undefined },
+  { renderFn, widgetProps, filterConditions, filterMatchMode }: {
+    renderFn: (props: WidgetProps) => React.ReactNode
+    widgetProps: WidgetProps
+    filterConditions: DashboardWidgetConfig['filter']
+    filterMatchMode: DashboardWidgetConfig['filter_match_mode']
+  },
 ) {
-  return <>{renderFn({ ...widgetProps, filter })}</>
+  return <>{renderFn({ ...widgetProps, filterConditions, filterMatchMode })}</>
 })
 
 // A small, fully self-written grid (2026-07-20) — replaces an earlier
@@ -418,7 +423,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-3">
                 {WIDGET_REGISTRY[w.widget_type]
-                  ? <MemoWidget renderFn={WIDGET_REGISTRY[w.widget_type].render} widgetProps={widgetProps} filter={w.filter} />
+                  ? <MemoWidget renderFn={WIDGET_REGISTRY[w.widget_type].render} widgetProps={widgetProps} filterConditions={w.filter} filterMatchMode={w.filter_match_mode} />
                   : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}
               </div>
               <div

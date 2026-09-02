@@ -359,7 +359,7 @@ def _schedule_activities(activities: list[Activity]) -> list[ScheduleActivitySum
             id=a.id, code=a.code, task_name=a.task_name, start=a.start, finish=a.finish, bl_finish=a.bl_finish,
             variance_days=a.variance_days, total_float_hours=a.total_float_hours,
             is_critical=a.is_critical, pct_complete=a.pct_complete, schedule_category=a.schedule_category,
-            suspend_date=a.suspend_date, resume_date=a.resume_date,
+            suspend_date=a.suspend_date, resume_date=a.resume_date, wbs_path=a.wbs_path,
         )
         for a in activities
         if a.activity_type == "task"

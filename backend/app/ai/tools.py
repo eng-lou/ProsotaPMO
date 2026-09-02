@@ -385,25 +385,28 @@ TOOLS: list[dict] = [
             "build a custom dashboard view out of EXISTING widgets. If what's asked for "
             "genuinely isn't expressible with any existing widget_type even filtered, say so "
             "plainly — there is no way to invent a new widget type yet.\n"
-            "Nine widget types accept an optional filter — a dict of {field: value} pairs, ALL "
-            "of which must match (AND, not OR) for a record to be included. Every key must be a "
-            "REAL field name on that widget's own underlying record (below); an unrecognised "
-            "key matches nothing at all rather than erroring, so getting the exact field name "
-            "right matters. Values are always compared as plain text, even for a numeric/date "
-            "field. Any other widget_type must omit filter entirely.\n"
+            "Nine widget types accept an optional filter — the exact same {field, operator, "
+            "value} condition language as Scheduling's own Filters/Highlights (same operator "
+            "vocabulary, same wbs_path+starts_with convention for a WBS-subtree scope), combined "
+            "via filter_match_mode ('all'=AND, default, or 'any'=OR). Every condition's field "
+            "must be a REAL field name on that widget's own underlying record (below); an "
+            "unrecognised field matches nothing at all rather than erroring, so getting the "
+            "exact name right matters. Any other widget_type must omit filter entirely.\n"
             "- top_risks, risk_register_table — fields on a Risk: id, code, title, category, "
             "area, status, risk_owner, risk_type ('threat'|'opportunity'), response_strategy, "
             "rating, emv_cost, emv_schedule_days, date_raised. E.g. a specific risk: "
-            "{code:'R-004'}; a category: {category:'Cost'}; both a type AND area: "
-            "{risk_type:'threat', area:'Site'}.\n"
+            "{field:'code', operator:'eq', value:'R-004'}; a category: {field:'category', "
+            "operator:'eq', value:'Cost'}; risks over £50k EMV: {field:'emv_cost', "
+            "operator:'gt', value:'50000'}.\n"
             "- cost_elements_table — fields on a Cost Element: id, code, description, "
             "element_group, cost_owner, status, bac, ac, pct_complete, cpi, eac, vac.\n"
             "- resource_assignments_table — fields on a Resource Assignment: id, resource_name, "
             "resource_type ('labour'|'equipment'|'material'|'subcontractor'|'cost'|'crew'), "
             "discipline, company, role, budget, activity_id, activity_task_name. A request for "
-            "one NAMED resource (not a whole type) means {resource_name: '<its exact name>'} — "
-            "resolve the exact name/type first via find_records(record_type='resource') or "
-            "get_project_snapshot, never guessed or partially matched.\n"
+            "one NAMED resource (not a whole type) means {field:'resource_name', operator:'eq', "
+            "value:'<its exact name>'} — resolve the exact name/type first via "
+            "find_records(record_type='resource') or get_project_snapshot, never guessed or "
+            "partially matched.\n"
             "- open_items_by_owner — fields on an ICD item: id, code, title, item_type "
             "('issue'|'change'|'decision'), status, priority, owner, raised_date, due_date, "
             "closed_date, severity, decision_maker, required_by, ccb_decision, cost_impact, "
@@ -411,13 +414,17 @@ TOOLS: list[dict] = [
             "- baseline_variance_table, critical_activities_table, near_critical_watch_list — "
             "fields on a scheduled Activity: id, code, task_name, start, finish, bl_finish, "
             "variance_days, total_float_hours, is_critical, pct_complete, schedule_category, "
-            "suspend_date, resume_date. A specific activity: {code:'T-0074'}.\n"
+            "suspend_date, resume_date, wbs_path (a dotted path like '1.2.3' — "
+            "{field:'wbs_path', operator:'starts_with', value:'1.2'} scopes to EVERYTHING under "
+            "WBS node 1.2, the exact same convention Scheduling's own Filters/Highlights already "
+            "use for this same field; a plain 'eq' would only ever match one exact activity). A "
+            "specific activity: {field:'code', operator:'eq', value:'T-0074'}.\n"
             "- milestones_table — fields on a Milestone: id, task_name, finish, bl_finish, "
             "is_critical, variance_days.\n"
             "Any id/code/name value must be a real one from get_project_snapshot or find_records "
             "— never invented. If a specific field you'd want to filter on genuinely isn't in "
-            "these lists (e.g. no widget can be filtered by an activity's own WBS node or a "
-            "custom UDF value today), say so rather than picking the closest-sounding field name."
+            "these lists (e.g. a custom UDF value isn't filterable today), say so rather than "
+            "picking the closest-sounding field name."
         ),
         "input_schema": {
             "type": "object",
@@ -449,9 +456,38 @@ TOOLS: list[dict] = [
                                 ],
                             },
                             "filter": {
-                                "type": "object",
-                                "additionalProperties": {"type": "string"},
-                                "description": "Only for the 5 filterable widget types listed above — omit entirely otherwise.",
+                                "type": "array",
+                                "description": (
+                                    "Only for the 9 filterable widget types listed above — omit entirely "
+                                    "otherwise. Each condition is ANDed (or ORed, via filter_match_mode) "
+                                    "against the same record."
+                                ),
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "field": {"type": "string", "description": "A real field name on that widget's own underlying record — see the exact lists above."},
+                                        "operator": {
+                                            "type": "string",
+                                            "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "is_true", "is_false", "contains", "starts_with"],
+                                            "description": (
+                                                "eq/neq/contains/starts_with for text; eq/neq/gt/gte/lt/lte for a "
+                                                "number or date; is_true/is_false for a boolean (value is ignored "
+                                                "for these two). starts_with on wbs_path is a WBS-subtree scope "
+                                                "('everything under this node'), not a literal string prefix — "
+                                                "the exact same convention Scheduling's own Filters/Highlights "
+                                                "already use for wbs_path."
+                                            ),
+                                        },
+                                        "value": {"type": "string", "description": "Always a plain string, even for a numeric/date field — compared after the field's own real type is resolved. Ignored for is_true/is_false."},
+                                    },
+                                    "required": ["field", "operator", "value"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "filter_match_mode": {
+                                "type": "string",
+                                "enum": ["all", "any"],
+                                "description": "'all' (default, AND) or 'any' (OR) — how multiple filter conditions on the same widget combine. Omit for the default.",
                             },
                         },
                         "required": ["widget_type"],

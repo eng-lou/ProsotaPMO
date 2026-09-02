@@ -89,6 +89,7 @@ export interface ScheduleActivitySummary {
   schedule_category: string | null
   suspend_date: string | null
   resume_date: string | null
+  wbs_path: string | null
 }
 
 export interface LookaheadItem {

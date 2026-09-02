@@ -138,6 +138,17 @@ class ScheduleActivitySummary(BaseModel):
     # suspend_date set, resume_date not yet.
     suspend_date: datetime | None
     resume_date: datetime | None
+    # 2026-09-02, per Maro: "see how we use the filters/highlights in the
+    # schedule. functionality is definitely there" — a materialized dotted
+    # path (e.g. "1.2.3"), the exact same field Scheduling's own Filters
+    # dialog already exposes (schedulingFilters.ts's own getFieldValue),
+    # matched with a starts_with condition there for "everything under
+    # this WBS node," not a literal string-equals — a plain equality check
+    # would only ever match one exact activity, never a subtree. Reused
+    # verbatim here rather than a second, dashboard-only WBS-scoping
+    # mechanism, since the real answer to "is this activity under WBS node
+    # X" was already solved once.
+    wbs_path: str | None
 
 
 class LookaheadItem(BaseModel):

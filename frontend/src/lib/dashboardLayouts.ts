@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import type { DashboardFilterCondition } from './dashboardFilters'
 
 // Mirrors backend app/schemas/dashboard_layout.py:DashboardLayoutConfig
 // exactly — x/y/w/h are the same units react-grid-layout's own LayoutItem
@@ -12,11 +13,16 @@ export interface DashboardWidgetConfig {
   w: number
   h: number
   // Per-widget filter (2026-09-02, per Maro: "what if you allowed
-  // flexibility to those widgets") — only the widgets that actually
-  // support one read specific keys out of it (see widgets.tsx's own
-  // WidgetProps.filter header for the current list); everything else
-  // ignores it. Optional/undefined for every pre-existing saved layout.
-  filter?: Record<string, string>
+  // flexibility to those widgets" -> "see how we use the filters/
+  // highlights in the schedule. functionality is definitely there") —
+  // same {field, operator, value} condition language as Scheduling's own
+  // Filters/Highlights (see lib/dashboardFilters.ts's own header for the
+  // full "why", and widgets.tsx's own WidgetProps.filterConditions header
+  // for the current list of widgets that read it); everything else
+  // ignores both fields. Optional/undefined for every pre-existing saved
+  // layout.
+  filter?: DashboardFilterCondition[]
+  filter_match_mode?: 'all' | 'any'
 }
 
 export interface DashboardLayoutConfig {

@@ -8,7 +8,9 @@ import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { WIDGET_REGISTRY } from '@/modules/dashboard/widgets'
+import { FILTER_OPERATOR_LABELS } from '@/modules/scheduling/types'
 import type { DashboardWidgetConfig } from '@/lib/dashboardLayouts'
+import type { DashboardFilterCondition } from '@/lib/dashboardFilters'
 
 // Proposal draft shapes (2026-08-31/2026-09-01) — each mirrors its own
 // real backend schema field-for-field, since an approved draft gets sent
@@ -77,14 +79,15 @@ interface ResourceAssignmentProposalDraft {
 
 // DashboardWidgetProposalDraft <-> propose_create_dashboard_layout's own
 // per-widget shape (2026-09-02, per Maro: "I want Poe to be able to
-// create widgets based on the prompts" — round 1, existing widget_types
-// only, an optional filter for the 5 that support one, see widgets.tsx's
-// own WidgetProps.filter header). Deliberately no x/y/w/h — see this
-// draft's own approval handler below for why those are computed here,
-// not asked of Poe.
+// create widgets based on the prompts", filter generalized same day to
+// the same {field, operator, value} condition language as Scheduling's
+// own Filters/Highlights — see lib/dashboardFilters.ts's own header).
+// Deliberately no x/y/w/h — see this draft's own approval handler below
+// for why those are computed here, not asked of Poe.
 interface DashboardWidgetProposalDraft {
   widget_type: string
-  filter?: Record<string, string>
+  filter?: DashboardFilterCondition[]
+  filter_match_mode?: 'all' | 'any'
 }
 
 // RelationshipEditOperationDraft <-> propose_edit_relationships' own
@@ -727,7 +730,10 @@ export function PoePanel({
           let y = 0
           const widgets: DashboardWidgetConfig[] = approved.map((w, i) => {
             const size = WIDGET_REGISTRY[w.widget_type]?.defaultSize ?? { w: 6, h: 4 }
-            const widget: DashboardWidgetConfig = { id: `poe-${Date.now()}-${i}`, widget_type: w.widget_type, x: 0, y, w: size.w, h: size.h, filter: w.filter }
+            const widget: DashboardWidgetConfig = {
+              id: `poe-${Date.now()}-${i}`, widget_type: w.widget_type, x: 0, y, w: size.w, h: size.h,
+              filter: w.filter, filter_match_mode: w.filter_match_mode,
+            }
             y += size.h
             return widget
           })
@@ -1091,9 +1097,10 @@ export function PoePanel({
                         />
                         <div className="min-w-0 flex-1">
                           <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</p>
-                          {w.filter && Object.keys(w.filter).length > 0 && (
+                          {w.filter && w.filter.length > 0 && (
                             <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
-                              {Object.entries(w.filter).map(([k, v]) => `${k}=${v}`).join(', ')}
+                              {w.filter.map(c => `${c.field} ${FILTER_OPERATOR_LABELS[c.operator]} ${c.value}`)
+                                .join(w.filter_match_mode === 'any' ? ' OR ' : ' AND ')}
                             </p>
                           )}
                         </div>
