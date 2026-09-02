@@ -346,6 +346,91 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    # propose_create_dashboard_layout (2026-09-02, per Maro: "I want Poe to
+    # be able to create widgets based on the prompts... a new empty layout
+    # and create widgets... based on those requests if it doesn't already
+    # exist in the template" — round 1 of that ask, per the agreed split:
+    # flexibility on the EXISTING 45+ widgets (an optional filter, see
+    # frontend widgets.tsx's own WidgetProps.filter header) rather than a
+    # new generic/custom widget type, which stays a later round). Mirrors
+    # dashboard_layout.py's own DashboardLayoutCreate — approval POSTs
+    # straight to the real /dashboard-layouts/ endpoint, which always
+    # creates inactive (never auto-applied, matching every other
+    # proposal's "review before it affects anything real" shape). Grid
+    # x/y/w/h are deliberately NOT part of this schema — PoePanel.tsx's
+    # own approval handler auto-stacks widgets top-to-bottom using each
+    # one's own WIDGET_REGISTRY.defaultSize, the same registry
+    # DashboardGrid.tsx itself already uses for "add widget" — Poe has no
+    # reason to guess grid coordinates a human would immediately want to
+    # rearrange anyway.
+    {
+        "name": "propose_create_dashboard_layout",
+        "description": (
+            "Draft a new, named Reporting & Controls dashboard layout for human review — "
+            "nothing is saved until explicitly approved, and creating one never changes what's "
+            "currently displayed (a new layout is never auto-applied; the human applies it "
+            "themselves from the layout picker once happy with it). Use this when asked to "
+            "build a custom dashboard view out of EXISTING widgets, e.g. \"a dashboard showing "
+            "just Cost risks and labour resource assignments\" (two widgets: risk_register_table "
+            "filtered risk_type='threat' won't work — 'Cost risks' means category, not type — "
+            "so category='Cost'; resource_assignments_table filtered resource_type='labour'). "
+            "If what's asked for genuinely isn't expressible with any existing widget_type even "
+            "with a filter, say so plainly — there is no way to invent a new widget type yet. "
+            "Five widget types currently accept an optional filter (any other widget_type must "
+            "omit filter entirely — an unrecognised key on a non-filterable widget is silently "
+            "ignored, not an error, so don't guess one where none applies):\n"
+            "- top_risks, risk_register_table: filter={risk_type: 'threat'|'opportunity'} "
+            "and/or (risk_register_table only) {category: '<exact category text, e.g. from "
+            "get_project_snapshot — never guessed>'}\n"
+            "- cost_elements_table: filter={element_group: '<exact group text, never guessed>'}\n"
+            "- resource_assignments_table: filter={resource_type: 'labour'|'equipment'|"
+            "'material'|'subcontractor'|'cost'|'crew'}\n"
+            "- open_items_by_owner: filter={item_type: 'issue'|'change'|'decision'}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "A short, descriptive layout name — shown in the layout picker."},
+                "widgets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "widget_type": {
+                                "type": "string",
+                                "enum": [
+                                    "kpi_strip", "schedule_performance", "risk_overview", "milestone_timeline",
+                                    "risk_exposure", "top_risks", "float_distribution", "activities_by_category",
+                                    "baseline_variance_table", "milestones_table", "critical_activities_table",
+                                    "risks_by_category", "risks_by_owner", "threats_vs_opportunities",
+                                    "response_strategy_breakdown", "risk_register_table", "cost_breakdown_by_group",
+                                    "cost_breakdown_by_owner", "budget_utilisation", "bac_vs_eac_by_group",
+                                    "cost_elements_table", "issues_by_status", "issues_ageing_table",
+                                    "open_items_by_owner", "decisions_pending_table", "changes_by_ccb_decision",
+                                    "resource_budget_by_type", "resource_budget_by_discipline",
+                                    "resource_budget_by_company", "resource_assignments_table",
+                                    "top_resources_by_budget", "dcma_score", "clash_summary", "clash_detail_table",
+                                    "eac_forecast_comparison", "earned_value_summary_table",
+                                    "near_critical_watch_list", "activity_status", "project_info",
+                                    "camera_view_gallery", "fourd_video_gallery", "lookahead_planner",
+                                    "mitigation_actions_table", "risk_ageing_table", "project_narrative",
+                                ],
+                            },
+                            "filter": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": "Only for the 5 filterable widget types listed above — omit entirely otherwise.",
+                            },
+                        },
+                        "required": ["widget_type"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["name", "widgets"],
+            "additionalProperties": False,
+        },
+    },
     # propose_link_records (2026-09-01) — mirrors
     # backend/app/schemas/record_link.py's own RecordLinkCreate
     # field-for-field. source_id/target_id must be real ids (find_records/
@@ -639,5 +724,5 @@ CLIENT_TOOL_NAMES: frozenset[str] = frozenset({
 PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
     "propose_create_risks", "propose_create_activities", "propose_link_records",
     "propose_edit_relationships", "propose_link_elements", "propose_clash_test",
-    "propose_create_resource_assignments",
+    "propose_create_resource_assignments", "propose_create_dashboard_layout",
 })

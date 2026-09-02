@@ -22,6 +22,19 @@ export interface WidgetProps {
   // Optional, mirroring DashboardGrid's own projectId prop — undefined only
   // while no project is selected yet, same case that component already handles.
   projectId: string | undefined
+  // Per-widget filter (2026-09-02, per Maro: "what if you allowed
+  // flexibility to those widgets" — round 1 of the widget-flexibility
+  // work, before any generic/custom widget type). A plain string-keyed
+  // dict rather than a typed shape per widget, matching this app's own
+  // "shape owned by the frontend, opaque JSONB at rest" convention
+  // (Zone.points, MaterialPreset.config) — DashboardGrid.tsx passes each
+  // widget's own w.filter through here unchanged; only the widgets that
+  // actually support one (currently TopRisksWidget/
+  // RiskRegisterTableWidget/CostElementsTableWidget/
+  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget) read specific
+  // keys out of it, everything else ignores it. Undefined = no filter, same
+  // as never having narrowed the widget at all.
+  filter?: Record<string, string>
 }
 
 const RISK_BAND_COLORS: Record<string, string> = { Low: '#16a34a', Medium: '#d97706', High: '#dc2626' }
@@ -128,7 +141,17 @@ export function RiskExposureWidget({ data }: WidgetProps) {
   )
 }
 
-export function TopRisksWidget({ data, onNavigateToRisks }: WidgetProps) {
+export function TopRisksWidget({ data, onNavigateToRisks, filter }: WidgetProps) {
+  // Filterable (2026-09-02) — recomputed from data.risks (the raw list)
+  // rather than data.top_risks (a fixed, unfiltered server-side top-5) so
+  // an optional risk_type narrowing can apply before picking the top 5;
+  // same rating-desc ordering data.top_risks itself uses server-side
+  // (dashboard.py), just reproduced client-side here so filtering doesn't
+  // need a second backend field.
+  const topRisks = [...data.risks]
+    .filter(r => !filter?.risk_type || r.risk_type === filter.risk_type)
+    .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
+    .slice(0, 5)
   return (
     <table className="w-full text-xs">
       <thead>
@@ -142,7 +165,7 @@ export function TopRisksWidget({ data, onNavigateToRisks }: WidgetProps) {
         </tr>
       </thead>
       <tbody>
-        {data.top_risks.map(r => (
+        {topRisks.map(r => (
           <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-prosota-panel2 cursor-pointer" onClick={onNavigateToRisks}>
             <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
             <td className="py-1.5 pr-2">{r.title}</td>
@@ -152,7 +175,7 @@ export function TopRisksWidget({ data, onNavigateToRisks }: WidgetProps) {
             <td className="py-1.5 pr-2">{r.emv_schedule_days !== null ? Number(r.emv_schedule_days).toFixed(1) : '—'}</td>
           </tr>
         ))}
-        {data.top_risks.length === 0 && (
+        {topRisks.length === 0 && (
           <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No risks yet.</td></tr>
         )}
       </tbody>
@@ -416,9 +439,13 @@ export function ResponseStrategyBreakdownWidget({ data }: WidgetProps) {
   )
 }
 
-export function RiskRegisterTableWidget({ data, onNavigateToRisks }: WidgetProps) {
+export function RiskRegisterTableWidget({ data, onNavigateToRisks, filter }: WidgetProps) {
+  // Filterable (2026-09-02) — risk_type/category narrowing on top of the
+  // existing open-only filter, e.g. "Cost risks only" or "opportunities only".
   const open = data.risks
     .filter(r => r.status !== 'closed')
+    .filter(r => !filter?.risk_type || r.risk_type === filter.risk_type)
+    .filter(r => !filter?.category || r.category === filter.category)
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
   return (
     <table className="w-full text-xs">
@@ -556,8 +583,11 @@ export function BacVsEacByGroupWidget({ data }: WidgetProps) {
   )
 }
 
-export function CostElementsTableWidget({ data }: WidgetProps) {
-  const rows = [...data.cost_elements].sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
+export function CostElementsTableWidget({ data, filter }: WidgetProps) {
+  // Filterable (2026-09-02) — narrow to one cost group, e.g. "Prelims only".
+  const rows = data.cost_elements
+    .filter(el => !filter?.element_group || el.element_group === filter.element_group)
+    .sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -658,10 +688,12 @@ export function IssuesAgeingTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function OpenItemsByOwnerWidget({ data }: WidgetProps) {
+export function OpenItemsByOwnerWidget({ data, filter }: WidgetProps) {
+  // Filterable (2026-09-02) — narrow to one item_type ('issue'|'change'|'decision').
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.status === 'closed') continue
+    if (filter?.item_type && i.item_type !== filter.item_type) continue
     const key = i.owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -805,8 +837,11 @@ export function ResourceBudgetByCompanyWidget({ data }: WidgetProps) {
   )
 }
 
-export function ResourceAssignmentsTableWidget({ data }: WidgetProps) {
-  const rows = [...data.resource_assignments].sort((a, b) => Number(b.budget) - Number(a.budget))
+export function ResourceAssignmentsTableWidget({ data, filter }: WidgetProps) {
+  // Filterable (2026-09-02) — narrow to one resource_type, e.g. "labour only".
+  const rows = data.resource_assignments
+    .filter(a => !filter?.resource_type || a.resource_type === filter.resource_type)
+    .sort((a, b) => Number(b.budget) - Number(a.budget))
   return (
     <table className="w-full text-xs">
       <thead>

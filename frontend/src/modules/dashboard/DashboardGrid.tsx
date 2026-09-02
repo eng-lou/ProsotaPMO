@@ -18,10 +18,17 @@ interface DashboardGridProps {
 // constant, and Overview.tsx's own widgetProps object doesn't change just
 // because this component's internal drag state does) — one wrapper here
 // gets the same effect as memoizing all 45 widgets individually.
+// filter is a separate prop, not pre-merged into widgetProps by the caller
+// (2026-09-02) — widgetProps is the one shared object every widget on the
+// grid receives, so merging per-widget here (only when this specific
+// widget actually has a filter set) keeps React.memo's own shallow
+// comparison meaningful for every OTHER widget instead of forcing a fresh
+// widgetProps reference — and therefore a wasted re-render — on all ~45 of
+// them every time any one widget's filter changes.
 const MemoWidget = memo(function MemoWidget(
-  { renderFn, widgetProps }: { renderFn: (props: WidgetProps) => React.ReactNode; widgetProps: WidgetProps },
+  { renderFn, widgetProps, filter }: { renderFn: (props: WidgetProps) => React.ReactNode; widgetProps: WidgetProps; filter: Record<string, string> | undefined },
 ) {
-  return <>{renderFn(widgetProps)}</>
+  return <>{renderFn({ ...widgetProps, filter })}</>
 })
 
 // A small, fully self-written grid (2026-07-20) — replaces an earlier
@@ -411,7 +418,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-3">
                 {WIDGET_REGISTRY[w.widget_type]
-                  ? <MemoWidget renderFn={WIDGET_REGISTRY[w.widget_type].render} widgetProps={widgetProps} />
+                  ? <MemoWidget renderFn={WIDGET_REGISTRY[w.widget_type].render} widgetProps={widgetProps} filter={w.filter} />
                   : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}
               </div>
               <div

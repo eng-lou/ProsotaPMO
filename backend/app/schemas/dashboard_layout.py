@@ -16,6 +16,14 @@ class DashboardWidgetConfig(BaseModel):
     y: int
     w: int
     h: int
+    # Per-widget filter (2026-09-02, per Maro: "what if you allowed
+    # flexibility to those widgets") — a plain string-keyed dict, not a
+    # typed shape per widget_type, same "shape owned by the frontend"
+    # convention this config's own class docstring already establishes for
+    # the rest of this schema. Only the widgets that actually support one
+    # read specific keys out of it (see frontend widgets.tsx's own
+    # WidgetProps.filter header); everything else ignores it.
+    filter: dict[str, str] | None = None
 
 
 class DashboardLayoutConfig(BaseModel):

@@ -7,6 +7,8 @@ import { sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssis
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { WIDGET_REGISTRY } from '@/modules/dashboard/widgets'
+import type { DashboardWidgetConfig } from '@/lib/dashboardLayouts'
 
 // Proposal draft shapes (2026-08-31/2026-09-01) — each mirrors its own
 // real backend schema field-for-field, since an approved draft gets sent
@@ -73,6 +75,18 @@ interface ResourceAssignmentProposalDraft {
   utilisation_pct?: number | null
 }
 
+// DashboardWidgetProposalDraft <-> propose_create_dashboard_layout's own
+// per-widget shape (2026-09-02, per Maro: "I want Poe to be able to
+// create widgets based on the prompts" — round 1, existing widget_types
+// only, an optional filter for the 5 that support one, see widgets.tsx's
+// own WidgetProps.filter header). Deliberately no x/y/w/h — see this
+// draft's own approval handler below for why those are computed here,
+// not asked of Poe.
+interface DashboardWidgetProposalDraft {
+  widget_type: string
+  filter?: Record<string, string>
+}
+
 // RelationshipEditOperationDraft <-> propose_edit_relationships' own
 // per-op shape (2026-09-01, per Maro: "if i ask poe to reassign
 // relationships... can they do it") — mirrors
@@ -135,6 +149,7 @@ type PendingProposal =
   | { kind: 'link_elements'; toolUseId: string; activityId: string; activityName?: string; elements: ElementLinkDraft[] }
   | { kind: 'clash_test'; toolUseId: string; draft: ClashTestProposalDraft }
   | { kind: 'resource_assignments'; toolUseId: string; assignments: ResourceAssignmentProposalDraft[] }
+  | { kind: 'dashboard_layout'; toolUseId: string; name: string; widgets: DashboardWidgetProposalDraft[] }
 
 // Only the LAST message can hold a genuinely still-pending proposal — the
 // moment one gets resolved, a new user message carrying its tool_result is
@@ -150,7 +165,7 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
     b.type === 'tool_use'
     && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'
       || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'
-      || b.name === 'propose_create_resource_assignments'),
+      || b.name === 'propose_create_resource_assignments' || b.name === 'propose_create_dashboard_layout'),
   )
   if (!block) return null
   const toolUseId = block.id as string
@@ -179,6 +194,13 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
     return {
       kind: 'resource_assignments', toolUseId,
       assignments: (input.assignments as ResourceAssignmentProposalDraft[] | undefined) ?? [],
+    }
+  }
+  if (block.name === 'propose_create_dashboard_layout') {
+    return {
+      kind: 'dashboard_layout', toolUseId,
+      name: (input.name as string | undefined) ?? 'New Layout',
+      widgets: (input.widgets as DashboardWidgetProposalDraft[] | undefined) ?? [],
     }
   }
   if (block.name === 'propose_clash_test') {
@@ -284,7 +306,7 @@ const POE_CAPABILITY_LINES = [
   'Explain WHY something happened — trace real linked Issues/Changes/Decisions/Risks back through Activities/Cost Elements, e.g. behind a Baseline Comparison variance',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
   'On the BIM/Reality Capture page: highlight, isolate, colour, or set up and run a clash test between two selections',
-  'Ask it to draft new risks, activities, resource assignments, relationships, or links between records/3D elements and an activity — you approve before anything saves',
+  'Ask it to draft new risks, activities, resource assignments, relationships, links between records/3D elements and an activity, or a custom Reporting & Controls dashboard layout — you approve before anything saves',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 
@@ -408,6 +430,7 @@ export function PoePanel({
     else if (pendingProposal.kind === 'edit_relationships') setSelectedIndices(new Set(pendingProposal.operations.map((_, i) => i)))
     else if (pendingProposal.kind === 'link_elements') setSelectedIndices(new Set(pendingProposal.elements.map((_, i) => i)))
     else if (pendingProposal.kind === 'resource_assignments') setSelectedIndices(new Set(pendingProposal.assignments.map((_, i) => i)))
+    else if (pendingProposal.kind === 'dashboard_layout') setSelectedIndices(new Set(pendingProposal.widgets.map((_, i) => i)))
     else if (pendingProposal.kind === 'clash_test') setClashTestApproved(true)
     else setActivitiesApproved(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -687,6 +710,37 @@ export function PoePanel({
         summary = `Created ${createdCount} of ${approved.length} approved assignment(s)` +
           `${failedCount > 0 ? ` (${failedCount} failed — a stale id or an invalid quantity/utilisation for that resource's type)` : ''}` +
           `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+      } else if (pendingProposal.kind === 'dashboard_layout') {
+        // dashboard_layout (2026-09-02) — x/y/w/h are computed here, not
+        // asked of Poe (see DashboardWidgetProposalDraft's own header):
+        // stack approved widgets top-to-bottom, full-width, each using its
+        // own WIDGET_REGISTRY.defaultSize height — the exact same registry
+        // DashboardGrid.tsx's own "add widget" already reads from, so a
+        // freshly-created layout looks like one a human assembled by hand,
+        // not a special Poe-only shape. Created inactive (real
+        // /dashboard-layouts/ behaviour) — never disrupts whatever's
+        // currently on screen; the human applies it from the layout picker.
+        const approved = pendingProposal.widgets.filter((_, i) => selectedIndices.has(i))
+        if (approved.length === 0) {
+          summary = 'Every proposed widget was rejected — no layout created.'
+        } else {
+          let y = 0
+          const widgets: DashboardWidgetConfig[] = approved.map((w, i) => {
+            const size = WIDGET_REGISTRY[w.widget_type]?.defaultSize ?? { w: 6, h: 4 }
+            const widget: DashboardWidgetConfig = { id: `poe-${Date.now()}-${i}`, widget_type: w.widget_type, x: 0, y, w: size.w, h: size.h, filter: w.filter }
+            y += size.h
+            return widget
+          })
+          try {
+            await api.post('/api/v1/dashboard-layouts/', { project_id: projectId, name: pendingProposal.name, config: { widgets } })
+            const rejectedCount = pendingProposal.widgets.length - approved.length
+            summary = `Created layout "${pendingProposal.name}" with ${approved.length} widget(s)` +
+              `${rejectedCount > 0 ? ` (${rejectedCount} rejected)` : ''}. Not applied yet — open it from the layout picker to switch to it.`
+          } catch (err) {
+            const detail = axios.isAxiosError(err) ? err.response?.data?.detail : null
+            summary = `Failed to create the layout: ${typeof detail === 'string' ? detail : 'unknown error'}`
+          }
+        }
       } else {
         // clash_test — NOT a plain REST call like every kind above (see
         // aiFourDBridge.tsx's own execute_clash_test_proposal header for
@@ -1012,6 +1066,36 @@ export function PoePanel({
                         <div className="min-w-0 flex-1">
                           <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">{el.element_label}</p>
                           <p className="text-[11px] text-gray-400 dark:text-prosota-muted">{el.source_kind}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'dashboard_layout' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      New layout "{pendingProposal.name}" — {pendingProposal.widgets.length} widget{pendingProposal.widgets.length === 1 ? '' : 's'} proposed, review before saving (won't be applied automatically):
+                    </p>
+                    {pendingProposal.widgets.map((w, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</p>
+                          {w.filter && Object.keys(w.filter).length > 0 && (
+                            <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                              {Object.entries(w.filter).map(([k, v]) => `${k}=${v}`).join(', ')}
+                            </p>
+                          )}
                         </div>
                       </label>
                     ))}

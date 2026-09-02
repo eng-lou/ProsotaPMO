@@ -11,6 +11,12 @@ export interface DashboardWidgetConfig {
   y: number
   w: number
   h: number
+  // Per-widget filter (2026-09-02, per Maro: "what if you allowed
+  // flexibility to those widgets") — only the widgets that actually
+  // support one read specific keys out of it (see widgets.tsx's own
+  // WidgetProps.filter header for the current list); everything else
+  // ignores it. Optional/undefined for every pre-existing saved layout.
+  filter?: Record<string, string>
 }
 
 export interface DashboardLayoutConfig {
