@@ -31,6 +31,18 @@ export interface SiteContext {
   offset_z: number
   offset_yaw_deg: number
   scale: number
+  // Tile Cutout (2026-09-02, per Maro: "add a polygon like the zones but
+  // this will allow me to actually clip the 3d tile so i can have my ifc
+  // model or 3d in that space") — reuses an existing Zone's own footprint
+  // (zones.ts) as the shape to cut out of the Site Context Tiles layer,
+  // rather than a second, parallel polygon-drawing system. v1 scope,
+  // deliberate (see site_context.py's own model docstring): exactly one
+  // cutout Zone at a time, and its footprint must be convex — three.js
+  // clipping can't express an arbitrary concave hole or more than one
+  // independent cutout on the same material at once the way CesiumJS's
+  // own ClippingPolygonCollection can. null = no cutout Zone selected.
+  cutout_zone_id: string | null
+  cutout_active: boolean
   created_at: string | null
   updated_at: string | null
 }

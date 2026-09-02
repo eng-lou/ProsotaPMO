@@ -6792,6 +6792,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           apiKey={siteTilesApiKey}
           onUpdate={handleUpdateSiteContext}
           onSaveApiKey={handleSaveSiteTilesApiKey}
+          zones={zones}
+          upAxis={settings.upAxis}
         />
       ),
     })

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as THREE from 'three'
 import { TilesRenderer, TilesPlugin, TilesAttributionOverlay } from '3d-tiles-renderer/r3f'
 import type { TilesRenderer as TilesRendererImpl } from '3d-tiles-renderer/three'
@@ -17,6 +17,68 @@ interface Props {
   // props using dot-notation for nested properties, e.g. lruCache-minSize").
   errorTarget: number
   cacheSizeMb: number
+  // Tile Cutout (2026-09-02) — world-space clip planes from
+  // tileCutoutGeometry.ts's own computeCutoutWorldPlanes, or null when no
+  // cutout is active. Applied via TileCutoutClipPlugin below, not the
+  // per-frame scene-graph patch Section Box uses for regular IFC/mesh
+  // imports (Viewport3D.tsx's own ModelObjects) — Tiles stream content in
+  // and out continuously via their own LRU cache, so a one-time or
+  // per-frame external scan would miss newly-loaded tiles; the plugin's
+  // own processTileModel hook (fires per-tile, confirmed against
+  // 3d-tiles-renderer's own installed source) is the correct place to
+  // catch content that doesn't exist yet when this prop last changed.
+  cutoutPlanes: THREE.Plane[] | null
+}
+
+// Applies (or clears) a fixed set of world-space clipping planes to every
+// mesh material in a Tiles tileset — both tiles already loaded when this
+// plugin is registered (via init, called once at registration) and any
+// tile that streams in afterward (via processTileModel, fires per-tile as
+// content loads — see 3d-tiles-renderer's own TilesRenderer.js). A fresh
+// plugin instance is created whenever `planes` changes (r3f's own
+// <TilesPlugin> unregisters the old instance and constructs+registers a
+// new one whenever its `args` object identity changes — see that
+// component's own useLayoutEffect deps), so re-walking already-loaded
+// tiles in `init` is what makes editing/toggling the cutout Zone take
+// effect immediately instead of only affecting tiles loaded from that
+// point on.
+//
+// clipIntersection = true (2026-09-02, verified against three.js's own
+// installed clipping shader + WebGLClipping source, not assumed) —
+// three.js's default (clipIntersection=false, "union" mode, what Section
+// Box uses) discards a fragment if it fails ANY plane, which nets to
+// KEEPING only the intersection of every plane's own kept side — correct
+// for Section Box's "show only the box's interior" cutaway, but the exact
+// opposite of what a cutout needs. clipIntersection=true instead discards
+// a fragment only if it fails EVERY plane simultaneously — with
+// outward-facing normals per polygon edge (computeCutoutWorldPlanes' own
+// convention), that discard condition is true precisely inside the convex
+// polygon on every edge at once, and false everywhere outside it.
+class TileCutoutClipPlugin {
+  private planes: THREE.Plane[] | null
+  constructor({ planes }: { planes: THREE.Plane[] | null }) {
+    this.planes = planes && planes.length > 0 ? planes : null
+  }
+
+  private apply(root: THREE.Object3D) {
+    root.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const material of materials) {
+        material.clippingPlanes = this.planes
+        material.clipIntersection = true
+        material.clipShadows = true
+      }
+    })
+  }
+
+  init(tiles: TilesRendererImpl) {
+    this.apply(tiles.group)
+  }
+
+  processTileModel(scene: THREE.Object3D) {
+    this.apply(scene)
+  }
 }
 
 // Stands in for 3d-tiles-renderer/plugins' own GoogleCloudAuthPlugin
@@ -134,8 +196,16 @@ class SimpleGoogleTilesAuthPlugin {
 // internally by <TilesRenderer>'s own useFrame — it automatically respects
 // whatever frameloop mode the parent <Canvas> is in, so this needs no
 // separate `active` gating of its own.
-export function SiteTilesLayer({ apiKey, ctx, upAxis, errorTarget, cacheSizeMb }: Props) {
+export function SiteTilesLayer({ apiKey, ctx, upAxis, errorTarget, cacheSizeMb, cutoutPlanes }: Props) {
   const [tiles, setTiles] = useState<TilesRendererImpl | null>(null)
+  // Stable args reference (2026-09-02) — <TilesPlugin>'s own dependency
+  // tracking (useObjectDep) only shallow-compares one level deep, so a
+  // freshly-literal `[{ planes: cutoutPlanes }]` on every render would
+  // look "changed" every time even when cutoutPlanes itself hasn't,
+  // forcing TileCutoutClipPlugin to re-walk the entire loaded tile tree
+  // for no reason. Memoized so that traversal only actually happens when
+  // cutoutPlanes really changes.
+  const cutoutPluginArgs = useMemo(() => [{ planes: cutoutPlanes }], [cutoutPlanes])
 
   // Recentres the tileset's own root group so the saved lat/lon lands at
   // local (0,0,0) instead of the real ECEF distance from Earth's centre
@@ -212,6 +282,7 @@ export function SiteTilesLayer({ apiKey, ctx, upAxis, errorTarget, cacheSizeMb }
           lruCache-minBytesSize={cacheSizeMb * 1024 * 1024 * 0.75}
         >
           <TilesPlugin plugin={SimpleGoogleTilesAuthPlugin} args={[{ apiToken: apiKey }]} />
+          <TilesPlugin plugin={TileCutoutClipPlugin} args={cutoutPluginArgs} />
           {/* Required, not decorative — Google's terms require on-screen
               attribution whenever their Photorealistic 3D Tiles are shown.
               Ships as a ready-made component (3d-tiles-renderer/r3f) that

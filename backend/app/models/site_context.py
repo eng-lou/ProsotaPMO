@@ -60,3 +60,30 @@ class SiteContext(Base, TimestampMixin):
     offset_z: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     offset_yaw_deg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     scale: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+    # Tile Cutout (2026-09-02, per Maro: "add a polygon like the zones but
+    # this will allow me to actually clip the 3d tile so i can have my ifc
+    # model or 3d in that space" — e.g. Euston Station: cut the existing
+    # station's own tile geometry out of the reconstruction plot, keeping
+    # the surrounding real-world context tiles, so the project's actual
+    # IFC/mesh model shows in its place instead). Deliberately reuses an
+    # existing Zone's own footprint (zone.py) rather than a second,
+    # parallel polygon-drawing/editing system — Zone's click-to-add-point +
+    # drag-vertex interaction is already built and proven; this only adds
+    # "and also use this Zone's shape to clip Site Context Tiles."
+    #
+    # v1 scope, deliberate: three.js Material.clippingPlanes can express a
+    # convex region (N planes) but not an arbitrary concave polygon, and
+    # not more than one independent cutout on the same material at once —
+    # CesiumJS's own ClippingPolygonCollection supports both via a custom
+    # per-fragment shader test that this does not attempt yet (see this
+    # session's own research). So: exactly one cutout Zone at a time, and
+    # its footprint must be convex — a concave source Zone clips
+    # incorrectly (SiteContextPanel.tsx warns via isConvexPolygon, does
+    # not block it). ondelete="SET NULL" rather than a hard requirement
+    # that the Zone still exist — deleting the source Zone just quietly
+    # turns the cutout off instead of failing.
+    cutout_zone_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL"), nullable=True
+    )
+    cutout_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

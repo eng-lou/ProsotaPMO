@@ -18,6 +18,8 @@ class SiteContextUpsert(BaseModel):
     offset_z: float = 0.0
     offset_yaw_deg: float = 0.0
     scale: float = Field(default=1.0, gt=0)
+    cutout_zone_id: uuid.UUID | None = None
+    cutout_active: bool = False
 
 
 class SiteContextResponse(BaseModel):
@@ -38,5 +40,7 @@ class SiteContextResponse(BaseModel):
     offset_z: float
     offset_yaw_deg: float
     scale: float
+    cutout_zone_id: uuid.UUID | None
+    cutout_active: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None

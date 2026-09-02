@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
 import { parseCoordinate, parseCoordinatePair, type SiteContext } from './siteContext'
+import type { Zone } from './zones'
+import type { UpAxis } from './upAxis'
+import { isConvexPolygon } from './tileCutoutGeometry'
 
 type SiteContextPatch = Partial<Pick<SiteContext,
   'enabled' | 'lat' | 'lon' | 'elevation' | 'label' | 'offset_x' | 'offset_y' | 'offset_z' | 'offset_yaw_deg' | 'scale'
+  | 'cutout_zone_id' | 'cutout_active'
 >>
 
 interface Props {
@@ -11,6 +15,13 @@ interface Props {
   apiKey: string | null
   onUpdate: (patch: SiteContextPatch) => void
   onSaveApiKey: (key: string) => Promise<void>
+  // Tile Cutout (2026-09-02) — reuses an existing Zone's own footprint as
+  // the shape to cut out of Site Context Tiles (see site_context.py's own
+  // model docstring for the full "why", incl. the v1 convex-only/
+  // single-cutout scope) rather than a second, parallel polygon-drawing
+  // system.
+  zones: Zone[]
+  upAxis: UpAxis
 }
 
 // "Site Context" dockable panel — real-world Google Photorealistic 3D
@@ -28,7 +39,7 @@ function formatCoord(v: number | null): string {
   return v === null ? '' : String(v)
 }
 
-export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }: Props) {
+export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, zones, upAxis }: Props) {
   const [keyDraft, setKeyDraft] = useState(apiKey ?? '')
   const [savingKey, setSavingKey] = useState(false)
 
@@ -216,6 +227,55 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey }:
               className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
             />
           </label>
+        </div>
+
+        <div className="pt-2 mt-1 border-t border-gray-100 dark:border-prosota-line space-y-1.5">
+          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Tile Cutout</div>
+          <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+            Cuts an existing Zone's footprint out of the Tiles layer — e.g. remove an existing
+            station's own tile geometry from a reconstruction plot so your IFC/mesh model shows
+            in its place, keeping the surrounding real-world tiles. v1 only supports a convex
+            footprint and one active cutout at a time.
+          </p>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
+            <span className="w-20 shrink-0">Cutout Zone</span>
+            <select
+              value={ctx.cutout_zone_id ?? ''}
+              onChange={e => onUpdate({ cutout_zone_id: e.target.value || null })}
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 bg-white dark:bg-prosota-panel2"
+            >
+              <option value="">None</option>
+              {zones.filter(z => z.shape === 'polygon').map(z => (
+                <option key={z.id} value={z.id}>{z.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className={`flex items-center gap-1.5 text-[11px] ${ctx.cutout_zone_id ? 'text-gray-500 dark:text-prosota-muted' : 'text-gray-300 dark:text-prosota-line'}`}>
+            <input
+              type="checkbox"
+              checked={ctx.cutout_active}
+              disabled={!ctx.cutout_zone_id}
+              onChange={e => onUpdate({ cutout_active: e.target.checked })}
+            />
+            Active
+          </label>
+          {(() => {
+            const selectedZone = zones.find(z => z.id === ctx.cutout_zone_id)
+            if (!selectedZone || !ctx.cutout_active) return null
+            if (selectedZone.points.length < 3) {
+              return <p className="text-[11px] text-amber-600 dark:text-amber-400">This Zone doesn't have enough points to form a shape yet.</p>
+            }
+            if (!isConvexPolygon(selectedZone.points, upAxis)) {
+              return (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  "{selectedZone.name}" isn't a convex shape — the cutout will clip an approximation
+                  (roughly its convex hull), not the exact outline. Use a simpler, convex Zone shape
+                  for an accurate cut.
+                </p>
+              )
+            }
+            return null
+          })()}
         </div>
       </div>
     </div>

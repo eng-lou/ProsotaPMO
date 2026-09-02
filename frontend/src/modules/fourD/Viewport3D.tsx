@@ -55,6 +55,7 @@ import { CameraGizmo } from './CameraGizmo'
 import { PassepartoutOverlay } from './PassepartoutOverlay'
 import { fovFromFocalLength, focalLengthFromFov, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { SiteTilesLayer } from './SiteTilesLayer'
+import { computeCutoutWorldPlanes } from './tileCutoutGeometry'
 import type { SiteContext } from './siteContext'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
@@ -5112,6 +5113,19 @@ export function Viewport3D({
     return Math.min(neededMultiplier, gpuMultiplierCeiling)
   }
 
+  // Tile Cutout (2026-09-02) — recomputed only when the selected cutout
+  // Zone's own points, siteContext.cutout_active, or upAxis actually
+  // change (not every render), so <SiteTilesLayer>'s own args={{ planes:
+  // cutoutPlanes }} keeps a stable reference and doesn't re-register
+  // TileCutoutClipPlugin (re-walking every loaded tile) needlessly.
+  const cutoutZone = siteContext?.cutout_active
+    ? zones.find(z => z.id === siteContext.cutout_zone_id) ?? null
+    : null
+  const cutoutPlanes = useMemo(
+    () => (cutoutZone ? computeCutoutWorldPlanes(cutoutZone.points, settings.upAxis) : null),
+    [cutoutZone, settings.upAxis],
+  )
+
   const handleCaptureImage = async () => {
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
@@ -6168,7 +6182,7 @@ export function Viewport3D({
               the layer's enabled AND a key's actually been fetched — no
               point instantiating a TilesRenderer that can't authenticate. */}
           {siteContext?.enabled && siteTilesApiKey && (
-            <SiteTilesLayer apiKey={siteTilesApiKey} ctx={siteContext} upAxis={settings.upAxis} errorTarget={settings.tilesErrorTarget} cacheSizeMb={settings.tilesCacheSizeMb} />
+            <SiteTilesLayer apiKey={siteTilesApiKey} ctx={siteContext} upAxis={settings.upAxis} errorTarget={settings.tilesErrorTarget} cacheSizeMb={settings.tilesCacheSizeMb} cutoutPlanes={cutoutPlanes} />
           )}
           {/* Grid is Y-up by its own native convention (it's our own
               geometry) — this wrapper corrects it to match upAxis, same as
