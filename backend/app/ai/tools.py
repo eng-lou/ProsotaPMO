@@ -355,19 +355,26 @@ TOOLS: list[dict] = [
     # be able to create widgets based on the prompts... a new empty layout
     # and create widgets... based on those requests if it doesn't already
     # exist in the template" — round 1 of that ask, per the agreed split:
-    # flexibility on the EXISTING 45+ widgets (an optional filter, see
-    # frontend widgets.tsx's own WidgetProps.filter header) rather than a
-    # new generic/custom widget type, which stays a later round). Mirrors
-    # dashboard_layout.py's own DashboardLayoutCreate — approval POSTs
-    # straight to the real /dashboard-layouts/ endpoint, which always
-    # creates inactive (never auto-applied, matching every other
-    # proposal's "review before it affects anything real" shape). Grid
-    # x/y/w/h are deliberately NOT part of this schema — PoePanel.tsx's
-    # own approval handler auto-stacks widgets top-to-bottom using each
-    # one's own WIDGET_REGISTRY.defaultSize, the same registry
-    # DashboardGrid.tsx itself already uses for "add widget" — Poe has no
-    # reason to guess grid coordinates a human would immediately want to
-    # rearrange anyway.
+    # flexibility on the EXISTING 45+ widgets rather than a new generic/
+    # custom widget type, which stays a later round). Filter is generic
+    # (2026-09-02, per Maro's own live test + follow-up: "any structured
+    # field should be queryable/sliceable/filterable especially key ones",
+    # after a first-pass hand-picked-keys-only version failed to cover "a
+    # particular named resource" — see widgets.tsx's own matchesFilter
+    # header) — any real field on the underlying record type, not a fixed
+    # small set, checked directly against the actual backend schemas
+    # (dashboard.py's RiskSummary/CostElementSummary/
+    # ResourceAssignmentSummary/IcdItemSummary) so the field list below is
+    # exhaustive, not a guess. Mirrors dashboard_layout.py's own
+    # DashboardLayoutCreate — approval POSTs straight to the real
+    # /dashboard-layouts/ endpoint, which always creates inactive (never
+    # auto-applied, matching every other proposal's "review before it
+    # affects anything real" shape). Grid x/y/w/h are deliberately NOT
+    # part of this schema — PoePanel.tsx's own approval handler
+    # auto-stacks widgets top-to-bottom using each one's own
+    # WIDGET_REGISTRY.defaultSize, the same registry DashboardGrid.tsx
+    # itself already uses for "add widget" — Poe has no reason to guess
+    # grid coordinates a human would immediately want to rearrange anyway.
     {
         "name": "propose_create_dashboard_layout",
         "description": (
@@ -375,24 +382,42 @@ TOOLS: list[dict] = [
             "nothing is saved until explicitly approved, and creating one never changes what's "
             "currently displayed (a new layout is never auto-applied; the human applies it "
             "themselves from the layout picker once happy with it). Use this when asked to "
-            "build a custom dashboard view out of EXISTING widgets, e.g. \"a dashboard showing "
-            "just Cost risks and labour resource assignments\" (two widgets: risk_register_table "
-            "filtered risk_type='threat' won't work — 'Cost risks' means category, not type — "
-            "so category='Cost'; resource_assignments_table filtered resource_type='labour'). "
-            "If what's asked for genuinely isn't expressible with any existing widget_type even "
-            "with a filter, say so plainly — there is no way to invent a new widget type yet. "
-            "Five widget types currently accept an optional filter (any other widget_type must "
-            "omit filter entirely — an unrecognised key on a non-filterable widget is silently "
-            "ignored, not an error, so don't guess one where none applies):\n"
-            "- top_risks, risk_register_table: filter={risk_type: 'threat'|'opportunity'} "
-            "and/or (risk_register_table only) {category: '<exact category text, e.g. from "
-            "get_project_snapshot — never guessed>'}\n"
-            "- cost_elements_table: filter={element_group: '<exact group text, never guessed>'}\n"
-            "- resource_assignments_table: filter={resource_type: 'labour'|'equipment'|"
-            "'material'|'subcontractor'|'cost'|'crew'} and/or {resource_name: '<exact resource "
-            "name, e.g. from find_records(record_type=\"resource\") — never guessed, and never "
-            "partial>'}\n"
-            "- open_items_by_owner: filter={item_type: 'issue'|'change'|'decision'}"
+            "build a custom dashboard view out of EXISTING widgets. If what's asked for "
+            "genuinely isn't expressible with any existing widget_type even filtered, say so "
+            "plainly — there is no way to invent a new widget type yet.\n"
+            "Nine widget types accept an optional filter — a dict of {field: value} pairs, ALL "
+            "of which must match (AND, not OR) for a record to be included. Every key must be a "
+            "REAL field name on that widget's own underlying record (below); an unrecognised "
+            "key matches nothing at all rather than erroring, so getting the exact field name "
+            "right matters. Values are always compared as plain text, even for a numeric/date "
+            "field. Any other widget_type must omit filter entirely.\n"
+            "- top_risks, risk_register_table — fields on a Risk: id, code, title, category, "
+            "area, status, risk_owner, risk_type ('threat'|'opportunity'), response_strategy, "
+            "rating, emv_cost, emv_schedule_days, date_raised. E.g. a specific risk: "
+            "{code:'R-004'}; a category: {category:'Cost'}; both a type AND area: "
+            "{risk_type:'threat', area:'Site'}.\n"
+            "- cost_elements_table — fields on a Cost Element: id, code, description, "
+            "element_group, cost_owner, status, bac, ac, pct_complete, cpi, eac, vac.\n"
+            "- resource_assignments_table — fields on a Resource Assignment: id, resource_name, "
+            "resource_type ('labour'|'equipment'|'material'|'subcontractor'|'cost'|'crew'), "
+            "discipline, company, role, budget, activity_id, activity_task_name. A request for "
+            "one NAMED resource (not a whole type) means {resource_name: '<its exact name>'} — "
+            "resolve the exact name/type first via find_records(record_type='resource') or "
+            "get_project_snapshot, never guessed or partially matched.\n"
+            "- open_items_by_owner — fields on an ICD item: id, code, title, item_type "
+            "('issue'|'change'|'decision'), status, priority, owner, raised_date, due_date, "
+            "closed_date, severity, decision_maker, required_by, ccb_decision, cost_impact, "
+            "schedule_impact_days.\n"
+            "- baseline_variance_table, critical_activities_table, near_critical_watch_list — "
+            "fields on a scheduled Activity: id, code, task_name, start, finish, bl_finish, "
+            "variance_days, total_float_hours, is_critical, pct_complete, schedule_category, "
+            "suspend_date, resume_date. A specific activity: {code:'T-0074'}.\n"
+            "- milestones_table — fields on a Milestone: id, task_name, finish, bl_finish, "
+            "is_critical, variance_days.\n"
+            "Any id/code/name value must be a real one from get_project_snapshot or find_records "
+            "— never invented. If a specific field you'd want to filter on genuinely isn't in "
+            "these lists (e.g. no widget can be filtered by an activity's own WBS node or a "
+            "custom UDF value today), say so rather than picking the closest-sounding field name."
         ),
         "input_schema": {
             "type": "object",

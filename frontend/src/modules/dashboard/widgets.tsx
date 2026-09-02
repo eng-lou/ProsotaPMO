@@ -23,18 +23,40 @@ export interface WidgetProps {
   // while no project is selected yet, same case that component already handles.
   projectId: string | undefined
   // Per-widget filter (2026-09-02, per Maro: "what if you allowed
-  // flexibility to those widgets" — round 1 of the widget-flexibility
-  // work, before any generic/custom widget type). A plain string-keyed
-  // dict rather than a typed shape per widget, matching this app's own
-  // "shape owned by the frontend, opaque JSONB at rest" convention
-  // (Zone.points, MaterialPreset.config) — DashboardGrid.tsx passes each
-  // widget's own w.filter through here unchanged; only the widgets that
-  // actually support one (currently TopRisksWidget/
+  // flexibility to those widgets", generalized same day per Maro: "any
+  // structured field should be queryable/sliceable/filterable... not just
+  // resource related") — a plain string-keyed dict, matched generically
+  // against whichever record a filterable widget iterates via
+  // matchesFilter below, rather than each widget hand-picking a fixed set
+  // of named keys. Undefined = no filter, same as never having narrowed
+  // the widget at all. Currently wired into TopRisksWidget/
   // RiskRegisterTableWidget/CostElementsTableWidget/
-  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget) read specific
-  // keys out of it, everything else ignores it. Undefined = no filter, same
-  // as never having narrowed the widget at all.
+  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget — everything
+  // else ignores it.
   filter?: Record<string, string>
+}
+
+// Generic per-record filter match (2026-09-02, per Maro: "any structured
+// field should be queryable/sliceable/filterable especially key ones" —
+// replaces this file's own first-pass hand-coded field-by-field .filter()
+// chains, e.g. "only risk_type and category", which only ever covered
+// whichever fields got explicitly wired in and left every other real
+// field on the same record un-filterable). Every key in `filter` must
+// match the record's own same-named field (String-compared, since a
+// filter value is always a plain string but the underlying field can be
+// a number/enum/nullable string) for the record to pass — an unknown key
+// (not a real field on this record type) can never match anything, so it
+// silently excludes everything rather than silently matching everything,
+// same "fail closed" instinct as every other unrecognised-input case in
+// this app. Generic over T so one function serves every summary type
+// (RiskSummary, CostElementSummary, ResourceAssignmentSummary,
+// IcdItemSummary) without a cast at each call site.
+function matchesFilter<T extends object>(record: T, filter: Record<string, string> | undefined): boolean {
+  if (!filter) return true
+  return Object.entries(filter).every(([key, value]) => {
+    const fieldValue = (record as Record<string, unknown>)[key]
+    return fieldValue !== undefined && String(fieldValue) === value
+  })
 }
 
 const RISK_BAND_COLORS: Record<string, string> = { Low: '#16a34a', Medium: '#d97706', High: '#dc2626' }
@@ -148,8 +170,11 @@ export function TopRisksWidget({ data, onNavigateToRisks, filter }: WidgetProps)
   // same rating-desc ordering data.top_risks itself uses server-side
   // (dashboard.py), just reproduced client-side here so filtering doesn't
   // need a second backend field.
+  // Filterable on any RiskSummary field (2026-09-02, matchesFilter's own
+  // header) — e.g. filter={risk_type:'threat'}, {category:'Cost'},
+  // {code:'R-004'}, {area:'Site'}, or any combination.
   const topRisks = [...data.risks]
-    .filter(r => !filter?.risk_type || r.risk_type === filter.risk_type)
+    .filter(r => matchesFilter(r, filter))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
     .slice(0, 5)
   return (
@@ -243,9 +268,16 @@ export function ActivitiesByCategoryWidget({ data }: WidgetProps) {
   )
 }
 
-export function BaselineVarianceTableWidget({ data }: WidgetProps) {
+export function BaselineVarianceTableWidget({ data, filter }: WidgetProps) {
+  // Filterable on any ScheduleActivitySummary field (2026-09-02,
+  // matchesFilter's own header) — applied before the top-10-by-variance
+  // slice below, same "specific-entity filter guarantees inclusion
+  // regardless of ranking" fix TopRisksWidget already needed, e.g. a
+  // single {code:'T-0074'} would otherwise silently vanish if that
+  // activity's own variance isn't in the top 10.
   const ranked = data.schedule_activities
     .filter(a => a.variance_days !== null && a.variance_days !== 0)
+    .filter(a => matchesFilter(a, filter))
     .sort((a, b) => Math.abs(b.variance_days!) - Math.abs(a.variance_days!))
     .slice(0, 10)
   return (
@@ -279,7 +311,10 @@ export function BaselineVarianceTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function MilestonesTableWidget({ data }: WidgetProps) {
+export function MilestonesTableWidget({ data, filter }: WidgetProps) {
+  // Filterable on any MilestoneTimelineItem field (2026-09-02, matchesFilter's
+  // own header) — e.g. a specific milestone by {id:'<real uuid>'}.
+  const milestones = data.milestones.filter(m => matchesFilter(m, filter))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -291,7 +326,7 @@ export function MilestonesTableWidget({ data }: WidgetProps) {
         </tr>
       </thead>
       <tbody>
-        {data.milestones.map(m => (
+        {milestones.map(m => (
           <tr key={m.id} className="border-b border-gray-50">
             <td className="py-1.5 pr-2">{m.task_name}</td>
             <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.bl_finish)}</td>
@@ -301,7 +336,7 @@ export function MilestonesTableWidget({ data }: WidgetProps) {
             </td>
           </tr>
         ))}
-        {data.milestones.length === 0 && (
+        {milestones.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No milestones yet.</td></tr>
         )}
       </tbody>
@@ -309,8 +344,10 @@ export function MilestonesTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function CriticalActivitiesTableWidget({ data }: WidgetProps) {
-  const critical = data.schedule_activities.filter(a => a.is_critical === true)
+export function CriticalActivitiesTableWidget({ data, filter }: WidgetProps) {
+  // Filterable on any ScheduleActivitySummary field (2026-09-02,
+  // matchesFilter's own header), on top of the existing is_critical filter.
+  const critical = data.schedule_activities.filter(a => a.is_critical === true).filter(a => matchesFilter(a, filter))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -442,10 +479,11 @@ export function ResponseStrategyBreakdownWidget({ data }: WidgetProps) {
 export function RiskRegisterTableWidget({ data, onNavigateToRisks, filter }: WidgetProps) {
   // Filterable (2026-09-02) — risk_type/category narrowing on top of the
   // existing open-only filter, e.g. "Cost risks only" or "opportunities only".
+  // Filterable on any RiskSummary field, on top of the existing open-only
+  // filter (2026-09-02, matchesFilter's own header).
   const open = data.risks
     .filter(r => r.status !== 'closed')
-    .filter(r => !filter?.risk_type || r.risk_type === filter.risk_type)
-    .filter(r => !filter?.category || r.category === filter.category)
+    .filter(r => matchesFilter(r, filter))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
   return (
     <table className="w-full text-xs">
@@ -585,8 +623,10 @@ export function BacVsEacByGroupWidget({ data }: WidgetProps) {
 
 export function CostElementsTableWidget({ data, filter }: WidgetProps) {
   // Filterable (2026-09-02) — narrow to one cost group, e.g. "Prelims only".
+  // Filterable on any CostElementSummary field (2026-09-02, matchesFilter's
+  // own header) — e.g. filter={element_group:'Prelims'} or {code:'C-012'}.
   const rows = data.cost_elements
-    .filter(el => !filter?.element_group || el.element_group === filter.element_group)
+    .filter(el => matchesFilter(el, filter))
     .sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
   return (
     <table className="w-full text-xs">
@@ -689,11 +729,12 @@ export function IssuesAgeingTableWidget({ data }: WidgetProps) {
 }
 
 export function OpenItemsByOwnerWidget({ data, filter }: WidgetProps) {
-  // Filterable (2026-09-02) — narrow to one item_type ('issue'|'change'|'decision').
+  // Filterable on any IcdItemSummary field (2026-09-02, matchesFilter's
+  // own header) — e.g. filter={item_type:'issue'} or {code:'I-014'}.
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.status === 'closed') continue
-    if (filter?.item_type && i.item_type !== filter.item_type) continue
+    if (!matchesFilter(i, filter)) continue
     const key = i.owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -838,14 +879,13 @@ export function ResourceBudgetByCompanyWidget({ data }: WidgetProps) {
 }
 
 export function ResourceAssignmentsTableWidget({ data, filter }: WidgetProps) {
-  // Filterable (2026-09-02, resource_name added same day — a real gap Poe
-  // hit live: asked to narrow to one named resource, "Concrete Finishing
-  // Crew," and could only offer a resource_type slice since no per-resource
-  // filter existed). Exact match, not partial — same "never guess, use the
-  // real value" discipline find_records already enforces for the id itself.
+  // Filterable on any ResourceAssignmentSummary field (2026-09-02,
+  // matchesFilter's own header) — e.g. filter={resource_type:'labour'} or
+  // {resource_name:'Concrete Finishing Crew'} (a real gap Poe hit live:
+  // could only offer a resource_type slice before this, no way to narrow
+  // to one named resource specifically).
   const rows = data.resource_assignments
-    .filter(a => !filter?.resource_type || a.resource_type === filter.resource_type)
-    .filter(a => !filter?.resource_name || a.resource_name === filter.resource_name)
+    .filter(a => matchesFilter(a, filter))
     .sort((a, b) => Number(b.budget) - Number(a.budget))
   return (
     <table className="w-full text-xs">
@@ -1094,9 +1134,14 @@ export function EarnedValueSummaryTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function NearCriticalWatchListWidget({ data }: WidgetProps) {
+export function NearCriticalWatchListWidget({ data, filter }: WidgetProps) {
+  // Filterable on any ScheduleActivitySummary field (2026-09-02,
+  // matchesFilter's own header), applied before the top-10-by-float
+  // slice — same "specific-entity filter guarantees inclusion" reasoning
+  // as BaselineVarianceTableWidget above.
   const rows = data.schedule_activities
     .filter(a => a.total_float_hours !== null && Number(a.total_float_hours) > 0 && Number(a.total_float_hours) <= 80)
+    .filter(a => matchesFilter(a, filter))
     .sort((a, b) => Number(a.total_float_hours) - Number(b.total_float_hours))
     .slice(0, 10)
   return (
