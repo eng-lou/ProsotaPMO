@@ -25,6 +25,9 @@ import {
 
 interface Props {
   importedObjects: ImportedObject[]
+  // Same fix as Viewport3D.tsx's own transformTick prop (2026-09-02) — see
+  // that file's Props header for the full "why."
+  transformTick: number
   timelineSceneObjects: TimelineSceneObject[]
   ifcHandles: IfcModelHandle[]
   upAxis: UpAxis
@@ -127,7 +130,7 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 // feature this module has beyond the header controls below stays owned by
 // the one real Viewport3D.
 export function ComparisonViewportPane({
-  importedObjects, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
+  importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, showEdges, ambientOcclusion, dynamicSky, showGrid,
@@ -152,7 +155,7 @@ export function ComparisonViewportPane({
   // the full "why": without this, the sun/its shadow frustum always aimed
   // at world origin regardless of where this pane's own model actually
   // sits, same "not well placed" bug as the primary viewport had).
-  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects])
+  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects, transformTick])
   const modelRadius = modelBounds.radius
   // Mirrors computeSunPosition's own internal sunRadius — see
   // Viewport3D.tsx's own sunRadius for the full "why" (needed again here

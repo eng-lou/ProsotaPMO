@@ -3673,7 +3673,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // THREE.Object3D each render, this is just the "please re-read it" signal
   // (2026-07-11 — lifted up here from a Viewport3D-local state once the
   // Transform panel moved out to a PropertiesPanel sibling, per Maro).
-  const [, setTransformTick] = useState(0)
+  // Value now also read (2026-09-02 fix, per Maro: "moved the models
+  // height... the shadows did not move with the models" — a real,
+  // independently-confirmed bug: Viewport3D's own modelBounds/sunTarget/
+  // shadow-catcher-plane placement was memoized on the `importedObjects`
+  // array's own reference identity, which a plain position/height edit
+  // never changes — it mutates the live THREE.Object3D in place, the same
+  // "read/write outside React's render cycle" pattern this whole tick
+  // exists to force a re-render around in the first place. Forwarded to
+  // Viewport3D as its own `transformTick` prop so modelBounds can finally
+  // depend on "a transform was just committed," not just "the objects
+  // array itself changed" — same shape as materializeVersion's own
+  // existing precedent for exactly this class of staleness.
+  const [transformTick, setTransformTick] = useState(0)
   // Debounced transform persistence (2026-07-11) — see
   // pendingTransformSaveRef's own declaration further down, right after
   // activeTransformObject/isElementTransform/activeIfcHandle are derived
@@ -6520,6 +6532,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       <ComparisonViewportPane
         key={index}
         importedObjects={viewportObjects}
+        transformTick={transformTick}
         timelineSceneObjects={sceneObjects}
         ifcHandles={ifcHandles}
         upAxis={settings.upAxis}
@@ -6933,6 +6946,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       key="primary"
       settings={settings}
       importedObjects={viewportObjects}
+      transformTick={transformTick}
       meshAnimWindows={meshAnimWindows}
       selectedExpressId={selectedExpressId}
       selectedExpressIds={selectedExpressIds}

@@ -451,6 +451,20 @@ export function computeSunPosition(sunAzimuth: number, sunElevation: number, mod
 interface Props {
   settings: ViewerSettings
   importedObjects: ImportedObject[]
+  // Bumped by FourD.tsx on every committed transform (gizmo drag AND
+  // TransformPanel's own numeric fields — both call the same
+  // handleTransformChange there), regardless of whether `importedObjects`
+  // itself gets a new array reference (2026-09-02 fix, per Maro: "moved
+  // the models height... the shadows did not move" — a plain position
+  // edit mutates the live THREE.Object3D in place, which FourD.tsx's own
+  // viewportObjects memo has no reason to treat as "changed" since its own
+  // dependency list is [sceneObjects, hiddenIds, isolateMode,
+  // isolatedObjectIds], none of which a transform touches). modelBounds
+  // below depends on this specifically so the sun/shadow-catcher-plane
+  // placement actually tracks where things really are, not just "the
+  // objects array's own identity changed" — same shape as
+  // materializeVersion's own existing precedent for this class of bug.
+  transformTick: number
   // A mesh import's own raw embedded-animation loop (EmbeddedAnimationLoop,
   // below), keyframeable exactly like Path/Zone/Annotation's own reveal
   // window (2026-08-22, per Maro's own follow-up: "I need to be able to
@@ -4425,7 +4439,7 @@ function ClippingSetup() {
 // re-renders both.
 
 export function Viewport3D({
-  settings, importedObjects, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
+  settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
@@ -4492,7 +4506,15 @@ export function Viewport3D({
   // not free to redo on every unrelated render. Falls back to a 20-radius
   // box centered at the origin (the old fixed default) when nothing's
   // loaded yet.
-  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects])
+  // transformTick added (2026-09-02 fix, see this component's own Props
+  // header on that field) — expandByObject reads each object's *current*
+  // matrixWorld, so this was always capable of returning the right answer;
+  // it just never got asked to run again after a plain position/height
+  // edit, since importedObjects' own array reference doesn't change for
+  // that. Recomputing on every committed transform (not every frame) keeps
+  // this the same real geometry-traversal cost it always was, just
+  // triggered correctly instead of continuously.
+  const modelBounds = useMemo(() => computeModelBounds(importedObjects), [importedObjects, transformTick])
   const modelRadius = modelBounds.radius
 
   // Shadow casting for the two element kinds the big selection/material
