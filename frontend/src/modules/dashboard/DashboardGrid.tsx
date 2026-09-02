@@ -447,6 +447,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                 {filterEditorFor === w.id && (
                   <DashboardWidgetFilterEditor
                     widget={w}
+                    data={widgetProps.data}
                     onChange={patch => updateWidgetFilter(w.id, patch)}
                     onClose={() => setFilterEditorFor(null)}
                   />

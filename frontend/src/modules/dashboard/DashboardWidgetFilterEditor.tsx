@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { FILTER_OPERATOR_LABELS, type FilterOperator } from '@/modules/scheduling/types'
 import type { DashboardFilterCondition } from '@/lib/dashboardFilters'
 import type { DashboardWidgetConfig } from '@/lib/dashboardLayouts'
+import { dashboardFieldOptions, operatorsForType, type DashboardFieldDef } from '@/lib/dashboardFilterFields'
+import type { DashboardOverviewResponse } from './types'
 
 // Direct filter editing for dashboard widgets (2026-09-02, per Maro: "you
 // cant do anything but delete them because you havent exposed the filter
@@ -14,20 +16,12 @@ import type { DashboardWidgetConfig } from '@/lib/dashboardLayouts'
 // changes later) had no fix except deleting the whole widget and asking
 // Poe to redraft it from scratch.
 //
-// Deliberately plain field/value TEXT inputs, not a per-widget-type guided
-// dropdown of real field names (the way FILTER_FIELD_DEFS drives
-// Scheduling's own ConditionRow, schedulingFilters.ts) — that registry is
-// hard-typed to Activity's own fields alone; dashboard widgets span five
-// unrelated record shapes (Risk/CostElement/ResourceAssignment/IcdItem/
-// ScheduleActivity) plus per-project-dynamic UDF names (udf.<name>), so a
-// single shared dropdown can't cover all of them without either a second,
-// larger per-widget-type field registry (a real, separately-scoped follow-
-// up if this plain version turns out too fiddly in practice) or silently
-// getting it wrong for some widget types. A free-text field name is
-// exactly what propose_create_dashboard_layout's own tool description
-// already documents per widget_type — Maro can read the same field list
-// Poe was given (this file's own header points there) rather than this UI
-// needing to duplicate it as a dropdown.
+// Field is a dropdown, not free text (2026-09-02, per Maro: "you need to
+// make this a drop down" — the plain-text version this replaced was
+// unclickable on top of being fiddly; see lib/dashboardFilterFields.ts's
+// own header for the per-widget-type field registry this now drives from,
+// including UDF options discovered live from this widget's own already-
+// fetched data rather than a fixed list).
 //
 // Local-only, same as every other widget edit in this grid (drag/resize/
 // add/remove/rename) — DashboardGrid.tsx's own "Local-only... doesn't
@@ -35,19 +29,20 @@ import type { DashboardWidgetConfig } from '@/lib/dashboardLayouts'
 // here unchanged; this component only ever calls the same setWidgets
 // updater the rest of the grid already uses.
 
-const OPERATORS: FilterOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_true', 'is_false', 'contains', 'starts_with']
-
-function emptyCondition(): DashboardFilterCondition {
-  return { field: '', operator: 'eq', value: '' }
+function emptyCondition(fields: DashboardFieldDef[]): DashboardFilterCondition {
+  return { field: fields[0]?.key ?? '', operator: 'eq', value: '' }
 }
 
-export function DashboardWidgetFilterEditor({ widget, onChange, onClose }: {
+export function DashboardWidgetFilterEditor({ widget, data, onChange, onClose }: {
   widget: DashboardWidgetConfig
+  data: DashboardOverviewResponse | undefined
   onChange: (next: Pick<DashboardWidgetConfig, 'filter' | 'filter_match_mode'>) => void
   onClose: () => void
 }) {
   const [conditions, setConditions] = useState<DashboardFilterCondition[]>(widget.filter ?? [])
   const [matchMode, setMatchMode] = useState<'all' | 'any'>(widget.filter_match_mode ?? 'all')
+
+  const fields = dashboardFieldOptions(widget.widget_type, data)
 
   const commit = (nextConditions: DashboardFilterCondition[], nextMatchMode: 'all' | 'any') => {
     setConditions(nextConditions)
@@ -62,7 +57,7 @@ export function DashboardWidgetFilterEditor({ widget, onChange, onClose }: {
     commit(conditions.filter((_, i) => i !== index), matchMode)
   }
   const addCondition = () => {
-    commit([...conditions, emptyCondition()], matchMode)
+    commit([...conditions, emptyCondition(fields)], matchMode)
   }
 
   return (
@@ -96,42 +91,59 @@ export function DashboardWidgetFilterEditor({ widget, onChange, onClose }: {
         {conditions.length === 0 && (
           <p className="text-[11px] text-gray-400 dark:text-prosota-muted">No filter — showing everything this widget normally shows.</p>
         )}
-        {conditions.map((c, i) => (
-          <div key={i} className="space-y-1 border border-gray-100 dark:border-prosota-line rounded p-1.5">
-            <div className="flex items-center gap-1">
-              <input
-                type="text"
-                value={c.field}
-                onChange={e => updateCondition(i, { field: e.target.value })}
-                placeholder="field, e.g. category or udf.Discipline"
-                className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
-              />
-              <button
-                onClick={() => removeCondition(i)}
-                title="Remove condition"
-                className="shrink-0 text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
-              >✕</button>
-            </div>
-            <div className="flex items-center gap-1">
-              <select
-                value={c.operator}
-                onChange={e => updateCondition(i, { operator: e.target.value as FilterOperator })}
-                className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
-              >
-                {OPERATORS.map(op => <option key={op} value={op}>{FILTER_OPERATOR_LABELS[op]}</option>)}
-              </select>
-              {c.operator !== 'is_true' && c.operator !== 'is_false' && (
-                <input
-                  type="text"
-                  value={c.value}
-                  onChange={e => updateCondition(i, { value: e.target.value })}
-                  placeholder="value"
+        {conditions.map((c, i) => {
+          // A condition's field can be stale (a UDF value that no longer
+          // exists in real data, or a name Poe typed that never matched
+          // anything) — always keep it selectable rather than silently
+          // reverting to the first option, so a human can see and fix
+          // exactly what's wrong.
+          const known = fields.find(f => f.key === c.field)
+          const options = known ? fields : [{ key: c.field, label: c.field ? `${c.field} (not a real field)` : '— choose a field —', type: 'text' as const }, ...fields]
+          const fieldType = known?.type ?? 'text'
+          return (
+            <div key={i} className="space-y-1 border border-gray-100 dark:border-prosota-line rounded p-1.5">
+              <div className="flex items-center gap-1">
+                <select
+                  value={c.field}
+                  onChange={e => {
+                    const nextField = fields.find(f => f.key === e.target.value)
+                    const nextOperators = operatorsForType(nextField?.type ?? 'text')
+                    updateCondition(i, {
+                      field: e.target.value,
+                      operator: nextOperators.includes(c.operator) ? c.operator : nextOperators[0],
+                    })
+                  }}
                   className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
-                />
-              )}
+                >
+                  {options.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+                <button
+                  onClick={() => removeCondition(i)}
+                  title="Remove condition"
+                  className="shrink-0 text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
+                >✕</button>
+              </div>
+              <div className="flex items-center gap-1">
+                <select
+                  value={c.operator}
+                  onChange={e => updateCondition(i, { operator: e.target.value as FilterOperator })}
+                  className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
+                >
+                  {operatorsForType(fieldType).map(op => <option key={op} value={op}>{FILTER_OPERATOR_LABELS[op]}</option>)}
+                </select>
+                {c.operator !== 'is_true' && c.operator !== 'is_false' && (
+                  <input
+                    type="text"
+                    value={c.value}
+                    onChange={e => updateCondition(i, { value: e.target.value })}
+                    placeholder="value"
+                    className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
         <button
           onClick={addCondition}
           className="w-full text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
@@ -139,7 +151,7 @@ export function DashboardWidgetFilterEditor({ widget, onChange, onClose }: {
           + Add condition
         </button>
         <p className="text-[10px] text-gray-400 dark:text-prosota-muted">
-          Field names match this widget's own underlying record — the same list Poe uses when it drafts a filtered layout. A wrong/misspelled field silently matches nothing rather than erroring.
+          Fields match this widget's own underlying record, including any of this project's own User Defined Fields found in the live data.
         </p>
       </div>
     </>
