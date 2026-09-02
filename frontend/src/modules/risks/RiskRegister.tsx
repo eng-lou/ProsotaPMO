@@ -411,12 +411,9 @@ export function RiskRegister() {
   return (
     <>
     <div className="p-8 no-print">
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Risk Register &amp; Analysis</h1>
       </div>
-      <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">
-        Risks for {selectedProject.name}. Frozen periods will become read-only once Period Manager is built.
-      </p>
 
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
