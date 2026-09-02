@@ -74,12 +74,23 @@ async def find_records(
         # unlike everything else find_records handles, which is why this
         # gets its own branch rather than joining _NAME_COLUMN's
         # period_id-scoped shape below.
+        #
+        # resource_type included in the result (2026-09-02 fix, per a real
+        # live gap Poe hit: asked to filter resource_assignments_table by
+        # type for "Concrete Finishing Crew," but that resource wasn't in
+        # get_project_snapshot's own top-10-by-committed-cost list, and
+        # find_records here didn't return type either — Poe correctly
+        # refused to guess it rather than risk an empty/wrong filter, but
+        # had no real way to actually resolve it without asking the human.
+        # Every other record_type's find_records result is just {id, name}
+        # (matching explain_causal_baseline's own generic name lookup) —
+        # this one extra field is resource-specific, not a general pattern.
         rows = (await db.execute(
-            select(Resource.id, Resource.name).where(
+            select(Resource.id, Resource.name, Resource.resource_type).where(
                 Resource.project_id == project_id, Resource.name.ilike(like),
             ).limit(20)
         )).all()
-        return {"record_type": record_type, "matches": [{"id": str(i), "name": n} for i, n in rows]}
+        return {"record_type": record_type, "matches": [{"id": str(i), "name": n, "resource_type": t} for i, n, t in rows]}
 
     if record_type not in _NAME_COLUMN:
         raise ValueError(f"Unknown record_type: {record_type}")

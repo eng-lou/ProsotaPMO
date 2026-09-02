@@ -119,7 +119,12 @@ TOOLS: list[dict] = [
             "Search for a record by name/title within one record type and get back its real "
             "id. Call this before propose_link_records or explain_causal_baseline whenever you "
             "don't already have a record's real id from get_project_snapshot — never invent or "
-            "guess one. Returns up to 20 matches."
+            "guess one. Returns up to 20 matches. For record_type='resource' specifically, each "
+            "match also includes its real resource_type (labour/equipment/material/"
+            "subcontractor/cost/crew) — use this to confirm a resource's type before setting a "
+            "resource_type filter on resource_assignments_table (in "
+            "propose_create_dashboard_layout) or a filter value on propose_create_"
+            "resource_assignments, rather than guessing from a similarly-named resource."
         ),
         "input_schema": {
             "type": "object",
@@ -384,7 +389,9 @@ TOOLS: list[dict] = [
             "get_project_snapshot — never guessed>'}\n"
             "- cost_elements_table: filter={element_group: '<exact group text, never guessed>'}\n"
             "- resource_assignments_table: filter={resource_type: 'labour'|'equipment'|"
-            "'material'|'subcontractor'|'cost'|'crew'}\n"
+            "'material'|'subcontractor'|'cost'|'crew'} and/or {resource_name: '<exact resource "
+            "name, e.g. from find_records(record_type=\"resource\") — never guessed, and never "
+            "partial>'}\n"
             "- open_items_by_owner: filter={item_type: 'issue'|'change'|'decision'}"
         ),
         "input_schema": {

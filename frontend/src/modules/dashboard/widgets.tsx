@@ -838,9 +838,14 @@ export function ResourceBudgetByCompanyWidget({ data }: WidgetProps) {
 }
 
 export function ResourceAssignmentsTableWidget({ data, filter }: WidgetProps) {
-  // Filterable (2026-09-02) — narrow to one resource_type, e.g. "labour only".
+  // Filterable (2026-09-02, resource_name added same day — a real gap Poe
+  // hit live: asked to narrow to one named resource, "Concrete Finishing
+  // Crew," and could only offer a resource_type slice since no per-resource
+  // filter existed). Exact match, not partial — same "never guess, use the
+  // real value" discipline find_records already enforces for the id itself.
   const rows = data.resource_assignments
     .filter(a => !filter?.resource_type || a.resource_type === filter.resource_type)
+    .filter(a => !filter?.resource_name || a.resource_name === filter.resource_name)
     .sort((a, b) => Number(b.budget) - Number(a.budget))
   return (
     <table className="w-full text-xs">
