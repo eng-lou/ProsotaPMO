@@ -67,8 +67,15 @@ export function DashboardWidgetFilterEditor({ widget, onChange, onClose }: {
 
   return (
     <>
-      <button className="fixed inset-0 z-30 cursor-default" onClick={onClose} tabIndex={-1} aria-label="Close filter editor" />
-      <div className="absolute top-full right-0 mt-1 z-40 w-80 bg-white dark:bg-prosota-panel border border-gray-300 dark:border-prosota-line rounded-md shadow-lg p-2.5 space-y-2">
+      <button className="fixed inset-0 z-30 cursor-default" onMouseDown={e => e.stopPropagation()} onClick={onClose} tabIndex={-1} aria-label="Close filter editor" />
+      <div
+        className="absolute top-full right-0 mt-1 z-40 w-80 bg-white dark:bg-prosota-panel border border-gray-300 dark:border-prosota-line rounded-md shadow-lg p-2.5 space-y-2"
+        onMouseDown={e => e.stopPropagation()}
+      >
+        {/* Widget header's own onMouseDown starts a drag (with preventDefault,
+            which blocks input focus) on every descendant — this popover is
+            rendered inside that header, so every row here must stop the
+            mousedown from bubbling up to it. */}
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Filter</span>
           {conditions.length > 1 && (
