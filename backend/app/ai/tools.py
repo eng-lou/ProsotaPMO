@@ -407,7 +407,7 @@ TOOLS: list[dict] = [
             "real (source_kind, element_ref, element_label) identity. Call this before "
             "propose_link_elements whenever asked to assign/link elements to an activity — there "
             "is no way to identify specific elements from chat text alone; the user must select "
-            "them in the viewport first. Only available while the 4D module is open."
+            "them in the viewport first. Only available while the BIM, Simulations & Reality Capture module is open."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -500,7 +500,7 @@ TOOLS: list[dict] = [
         "name": "highlight_elements",
         "description": (
             "Highlight the 3D elements linked to one or more activities in the currently-open "
-            "4D viewport. Only available while the 4D module is open — if you don't have this "
+            "4D viewport. Only available while the BIM, Simulations & Reality Capture module is open — if you don't have this "
             "tool, tell the user to open 4D first rather than pretending to do it. Use real "
             "activity names/codes from get_project_snapshot or find_records, never invented ones."
         ),
@@ -520,7 +520,7 @@ TOOLS: list[dict] = [
         "name": "isolate_elements",
         "description": (
             "Isolate the 3D elements linked to one or more activities in the currently-open 4D "
-            "viewport, hiding everything else. Only available while the 4D module is open — if "
+            "viewport, hiding everything else. Only available while the BIM, Simulations & Reality Capture module is open — if "
             "you don't have this tool, tell the user to open 4D first. Use real activity "
             "names/codes, never invented ones."
         ),
@@ -545,7 +545,7 @@ TOOLS: list[dict] = [
             "Switch the 4D viewport's element colouring. Only two real modes exist — "
             "'variance' (colours by schedule variance vs baseline) and 'clash' (colours "
             "elements flagged by Clash Detective) — there is no free-form colour-by-arbitrary-"
-            "criteria mode. Only available while the 4D module is open."
+            "criteria mode. Only available while the BIM, Simulations & Reality Capture module is open."
         ),
         "input_schema": {
             "type": "object",
@@ -580,7 +580,7 @@ TOOLS: list[dict] = [
 # actually offered to the model when frontend/src/modules/fourD/
 # aiFourDBridge.tsx's own context is mounted (see PoePanel.tsx's own
 # client_tools_available, orchestrator.py's own `tools` filter), since
-# these only mean anything while the 4D module is open.
+# these only mean anything while the BIM, Simulations & Reality Capture module is open.
 CLIENT_TOOL_NAMES: frozenset[str] = frozenset({
     "highlight_elements", "isolate_elements", "color_by_criteria", "run_clash_detection", "get_selected_elements",
 })

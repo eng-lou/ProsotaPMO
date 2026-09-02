@@ -252,13 +252,13 @@ const SIZE = {
 // the exact same wording so the two never drift apart.
 const POE_CAPABILITY_LINES = [
   'Schedule — dates, milestones, critical path',
-  'Risk register and risk scoring',
+  'Risk Register — risk scoring, EMV, threats vs opportunities',
   'Resources — assignments and committed cost',
-  'Cost and earned value (CPI/SPI, EAC)',
-  'ICD — issues, changes, decisions',
+  'Cost & Quantity Takeoff — earned value (CPI/SPI, EAC), BOQ',
+  'Issues, Changes & Decisions — reads only for now, can\'t draft new ones yet',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
-  'On the 4D page: highlight, isolate, colour, or set up and run a clash test between two selections',
-  'Ask it to draft new risks, activities, links, relationships, or element assignments — you approve before anything saves',
+  'On the BIM/Reality Capture page: highlight, isolate, colour, or set up and run a clash test between two selections',
+  'Ask it to draft new risks, activities, relationships, or links between records/3D elements and an activity — you approve before anything saves',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 
