@@ -871,7 +871,7 @@ export function CostPlan() {
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Cost Plan</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Cost &amp; Quantity Takeoff</h1>
       </div>
       <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">
         Cost elements for {selectedProject.name}. Percentage elements (Prelims, Contingency, etc.) compute automatically from the fixed subtotal.

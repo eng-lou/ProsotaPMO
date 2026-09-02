@@ -389,7 +389,7 @@ export function IcdTracker() {
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">ICD Tracker</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Issues, Changes &amp; Decisions</h1>
       </div>
       <p className="text-gray-500 dark:text-prosota-muted text-sm mb-6">Issues, changes, and decisions for {selectedProject.name}.</p>
 

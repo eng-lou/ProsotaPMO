@@ -13,12 +13,12 @@ import { ProsotaLogo } from './ProsotaLogo'
 // this same route->label mapping rather than duplicating it, so the
 // browser tab title and this nav list can never drift out of sync.
 export const NAV = [
-  { to: '/dashboard', label: 'Controls Dashboard' },
-  { to: '/scheduling', label: 'Scheduling' },
-  { to: '/4d', label: '4D' },
-  { to: '/risks', label: 'Risk Register' },
-  { to: '/costs', label: 'Cost Plan' },
-  { to: '/icd', label: 'ICD Tracker' },
+  { to: '/dashboard', label: 'Reporting & Controls' },
+  { to: '/scheduling', label: 'Scheduling & Resourcing' },
+  { to: '/4d', label: 'BIM Coordination & Animations' },
+  { to: '/risks', label: 'Risk Register & Analysis' },
+  { to: '/costs', label: 'Cost & Quantity Takeoff' },
+  { to: '/icd', label: 'Issues, Changes & Decisions' },
 ]
 
 export function Sidebar() {

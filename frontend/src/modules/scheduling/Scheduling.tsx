@@ -2393,7 +2393,7 @@ export function Scheduling() {
     <>
     <div className="p-8 no-print">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Scheduling</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Scheduling &amp; Resourcing</h1>
       </div>
 
       {(error || periodError) && (

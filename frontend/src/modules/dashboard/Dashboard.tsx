@@ -11,7 +11,7 @@ export function Dashboard() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Controls Dashboard</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Reporting &amp; Controls</h1>
       </div>
 
       <div className="flex gap-1 border-b border-gray-200 dark:border-prosota-line">
