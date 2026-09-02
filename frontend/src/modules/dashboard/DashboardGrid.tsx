@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useActiveDashboardConfig, useDashboardLayouts, type DashboardWidgetConfig } from '@/lib/dashboardLayouts'
-import { WIDGET_CATEGORIES, WIDGET_REGISTRY, type WidgetProps } from './widgets'
+import { DashboardWidgetFilterEditor } from './DashboardWidgetFilterEditor'
+import { FILTERABLE_WIDGET_TYPES, WIDGET_CATEGORIES, WIDGET_REGISTRY, type WidgetProps } from './widgets'
 
 interface DashboardGridProps {
   projectId: string | undefined
@@ -169,6 +170,11 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
+  // Which widget's filter popover is open (2026-09-02, per Maro: "you need
+  // to be able to expose the parameters driving the dashboards so users
+  // may edit" — see DashboardWidgetFilterEditor.tsx's own header). At most
+  // one at a time, same convention as layoutMenuOpen/addMenuOpen above.
+  const [filterEditorFor, setFilterEditorFor] = useState<string | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [livePixels, setLivePixels] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
 
@@ -263,6 +269,10 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   }
 
   const removeWidget = (id: string) => setWidgets(prev => prev.filter(w => w.id !== id))
+  // Local-only, same as every other edit here — see
+  // DashboardWidgetFilterEditor.tsx's own header for the full "why."
+  const updateWidgetFilter = (id: string, patch: Pick<DashboardWidgetConfig, 'filter' | 'filter_match_mode'>) =>
+    setWidgets(prev => prev.map(w => (w.id === id ? { ...w, ...patch } : w)))
 
   const addWidget = (widgetType: string) => {
     const maxY = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0)
@@ -408,18 +418,39 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
               style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, transition: isDragging ? 'none' : 'left 120ms, top 120ms' }}
             >
               <div
-                className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0 cursor-move select-none"
+                className="relative flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0 cursor-move select-none"
                 onMouseDown={startDrag(w, 'move')}
               >
                 <span className="text-xs font-bold text-gray-700 dark:text-prosota-muted">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</span>
+                {FILTERABLE_WIDGET_TYPES.has(w.widget_type) && (
+                  <button
+                    onMouseDown={e => e.stopPropagation()}
+                    onClick={() => setFilterEditorFor(filterEditorFor === w.id ? null : w.id)}
+                    title="Filter this widget"
+                    className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                      w.filter && w.filter.length > 0
+                        ? 'text-prosota-accent font-bold'
+                        : 'text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
+                    }`}
+                  >
+                    Filter{w.filter && w.filter.length > 0 ? ` (${w.filter.length})` : ''}
+                  </button>
+                )}
                 <button
                   onMouseDown={e => e.stopPropagation()}
                   onClick={() => removeWidget(w.id)}
                   title="Remove"
-                  className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
+                  className={FILTERABLE_WIDGET_TYPES.has(w.widget_type) ? 'text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400' : 'ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400'}
                 >
                   ✕
                 </button>
+                {filterEditorFor === w.id && (
+                  <DashboardWidgetFilterEditor
+                    widget={w}
+                    onChange={patch => updateWidgetFilter(w.id, patch)}
+                    onClose={() => setFilterEditorFor(null)}
+                  />
+                )}
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-3">
                 {WIDGET_REGISTRY[w.widget_type]

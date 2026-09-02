@@ -1512,6 +1512,19 @@ export interface WidgetDefinition {
 
 // Adding a future widget (S-curve, AI baseline insight, ...) is one entry
 // here — DashboardGrid.tsx's own grid/drag/resize mechanics never change.
+// Widget types that actually read filterConditions/filterMatchMode
+// (2026-09-02) — kept as one shared list so DashboardGrid.tsx's own
+// per-widget "Filter" button only appears where it does something, rather
+// than on all ~45 registry entries. Must stay in sync with
+// propose_create_dashboard_layout's own enumerated field lists
+// (backend/app/ai/tools.py) — that's the authoritative source for which
+// widget_types support a filter at all.
+export const FILTERABLE_WIDGET_TYPES = new Set([
+  'top_risks', 'risk_register_table', 'cost_elements_table', 'resource_assignments_table',
+  'open_items_by_owner', 'baseline_variance_table', 'critical_activities_table',
+  'near_critical_watch_list', 'milestones_table',
+])
+
 export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   kpi_strip: { label: 'KPI Strip', category: 'Overview', defaultSize: { w: 12, h: 2 }, render: props => <KpiStripWidget {...props} /> },
   schedule_performance: { label: 'Schedule Performance', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <SchedulePerformanceWidget {...props} /> },
