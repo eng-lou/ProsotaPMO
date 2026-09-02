@@ -94,6 +94,18 @@ Commands are grouped by tool. Within each group, the most commonly used ones are
 |---|---|
 | `[System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("file.fbx"))` piped through `[regex]::Matches($text, "[\x20-\x7e]{5,}")` (PowerShell) | Linux/Mac have a built-in `strings` command that pulls out every readable chunk of text buried in a binary file; Windows doesn't. This is the PowerShell equivalent — read the whole file as raw bytes, decode it as plain ASCII text (garbled everywhere except the readable parts), then use a regex to pull out every run of 5+ normal keyboard characters in a row. Used to confirm a `.fbx` character model's own embedded material settings (its "ShadingModel" was literally the text `Phong`) without needing to actually load the file in a 3D program — the fastest way to check what a binary file *actually* contains instead of guessing from its file extension. |
 
+## sed (Git Bash's own bulk find-and-replace tool)
+
+| Command | What it does |
+|---|---|
+| `sed -i 's/old text/new text/g' <file>` (run through Git Bash, not PowerShell) | Rewrites a file in place, replacing every occurrence of one exact bit of text with another. Used to mechanically apply the same small code change (wiring a new filter feature into a widget) across nine near-identical widget functions in one file, rather than editing each by hand and risking one being typo'd differently from the rest. |
+
+## Testing a backend service script directly against a real external API
+
+| Command | What it does |
+|---|---|
+| `python -c "import asyncio; asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)"` | Runs an async Python script with a specific kind of event loop instead of Windows' default one. Needed here because `psycopg` (the library the backend uses to talk to Postgres) refuses to run on Windows' default "ProactorEventLoop" — asking for `SelectorEventLoop` instead is the fix. Used to test the Gemini AI image API directly, outside the full running app, to get the real underlying error message (a `429 RESOURCE_EXHAUSTED, limit: 0` billing issue) instead of the generic `502` the app itself was showing. |
+
 ## Docker (not currently in active use on this machine)
 
 | Command | What it does |

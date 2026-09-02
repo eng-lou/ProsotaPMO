@@ -4966,3 +4966,265 @@ real and recurring failure pattern in this codebase's 3D rendering layer
 — worth specifically checking for whenever a "the effect just doesn't
 show up" bug involves anything that updates continuously (shadows,
 animation, live-dragged transforms).
+
+## 2026-08-31/09-01 — Introducing Poe, an AI assistant built into the app
+
+A new feature: a floating, draggable chat panel (launch button in the
+bottom corner of every screen) backed by Claude, named "Poe" — short for
+"Planning Operations Expert," after the AI character in Altered Carbon.
+Ask it about the project (schedule dates, milestones, critical path,
+resources, cost/EVM, risks, issues) and it answers using the project's
+own real data, not a guess — it has a set of "read" tools that pull live
+numbers the same way the dashboard does. It can also read attached
+images, PDFs, and spreadsheets you drop into the chat.
+
+Poe can also draft changes — new risks, new schedule activities, links
+between records — but never saves anything on its own. Every draft shows
+up as a review card you have to explicitly approve; only then does it
+call the exact same save endpoint the regular UI buttons use. This was a
+deliberate choice: Poe's own introduction message promises it never
+writes directly, and every proposal tool built since sticks to that rule.
+
+One real bug from this build: Poe kept reporting "0 milestones" on
+schedules that clearly had milestones (M-0001, etc.) — the underlying
+database check was looking for a value that has never actually existed
+in this app's real data (milestones are stored as "start_milestone" or
+"finish_milestone," not a plain "milestone"). Caught by comparing Poe's
+answer against the real Scheduling screen, not by code review — a
+reminder that these are exactly the kind of wrong-but-confident answers
+worth double-checking rather than trusting outright.
+
+## 2026-09-01 — Poe learns to reassign schedule links, tie 3D elements to activities, and run clash tests
+
+Three more things Poe couldn't do yet, all real gaps rather than a
+prompting problem: reassign a predecessor/successor relationship in the
+schedule, link a selected 3D element to an activity, and run a clash test
+between two groups of elements. All three needed the same missing piece
+first — a way for Poe to know exactly which 3D elements you currently
+have selected in the viewport, since those are identified internally by
+an opaque IFC ID or filename, never something you'd type by name. Built
+that as a new tool Poe can call, then built the three follow-on actions
+on top of it, each still going through the same "draft it, you approve
+it, then it uses the real save endpoint" pattern as everything else.
+
+The clash-test one needed a genuinely new trick: actually running a
+clash test needs the live 3D model loaded in your browser, which the
+assistant's normal "ask the server, get an answer" loop can't reach. So
+approving that particular kind of proposal calls a function directly
+inside the 4D module itself, skipping the usual round trip to the AI
+service entirely — the only proposal type in the whole assistant that
+works this way.
+
+## 2026-09-01 — Making the Baseline Comparison view actually match what the live 3D view looks like
+
+The Baseline Comparison screen shows two side-by-side 3D views (before
+and after a baseline) so you can visually compare progress. Several
+display settings that the main 4D viewport already respects — render
+mode, edges, sky, grid, which elements are isolated, shadows, ambient
+occlusion — weren't being applied to these comparison panes at all, or
+were applied inconsistently, so the comparison views could look flatter
+or differently lit than the real model. Fixed across several passes so
+both panes now render with the same settings as the live viewport. Also
+gave each pane its own title (instead of one shared title for both), and
+separated the project's narrative text from the Gantt/Table panels so
+editing one no longer moves the other around.
+
+## 2026-09-01/09-02 — AI Enhance for exported stills, and a second "concept render" mode
+
+Added an optional "AI Enhance" checkbox to the render/capture settings
+for exported still images. Turned on, an exported image gets run through
+Real-ESRGAN (via a service called fal.ai) right after capture — a
+sharpening/upscaling model that can only refine detail that's genuinely
+already there, never invent anything, which matters for an engineering
+tool where a fabricated-looking detail could get mistaken for real model
+data. One real bug: the raw capture has a transparent background behind
+the model, which is invisible normally, but the upscaling service
+flattens transparency to black before processing it — so enhanced images
+came back with a solid black background. Fixed by filling that
+transparency with white ourselves before sending it.
+
+Then a live side-by-side test showed the honest limit of that approach:
+on a flat, CAD-style building shell with no real surface texture, and on
+a Google 3D Tiles closeup where the underlying geometry itself is
+low-detail, Real-ESRGAN had barely anything to sharpen — there's no
+hidden texture to recover. Testing the same two images through a
+general-purpose AI image generator (Gemini) instead gave a dramatically
+better-looking, photorealistic result — but by inventing things: added
+trees, weathered brick, cars, specific sky conditions, none of it real
+model data. Rather than switch to that and lose accuracy, it was added as
+a second, separate, opt-in mode ("Concept Render") alongside the original
+faithful one, with a hard rule baked into the request sent to the AI:
+never add, remove, or move anything not already in the picture, edit like
+a photo retoucher would, not by inventing content — an optional extra
+instruction from you can add to that rule, never replace it. Every
+concept-render image also gets a mandatory "AI-GENERATED CONCEPT — NOT
+MODEL DATA" banner burned into the image itself, not just shown on
+screen, so it can never be silently reused as if it were a real capture.
+Both modes are live and can also be chained (concept render's output
+automatically run through the faithful upscaler afterward, since the AI
+generator's own images are usually a smaller size than what you'd want to
+export).
+
+## 2026-09-02 — Two Site Context (Google 3D Tiles) improvements
+
+Two related fixes to how the app displays Google's real-world 3D map
+tiles ("Site Context"):
+
+First, added sliders in the 3D View Properties panel that control how
+aggressively the tile viewer fetches and keeps finer detail as you zoom
+in, and how much tile data it's allowed to hold in memory before throwing
+older tiles away. These are real, previously-hidden settings inside the
+tile-rendering library, not new capability — worth knowing they can only
+make the app *more willing* to show detail Google has actually published
+for that spot. If Google's own map data for a location is simply
+low-detail (a common case for trees and small objects), no setting here
+can conjure detail that was never captured.
+
+Second, a new "Tile Cutout" feature: pick one of your existing Zones (the
+same polygon tool already used elsewhere in the app) and the Site Context
+tiles get invisibly clipped away inside that zone's footprint, so your
+own IFC or 3D model can sit visibly in the gap instead of being hidden
+behind (or fighting with) Google's real-world tile geometry — useful for
+showing a planned building in its actual real-world surroundings. This
+first version only supports one cutout at a time, and the zone's shape
+has to be convex (no inward-caving corners) — a concave shape gets a
+warning rather than a silently wrong-looking cut. If that turns out to be
+too limiting, the agreed next step is a more complex version that can
+handle any shape.
+
+## 2026-09-02 — Renaming the app's modules to describe what they actually do now
+
+Several of the app's main navigation sections had names that no longer
+matched what they'd grown into, so they were renamed: "Controls
+Dashboard" became "Reporting & Controls," "Scheduling" became "Scheduling
+& Resourcing," "Cost Plan" became "Cost & Quantity Takeoff," "Risk
+Register" became "Risk Register & Analysis," "ICD Tracker" became
+"Issues, Changes & Decisions," and — after some back-and-forth about it
+undervaluing everything that module has grown into (point clouds, Google
+3D Tiles, 5D sequencing, not just "3D plus a schedule") — "4D" became
+"BIM, Simulations & Reality Capture." Updated in the sidebar navigation,
+each module's own page heading, and the descriptive text on the home
+page. Also removed a repetitive "for {project name}" line that was
+showing under three page headings (Cost, ICD, Risk) now that the project
+name is already shown elsewhere on screen.
+
+## 2026-09-02 — Poe gets a Resources tool, and an honest list of what it still can't do
+
+Asked whether Poe could also work with Resources (labour, equipment,
+material, and subcontractor assignments on activities), and whether it
+could build a custom dashboard layout from a plain-English request.
+Building the Resources part turned up a real, smaller gap along the way:
+when asked to build something around a specific named resource
+("Concrete Finishing Crew"), Poe couldn't confirm which type of resource
+that actually was, since the quick project summary it reads only lists
+the top handful by name. Fixed by giving its record-lookup tool the
+ability to also return a resource's type when searching by name, and
+adding a new proposal tool so Poe can now draft resource assignments the
+same "you approve, then it saves for real" way everything else works.
+
+Separately, since this same day's module renaming (above) hadn't been
+reflected in what Poe itself knows about the app, its own internal
+knowledge and the tooltips shown to users were refreshed — and instead of
+letting it silently guess, an explicit note was added to its own
+instructions listing exactly what it can and can't create yet: Risk and
+Scheduling both have full create support, but Cost and ICD (Issues,
+Changes & Decisions) are currently read-only for Poe, so it now says so
+plainly rather than pretending to route the request through a different
+tool that doesn't actually do what was asked.
+
+## 2026-09-02 — Letting Poe build custom dashboards, and getting the filtering right after three real corrections
+
+The Controls Dashboard already has 45+ pre-built visual "widgets" (charts,
+tables, KPI tiles). The ask was for Poe to build custom dashboard layouts
+on request — but a brand-new widget type genuinely can't be created from
+a plain-English prompt without generating and running new code live,
+which this app deliberately never does anywhere for safety reasons. The
+workable version instead: Poe assembles a NEW layout out of the EXISTING
+widgets, optionally filtered, and you apply it yourself from the layout
+picker once you like it (it's never applied automatically).
+
+Getting that filtering right took three real rounds, each triggered by a
+genuine gap found in live testing rather than something guessed up front:
+
+Round one let each widget filter on a small, hand-picked list of fields
+(e.g. "risk type" for the risk table). That broke immediately on a real
+request for one specific NAMED resource — hand-picking which fields are
+filterable can never anticipate every reasonable request. Round two made
+filtering fully generic (any real field on the underlying record,
+equals-match only) — better, but still couldn't express "more than,"
+"less than," or a whole branch of the schedule's WBS breakdown at once.
+Round three rebuilt it a third time on top of the exact same filter
+language the Scheduling module's own Filters/Highlights already use (a
+field, a comparison like equals/greater-than/contains, and a value) —
+reusing something already proven, rather than a third weaker
+reinvention. That same round also connected dashboard filtering to this
+project's own custom "User Defined Fields" (like a "Discipline" field),
+the same real data the Radial Chart widget already uses for its own
+scoping — so a request like "activities where Discipline is HVAC" now
+genuinely works, using real project data rather than an invented field.
+
+## 2026-09-02 — Fixing "Select Linked" + reduced opacity in the 4D module
+
+Reported bug: select an element (e.g. a window), use "Select Linked" to
+also select every other element sharing its material, lower the opacity
+slider — only the originally-clicked element actually became transparent,
+even though "Apply to Linked" wasn't greyed out and the whole set was
+genuinely selected. The cause: for performance, most repeated elements in
+a big model are drawn as one shared, batched chunk rather than as
+individually-editable pieces — a specific element only becomes
+individually editable the moment something actually needs to change just
+that one. Select Linked was correctly finding every matching element, but
+never doing that "make this one individually editable" step for the ones
+that were still part of the shared batch, so the opacity change silently
+had nothing of its own to apply to. Fixed by doing that conversion for
+every linked match at the moment you click Select Linked, rather than
+continuously during the slider drag (which had caused a real slowdown the
+last time this exact conversion was tried mid-drag, in an earlier
+session).
+
+## 2026-09-02 — Letting you edit a dashboard widget's own filter directly, plus two bugs found by testing it live
+
+A real, reported gap: a Poe-generated dashboard had two widgets both
+filtered on "Discipline = MEP," but the actual project data used "HVAC,"
+so both came up empty — and there was no way to fix that except deleting
+the whole widget and asking Poe to try again, since nothing in the
+dashboard grid could show or edit a widget's own filter once it existed.
+Added a "Filter" button to every widget that supports one, opening a
+small panel to add, edit, or remove filter conditions and choose whether
+all of them or just any one of them needs to match — all changes stay
+local to your current view until you explicitly save the layout, same as
+moving or resizing a widget.
+
+Two real bugs turned up immediately once this was actually clicked on:
+
+First, clicking into the filter panel's own text boxes didn't work at
+all — it just felt like you were dragging the whole widget around
+instead. The cause: the panel is drawn inside the same draggable header
+bar as the widget's title, and that bar's own "start dragging" logic runs
+on every click anywhere inside it, including inside the filter panel,
+and was silently blocking the browser's normal "click a text box to type
+in it" behaviour before it could ever happen. Fixed by telling the filter
+panel to keep its own clicks to itself.
+
+Second, per direct feedback, the "which field to filter on" box was a
+plain text field — easy to mistype (exactly how "MEP" vs "HVAC" happened
+in the first place). Replaced it with a proper dropdown listing the real
+fields available for each widget's kind of data, including this
+project's own custom fields (like "Discipline") — and those custom-field
+options are read live from the actual current data, not a fixed list, so
+whatever shows up in the dropdown is guaranteed to be something real
+right now. Picking a field also narrows down the list of comparison
+options shown next to it (no "greater than" offered for a text field, for
+example).
+
+Separately, using the dashboard's WBS scope picker (top right of the
+Overview screen — narrows every widget down to one part of the schedule)
+turned out to wipe out any unsaved filter edits and made the whole
+dashboard flash and rebuild itself. The real cause: picking a WBS scope
+re-fetches the dashboard's data, and the screen was set up to hide the
+entire dashboard behind a "Loading…" message every single time that
+happens, not just on the very first visit — which fully tears down and
+rebuilds the dashboard grid, discarding anything changed that wasn't
+explicitly saved yet. Fixed so only the very first load shows that full
+loading screen; a WBS pick now just dims the dashboard briefly with a
+small "Refreshing…" label while it stays fully intact underneath.
