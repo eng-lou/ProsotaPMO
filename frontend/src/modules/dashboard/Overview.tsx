@@ -59,7 +59,7 @@ export function Overview() {
       .finally(() => setLoading(false))
   }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId])
 
-  if (periodLoading || scheduleLoading || loading || !data) {
+  if (periodLoading || scheduleLoading || !data) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
 
@@ -67,6 +67,20 @@ export function Overview() {
     <div className="space-y-6">
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-3 text-sm">
+          {/* 2026-09-02, per Maro: "using the general wbs filter at the top
+              right just messed up the whole dashboard... the filter edits on
+              the critical activities one was just wiped" — this used to gate
+              on `loading` too, which is true on every WBS/period refetch, not
+              just the very first load. That unmounted DashboardGrid on every
+              WBS pick, discarding its own local widgets state (drag/resize/
+              add/remove/filter edits, all local-only until "Save current
+              as…") and re-seeding fresh from the server on remount, silently
+              reverting any unsaved edit. Now gated on `data` alone (set once
+              and never reset to null on refetch) so DashboardGrid stays
+              mounted across a WBS change — only its widgetProps.data prop
+              updates in place — and a lightweight "Refreshing…" label covers
+              the "still fetching" case instead of unmounting the whole grid. */}
+          {loading && <span className="text-xs text-gray-400 dark:text-prosota-muted">Refreshing…</span>}
           <div className="w-56">
             <ActivityPicker
               activities={wbsNodes}
@@ -87,10 +101,12 @@ export function Overview() {
         </div>
       </div>
 
-      <DashboardGrid
-        projectId={selectedProject?.id}
-        widgetProps={{ data, onNavigateToRisks: () => navigate('/risks'), projectId: selectedProject?.id }}
-      />
+      <div className={loading ? 'opacity-60 pointer-events-none transition-opacity' : 'transition-opacity'}>
+        <DashboardGrid
+          projectId={selectedProject?.id}
+          widgetProps={{ data, onNavigateToRisks: () => navigate('/risks'), projectId: selectedProject?.id }}
+        />
+      </div>
     </div>
   )
 }
