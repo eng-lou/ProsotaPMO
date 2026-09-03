@@ -175,6 +175,14 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   // may edit" — see DashboardWidgetFilterEditor.tsx's own header). At most
   // one at a time, same convention as layoutMenuOpen/addMenuOpen above.
   const [filterEditorFor, setFilterEditorFor] = useState<string | null>(null)
+  // Pop-out/expand (2026-09-03, per Maro: "an icon to click and pop out/
+  // immediately expand that a dashboard [widget]") — a widget tile is
+  // often too small to read comfortably (a stacked Milestone Timeline with
+  // several close-together dates, a long table) without permanently
+  // resizing it in the saved layout. At most one expanded at a time, same
+  // convention as filterEditorFor/layoutMenuOpen/addMenuOpen above.
+  const [expandedWidgetId, setExpandedWidgetId] = useState<string | null>(null)
+  const expandedWidget = widgets.find(w => w.id === expandedWidgetId) ?? null
   const [drag, setDrag] = useState<DragState | null>(null)
   const [livePixels, setLivePixels] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
 
@@ -422,12 +430,20 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                 onMouseDown={startDrag(w, 'move')}
               >
                 <span className="text-xs font-bold text-gray-700 dark:text-prosota-muted">{WIDGET_REGISTRY[w.widget_type]?.label ?? w.widget_type}</span>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => setExpandedWidgetId(w.id)}
+                  title="Expand"
+                  className="ml-auto text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper"
+                >
+                  ⤢
+                </button>
                 {FILTERABLE_WIDGET_TYPES.has(w.widget_type) && (
                   <button
                     onMouseDown={e => e.stopPropagation()}
                     onClick={() => setFilterEditorFor(filterEditorFor === w.id ? null : w.id)}
                     title="Filter this widget"
-                    className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                    className={`text-xs px-1.5 py-0.5 rounded ${
                       w.filter && w.filter.length > 0
                         ? 'text-prosota-accent font-bold'
                         : 'text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
@@ -440,7 +456,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                   onMouseDown={e => e.stopPropagation()}
                   onClick={() => removeWidget(w.id)}
                   title="Remove"
-                  className={FILTERABLE_WIDGET_TYPES.has(w.widget_type) ? 'text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400' : 'ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400'}
+                  className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
                 >
                   ✕
                 </button>
@@ -469,6 +485,55 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
           )
         })}
       </div>
+
+      {expandedWidget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-8"
+          onClick={() => setExpandedWidgetId(null)}
+        >
+          <div
+            className="relative w-full max-w-5xl h-full max-h-[85vh] bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="relative flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0">
+              <span className="text-sm font-bold text-gray-700 dark:text-prosota-muted">{WIDGET_REGISTRY[expandedWidget.widget_type]?.label ?? expandedWidget.widget_type}</span>
+              {FILTERABLE_WIDGET_TYPES.has(expandedWidget.widget_type) && (
+                <button
+                  onClick={() => setFilterEditorFor(filterEditorFor === expandedWidget.id ? null : expandedWidget.id)}
+                  title="Filter this widget"
+                  className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                    expandedWidget.filter && expandedWidget.filter.length > 0
+                      ? 'text-prosota-accent font-bold'
+                      : 'text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
+                  }`}
+                >
+                  Filter{expandedWidget.filter && expandedWidget.filter.length > 0 ? ` (${expandedWidget.filter.length})` : ''}
+                </button>
+              )}
+              <button
+                onClick={() => setExpandedWidgetId(null)}
+                title="Close"
+                className={FILTERABLE_WIDGET_TYPES.has(expandedWidget.widget_type) ? 'text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400' : 'ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400'}
+              >
+                ✕
+              </button>
+              {filterEditorFor === expandedWidget.id && (
+                <DashboardWidgetFilterEditor
+                  widget={expandedWidget}
+                  data={widgetProps.data}
+                  onChange={patch => updateWidgetFilter(expandedWidget.id, patch)}
+                  onClose={() => setFilterEditorFor(null)}
+                />
+              )}
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto p-4">
+              {WIDGET_REGISTRY[expandedWidget.widget_type]
+                ? <MemoWidget renderFn={WIDGET_REGISTRY[expandedWidget.widget_type].render} widgetProps={widgetProps} filterConditions={expandedWidget.filter} filterMatchMode={expandedWidget.filter_match_mode} />
+                : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

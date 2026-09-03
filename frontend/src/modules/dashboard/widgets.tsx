@@ -141,8 +141,17 @@ export function RiskOverviewWidget({ data }: WidgetProps) {
 
 export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const milestones = data.milestones.filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+  // pt-4 (2026-09-03, per Maro: "top buffer for the milestone timeline") —
+  // MilestoneTrack's own topmost label sits at a fixed offset above its
+  // internal axis, which is itself vertically centred within a container
+  // whose height is usually pinned at BASE_MIN_HEIGHT (single-row case) —
+  // so shrinking the widget tile down toward that minimum leaves almost no
+  // visible gap between this header and the first label. Adding padding
+  // here (outside MilestoneTrack's own layout math) pushes the whole track
+  // down by a fixed amount without touching its internal dot/label/axis
+  // spacing logic.
   return (
-    <div className="h-full overflow-auto">
+    <div className="h-full overflow-auto pt-4">
       <MilestoneTrack milestones={milestones} />
     </div>
   )
