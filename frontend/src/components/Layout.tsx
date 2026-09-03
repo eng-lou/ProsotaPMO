@@ -1,10 +1,19 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AiMessage } from '@/lib/aiAssistant'
 import { AiFourDBridgeProvider } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
-import { PoePanel } from './PoePanel'
 import { NAV, Sidebar } from './Sidebar'
+
+// Lazy (2026-09-03 perf pass, per Maro: "switching between modules...
+// takes a longer time") — PoePanel pulls in aiAttachments.ts's own `xlsx`
+// (SheetJS, genuinely heavy) for spreadsheet attachments, plus its own
+// chat/tool-call UI. Layout wraps every routed page, so a static import
+// here put all of that in the one shared chunk every visitor downloads on
+// first load, whether or not they ever open Poe — same root cause, and same
+// fix, as App.tsx's own per-route lazy imports (named export, hence the
+// same .then() adapter React.lazy needs).
+const PoePanel = lazy(() => import('./PoePanel').then(m => ({ default: m.PoePanel })))
 
 // Dynamic browser tab title (2026-07-25, quality-of-life pass alongside the
 // branding/theme work — confirmed via grep that document.title was never
@@ -70,12 +79,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
         )}
         {poeOpen && selectedProject && (
-          <PoePanel
-            projectId={selectedProject.id}
-            onClose={() => setPoeOpen(false)}
-            messages={poeMessages}
-            onMessagesChange={setPoeMessages}
-          />
+          <Suspense fallback={null}>
+            <PoePanel
+              projectId={selectedProject.id}
+              onClose={() => setPoeOpen(false)}
+              messages={poeMessages}
+              onMessagesChange={setPoeMessages}
+            />
+          </Suspense>
         )}
       </div>
     </AiFourDBridgeProvider>

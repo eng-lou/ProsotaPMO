@@ -1016,12 +1016,25 @@ async def get_risk_emv_trend(db: AsyncSession, period_id: uuid.UUID) -> RiskEmvT
         .order_by(RiskBaseline.baseline_date.asc(), RiskBaseline.created_at.asc())
     )).scalars().all()
 
+    # One batched query for every baseline's items, not one query per
+    # baseline (2026-09-03 perf pass, per Maro: "switching between modules
+    # and sometime clicking a particular process takes a longer time on
+    # main/production" — this trend chart was doing N sequential round trips
+    # to the DB, cheap over a low-latency local connection but genuinely slow
+    # against production's real network RTT to Neon; same fix applied to the
+    # other 3 trend charts and matches get_milestone_trend's own established
+    # batching pattern below).
+    snapshots_by_baseline: dict[uuid.UUID, list[RiskBaselineItem]] = {b.id: [] for b in baselines}
+    if baselines:
+        all_snapshots = (await db.execute(
+            select(RiskBaselineItem).where(RiskBaselineItem.baseline_id.in_([b.id for b in baselines]))
+        )).scalars().all()
+        for s in all_snapshots:
+            snapshots_by_baseline[s.baseline_id].append(s)
+
     points = []
     for b in baselines:
-        snapshots = (await db.execute(
-            select(RiskBaselineItem).where(RiskBaselineItem.baseline_id == b.id)
-        )).scalars().all()
-        open_snapshots = [s for s in snapshots if s.status != "closed"]
+        open_snapshots = [s for s in snapshots_by_baseline[b.id] if s.status != "closed"]
         emv_cost_total = sum((s.emv_cost for s in open_snapshots if s.emv_cost is not None), Decimal(0))
         emv_days_total = sum((s.emv_schedule_days for s in open_snapshots if s.emv_schedule_days is not None), Decimal(0))
         points.append(RiskEmvTrendPoint(
@@ -1060,13 +1073,19 @@ async def get_cost_performance_trend(db: AsyncSession, period_id: uuid.UUID) -> 
         .order_by(CostBaseline.baseline_date.asc(), CostBaseline.created_at.asc())
     )).scalars().all()
 
+    # Batched (see get_risk_emv_trend's own comment above for why).
+    snapshots_by_baseline: dict[uuid.UUID, list[CostBaselineItem]] = {b.id: [] for b in baselines}
+    if baselines:
+        all_snapshots = (await db.execute(
+            select(CostBaselineItem).where(CostBaselineItem.baseline_id.in_([b.id for b in baselines]))
+        )).scalars().all()
+        for s in all_snapshots:
+            snapshots_by_baseline[s.baseline_id].append(s)
+
     points = []
     for b in baselines:
-        snapshots = (await db.execute(
-            select(CostBaselineItem).where(CostBaselineItem.baseline_id == b.id)
-        )).scalars().all()
         bac_total = ac_total = ev_total = Decimal(0)
-        for s in snapshots:
+        for s in snapshots_by_baseline[b.id]:
             bac_total += s.bac
             ac_total += s.ac or Decimal(0)
             if s.pct_complete is not None:
@@ -1113,17 +1132,43 @@ async def get_spi_trend(db: AsyncSession, project_id: uuid.UUID) -> SpiTrendResp
         .order_by(BaselineSet.baseline_date.asc(), BaselineSet.created_at.asc())
     )).scalars().all()
 
+    # Batched: one query for every set's own ScheduleBaseline, one for all
+    # their ScheduleBaselineActivity snapshots — not 2 round trips per set
+    # (see get_risk_emv_trend's own comment for why this matters on
+    # production). _baseline_schedule_spi itself still runs once per relevant
+    # BaselineSet below (its own internal CostBaseline/CostElement lookups
+    # aren't batched here — same function Baseline Comparison already calls
+    # for exactly one set at a time, left as-is rather than risk that proven
+    # path; SPI trend's real-world baseline-set count is typically small
+    # since "Capture All Now" is a deliberate, occasional action, unlike
+    # Risk/Cost/ICD's own more-frequent baselines).
+    sched_baselines_by_set: dict[uuid.UUID, ScheduleBaseline] = {}
+    if baseline_sets:
+        set_ids = [bset.id for bset in baseline_sets]
+        all_sched_baselines = (await db.execute(
+            select(ScheduleBaseline).where(ScheduleBaseline.baseline_set_id.in_(set_ids))
+            .order_by(ScheduleBaseline.created_at.desc())
+        )).scalars().all()
+        for sb in all_sched_baselines:
+            sched_baselines_by_set.setdefault(sb.baseline_set_id, sb)  # first (most recent) wins
+
+        sched_baseline_ids = [sb.id for sb in sched_baselines_by_set.values()]
+        snapshots_by_sched_baseline: dict[uuid.UUID, list[ScheduleBaselineActivity]] = {bid: [] for bid in sched_baseline_ids}
+        if sched_baseline_ids:
+            all_snapshots = (await db.execute(
+                select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id.in_(sched_baseline_ids))
+            )).scalars().all()
+            for snap in all_snapshots:
+                snapshots_by_sched_baseline[snap.baseline_id].append(snap)
+    else:
+        snapshots_by_sched_baseline = {}
+
     points = []
     for bset in baseline_sets:
-        sched_baseline = (await db.execute(
-            select(ScheduleBaseline).where(ScheduleBaseline.baseline_set_id == bset.id)
-            .order_by(ScheduleBaseline.created_at.desc())
-        )).scalars().first()
+        sched_baseline = sched_baselines_by_set.get(bset.id)
         if sched_baseline is None:
             continue
-        snapshots = (await db.execute(
-            select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == sched_baseline.id)
-        )).scalars().all()
+        snapshots = snapshots_by_sched_baseline[sched_baseline.id]
         spi = await _baseline_schedule_spi(db, bset.id, snapshots)
         if spi is None:
             continue
@@ -1155,13 +1200,19 @@ async def get_icd_open_items_trend(db: AsyncSession, period_id: uuid.UUID) -> Ic
         .order_by(IcdBaseline.baseline_date.asc(), IcdBaseline.created_at.asc())
     )).scalars().all()
 
+    # Batched (see get_risk_emv_trend's own comment above for why).
+    snapshots_by_baseline: dict[uuid.UUID, list[IcdBaselineItem]] = {b.id: [] for b in baselines}
+    if baselines:
+        all_snapshots = (await db.execute(
+            select(IcdBaselineItem).where(IcdBaselineItem.baseline_id.in_([b.id for b in baselines]))
+        )).scalars().all()
+        for s in all_snapshots:
+            snapshots_by_baseline[s.baseline_id].append(s)
+
     points = []
     for b in baselines:
-        snapshots = (await db.execute(
-            select(IcdBaselineItem).where(IcdBaselineItem.baseline_id == b.id)
-        )).scalars().all()
         counts = {"issue": 0, "change": 0, "decision": 0}
-        for s in snapshots:
+        for s in snapshots_by_baseline[b.id]:
             if s.status != "closed":
                 counts[s.item_type] += 1
         points.append(IcdOpenItemsTrendPoint(

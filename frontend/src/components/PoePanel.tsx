@@ -331,14 +331,14 @@ const SIZE = {
 // the exact same wording so the two never drift apart.
 const POE_CAPABILITY_LINES = [
   'Schedule — dates, milestones, critical path',
-  'Risk Register — risk scoring, EMV, threats vs opportunities',
+  'Risk Register — scoring, EMV, threats vs opportunities',
   'Resources — assignments and committed cost',
-  'Cost & Quantity Takeoff — earned value (CPI/SPI, EAC), BOQ — reads only, can\'t draft new cost elements yet',
-  'Issues, Changes & Decisions — can draft new Issues/Changes/Decisions now, including for something that\'s already happened, not just future ones',
-  'Explain WHY something happened — traces real linked Issues/Changes/Decisions/Risks (e.g. behind a Baseline Comparison variance), AND checks a record\'s own logged reassessment notes (why a duration/probability/forecast was actually changed) — the two together, not just one',
+  'Cost & Quantity Takeoff — CPI/SPI, EAC, BOQ (read-only)',
+  'Issues, Changes & Decisions — can draft new items, past or future',
+  'Explain why something happened — traces linked records and reassessment notes',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
-  'On the BIM/Reality Capture page: highlight, isolate, colour, or set up and run a clash test between two selections',
-  'Ask it to draft new risks, activities, ICD items, resource assignments, relationships, links between records/3D elements and an activity, or a custom Reporting & Controls dashboard layout — you approve before anything saves',
+  'BIM/Reality Capture — highlight, isolate, colour, run clash tests',
+  'Draft risks, activities, ICD items, assignments, links, or a dashboard layout — you approve before saving',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 

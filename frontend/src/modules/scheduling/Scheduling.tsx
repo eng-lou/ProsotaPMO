@@ -55,7 +55,6 @@ import { ScheduleVariantWidget } from './ScheduleVariantWidget'
 import { SubProjectsWidget } from './SubProjectsWidget'
 import { UdfCell } from './UdfCell'
 import { UserDefinedFieldsWidget } from './UserDefinedFieldsWidget'
-import { downloadResourcesExcel } from './exportResourcesExcel'
 import {
   findNextOverallocatedTarget, levelTarget,
   type LevelingGranularity, type LevelingMode, type LevelingTarget,
@@ -123,6 +122,7 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'wbs', label: 'WBS', width: 'w-16' },
   { key: 'type', label: 'Type', width: 'w-24' },
   { key: 'duration', label: 'Dur (d)', width: 'w-16' },
+  { key: 'status', label: 'Status', width: 'w-24', title: 'Planned, In Progress, Suspended, or Completed. Double-click to set directly — it drives % Complete, Actual Start/Finish, and Suspend/Resume Date rather than being a separate field of its own, so those update to match whatever you pick.' },
   { key: 'start', label: 'Start', width: 'w-24' },
   { key: 'bl_start', label: 'BL Start', width: 'w-24', title: 'Baseline start — captured by whichever baseline is assigned, the plan this activity is measured against' },
   { key: 'finish', label: 'Finish', width: 'w-24' },
@@ -134,7 +134,6 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'sub_float', label: 'Sub Total Float (d)', width: 'w-24', title: 'Total Float within its own tagged sub-project\'s branch, calculated in isolation from the rest of the schedule — blank for anything outside a tagged sub-project. See the 🏗️ Sub-Projects widget.' },
   { key: 'sub_critical', label: 'Sub Critical', width: 'w-20', title: 'Critical within its own tagged sub-project\'s branch, even if not critical on the master schedule — the whole point of tagging a sub-project. Blank for anything outside a tagged sub-project.' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
-  { key: 'status', label: 'Status', width: 'w-24', title: 'Planned, In Progress, Suspended, or Completed. Double-click to set directly — it drives % Complete, Actual Start/Finish, and Suspend/Resume Date rather than being a separate field of its own, so those update to match whatever you pick.' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
@@ -159,7 +158,7 @@ const VISIBLE_COLUMNS_STORAGE_KEY = 'prosota_scheduling_visible_columns'
 // sub-project columns they'd never touched. Only ever applies to a fresh
 // browser with nothing saved yet; anyone who's already customized their
 // own visible set keeps exactly what they chose.
-const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ['code', 'duration', 'start', 'finish']
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ['code', 'duration', 'status', 'start', 'finish']
 
 function loadVisibleColumns(): Set<ColumnKey> {
   try {
@@ -911,6 +910,15 @@ export function Scheduling() {
       window.alert('Check at least one table in Page Setup before exporting.')
       return
     }
+    // Dynamic import (2026-09-03 perf pass, per Maro: "switching between
+    // modules... takes a longer time") — exceljs is a genuinely heavy
+    // library (see exportResourcesExcel.ts's own docstring on why it's used
+    // over xlsx/SheetJS despite the size) that was previously bundled
+    // straight into Scheduling's main chunk via a static import, paid by
+    // every visitor to this module even if they never click Export Excel.
+    // Loaded on demand instead, matching the same lazy-chunk pattern
+    // App.tsx's own routes already use for FourD/Scheduling/etc.
+    const { downloadResourcesExcel } = await import('./exportResourcesExcel')
     await downloadResourcesExcel({
       tables: resourcesPrintTables, projectName: selectedProject?.name ?? 'Project',
       resources: printScopedResources, calendars,
@@ -2043,7 +2051,7 @@ export function Scheduling() {
   const handleUpdate = async (
     activity: Activity, values: ActivityFormValues, reassessmentNote: string | null, amendRelationships = false
   ) => {
-    const payload = toActivityPayload(values, calendarLookup, activity.activity_type === 'wbs_summary')
+    const payload = toActivityPayload(values, calendarLookup, activity.activity_type === 'wbs_summary', activity.status)
     try {
       await api.patch(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
     } catch (err) {
@@ -3388,6 +3396,7 @@ export function Scheduling() {
               <col style={{ width: columnWidths.activity }} />
               {isColumnVisible('type') && <col style={{ width: columnWidths.type }} />}
               {isColumnVisible('duration') && <col style={{ width: columnWidths.duration }} />}
+              {isColumnVisible('status') && <col style={{ width: columnWidths.status }} />}
               {isColumnVisible('start') && <col style={{ width: columnWidths.start }} />}
               {isColumnVisible('bl_start') && <col style={{ width: columnWidths.bl_start }} />}
               {isColumnVisible('finish') && <col style={{ width: columnWidths.finish }} />}
@@ -3399,7 +3408,6 @@ export function Scheduling() {
               {isColumnVisible('sub_float') && <col style={{ width: columnWidths.sub_float }} />}
               {isColumnVisible('sub_critical') && <col style={{ width: columnWidths.sub_critical }} />}
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
-              {isColumnVisible('status') && <col style={{ width: columnWidths.status }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
               {isColumnVisible('element_count') && <col style={{ width: columnWidths.element_count }} />}
               {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
@@ -3435,6 +3443,7 @@ export function Scheduling() {
                 <ResizableTh width={columnWidths.activity} onResizeStart={startColumnResize('activity')} {...sortHeader('activity')}>Activity</ResizableTh>
                 {isColumnVisible('type') && <ResizableTh width={columnWidths.type} onResizeStart={startColumnResize('type')} {...sortHeader('type')}>Type</ResizableTh>}
                 {isColumnVisible('duration') && <ResizableTh width={columnWidths.duration} onResizeStart={startColumnResize('duration')} {...sortHeader('duration')}>Dur (d)</ResizableTh>}
+                {isColumnVisible('status') && <ResizableTh width={columnWidths.status} onResizeStart={startColumnResize('status')} {...sortHeader('status')} title="Double-click a row to set Planned/In Progress/Suspended/Completed — drives % Complete, Actual Start/Finish, and Suspend/Resume Date">Status</ResizableTh>}
                 {isColumnVisible('start') && <ResizableTh width={columnWidths.start} onResizeStart={startColumnResize('start')} {...sortHeader('start')}>Start</ResizableTh>}
                 {isColumnVisible('bl_start') && <ResizableTh width={columnWidths.bl_start} onResizeStart={startColumnResize('bl_start')} {...sortHeader('bl_start')} title="Baseline start — assigned via the Baseline widget">BL Start</ResizableTh>}
                 {isColumnVisible('finish') && <ResizableTh width={columnWidths.finish} onResizeStart={startColumnResize('finish')} {...sortHeader('finish')}>Finish</ResizableTh>}
@@ -3453,7 +3462,6 @@ export function Scheduling() {
                 {isColumnVisible('sub_float') && <ResizableTh width={columnWidths.sub_float} onResizeStart={startColumnResize('sub_float')} {...sortHeader('sub_float')} title="Total Float within its own tagged sub-project's branch, calculated in isolation — blank outside any tagged sub-project">Sub Total Float (d)</ResizableTh>}
                 {isColumnVisible('sub_critical') && <ResizableTh width={columnWidths.sub_critical} onResizeStart={startColumnResize('sub_critical')} {...sortHeader('sub_critical')} title="Critical within its own tagged sub-project's branch, even if not critical on the master schedule — blank outside any tagged sub-project">Sub Critical</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
-                {isColumnVisible('status') && <ResizableTh width={columnWidths.status} onResizeStart={startColumnResize('status')} {...sortHeader('status')} title="Double-click a row to set Planned/In Progress/Suspended/Completed — drives % Complete, Actual Start/Finish, and Suspend/Resume Date">Status</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
@@ -3603,6 +3611,33 @@ export function Scheduling() {
                       ) : formatDuration(a.duration_days)}
                     </td>
                   )}
+                  {isColumnVisible('status') && (
+                    <td
+                      className={`px-3 py-1 whitespace-nowrap ${ACTIVITY_STATUS_CLASSES[activityStatus(a)]}`}
+                      onDoubleClick={() => startEdit(a, 'status')}
+                      title={a.activity_type === 'wbs_summary' ? 'Computed (rolled up from its children) — not directly editable' : 'Double-click to change'}
+                    >
+                      {editingField === 'status' ? (
+                        <select
+                          autoFocus
+                          value={editingValue}
+                          // onChange-only commit, no onBlur — same race-condition
+                          // fix as the animation_profile_id <select> above (a
+                          // native <select>'s change+blur can fire back-to-back
+                          // before editingValue's re-render lands).
+                          onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
+                          onBlur={cancelEdit}
+                          onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
+                        >
+                          {(a.activity_type === 'start_milestone' || a.activity_type === 'finish_milestone'
+                            ? (['Planned', 'Completed'] as const)
+                            : (['Planned', 'In Progress', 'Suspended', 'Completed'] as const)
+                          ).map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : activityStatus(a)}
+                    </td>
+                  )}
                   {isColumnVisible('start') && (
                     <td
                       className="px-3 py-1 whitespace-nowrap text-gray-600 dark:text-prosota-muted"
@@ -3700,33 +3735,6 @@ export function Scheduling() {
                           className="w-16 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-sm"
                         />
                       ) : `${a.pct_complete ?? 0}%`}
-                    </td>
-                  )}
-                  {isColumnVisible('status') && (
-                    <td
-                      className={`px-3 py-1 whitespace-nowrap ${ACTIVITY_STATUS_CLASSES[activityStatus(a)]}`}
-                      onDoubleClick={() => startEdit(a, 'status')}
-                      title={a.activity_type === 'wbs_summary' ? 'Computed (rolled up from its children) — not directly editable' : 'Double-click to change'}
-                    >
-                      {editingField === 'status' ? (
-                        <select
-                          autoFocus
-                          value={editingValue}
-                          // onChange-only commit, no onBlur — same race-condition
-                          // fix as the animation_profile_id <select> above (a
-                          // native <select>'s change+blur can fire back-to-back
-                          // before editingValue's re-render lands).
-                          onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
-                          onBlur={cancelEdit}
-                          onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
-                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
-                        >
-                          {(a.activity_type === 'start_milestone' || a.activity_type === 'finish_milestone'
-                            ? (['Planned', 'Completed'] as const)
-                            : (['Planned', 'In Progress', 'Suspended', 'Completed'] as const)
-                          ).map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      ) : activityStatus(a)}
                     </td>
                   )}
                   {isColumnVisible('resources') && (() => {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay, type CalendarLookup } from './durationDisplay'
 import {
@@ -15,6 +16,13 @@ import {
 export interface ActivityFormValues {
   task_name: string
   activity_type: ActivityType
+  // 2026-09-03, per Maro: "add the status field in the bottom panel, so
+  // users can access aside the column edit way" — same real column/state
+  // machine as the grid's own Status dropdown (Scheduling.tsx), just
+  // reachable from here too now. Raw stored value ('planned' etc.), not a
+  // display label — this form has no reason to duplicate Scheduling.tsx's
+  // own label map.
+  status: Activity['status']
   // Collected in days (what planners actually type), converted to duration_hours
   // in toActivityPayload below — the backend's hour-precision CPM engine (Phase
   // 10) is unaffected, this is purely a display/input convenience.
@@ -33,6 +41,7 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
   return {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
+    status: activity?.status ?? 'planned',
     duration_days: activity?.duration_days?.toString() ?? '',
     pct_complete: activity?.pct_complete ?? '',
     constraint_type: activity?.constraint_type ?? '',
@@ -52,7 +61,18 @@ function toFormValues(activity: Activity | null): ActivityFormValues {
 // children — the backend rejects these outright for one (2026-07-06, per
 // Maro), so they're left out of the payload entirely rather than sent back
 // unchanged.
-export function toActivityPayload(values: ActivityFormValues, calendarLookup: CalendarLookup, isParent: boolean) {
+export function toActivityPayload(
+  values: ActivityFormValues, calendarLookup: CalendarLookup, isParent: boolean,
+  // The activity's status *before* this save — status is only ever included
+  // in the payload when it actually differs (2026-09-03). The backend's own
+  // update_activity treats "status present" and "pct_complete present" as
+  // mutually exclusive branches (status implies its own state-machine
+  // side-effects; otherwise a bare % Complete edit on a Planned activity
+  // auto-advances it to In Progress on its own) — always echoing status
+  // back unchanged would silently defeat that auto-advance on every save
+  // from this form, not just ones that actually touch Status.
+  currentStatus: Activity['status'] | null,
+) {
   const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
   // alap needs no date either (2026-07-07, per Maro) — a relative positioning
@@ -67,6 +87,11 @@ export function toActivityPayload(values: ActivityFormValues, calendarLookup: Ca
   if (isParent) return payload
   return {
     ...payload,
+    // Only when it actually changed — see this function's own currentStatus
+    // param doc above for why. Server-side state-machine translation is the
+    // same app/services/activity.py:_apply_status_change the grid's own
+    // Status column edit already goes through.
+    ...(currentStatus !== null && values.status !== currentStatus ? { status: values.status } : {}),
     duration_hours: isMilestone ? 0 : values.duration_days ? Number(values.duration_days) * hoursPerDay : null,
     pct_complete: values.pct_complete ? Number(values.pct_complete) : null,
     constraint_type: isAsap ? null : values.constraint_type,
@@ -95,12 +120,26 @@ const TYPE_LABELS: Record<ActivityType, string> = {
   wbs_summary: 'WBS Summary',
 }
 
+// Mirrors Scheduling.tsx's own ACTIVITY_STATUS_LABELS (not imported directly
+// — that file imports FROM this one already, and status option restrictions
+// here are keyed to isMilestone the same way the grid's own dropdown is).
+const STATUS_OPTION_LABELS: Record<Activity['status'], string> = {
+  planned: 'Planned', in_progress: 'In Progress', suspended: 'Suspended', completed: 'Completed',
+}
+
 export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded = false }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity))
   const [values, setValues] = useState<ActivityFormValues>(initialValues)
   const [submitting, setSubmitting] = useState(false)
   const [reassessmentNote, setReassessmentNote] = useState('')
+  // Collapsed by default (2026-09-03, per Maro: "this should be collapsible
+  // or removed, it makes the bottom panel too big. especially when the info
+  // exists in columns already" — every field in this block already has its
+  // own real column in the main grid). Kept rather than removed outright
+  // since it's still the fastest way to see them all in one place without
+  // scrolling the grid horizontally, just not shown by default anymore.
+  const [showComputed, setShowComputed] = useState(false)
 
   const set = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) =>
     setValues(v => ({ ...v, [key]: value }))
@@ -137,6 +176,29 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
     if (embedded) void commitValues(next)
   }
   const commitOnBlur = () => { if (embedded) void commitValues(values) }
+
+  // Same "are you sure" warning as the grid's own Status column edit
+  // (Scheduling.tsx's commitEdit 'status' case) — checked here, *before*
+  // setAndCommit ever mutates local state, not after (2026-09-03, per Maro:
+  // "add the status field in the bottom panel, so users can access aside
+  // the column edit way"). Doing this check post-mutation (e.g. inside
+  // onSubmit/handleUpdate) would leave values.status holding the declined
+  // pick — the very next unrelated field edit would then re-send that
+  // stale status and re-trigger this same warning unprompted.
+  const handleStatusChange = async (target: ActivityFormValues['status']) => {
+    if (!activity || target === activity.status) { setAndCommit('status', target); return }
+    const hasRecordedProgress = (activity.pct_complete !== null && Number(activity.pct_complete) > 0)
+      || activity.suspend_date !== null || activity.actual_start !== null || activity.actual_finish !== null
+    if ((target === 'planned' || activity.status === 'completed') && hasRecordedProgress && !(await confirmWithDontAsk(
+      'scheduling.reset-activity-status',
+      `"${activity.task_name}" is currently ${STATUS_OPTION_LABELS[activity.status]}, with recorded progress ` +
+      '(% Complete, actuals, and/or a suspend date). Changing it to ' +
+      `${STATUS_OPTION_LABELS[target]} clears all of that back to a fresh, un-started state. Continue?`
+    ))) {
+      return
+    }
+    setAndCommit('status', target)
+  }
 
   const isMilestone = isMilestoneType(values.activity_type)
   const isAsap = !values.constraint_type || values.constraint_type === 'asap'
@@ -199,7 +261,32 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
           className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
         />
       </div>
+      {activity && !isParent && (
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Status</label>
+          <select
+            value={values.status}
+            onChange={e => void handleStatusChange(e.target.value as ActivityFormValues['status'])}
+            className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-1.5 text-sm"
+          >
+            {(isMilestone ? (['planned', 'completed'] as const) : (['planned', 'in_progress', 'suspended', 'completed'] as const))
+              .map(s => <option key={s} value={s}>{STATUS_OPTION_LABELS[s]}</option>)}
+          </select>
+        </div>
+      )}
       {activity && (
+        <div className="col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowComputed(s => !s)}
+            className="flex items-center gap-1 text-xs font-semibold text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper"
+          >
+            <span className="inline-block w-3">{showComputed ? '▾' : '▸'}</span>
+            Computed schedule fields
+          </button>
+        </div>
+      )}
+      {activity && showComputed && (
         <div className="col-span-2 grid grid-cols-4 gap-3 bg-gray-50 dark:bg-prosota-panel2 rounded-md p-2.5 text-xs">
           <div>
             <div className="text-gray-400 dark:text-prosota-muted mb-0.5">Start (computed)</div>
