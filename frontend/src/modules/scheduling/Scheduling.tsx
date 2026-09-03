@@ -76,60 +76,37 @@ export type ColumnKey =
 
 // Activity status (2026-09-03, per Maro: "we need an activity status
 // field/column. Planned, In Progress, Suspended, Completed", then "obviously
-// it needs to be editable" with a full worked spec of what each pick should
-// do). NOT a new stored column of its own — it's a read/write VIEW onto
-// fields that already exist (% Complete, Actual Start/Finish, Suspend/
-// Resume Date), same discipline [[feedback_computed_fields]] already
-// established: a second, independent status a planner sets by hand could
-// silently disagree with those real fields. Picking a Status here is really
-// shorthand for setting a specific combination of them (see commitEdit's
-// own 'status' branch below) — the display and the edit are two views of
-// the exact same derivation, not two different mechanisms.
-//
-// Per Maro's own spec: Planned is the default (nothing recorded yet);
-// picking Suspended sets suspend_date to now; picking In Progress from
-// Suspended sets resume_date to now (and, more generally, ensures
-// actual_start is set — needed so "resumed but still 0% recorded" reads as
-// In Progress, not Planned); picking Completed sets actual_finish and
-// % Complete to 100; going back to Planned (or regressing away from
-// Completed, the same kind of data-discarding move) warns first if there's
-// real recorded progress, then does a full reset. Directly editing
-// % Complete on a Planned activity already turns it In Progress on its own
-// — that's the existing pct_complete-driven derivation below, this new
-// commitEdit branch doesn't change that path at all. Milestones only ever
-// show Planned/Completed (a zero-duration activity has no meaningful
-// "suspended" or "in progress" state) — same 4-state classification the
-// dashboard's own ActivityStatusWidget (widgets.tsx) already uses for
-// non-milestone activities, just with Maro's own words for the labels
-// here ("Planned"/"Completed") rather than that read-only widget's
-// chart-axis labels ("Not Started"/"Complete") — two UI surfaces for the
-// same underlying states, not a data disagreement.
+// it needs to be editable" with a full worked spec, then, once built as a
+// read/write VIEW onto % Complete/Actual Start-Finish/Suspend-Resume Date
+// (no new stored field), "it needs a column on its own" — P6/MSP-style
+// planners treat Status as the primary, independently-set fact (setting it
+// DRIVES the dates), not something reverse-engineered from them on every
+// read. `status` is now a real column (`Activity['status']`, backend
+// app/models/activity.py) — this file only maps its snake_case wire values
+// to the Title Case labels Maro's own words used for this column, and
+// still doesn't touch the underlying fields directly: picking a value
+// PATCHes `status` alone, and app/services/activity.py:_apply_status_change
+// is what sets % Complete/Actual Start/Actual Finish/Suspend/Resume Date to
+// match, in one place, for every caller (this grid, a future bulk edit, a
+// P6 import), not just whichever frontend built the dropdown first. Still
+// not a second, independently-drifting source of truth in the sense
+// [[feedback_computed_fields]] warns against: a WBS/Project summary row's
+// own status is a rollup from its children (backend _recompute_hierarchy),
+// never independently settable there, same as its pct_complete/duration/
+// finish. Milestones (zero duration) can only ever be Planned or
+// Completed — enforced both here (the dropdown's own option list) and
+// server-side.
 export type ActivityStatus = 'Planned' | 'In Progress' | 'Suspended' | 'Completed'
 
-export function activityStatus(
-  a: Pick<Activity, 'activity_type' | 'pct_complete' | 'suspend_date' | 'resume_date' | 'actual_start'>,
-): ActivityStatus {
-  const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
-  // Milestones are zero-duration — no meaningful "suspended" or "in
-  // progress" state, just whether it's happened yet (2026-09-03, per Maro:
-  // "milestones can only be planned or completed because they are zero day
-  // activities").
-  if (a.activity_type === 'start_milestone' || a.activity_type === 'finish_milestone') {
-    return pct >= 100 ? 'Completed' : 'Planned'
-  }
-  // Completed checked first (2026-09-03) — a fully-complete activity reads
-  // as Completed even if a stray suspend_date/no-resume_date is still
-  // sitting on the row (e.g. it was suspended earlier in its life and later
-  // finished without that ever getting tidied up); Suspended shouldn't be
-  // able to mask a real completion.
-  if (pct >= 100) return 'Completed'
-  if (a.suspend_date !== null && a.resume_date === null) return 'Suspended'
-  // actual_start alone (even at 0% recorded progress) still reads as In
-  // Progress — needed so "resume from Suspended" (which sets actual_start
-  // but not necessarily any % Complete yet) doesn't fall back to reading as
-  // Planned, which would contradict the very state just picked.
-  if (pct > 0 || a.actual_start !== null) return 'In Progress'
-  return 'Planned'
+const ACTIVITY_STATUS_LABELS: Record<Activity['status'], ActivityStatus> = {
+  planned: 'Planned', in_progress: 'In Progress', suspended: 'Suspended', completed: 'Completed',
+}
+const ACTIVITY_STATUS_VALUES: Record<ActivityStatus, Activity['status']> = {
+  Planned: 'planned', 'In Progress': 'in_progress', Suspended: 'suspended', Completed: 'completed',
+}
+
+export function activityStatus(a: Pick<Activity, 'status'>): ActivityStatus {
+  return ACTIVITY_STATUS_LABELS[a.status]
 }
 
 const ACTIVITY_STATUS_CLASSES: Record<ActivityStatus, string> = {
@@ -381,7 +358,7 @@ function groupHeaderPlaceholder(key: string): Activity {
     code: '', project_id: '', schedule_variant_id: '', schedule_period_id: '',
     task_name: '', activity_type: 'task', parent_id: null, wbs_path: null, sort_order: null,
     duration_hours: null, duration_days: null, start: null, finish: null,
-    actual_start: null, actual_finish: null, suspend_date: null, resume_date: null,
+    actual_start: null, actual_finish: null, suspend_date: null, resume_date: null, status: 'planned',
     remaining_duration_hours: null, bl_start: null, bl_finish: null, bl_duration_hours: null,
     variance_days: null, total_float_hours: null, free_float_hours: null, is_critical: null,
     sub_total_float_hours: null, sub_is_critical: null, pct_complete: null, commentary: null,
@@ -2236,44 +2213,26 @@ export function Scheduling() {
       // app/services/scheduling_cpm.py:compute_duration_for_finish.
       payload = { finish: value }
     } else if (field === 'status') {
-      // Picking a Status is a shortcut for a whole combination of the real
-      // underlying fields (2026-09-03, per Maro's own worked example) —
-      // never a stored field of its own, same "derivable, don't duplicate
-      // it as a manual input" discipline the read-only version of this
-      // column already followed (see activityStatus's own header comment).
+      // The state machine (which fields a target status implies) now lives
+      // entirely server-side (app/services/activity.py:_apply_status_change,
+      // since `status` became a real column, 2026-09-03) — this just sends
+      // the pick. The "are you sure" warning for a data-discarding
+      // transition stays client-side (a UX concern, not a data-integrity
+      // one), checked against the real underlying fields directly rather
+      // than re-deriving a status label from them.
       const activity = activities.find(a => a.id === id)
       if (!activity) { setEditingCell(null); return }
-      const target = value as ActivityStatus
-      const current = activityStatus(activity)
-      if (target === current) { setEditingCell(null); return }
-      const now = new Date().toISOString()
+      const target = ACTIVITY_STATUS_VALUES[value as ActivityStatus]
+      if (target === activity.status) { setEditingCell(null); return }
       const hasRecordedProgress = (activity.pct_complete !== null && Number(activity.pct_complete) > 0)
         || activity.suspend_date !== null || activity.actual_start !== null || activity.actual_finish !== null
-
-      // Regressing away from Completed needs the exact same "are you sure"
-      // treatment as going back to Planned — either way it discards a real
-      // recorded completion, not just a target-status label flip.
-      if (target === 'Planned' || current === 'Completed') {
-        if (hasRecordedProgress && !(await confirmWithDontAsk(
-          'scheduling.reset-activity-status',
-          `"${activity.task_name}" is currently ${current}, with recorded progress (% Complete, actuals, and/or a ` +
-          `suspend date). Changing it to ${target} clears all of that back to a fresh, un-started state. Continue?`
-        ))) { setEditingCell(null); return }
-        payload = { pct_complete: 0, suspend_date: null, resume_date: null, actual_start: null, actual_finish: null }
-        if (target === 'Suspended') payload.suspend_date = now
-        if (target === 'In Progress') payload.actual_start = now
-        if (target === 'Completed') { payload.pct_complete = 100; payload.actual_start = now; payload.actual_finish = now }
-      } else if (target === 'Suspended') {
-        payload = { suspend_date: now, resume_date: null }
-      } else if (target === 'In Progress') {
-        payload = {
-          actual_start: activity.actual_start ?? now,
-          ...(current === 'Suspended' ? { resume_date: now } : {}),
-        }
-      } else {
-        // target === 'Completed', current !== 'Completed'
-        payload = { pct_complete: 100, actual_finish: now, actual_start: activity.actual_start ?? now }
-      }
+      if ((target === 'planned' || activity.status === 'completed') && hasRecordedProgress && !(await confirmWithDontAsk(
+        'scheduling.reset-activity-status',
+        `"${activity.task_name}" is currently ${activityStatus(activity)}, with recorded progress (% Complete, ` +
+        `actuals, and/or a suspend date). Changing it to ${value} clears all of that back to a fresh, un-started ` +
+        'state. Continue?'
+      ))) { setEditingCell(null); return }
+      payload = { status: target }
     } else if (field === 'animation_profile_id') {
       // '' from the "Default" option means no override, not the literal
       // string '' (which would fail the backend's UUID validation) — same

@@ -81,6 +81,12 @@ export interface Activity {
   // no CPM interaction for this first cut.
   suspend_date: string | null
   resume_date: string | null
+  // Real, independently-stored column (2026-09-03) — setting it drives the
+  // fields above (backend app/services/activity.py:_apply_status_change),
+  // not the reverse. A WBS/Project summary row's own status is a rollup
+  // from its children, same as its pct_complete — never independently
+  // settable there.
+  status: 'planned' | 'in_progress' | 'suspended' | 'completed'
   // Computed server-side (Session 16 fix, per Maro): duration_hours x (1 -
   // pct_complete/100) — never sent as input. See
   // app/services/activity.py:_apply_computed_fields.
@@ -501,7 +507,7 @@ export interface ScheduleBaseline {
 // (a UI preference, not stored here) then combines whichever filters — built-
 // in and custom — are currently enabled; see Scheduling.tsx's visibleActivities.
 export type FilterFieldKey =
-  | 'code' | 'wbs_path' | 'task_name' | 'activity_type' | 'constraint_type'
+  | 'code' | 'wbs_path' | 'task_name' | 'activity_type' | 'constraint_type' | 'status'
   | 'is_critical' | 'is_archived'
   | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
   | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
@@ -583,6 +589,13 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   {
     key: 'constraint_type', label: 'Constraint', type: 'enum', operators: ENUM_OPERATORS,
     options: CONSTRAINT_TYPES.map(c => ({ value: c.value, label: c.label })),
+  },
+  {
+    key: 'status', label: 'Status', type: 'enum', operators: ENUM_OPERATORS,
+    options: [
+      { value: 'planned', label: 'Planned' }, { value: 'in_progress', label: 'In Progress' },
+      { value: 'suspended', label: 'Suspended' }, { value: 'completed', label: 'Completed' },
+    ],
   },
   { key: 'is_critical', label: 'Critical', type: 'boolean', operators: BOOLEAN_OPERATORS },
   { key: 'is_archived', label: 'Archived', type: 'boolean', operators: BOOLEAN_OPERATORS },

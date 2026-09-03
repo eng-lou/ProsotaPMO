@@ -10,6 +10,7 @@ function getFieldValue(activity: Activity, field: FilterFieldKey): unknown {
     case 'task_name': return activity.task_name
     case 'activity_type': return activity.activity_type
     case 'constraint_type': return activity.constraint_type
+    case 'status': return activity.status
     case 'is_critical': return activity.is_critical
     case 'is_archived': return activity.is_archived
     case 'start': return activity.start

@@ -94,6 +94,16 @@ class Activity(Base, TimestampMixin):
     # cut — no CPM interaction (see app/services/activity.py:_validate_suspend_resume).
     suspend_date: Mapped[datetime | None] = mapped_column(DateTime)
     resume_date: Mapped[datetime | None] = mapped_column(DateTime)
+    # planned | in_progress | suspended | completed (2026-09-03, per Maro:
+    # "it needs a column on its own") — same plain-String(20) pattern as
+    # activity_type above, not a Postgres-native enum, validated at the
+    # Pydantic schema layer (ActivityStatus, app/schemas/activity.py). A
+    # real, independently-stored fact, not re-derived from pct_complete/
+    # suspend_date/actual_start on every read — setting it is what drives
+    # those fields (app/services/activity.py:_apply_status_change), not the
+    # other way around. A WBS/Project summary row's own status is a rollup
+    # from its children (_recompute_hierarchy), same as its pct_complete.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="planned")
     remaining_duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     # bl_start/bl_finish/bl_duration_hours/variance_days/total_float_hours/
     # free_float_hours/is_critical are never accepted as API input (see

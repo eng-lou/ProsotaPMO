@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import time
+from datetime import datetime, time
 from decimal import Decimal
 from typing import Literal
 
@@ -22,6 +22,7 @@ from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
 from app.schemas.activity import (
     ActivityCreate,
+    ActivityStatus,
     ActivityUpdate,
     _validate_constraint,
     _validate_suspend_resume,
@@ -281,6 +282,79 @@ async def update_activity_actuals(db: AsyncSession, activity_id: uuid.UUID, actu
 
 
 
+def _derive_activity_status(
+    activity_type: str,
+    pct_complete: Decimal | None,
+    suspend_date: datetime | None,
+    resume_date: datetime | None,
+    actual_start: datetime | None,
+) -> ActivityStatus:
+    """Same 4-state classification the frontend's own activityStatus() (now
+    only used for WBS summary rollup display) used before `status` became a
+    real column — kept here purely for _recompute_hierarchy's own rollup
+    below, which has no single stored status of its own to defer to (a WBS
+    summary's status is computed from its children's rolled-up numbers, same
+    as its pct_complete)."""
+    pct = pct_complete if pct_complete is not None else Decimal(0)
+    if is_milestone_type(activity_type):
+        return "completed" if pct >= 100 else "planned"
+    if pct >= 100:
+        return "completed"
+    if suspend_date is not None and resume_date is None:
+        return "suspended"
+    if pct > 0 or actual_start is not None:
+        return "in_progress"
+    return "planned"
+
+
+def _apply_status_change(activity: Activity, target: ActivityStatus, now: datetime) -> None:
+    """Translates a Status pick into the real fields it drives (2026-09-03,
+    per Maro's own worked spec) — the single, authoritative place this state
+    machine lives, so every entry point (this grid, a future bulk edit, a P6
+    import, an API caller) gets identical behaviour, not just whichever
+    frontend happened to build the dropdown first.
+
+    Regressing away from Completed gets the exact same full reset as going
+    back to Planned — either way it's discarding a real recorded completion,
+    not just relabelling it. The confirm-before-doing-this warning is a
+    frontend UX concern (PoePanel/Scheduling.tsx's own confirmWithDontAsk),
+    not re-litigated here — this function trusts the caller already asked.
+    """
+    current = _derive_activity_status(
+        activity.activity_type, activity.pct_complete, activity.suspend_date, activity.resume_date, activity.actual_start,
+    )
+    if target == current:
+        return
+    if target == "planned" or current == "completed":
+        activity.pct_complete = Decimal(0)
+        activity.suspend_date = None
+        activity.resume_date = None
+        activity.actual_start = None
+        activity.actual_finish = None
+        if target == "suspended":
+            activity.suspend_date = now
+        elif target == "in_progress":
+            activity.actual_start = now
+        elif target == "completed":
+            activity.pct_complete = Decimal(100)
+            activity.actual_start = now
+            activity.actual_finish = now
+    elif target == "suspended":
+        activity.suspend_date = now
+        activity.resume_date = None
+    elif target == "in_progress":
+        if activity.actual_start is None:
+            activity.actual_start = now
+        if current == "suspended":
+            activity.resume_date = now
+    else:  # target == "completed", current not already "completed"
+        activity.pct_complete = Decimal(100)
+        activity.actual_finish = now
+        if activity.actual_start is None:
+            activity.actual_start = now
+    activity.status = target
+
+
 def _apply_computed_fields(activity: Activity) -> None:
     """Recompute the fields that are never accepted directly from clients.
 
@@ -487,6 +561,11 @@ async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) 
             node.pct_complete = sum(Decimal(str(p)) for p, _ in weighted) / len(weighted)
         else:
             node.pct_complete = None
+        # Status rolls up the same way pct_complete just did — a WBS/Project
+        # summary's own status is never independently set (locked in
+        # update_activity), it's a plain reflection of its own just-computed
+        # rollup percentage, same as duration/dates above.
+        node.status = _derive_activity_status(node.activity_type, node.pct_complete, None, None, None)
         _apply_computed_fields(node)
 
     for root in children.get(None, []):
@@ -708,6 +787,7 @@ async def update_activity(
     if activity.activity_type == "wbs_summary":
         locked = {
             "duration_hours": "Duration", "finish": "Finish", "pct_complete": "% Complete",
+            "status": "Status",
             "constraint_type": "Constraint Type", "constraint_date": "Constraint Date", "calendar_id": "Calendar",
         }
         attempted = [label for field, label in locked.items() if field in updates]
@@ -766,6 +846,42 @@ async def update_activity(
 
     if updates.get("animation_profile_id") is not None:
         await _validate_animation_profile_in_project(db, updates["animation_profile_id"], activity.project_id)
+
+    # Status is a shortcut onto real fields, not a plain column write
+    # (2026-09-03) — see _apply_status_change's own header. Popped out of
+    # `updates` since it's applied via that function instead of the generic
+    # setattr loop below, which would just overwrite activity.status without
+    # touching the fields the picked status actually implies.
+    if "status" in updates:
+        target = updates.pop("status")
+        if target is None:
+            raise HTTPException(status_code=422, detail="status can't be cleared — pick one of Planned/In Progress/Suspended/Completed")
+        effective_type = updates.get("activity_type", activity.activity_type)
+        if target in ("suspended", "in_progress") and is_milestone_type(effective_type):
+            raise HTTPException(
+                status_code=422,
+                detail="Milestones can only be Planned or Completed — they have zero duration, so there's no "
+                       "meaningful 'suspended' or 'in progress' state.",
+            )
+        # Naive, not datetime.now(timezone.utc) — suspend_date/resume_date/
+        # actual_start/actual_finish are plain DateTime columns (no
+        # timezone=True, see the model), same as every other manually-
+        # entered date on this table; comparing an aware value against them
+        # elsewhere (e.g. _validate_suspend_resume) raises TypeError.
+        _apply_status_change(activity, target, datetime.now())
+    # Editing % Complete directly (not via Status) still auto-advances a
+    # Planned activity to In Progress on its own (2026-09-03, per Maro:
+    # "ofcourse if i go straight to putting in %complete to a planned
+    # activity, it becomes in progress") — forward-only, and only from
+    # Planned specifically (his own words); doesn't touch any other status,
+    # and never auto-completes at 100% this way (Completed has its own
+    # actual_finish side effect that a bare % Complete edit shouldn't imply
+    # on its own — go through Status for that).
+    elif "pct_complete" in updates and updates["pct_complete"] is not None and activity.status == "planned" \
+            and updates["pct_complete"] > 0:
+        activity.status = "in_progress"
+        if activity.actual_start is None:
+            activity.actual_start = datetime.now()
 
     parent_changed = "parent_id" in updates and updates["parent_id"] != activity.parent_id
     for field, value in updates.items():

@@ -22,6 +22,31 @@ def is_milestone_type(activity_type: str) -> bool:
     return activity_type in ("start_milestone", "finish_milestone")
 
 
+# Activity Status (2026-09-03, per Maro: "it needs a column on its own" —
+# the first cut of this was a purely client-derived label with no backing
+# column at all; Maro's own follow-up made clear P6/MSP-style planners treat
+# Status as the primary, independently-set fact (setting it DRIVES the real
+# dates), not something reverse-engineered from them on every read. A real
+# stored column, same "task"/"start_milestone"/... String(20) pattern as
+# activity_type above (see app/models/activity.py) — plain string, not a
+# Postgres-native enum, validated at this Pydantic layer only.
+#
+# Still not a second, independently-drifting source of truth: setting it
+# (app/services/activity.py:_apply_status_change) always also sets the real
+# underlying fields it implies (% Complete, Actual Start/Finish, Suspend/
+# Resume Date) in the same update, and a WBS/Project summary row's own
+# status is a computed rollup from its children (_recompute_hierarchy),
+# never independently settable there — same "computed, not manually
+# duplicated" discipline as that row's own pct_complete/duration/finish
+# (see feedback_computed_fields in Claude's own memory). Milestones (zero
+# duration) can only ever be "planned" or "completed" — no meaningful
+# suspended/in_progress state — enforced in app/services/activity.py, not
+# here, since a partial PATCH can't always see the activity's own
+# activity_type in the same request (same reason resume_not_before_suspend
+# below is re-checked service-side against the merged/final state).
+ActivityStatus = Literal["planned", "in_progress", "suspended", "completed"]
+
+
 # A milestone (either kind) has zero duration, so its ES always equals its EF
 # — meaning a relationship type's *second* letter (which successor end is
 # nominally driven) is mathematically inert for it: SS and SF compute the
@@ -114,6 +139,7 @@ class ActivityBase(BaseModel):
     suspend_date: datetime | None = None
     resume_date: datetime | None = None
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
+    status: ActivityStatus = "planned"
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
     constraint_date: datetime | None = None
@@ -130,6 +156,17 @@ class ActivityBase(BaseModel):
             if self.duration_hours not in (None, 0):
                 raise ValueError("milestones have zero duration")
             self.duration_hours = Decimal("0")
+        return self
+
+    # Create-time only (2026-09-03) — both activity_type and status always
+    # have a real value here (ActivityBase's own defaults), unlike
+    # ActivityUpdate's partial-PATCH shape where a milestone check needs the
+    # activity's already-loaded state instead (see
+    # app/services/activity.py:update_activity's own version of this check).
+    @model_validator(mode="after")
+    def milestones_cannot_be_suspended_or_in_progress(self) -> "ActivityBase":
+        if is_milestone_type(self.activity_type) and self.status in ("suspended", "in_progress"):
+            raise ValueError("milestones can only be Planned or Completed — they have zero duration")
         return self
 
     @model_validator(mode="after")
@@ -174,6 +211,11 @@ class ActivityUpdate(BaseModel):
     suspend_date: datetime | None = None
     resume_date: datetime | None = None
     pct_complete: Decimal | None = Field(default=None, ge=0, le=100)
+    # None (omitted) = leave status alone; setting it explicitly runs
+    # app/services/activity.py:_apply_status_change, which also updates the
+    # real fields it implies (% Complete, Actual Start/Finish, Suspend/
+    # Resume Date) — see ActivityStatus's own header comment above.
+    status: ActivityStatus | None = None
     commentary: str | None = None
     constraint_type: ConstraintType | None = None
     constraint_date: datetime | None = None
