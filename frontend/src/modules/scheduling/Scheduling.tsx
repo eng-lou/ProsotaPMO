@@ -75,27 +75,60 @@ export type ColumnKey =
   | 'element_count' | 'elements' | 'animation_profile'
 
 // Activity status (2026-09-03, per Maro: "we need an activity status
-// field/column. Planned, In Progress, Suspended, Completed") — deliberately
-// NOT a new stored/manually-set field: every input it needs (% Complete,
-// Suspend/Resume Date) already exists and is already editable right here in
-// this same grid, so a second, independent "status" a planner sets by hand
-// could silently disagree with those — the exact "derivable value exposed
-// as a manual input" bug class [[feedback_computed_fields]] already caught
-// repeatedly elsewhere in this app. Same 4-state classification the
-// dashboard's own ActivityStatusWidget (widgets.tsx) already uses
-// (Suspended takes priority over the % Complete-driven states, matching
-// "suspended but 40% done" reading as Suspended, not In Progress) — labels
-// here use Maro's own words for this column ("Planned"/"Completed") rather
-// than that widget's chart-axis labels ("Not Started"/"Complete"), which
-// are two different UI surfaces for the same 4 states, not a data
-// disagreement.
+// field/column. Planned, In Progress, Suspended, Completed", then "obviously
+// it needs to be editable" with a full worked spec of what each pick should
+// do). NOT a new stored column of its own — it's a read/write VIEW onto
+// fields that already exist (% Complete, Actual Start/Finish, Suspend/
+// Resume Date), same discipline [[feedback_computed_fields]] already
+// established: a second, independent status a planner sets by hand could
+// silently disagree with those real fields. Picking a Status here is really
+// shorthand for setting a specific combination of them (see commitEdit's
+// own 'status' branch below) — the display and the edit are two views of
+// the exact same derivation, not two different mechanisms.
+//
+// Per Maro's own spec: Planned is the default (nothing recorded yet);
+// picking Suspended sets suspend_date to now; picking In Progress from
+// Suspended sets resume_date to now (and, more generally, ensures
+// actual_start is set — needed so "resumed but still 0% recorded" reads as
+// In Progress, not Planned); picking Completed sets actual_finish and
+// % Complete to 100; going back to Planned (or regressing away from
+// Completed, the same kind of data-discarding move) warns first if there's
+// real recorded progress, then does a full reset. Directly editing
+// % Complete on a Planned activity already turns it In Progress on its own
+// — that's the existing pct_complete-driven derivation below, this new
+// commitEdit branch doesn't change that path at all. Milestones only ever
+// show Planned/Completed (a zero-duration activity has no meaningful
+// "suspended" or "in progress" state) — same 4-state classification the
+// dashboard's own ActivityStatusWidget (widgets.tsx) already uses for
+// non-milestone activities, just with Maro's own words for the labels
+// here ("Planned"/"Completed") rather than that read-only widget's
+// chart-axis labels ("Not Started"/"Complete") — two UI surfaces for the
+// same underlying states, not a data disagreement.
 export type ActivityStatus = 'Planned' | 'In Progress' | 'Suspended' | 'Completed'
 
-export function activityStatus(a: Pick<Activity, 'pct_complete' | 'suspend_date' | 'resume_date'>): ActivityStatus {
-  if (a.suspend_date !== null && a.resume_date === null) return 'Suspended'
+export function activityStatus(
+  a: Pick<Activity, 'activity_type' | 'pct_complete' | 'suspend_date' | 'resume_date' | 'actual_start'>,
+): ActivityStatus {
   const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
+  // Milestones are zero-duration — no meaningful "suspended" or "in
+  // progress" state, just whether it's happened yet (2026-09-03, per Maro:
+  // "milestones can only be planned or completed because they are zero day
+  // activities").
+  if (a.activity_type === 'start_milestone' || a.activity_type === 'finish_milestone') {
+    return pct >= 100 ? 'Completed' : 'Planned'
+  }
+  // Completed checked first (2026-09-03) — a fully-complete activity reads
+  // as Completed even if a stray suspend_date/no-resume_date is still
+  // sitting on the row (e.g. it was suspended earlier in its life and later
+  // finished without that ever getting tidied up); Suspended shouldn't be
+  // able to mask a real completion.
   if (pct >= 100) return 'Completed'
-  if (pct > 0) return 'In Progress'
+  if (a.suspend_date !== null && a.resume_date === null) return 'Suspended'
+  // actual_start alone (even at 0% recorded progress) still reads as In
+  // Progress — needed so "resume from Suspended" (which sets actual_start
+  // but not necessarily any % Complete yet) doesn't fall back to reading as
+  // Planned, which would contradict the very state just picked.
+  if (pct > 0 || a.actual_start !== null) return 'In Progress'
   return 'Planned'
 }
 
@@ -124,7 +157,7 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'sub_float', label: 'Sub Total Float (d)', width: 'w-24', title: 'Total Float within its own tagged sub-project\'s branch, calculated in isolation from the rest of the schedule — blank for anything outside a tagged sub-project. See the 🏗️ Sub-Projects widget.' },
   { key: 'sub_critical', label: 'Sub Critical', width: 'w-20', title: 'Critical within its own tagged sub-project\'s branch, even if not critical on the master schedule — the whole point of tagging a sub-project. Blank for anything outside a tagged sub-project.' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
-  { key: 'status', label: 'Status', width: 'w-24', title: 'Planned, In Progress, Suspended, or Completed — computed from % Complete and Suspend/Resume Date, not a separate field of its own. Edit those to change this.' },
+  { key: 'status', label: 'Status', width: 'w-24', title: 'Planned, In Progress, Suspended, or Completed. Double-click to set directly — it drives % Complete, Actual Start/Finish, and Suspend/Resume Date rather than being a separate field of its own, so those update to match whatever you pick.' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
@@ -466,7 +499,7 @@ export function formatDuration(value: number | string | null): string {
 // can still push it later, it just can't start earlier); editing Finish is
 // translated server-side into the duration that produces it, Start unchanged — see
 // commitEdit below and backend app/services/scheduling_cpm.py:compute_duration_for_finish.
-type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'activity_type' | 'start' | 'finish' | 'animation_profile_id'
+type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 'status' | 'activity_type' | 'start' | 'finish' | 'animation_profile_id'
 
 // Mirrors the backend's own lockdown (app/services/activity.py:update_activity —
 // Duration/Finish/% Complete/Constraint/Type/Calendar are rejected outright,
@@ -479,7 +512,7 @@ type EditableField = 'task_name' | 'code' | 'duration_hours' | 'pct_complete' | 
 // "flashes the warning" — instead of the cell simply not being editable in
 // the first place, the same way the detail panel (ActivityForm.tsx) already
 // disables them (2026-07-06, per Maro).
-const LOCKED_ON_WBS_SUMMARY: readonly EditableField[] = ['activity_type', 'duration_hours', 'start', 'finish', 'pct_complete']
+const LOCKED_ON_WBS_SUMMARY: readonly EditableField[] = ['activity_type', 'duration_hours', 'start', 'finish', 'pct_complete', 'status']
 
 // Copy/paste is checkbox-driven (2026-07-04, per Maro): copying a row grabs a
 // full snapshot, and pasting lets you pick exactly which of these fields
@@ -2150,6 +2183,7 @@ export function Scheduling() {
       // this is purely a display/input convenience.
       : field === 'duration_hours' ? String(a.duration_days ?? '')
       : field === 'pct_complete' ? String(a.pct_complete ?? '')
+      : field === 'status' ? activityStatus(a)
       : field === 'start' ? toDatetimeLocalValue(a.start)
       : field === 'finish' ? toDatetimeLocalValue(a.finish)
       : field === 'animation_profile_id' ? (a.animation_profile_id ?? '')
@@ -2201,6 +2235,45 @@ export function Scheduling() {
       // Backend translates this into a new duration_hours (Start stays put) — see
       // app/services/scheduling_cpm.py:compute_duration_for_finish.
       payload = { finish: value }
+    } else if (field === 'status') {
+      // Picking a Status is a shortcut for a whole combination of the real
+      // underlying fields (2026-09-03, per Maro's own worked example) —
+      // never a stored field of its own, same "derivable, don't duplicate
+      // it as a manual input" discipline the read-only version of this
+      // column already followed (see activityStatus's own header comment).
+      const activity = activities.find(a => a.id === id)
+      if (!activity) { setEditingCell(null); return }
+      const target = value as ActivityStatus
+      const current = activityStatus(activity)
+      if (target === current) { setEditingCell(null); return }
+      const now = new Date().toISOString()
+      const hasRecordedProgress = (activity.pct_complete !== null && Number(activity.pct_complete) > 0)
+        || activity.suspend_date !== null || activity.actual_start !== null || activity.actual_finish !== null
+
+      // Regressing away from Completed needs the exact same "are you sure"
+      // treatment as going back to Planned — either way it discards a real
+      // recorded completion, not just a target-status label flip.
+      if (target === 'Planned' || current === 'Completed') {
+        if (hasRecordedProgress && !(await confirmWithDontAsk(
+          'scheduling.reset-activity-status',
+          `"${activity.task_name}" is currently ${current}, with recorded progress (% Complete, actuals, and/or a ` +
+          `suspend date). Changing it to ${target} clears all of that back to a fresh, un-started state. Continue?`
+        ))) { setEditingCell(null); return }
+        payload = { pct_complete: 0, suspend_date: null, resume_date: null, actual_start: null, actual_finish: null }
+        if (target === 'Suspended') payload.suspend_date = now
+        if (target === 'In Progress') payload.actual_start = now
+        if (target === 'Completed') { payload.pct_complete = 100; payload.actual_start = now; payload.actual_finish = now }
+      } else if (target === 'Suspended') {
+        payload = { suspend_date: now, resume_date: null }
+      } else if (target === 'In Progress') {
+        payload = {
+          actual_start: activity.actual_start ?? now,
+          ...(current === 'Suspended' ? { resume_date: now } : {}),
+        }
+      } else {
+        // target === 'Completed', current !== 'Completed'
+        payload = { pct_complete: 100, actual_finish: now, actual_start: activity.actual_start ?? now }
+      }
     } else if (field === 'animation_profile_id') {
       // '' from the "Default" option means no override, not the literal
       // string '' (which would fail the backend's UUID validation) — same
@@ -3421,7 +3494,7 @@ export function Scheduling() {
                 {isColumnVisible('sub_float') && <ResizableTh width={columnWidths.sub_float} onResizeStart={startColumnResize('sub_float')} {...sortHeader('sub_float')} title="Total Float within its own tagged sub-project's branch, calculated in isolation — blank outside any tagged sub-project">Sub Total Float (d)</ResizableTh>}
                 {isColumnVisible('sub_critical') && <ResizableTh width={columnWidths.sub_critical} onResizeStart={startColumnResize('sub_critical')} {...sortHeader('sub_critical')} title="Critical within its own tagged sub-project's branch, even if not critical on the master schedule — blank outside any tagged sub-project">Sub Critical</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
-                {isColumnVisible('status') && <ResizableTh width={columnWidths.status} onResizeStart={startColumnResize('status')} {...sortHeader('status')} title="Computed from % Complete and Suspend/Resume Date">Status</ResizableTh>}
+                {isColumnVisible('status') && <ResizableTh width={columnWidths.status} onResizeStart={startColumnResize('status')} {...sortHeader('status')} title="Double-click a row to set Planned/In Progress/Suspended/Completed — drives % Complete, Actual Start/Finish, and Suspend/Resume Date">Status</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
@@ -3671,8 +3744,30 @@ export function Scheduling() {
                     </td>
                   )}
                   {isColumnVisible('status') && (
-                    <td className={`px-3 py-1 whitespace-nowrap ${ACTIVITY_STATUS_CLASSES[activityStatus(a)]}`}>
-                      {activityStatus(a)}
+                    <td
+                      className={`px-3 py-1 whitespace-nowrap ${ACTIVITY_STATUS_CLASSES[activityStatus(a)]}`}
+                      onDoubleClick={() => startEdit(a, 'status')}
+                      title={a.activity_type === 'wbs_summary' ? 'Computed (rolled up from its children) — not directly editable' : 'Double-click to change'}
+                    >
+                      {editingField === 'status' ? (
+                        <select
+                          autoFocus
+                          value={editingValue}
+                          // onChange-only commit, no onBlur — same race-condition
+                          // fix as the animation_profile_id <select> above (a
+                          // native <select>'s change+blur can fire back-to-back
+                          // before editingValue's re-render lands).
+                          onChange={e => { setEditingValue(e.target.value); commitEdit(e.target.value) }}
+                          onBlur={cancelEdit}
+                          onKeyDown={e => { if (e.key === 'Escape') cancelEdit() }}
+                          className="border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-xs"
+                        >
+                          {(a.activity_type === 'start_milestone' || a.activity_type === 'finish_milestone'
+                            ? (['Planned', 'Completed'] as const)
+                            : (['Planned', 'In Progress', 'Suspended', 'Completed'] as const)
+                          ).map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : activityStatus(a)}
                     </td>
                   )}
                   {isColumnVisible('resources') && (() => {
