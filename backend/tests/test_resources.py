@@ -5,6 +5,7 @@ import uuid
 from httpx import AsyncClient
 
 from app.models.project import Project
+from app.models.schedule_period import SchedulePeriod
 
 
 async def test_create_resource(client: AsyncClient, project: Project):
@@ -72,6 +73,40 @@ async def test_delete_unused_resource(client: AsyncClient, project: Project):
 
     resp = await client.delete(f"/api/v1/resources/{resource_id}")
     assert resp.status_code == 204
+
+
+async def test_bulk_delete_resources(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """POST /resources/bulk-delete-all (2026-09-03, per Maro: "takes a long
+    time to delete... all resources" — see
+    app/services/resource.py:bulk_delete_resources). Covers the assigned-
+    resource path too, not just the trivially-unused one
+    test_delete_unused_resource already covers — a real pool is rarely all
+    unassigned."""
+    assigned = (await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies", "unit": "day", "rate": "220",
+    })).json()
+    unassigned = (await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "equipment", "name": "Tower Crane", "unit": "day", "rate": "800",
+    })).json()
+    activity = (await client.post("/api/v1/activities/", json={
+        "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id), "task_name": "Piling",
+    })).json()
+    assign = await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": assigned["id"],
+    })
+    assert assign.status_code == 201, assign.text
+
+    resp = await client.post("/api/v1/resources/bulk-delete-all", params={"project_id": str(project.id)})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deleted_count": 2, "skipped_names": []}
+
+    resp = await client.get("/api/v1/resources/", params={"project_id": str(project.id)})
+    assert resp.json() == []
+
+    resp = await client.get("/api/v1/resource-assignments/", params={"activity_id": activity["id"]})
+    assert resp.json() == []
 
 
 async def test_get_resource_not_found(client: AsyncClient):

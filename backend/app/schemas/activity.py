@@ -365,6 +365,15 @@ class DeleteActivityResponse(BaseModel):
     archived: bool
 
 
+class BulkDeleteActivitiesRequest(BaseModel):
+    activity_ids: list[uuid.UUID]
+
+
+class BulkDeleteActivitiesResponse(BaseModel):
+    deleted_count: int
+    archived_count: int
+
+
 class ActivityCodeHistoryResponse(BaseModel):
     """One entry in an activity's append-only code-change audit trail — see
     app/models/activity_code_history.py."""

@@ -326,24 +326,20 @@ function ResourcePoolWidgetImpl({ projectId, resources, calendars, onChange, onC
       `Delete all ${resources.length} resource${resources.length === 1 ? '' : 's'} in the pool? This also deletes any of their activity assignments — those activities' resourced costs will need re-generating. Any resource in a frozen schedule period will be skipped.`,
     ))) return
     setBulkDeleting(true)
-    const skipped: string[] = []
-    for (const r of resources) {
-      try {
-        const { data: assignments } = await api.get('/api/v1/resource-assignments/', { params: { resource_id: r.id } })
-        for (const a of assignments as { id: string }[]) {
-          await api.delete(`/api/v1/resource-assignments/${a.id}`)
-        }
-        await api.delete(`/api/v1/resources/${r.id}`)
-      } catch {
-        skipped.push(r.name)
-      }
-    }
+    // One request, batched server-side (2026-09-03, per Maro: "takes a long
+    // time to delete all activities and all resources" — the old per-resource
+    // GET-assignments/DELETE-each/DELETE-resource loop meant hundreds of
+    // sequential round trips for a real pool). See
+    // app/services/resource.py:bulk_delete_resources.
+    const { data } = await api.post<{ deleted_count: number; skipped_names: string[] }>(
+      '/api/v1/resources/bulk-delete-all', null, { params: { project_id: projectId } },
+    )
     setBulkDeleting(false)
     await onChange()
-    if (skipped.length > 0) {
+    if (data.skipped_names.length > 0) {
       window.alert(
-        `Deleted ${resources.length - skipped.length} of ${resources.length} resources.\n`
-        + `Could not clear (e.g. frozen period), skipped: ${skipped.join(', ')}`,
+        `Deleted ${data.deleted_count} of ${resources.length} resources.\n`
+        + `Could not clear (e.g. frozen period), skipped: ${data.skipped_names.join(', ')}`,
       )
     }
   }

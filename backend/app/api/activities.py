@@ -13,6 +13,8 @@ from app.schemas.activity import (
     ActivityMoveRequest,
     ActivityResponse,
     ActivityUpdate,
+    BulkDeleteActivitiesRequest,
+    BulkDeleteActivitiesResponse,
     DeleteActivityResponse,
     SetDataDateRequest,
 )
@@ -125,6 +127,20 @@ async def delete_activity(
     snapshot) — see app/services/activity.py:delete_activity."""
     archived = await svc.delete_activity(db, activity_id, cascade=cascade)
     return {"archived": archived}
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteActivitiesResponse)
+async def bulk_delete_activities(
+    data: BulkDeleteActivitiesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Multi-select delete in the Scheduling grid — always cascades (each id
+    and its whole subtree), same as the grid's own bulk-delete confirm text
+    already promises. Runs the hierarchy+CPM recompute once for the whole
+    batch instead of once per activity — see
+    app/services/activity.py:bulk_delete_activities."""
+    deleted, archived = await svc.bulk_delete_activities(db, data.activity_ids)
+    return {"deleted_count": deleted, "archived_count": archived}
 
 
 @router.post("/{activity_id}/archive", response_model=list[ActivityResponse])

@@ -61,6 +61,11 @@ class ResourceResponse(ResourceBase):
     updated_at: datetime
 
 
+class BulkDeleteResourcesResponse(BaseModel):
+    deleted_count: int
+    skipped_names: list[str]
+
+
 class ResourceAssignmentBase(BaseModel):
     resource_id: uuid.UUID
     role: str | None = None

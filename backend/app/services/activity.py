@@ -990,7 +990,9 @@ async def _get_or_create_archive_container(db: AsyncSession, schedule_period_id:
     return container
 
 
-async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> list[Activity]:
+async def archive_activity(
+    db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True, recompute: bool = True,
+) -> list[Activity]:
     """Actualise + reparent under the Archived container, instead of deleting
     (2026-07-04, per Maro): forces pct_complete to 100 ("all work is done to
     this point, not expecting to do more") and strips every relationship the
@@ -1054,15 +1056,18 @@ async def archive_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bo
         note="Archived — actualised to 100% complete, relationships removed, moved under the Archived WBS.",
     ))
 
-    await _recompute_hierarchy(db, schedule_period_id)
-    await scheduling_cpm.recompute_schedule(db, schedule_period_id)
-    # See create_activity's own comment on this same second call.
-    await _recompute_hierarchy(db, schedule_period_id)
-    await _attach_evm_fields(db, archived_activities)
+    if recompute:
+        await _recompute_hierarchy(db, schedule_period_id)
+        await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+        # See create_activity's own comment on this same second call.
+        await _recompute_hierarchy(db, schedule_period_id)
+        await _attach_evm_fields(db, archived_activities)
     return archived_activities
 
 
-async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True) -> bool:
+async def delete_activity(
+    db: AsyncSession, activity_id: uuid.UUID, cascade: bool = True, recompute: bool = True,
+) -> bool:
     """Delete an activity. cascade=True (default) removes its whole WBS subtree too
     (MS Project's usual "delete summary task" behaviour). cascade=False deletes only
     this row and promotes its direct children up to its own level — they become
@@ -1073,7 +1078,11 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     baseline snapshot can no longer be hard-deleted at all (2026-07-04, per
     Maro): that would sever the very audit trail baselines exist to provide,
     so Archive is the only removal path available for it.
-    """
+
+    recompute=False skips the hierarchy+CPM recompute at the end — for
+    bulk_delete_activities below, which runs it once for the whole batch
+    instead of once per item (2026-09-03, per Maro: a 132-activity bulk
+    delete was running a full CPM recompute 132 times over)."""
     activity = await get_activity(db, activity_id)
     await _require_live_schedule_period(db, activity.schedule_period_id)
     if activity.is_archive_container:
@@ -1083,7 +1092,7 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     doomed_ids = {activity_id} if cascade is False else await _subtree_ids(db, schedule_period_id, activity_id)
 
     if await _has_baseline_history(db, doomed_ids):
-        await archive_activity(db, activity_id, cascade=cascade)
+        await archive_activity(db, activity_id, cascade=cascade, recompute=recompute)
         return True
 
     # Explicitly ORM-delete any activity_relationships touching the row(s) about to be
@@ -1139,8 +1148,49 @@ async def delete_activity(db: AsyncSession, activity_id: uuid.UUID, cascade: boo
     await db.delete(activity)
     await db.commit()
     db.expunge_all()
+    if recompute:
+        await _recompute_hierarchy(db, schedule_period_id)
+        await scheduling_cpm.recompute_schedule(db, schedule_period_id)
+        # See create_activity's own comment on this same second call.
+        await _recompute_hierarchy(db, schedule_period_id)
+    return False
+
+
+async def bulk_delete_activities(db: AsyncSession, activity_ids: list[uuid.UUID]) -> tuple[int, int]:
+    """Multi-select "Delete" in the Scheduling grid (Scheduling.tsx's own
+    handleBulkDelete) used to call DELETE /activities/{id} once per
+    top-level selected activity — each one paying delete_activity's own
+    full hierarchy+CPM recompute (2026-09-03, per Maro: "takes a long time
+    to delete all activities" — a real 132-activity P6 import's own
+    multi-select delete was running that recompute 132 times over, by far
+    the dominant cost; each individual delete's other DB work is already
+    cheap). Reuses delete_activity's own per-item cascade/archive-if-
+    baselined logic completely unchanged (recompute=False), then runs the
+    recompute exactly once for the whole batch at the end.
+
+    Every id must belong to the same (live) schedule period — true for
+    every real caller, since the Scheduling grid only ever multi-selects
+    within the one period it has open; not defended further than the
+    natural 404/422 a stray cross-period id would hit inside
+    delete_activity itself.
+
+    Returns (deleted_count, archived_count)."""
+    if not activity_ids:
+        return 0, 0
+    first = await get_activity(db, activity_ids[0])
+    schedule_period_id = first.schedule_period_id
+    await _require_live_schedule_period(db, schedule_period_id)
+
+    deleted = 0
+    archived = 0
+    for activity_id in activity_ids:
+        was_archived = await delete_activity(db, activity_id, cascade=True, recompute=False)
+        if was_archived:
+            archived += 1
+        else:
+            deleted += 1
+
     await _recompute_hierarchy(db, schedule_period_id)
     await scheduling_cpm.recompute_schedule(db, schedule_period_id)
-    # See create_activity's own comment on this same second call.
     await _recompute_hierarchy(db, schedule_period_id)
-    return False
+    return deleted, archived

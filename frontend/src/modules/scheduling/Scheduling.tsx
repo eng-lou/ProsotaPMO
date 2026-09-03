@@ -2427,11 +2427,15 @@ export function Scheduling() {
       ? `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? ${withChildren.length} of them ${withChildren.length === 1 ? 'has' : 'have'} sub-activities — those will be deleted too. This cannot be undone.`
       : `Delete ${topLevel.length} selected activit${topLevel.length === 1 ? 'y' : 'ies'}? This cannot be undone.`
     if (!(await confirmWithDontAsk('scheduling.bulk-delete', message))) return
-    let archivedCount = 0
-    for (const a of topLevel) {
-      const { data } = await api.delete<{ archived: boolean }>(`/api/v1/activities/${a.id}`, { params: { cascade: true } })
-      if (data.archived) archivedCount += 1
-    }
+    // One request, one server-side hierarchy+CPM recompute for the whole
+    // batch (2026-09-03, per Maro: "takes a long time to delete all
+    // activities" — the old per-activity DELETE loop paid that recompute
+    // once per selected activity, the dominant cost for a large multi-select
+    // like a freshly P6-imported schedule).
+    const { data } = await api.post<{ deleted_count: number; archived_count: number }>(
+      '/api/v1/activities/bulk-delete', { activity_ids: topLevel.map(a => a.id) },
+    )
+    const archivedCount = data.archived_count
     setSelectedIds(new Set())
     await refresh()
     if (archivedCount > 0) {

@@ -515,6 +515,27 @@ async def test_delete_summary_cascades_to_children(
     assert resp.status_code == 404
 
 
+async def test_bulk_delete_activities(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """POST /activities/bulk-delete (2026-09-03, per Maro: multi-select
+    delete on a large real schedule was slow — see
+    app/services/activity.py:bulk_delete_activities) cascades each id like
+    the single-delete endpoint does, in one request."""
+    a = await _create(client, project, live_schedule_period, task_name="Phase 1")
+    a_child = await _create(client, project, live_schedule_period, task_name="Piling", parent_id=a["id"])
+    b = await _create(client, project, live_schedule_period, task_name="Phase 2")
+
+    resp = await client.post("/api/v1/activities/bulk-delete", json={"activity_ids": [a["id"], b["id"]]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"deleted_count": 2, "archived_count": 0}
+
+    for activity_id in (a["id"], a_child["id"], b["id"]):
+        resp = await client.get(f"/api/v1/activities/{activity_id}")
+        assert resp.status_code == 404
+
+
 async def test_delete_without_cascade_promotes_children(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):

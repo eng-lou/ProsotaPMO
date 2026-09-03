@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.resource import ResourceCreate, ResourceResponse, ResourceUpdate
+from app.schemas.resource import BulkDeleteResourcesResponse, ResourceCreate, ResourceResponse, ResourceUpdate
 from app.services import resource as svc
 
 router = APIRouter(prefix="/resources", tags=["resources"])
@@ -44,3 +44,15 @@ async def delete_resource(
 ) -> Response:
     await svc.delete_resource(db, resource_id)
     return Response(status_code=204)
+
+
+@router.post("/bulk-delete-all", response_model=BulkDeleteResourcesResponse)
+async def bulk_delete_resources(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resource Pool's "Delete All" — one request instead of the old
+    per-resource GET-assignments/DELETE-each/DELETE-resource loop. See
+    app/services/resource.py:bulk_delete_resources."""
+    deleted, skipped = await svc.bulk_delete_resources(db, project_id)
+    return {"deleted_count": deleted, "skipped_names": skipped}
