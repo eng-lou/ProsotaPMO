@@ -154,8 +154,35 @@ class ParsedUdfType:
 
 
 @dataclass
+class ParsedBaselineActivity:
+    # Matched back to a real imported Activity by this P6 Activity Id text
+    # (e.g. "EC2430"), NOT by ObjectId — a <BaselineProject>'s own nested
+    # <Activity> elements carry entirely different ObjectIds from the live
+    # project's own (confirmed against a real file: the live project and
+    # each of its baselines are separate P6 "projects" internally, each
+    # numbering their own objects independently), but P6 keeps the
+    # human-readable Activity Id stable across a project and its baselines.
+    p6_activity_id: str
+    start: datetime | None
+    finish: datetime | None
+    duration_hours: Decimal
+
+
+@dataclass
+class ParsedBaseline:
+    # BaselineTypeName ("Customer Sign-Off Baseline") is the label P6's own
+    # UI and export dialog show the user — preferred over the baseline
+    # project's own <Name> (e.g. "Saratoga Senior Community - B2"), which is
+    # just the live project's name with a suffix, far less recognisable.
+    name: str
+    data_date: date | None
+    activities: list[ParsedBaselineActivity] = field(default_factory=list)
+
+
+@dataclass
 class ParsedP6Schedule:
     project_name: str
+    data_date: date | None = None
     calendars: list[ParsedCalendar] = field(default_factory=list)
     wbs_nodes: list[ParsedWbs] = field(default_factory=list)
     activities: list[ParsedActivity] = field(default_factory=list)
@@ -163,6 +190,7 @@ class ParsedP6Schedule:
     resources: list[ParsedResource] = field(default_factory=list)
     assignments: list[ParsedAssignment] = field(default_factory=list)
     udf_types: list[ParsedUdfType] = field(default_factory=list)
+    baselines: list[ParsedBaseline] = field(default_factory=list)
     # Human-readable notes on anything the file contained that Prosota has
     # no model for, or a real file's actual values genuinely couldn't be
     # mapped cleanly — surfaced in the import summary rather than silently
@@ -324,7 +352,19 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
     if len(project_els) > 1:
         skipped.append(f"File contains {len(project_els)} projects — only the first (\"{_text(project_el, 'Id')}\") was imported.")
 
-    out = ParsedP6Schedule(project_name=_text(project_el, "Id") or _text(project_el, "Name") or "Imported Project", skipped=skipped)
+    # Real Name ("Saratoga Senior Community") preferred over Id ("EC00630")
+    # — the Id is P6's own short project code, not what the user would
+    # recognise the project as (2026-09-03, per Maro: "the Project Name
+    # wasn't captured" — Id was being used everywhere Name should have
+    # been). DataDate is P6's own live "as-of" date for the whole schedule
+    # — falls back to PlannedStartDate for a file that somehow lacks it
+    # (never actually seen, but PlannedStartDate is the closest analogue).
+    project_data_date = _datetime(project_el, "DataDate") or _datetime(project_el, "PlannedStartDate")
+    out = ParsedP6Schedule(
+        project_name=_text(project_el, "Name") or _text(project_el, "Id") or "Imported Project",
+        data_date=project_data_date.date() if project_data_date else None,
+        skipped=skipped,
+    )
 
     for cal_el in root.findall(_tag("Calendar")):
         out.calendars.append(_parse_calendar(cal_el, skipped))
@@ -396,5 +436,34 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
             activity_object_id=activity_object_id, resource_object_id=resource_object_id,
             planned_units=_decimal(asg_el, "PlannedUnits") or Decimal(0),
         ))
+
+    # --- Baselines: each is its own <BaselineProject>, a full sibling
+    # structure to <Project> (not nested inside it) carrying its own nested
+    # <Activity> elements — confirmed against a real two-baseline export
+    # (EC00630.xml, 2026-09-03). OriginalProjectObjectId is how a baseline
+    # says which live project it was captured from; only baselines pointing
+    # at *this* file's own <Project> are imported (a multi-project PMXML
+    # export could in principle carry baselines for projects other than the
+    # one being imported here).
+    project_object_id = _text(project_el, "ObjectId")
+    for bp_el in root.findall(_tag("BaselineProject")):
+        if _text(bp_el, "OriginalProjectObjectId") != project_object_id:
+            continue
+        bp_data_date = _datetime(bp_el, "DataDate")
+        baseline = ParsedBaseline(
+            name=_text(bp_el, "BaselineTypeName") or _text(bp_el, "Name") or "Imported Baseline",
+            data_date=bp_data_date.date() if bp_data_date else None,
+        )
+        for bact_el in bp_el.findall(_tag("Activity")):
+            p6_activity_id = _text(bact_el, "Id")
+            if p6_activity_id is None:
+                continue
+            baseline.activities.append(ParsedBaselineActivity(
+                p6_activity_id=p6_activity_id,
+                start=_datetime(bact_el, "StartDate") or _datetime(bact_el, "PlannedStartDate"),
+                finish=_datetime(bact_el, "FinishDate") or _datetime(bact_el, "PlannedFinishDate"),
+                duration_hours=_decimal(bact_el, "PlannedDuration") or Decimal(0),
+            ))
+        out.baselines.append(baseline)
 
     return out

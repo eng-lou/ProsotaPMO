@@ -94,6 +94,7 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                 <li>{summary.resource_count} resources, {summary.assignment_count} assignments</li>
                 <li>{summary.calendar_count} calendars</li>
                 {summary.udf_value_count > 0 && <li>{summary.udf_value_count} custom field values</li>}
+                {summary.baseline_count > 0 && <li>{summary.baseline_count} baseline{summary.baseline_count === 1 ? '' : 's'} captured</li>}
               </ul>
               {summary.skipped.length > 0 && (
                 <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1.5 max-h-32 overflow-y-auto">

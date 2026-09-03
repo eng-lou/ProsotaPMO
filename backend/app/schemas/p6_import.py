@@ -43,6 +43,7 @@ class P6ImportSummaryResponse(BaseModel):
     relationship_count: int
     assignment_count: int
     udf_value_count: int
+    baseline_count: int
     # Human-readable notes on anything skipped or approximated during
     # parsing/import — never silently dropped, see
     # app/services/p6_import.py's own P6ImportSummary docstring.

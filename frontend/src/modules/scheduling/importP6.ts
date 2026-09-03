@@ -11,6 +11,7 @@ export interface P6ImportSummary {
   relationship_count: number
   assignment_count: number
   udf_value_count: number
+  baseline_count: number
   skipped: string[]
 }
 

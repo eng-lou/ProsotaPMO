@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -15,6 +15,7 @@ from app.models.calendar import Calendar, CalendarBreak, CalendarException
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.activity import is_milestone_type
@@ -23,6 +24,8 @@ from app.services import cost_sync, schedule_variant, scheduling_cpm
 from app.services.activity import _activity_role, _apply_computed_fields, _next_role_code, _recompute_hierarchy
 from app.services.p6_import_parse import ParsedActivity, ParsedP6Schedule, ParsedResource, ParsedWbs
 from app.services.scheduling_cpm import _find_cycle
+
+_P6_ACTIVITY_ID_UDF_NAME = "P6 Activity ID"
 
 
 @dataclass
@@ -36,6 +39,7 @@ class P6ImportSummary:
     relationship_count: int = 0
     assignment_count: int = 0
     udf_value_count: int = 0
+    baseline_count: int = 0
     # Human-readable notes on anything skipped or approximated — combines
     # p6_import_parse.py's own parse-time notes with anything this layer
     # itself couldn't resolve (a relationship that would have created a
@@ -80,6 +84,14 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         select(SchedulePeriod).where(SchedulePeriod.schedule_variant_id == variant.id, SchedulePeriod.freeze_status == "live")
     )
     period = period_result.scalar_one()
+    # Anchor CPM to the P6 file's own DataDate, not "today" — a freshly
+    # created SchedulePeriod's start_date is null, and
+    # scheduling_cpm.data_date_for_period falls back to date.today() for
+    # that case, which is exactly why re-scheduling a real 2011-dated P6
+    # export against a 2026 "now" produced wildly wrong dates (2026-09-03,
+    # per Maro: "the dates are very off").
+    if parsed.data_date is not None:
+        period.start_date = parsed.data_date
 
     # --- Calendars: match existing project calendars by name, else stage new ones ---
     existing_calendars_result = await db.execute(select(Calendar).where(Calendar.project_id == project_id))
@@ -173,10 +185,50 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         db.add(definition)
         udf_def_real_id_by_object_id[pu.object_id] = definition.id
 
+    # P6's own Activity Id (e.g. "EC2430", distinct from Prosota's own
+    # generated P/W/T/M code) has no dedicated column on Activity — captured
+    # as a UDF instead, same as any other imported field with no direct
+    # Prosota equivalent (2026-09-03, per Maro: "i didnt see any udf for the
+    # P6 Activity ID... udfs need to be created to capture" it). Also doubles
+    # as the join key for matching this file's own <BaselineProject>
+    # snapshots back to the activities just imported (see the baseline
+    # section below) — those carry the same stable Id, not the live
+    # project's internal ObjectId.
+    p6_activity_id_udf = existing_udf_by_name.get(_P6_ACTIVITY_ID_UDF_NAME)
+    if p6_activity_id_udf is None:
+        p6_activity_id_udf = UserDefinedFieldDefinition(
+            id=uuid.uuid4(), project_id=project_id, entity_type="activity",
+            name=_P6_ACTIVITY_ID_UDF_NAME, data_type="text",
+        )
+        db.add(p6_activity_id_udf)
+    p6_activity_id_udf_id = p6_activity_id_udf.id
+
     # --- WBS -> wbs_summary Activities, parent-before-child ---
     wbs_by_object_id: dict[str, ParsedWbs] = {w.object_id: w for w in parsed.wbs_nodes}
     wbs_real_id_by_object_id: dict[str, uuid.UUID] = {}
     wbs_sort_counter = 0
+
+    # One root Activity representing the true P6 <Project> itself (role P) —
+    # in real P6, the Project always sits *above* the WBS tree as its own
+    # distinct object (confirmed against a real file: <Project> and <WBS>
+    # have entirely separate ObjectId sequences), so every top-level WBS
+    # branch/activity in this file is really a *child* of the project, never
+    # itself the project. The old code let every top-level WBS node (parent
+    # nil) become its own separate P row — fine for Prosota's own
+    # single-branch round-tripped exports, but wrong for a real multi-branch
+    # P6 project (2026-09-03, per Maro's own screenshot: "Building 1",
+    # "Garage 1" etc. each showing as their own P-000N when they should all
+    # be W under one Saratoga-level P).
+    root_activity_id = uuid.uuid4()
+    root_code = await _next_role_code(db, project_id, "P")
+    root_activity = Activity(
+        id=root_activity_id, code=root_code, wbs_role="P", project_id=project_id,
+        schedule_variant_id=variant.id, schedule_period_id=period.id,
+        task_name=parsed.project_name[:500], activity_type="wbs_summary", parent_id=None,
+        sort_order=-1,
+    )
+    _apply_computed_fields(root_activity)
+    db.add(root_activity)
 
     async def resolve_wbs(object_id: str, visiting: set[str]) -> uuid.UUID:
         if object_id in wbs_real_id_by_object_id:
@@ -185,16 +237,19 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         if pw is None:
             raise KeyError(object_id)
         if object_id in visiting:
-            skipped.append(f"WBS \"{pw.name}\" is part of a circular parent chain — imported as top-level.")
-            parent_real_id = None
+            skipped.append(f"WBS \"{pw.name}\" is part of a circular parent chain — imported under the project root.")
+            parent_real_id = root_activity_id
         else:
             visiting = visiting | {object_id}
-            parent_real_id = None
+            # No P6 parent (a true top-level WBS branch, e.g. "Building 1")
+            # nests under the synthetic project-root Activity above, not at
+            # Prosota's own top level — see root_activity_id's own header.
+            parent_real_id = root_activity_id
             if pw.parent_object_id is not None and pw.parent_object_id in wbs_by_object_id:
                 try:
                     parent_real_id = await resolve_wbs(pw.parent_object_id, visiting)
                 except KeyError:
-                    parent_real_id = None
+                    parent_real_id = root_activity_id
         nonlocal wbs_sort_counter
         # Brand-new leaf, same as bulk_generate.py's own plan_activity —
         # promotion to wbs_summary happens in the final _recompute_hierarchy
@@ -224,10 +279,16 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     activity_real_id_by_object_id: dict[str, uuid.UUID] = {}
     activity_by_object_id: dict[str, ParsedActivity] = {a.object_id: a for a in parsed.activities}
     activity_sort_counter = 0
+    activity_real_id_by_p6_id: dict[str, tuple[uuid.UUID, str]] = {}
     for pa in parsed.activities:
         parent_real_id = wbs_real_id_by_object_id.get(pa.wbs_object_id) if pa.wbs_object_id else None
         if pa.wbs_object_id and parent_real_id is None:
-            skipped.append(f"Activity \"{pa.name}\" references a WBS that doesn't exist in this file — imported as top-level.")
+            skipped.append(f"Activity \"{pa.name}\" references a WBS that doesn't exist in this file — imported under the project root.")
+        # No WBS at all (or an unresolvable one) still belongs under the
+        # project root, never fully detached — see root_activity_id's own
+        # header for why a real P6 file has no true "top level" above it.
+        if parent_real_id is None:
+            parent_real_id = root_activity_id
         role = _activity_role(pa.activity_type, parent_real_id)
         code = await _next_role_code(db, project_id, role)
         activity_id = uuid.uuid4()
@@ -255,6 +316,8 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         _apply_computed_fields(activity)
         db.add(activity)
         activity_real_id_by_object_id[pa.object_id] = activity_id
+        if pa.code:
+            activity_real_id_by_p6_id[pa.code] = (activity_id, code)
 
     # --- Relationships — validated against a real cycle check before any insert, same as bulk_generate.py ---
     def resolve_activity(object_id: str) -> uuid.UUID | None:
@@ -322,6 +385,12 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:
             continue
+        if pa.code:
+            db.add(UserDefinedFieldValue(
+                id=uuid.uuid4(), field_definition_id=p6_activity_id_udf_id, record_id=activity_id,
+                value_text=pa.code,
+            ))
+            udf_value_count += 1
         for v in pa.udf_values:
             definition_id = udf_def_real_id_by_object_id.get(v.udf_type_object_id)
             if definition_id is None:
@@ -331,6 +400,40 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
                 value_text=v.text, value_number=v.number, value_date=v.date_value,
             ))
             udf_value_count += 1
+
+    # --- Baselines: this file's own <BaselineProject> snapshots, matched
+    # back to the activities just imported by P6's stable Activity Id
+    # (2026-09-03, per Maro: "i also exported it with two baselines, i need
+    # those to be captured as well"). Deliberately NOT assigned (is_active
+    # stays False) — same "capture vs. assign are two separate deliberate
+    # actions" rule app/services/schedule_baseline.py's own capture_baseline
+    # already follows; the user picks which one (if any) to assign
+    # afterwards via the normal Baseline Manager UI. WBS/summary rows have
+    # no P6 Activity Id of their own to match on, so only leaf activities
+    # get a snapshot — same scope p6_export.py's own UDF capture already
+    # keeps to (activity-level only).
+    baseline_count = 0
+    for pb in parsed.baselines:
+        baseline = ScheduleBaseline(
+            id=uuid.uuid4(), schedule_period_id=period.id,
+            name=pb.name[:200], baseline_date=pb.data_date or date.today(),
+        )
+        db.add(baseline)
+        matched = 0
+        for pba in pb.activities:
+            match = activity_real_id_by_p6_id.get(pba.p6_activity_id)
+            if match is None:
+                continue
+            activity_id, prosota_code = match
+            db.add(ScheduleBaselineActivity(
+                id=uuid.uuid4(), baseline_id=baseline.id, activity_id=activity_id, code=prosota_code,
+                start=pba.start, finish=pba.finish, duration_hours=pba.duration_hours,
+            ))
+            matched += 1
+        if matched == 0 and pb.activities:
+            skipped.append(f"Baseline \"{pb.name}\" had no activities matching this import — skipped.")
+        else:
+            baseline_count += 1
 
     await db.commit()
 
@@ -347,7 +450,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     return P6ImportSummary(
         schedule_variant_id=variant.id, schedule_period_id=period.id, variant_name=variant.name,
         calendar_count=len(calendar_real_id_by_object_id), resource_count=len(resource_real_id_by_object_id),
-        activity_count=len(wbs_real_id_by_object_id) + len(activity_real_id_by_object_id),
+        activity_count=1 + len(wbs_real_id_by_object_id) + len(activity_real_id_by_object_id),
         relationship_count=relationship_count, assignment_count=assignment_count, udf_value_count=udf_value_count,
-        skipped=skipped,
+        baseline_count=baseline_count, skipped=skipped,
     )
