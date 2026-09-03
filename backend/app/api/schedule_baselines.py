@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.activity import ActivityResponse
 from app.schemas.schedule_baseline import (
+    MilestoneTrendResponse,
     PromoteBaselineCreate,
     PromoteBaselineResponse,
     ScheduleBaselineActivityResponse,
@@ -26,6 +27,18 @@ async def list_baselines(
     db: AsyncSession = Depends(get_db),
 ) -> list:
     return await svc.list_baselines(db, schedule_period_id)
+
+
+@router.get("/milestone-trend", response_model=MilestoneTrendResponse)
+async def get_milestone_trend(
+    schedule_period_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Milestone Trend Analysis — every live milestone's own forecast finish
+    at each saved baseline (chronological) plus its current, un-baselined
+    finish, so a planner can see at a glance whether it's been sliding later
+    or pulling in over time."""
+    return await svc.get_milestone_trend(db, schedule_period_id)
 
 
 @router.get("/{baseline_id}/snapshot", response_model=list[ScheduleBaselineActivityResponse])

@@ -84,3 +84,34 @@ class ScheduleBaselineActivityResponse(BaseModel):
     start: datetime | None
     finish: datetime | None
     duration_hours: Decimal | None = None
+
+
+# Milestone Trend Analysis (2026-09-03, per Maro: "i need charts across
+# baseline periods e.g milestones over time a trend analysis... whether
+# milestones have improved or delayed over time" — a classic P6/PMBOK
+# "milestone trend chart"/"banana chart": each milestone's own forecast date
+# plotted once per saved baseline, in capture order, so a planner can see at
+# a glance whether it's been sliding later (each point higher than the last)
+# or pulling in. One point per (milestone, ScheduleBaseline) pair that
+# actually has a snapshot row, matched by the milestone's own real
+# activity_id (ScheduleBaselineActivity's own stable reference — see that
+# model's own docstring), plus one final "Current" point from the milestone's
+# live, un-baselined finish — never a fabricated in-between date.
+class MilestoneTrendPoint(BaseModel):
+    # None for the synthetic trailing "Current" point — every real captured
+    # baseline has a real id.
+    baseline_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    finish: datetime | None
+
+
+class MilestoneTrendSeries(BaseModel):
+    activity_id: uuid.UUID
+    code: str
+    task_name: str
+    points: list[MilestoneTrendPoint]
+
+
+class MilestoneTrendResponse(BaseModel):
+    series: list[MilestoneTrendSeries]

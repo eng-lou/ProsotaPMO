@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -14,7 +15,15 @@ from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActiv
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
-from app.schemas.schedule_baseline import PromoteBaselineCreate, ScheduleBaselineCreate, ScheduleBaselineFromVariantCreate
+from app.schemas.activity import is_milestone_type
+from app.schemas.schedule_baseline import (
+    MilestoneTrendPoint,
+    MilestoneTrendResponse,
+    MilestoneTrendSeries,
+    PromoteBaselineCreate,
+    ScheduleBaselineCreate,
+    ScheduleBaselineFromVariantCreate,
+)
 from app.schemas.schedule_variant import ScheduleVariantResponse
 from app.services import scheduling_cpm
 from app.services.activity import _attach_evm_fields, _require_live_schedule_period
@@ -202,6 +211,59 @@ async def list_baselines(db: AsyncSession, schedule_period_id: uuid.UUID) -> lis
     baselines = list(result.scalars().all())
     await _attach_activity_counts(db, baselines)
     return baselines
+
+
+async def get_milestone_trend(db: AsyncSession, schedule_period_id: uuid.UUID) -> MilestoneTrendResponse:
+    """Milestone Trend Analysis (2026-09-03, per Maro: "charts across baseline
+    periods... whether milestones have improved or delayed over time") — for
+    every live milestone, its own forecast finish at each saved baseline
+    (chronological), plus a final "Current" point from its live, un-baselined
+    finish. Matched by activity_id (ScheduleBaselineActivity's own stable
+    reference — see that model's own docstring), never by code/name, since a
+    milestone's code can change between baselines (promoted/demoted/renamed)
+    but its activity_id never does. A milestone missing a snapshot row for a
+    given baseline (created after that baseline was captured) simply has no
+    point for it, rather than a fabricated/interpolated one."""
+    milestones_result = await db.execute(
+        select(Activity).where(
+            Activity.schedule_period_id == schedule_period_id,
+            Activity.is_archived.is_(False),
+        ).order_by(Activity.wbs_path)
+    )
+    milestones = [a for a in milestones_result.scalars().all() if is_milestone_type(a.activity_type)]
+    if not milestones:
+        return MilestoneTrendResponse(series=[])
+
+    baselines_result = await db.execute(
+        select(ScheduleBaseline).where(ScheduleBaseline.schedule_period_id == schedule_period_id)
+        .order_by(ScheduleBaseline.baseline_date.asc(), ScheduleBaseline.created_at.asc())
+    )
+    baselines = list(baselines_result.scalars().all())
+
+    snapshots_by_baseline_and_activity: dict[tuple[uuid.UUID, uuid.UUID], ScheduleBaselineActivity] = {}
+    if baselines:
+        milestone_ids = [m.id for m in milestones]
+        baseline_ids = [b.id for b in baselines]
+        snap_result = await db.execute(
+            select(ScheduleBaselineActivity).where(
+                ScheduleBaselineActivity.baseline_id.in_(baseline_ids),
+                ScheduleBaselineActivity.activity_id.in_(milestone_ids),
+            )
+        )
+        snapshots_by_baseline_and_activity = {
+            (s.baseline_id, s.activity_id): s for s in snap_result.scalars().all()
+        }
+
+    series = []
+    for m in milestones:
+        points = [
+            MilestoneTrendPoint(baseline_id=b.id, baseline_name=b.name, baseline_date=b.baseline_date, finish=snap.finish)
+            for b in baselines
+            if (snap := snapshots_by_baseline_and_activity.get((b.id, m.id))) is not None
+        ]
+        points.append(MilestoneTrendPoint(baseline_id=None, baseline_name="Current", baseline_date=date.today(), finish=m.finish))
+        series.append(MilestoneTrendSeries(activity_id=m.id, code=m.code, task_name=m.task_name, points=points))
+    return MilestoneTrendResponse(series=series)
 
 
 async def _clear_baseline_fields(db: AsyncSession, schedule_period_id: uuid.UUID) -> list[Activity]:

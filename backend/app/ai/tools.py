@@ -577,6 +577,7 @@ TOOLS: list[dict] = [
                                     "near_critical_watch_list", "activity_status", "project_info",
                                     "camera_view_gallery", "fourd_video_gallery", "lookahead_planner",
                                     "mitigation_actions_table", "risk_ageing_table", "project_narrative",
+                                    "milestone_trend_chart",
                                 ],
                             },
                             "filter": {

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
 import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
+import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { getMilestoneTrend, type MilestoneTrendSeries } from './milestoneTrend'
 import { MilestoneTrack } from './MilestoneTrack'
 import { formatCurrency, formatDate } from './Overview'
 import type { DashboardOverviewResponse, ResourceAssignmentSummary } from './types'
@@ -154,6 +156,97 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
     <div className="h-full overflow-auto pt-4">
       <MilestoneTrack milestones={milestones} />
     </div>
+  )
+}
+
+// Milestone Trend Analysis (2026-09-03, per Maro: "i need charts across
+// baseline periods e.g milestones over time a trend analysis... whether
+// milestones have improved or delayed over time") — unlike every widget
+// above, this doesn't read `data` (DashboardOverviewResponse) at all: it
+// needs every saved ScheduleBaseline's own captured milestone dates, not a
+// single current-schedule snapshot, so it fetches its own data and resolves
+// its own schedule period, same "genuinely different data source gets its
+// own fetch" precedent Camera Views/4D Video already established (Batch 7
+// above). A classic P6/PMBOK "milestone trend chart" (a.k.a. banana chart):
+// each milestone gets its own line, one point per baseline it existed for
+// (chronological) plus a final "Current" point from its live, un-baselined
+// finish — a flat line means stable, a rising line means slipping, falling
+// means pulling in.
+const MILESTONE_TREND_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
+
+interface MilestoneTrendAxisEntry { key: string; label: string; date: string }
+
+function buildMilestoneTrendAxis(series: MilestoneTrendSeries[]): MilestoneTrendAxisEntry[] {
+  const byKey = new Map<string, MilestoneTrendAxisEntry>()
+  for (const s of series) {
+    for (const p of s.points) {
+      const key = p.baseline_id ?? 'current'
+      if (!byKey.has(key)) byKey.set(key, { key, label: p.baseline_name, date: p.baseline_date })
+    }
+  }
+  return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export function MilestoneTrendChartWidget({ projectId }: WidgetProps) {
+  const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
+  const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
+
+  useEffect(() => {
+    if (!schedulePeriod) return
+    let cancelled = false
+    getMilestoneTrend(schedulePeriod.id).then(s => { if (!cancelled) setSeries(s) })
+    return () => { cancelled = true }
+  }, [schedulePeriod?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || series === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (series.length === 0) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones in this schedule yet.</span>
+
+  const axis = buildMilestoneTrendAxis(series)
+  if (axis.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved baselines yet) — save at least one Schedule Baseline to start a trend.
+      </span>
+    )
+  }
+  const chartData = axis.map(a => {
+    const row: Record<string, string | number | null> = { label: a.label }
+    for (const s of series) {
+      const point = s.points.find(p => (p.baseline_id ?? 'current') === a.key)
+      row[s.code] = point?.finish ? new Date(point.finish).getTime() : null
+    }
+    return row
+  })
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={chartData} margin={{ left: 8, right: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+        <YAxis
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={(v: number) => formatDate(new Date(v).toISOString())}
+          tick={{ fontSize: 11 }}
+          width={90}
+        />
+        <Tooltip
+          labelFormatter={(label: string) => label}
+          formatter={(v: number, name: string) => [formatDate(new Date(v).toISOString()), name]}
+        />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        {series.map((s, i) => (
+          <Line
+            key={s.activity_id}
+            type="monotone"
+            dataKey={s.code}
+            name={`${s.code} ${s.task_name}`}
+            stroke={MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]}
+            dot={{ r: 3 }}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
   )
 }
 
@@ -1596,6 +1689,7 @@ export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   schedule_performance: { label: 'Schedule Performance', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <SchedulePerformanceWidget {...props} /> },
   risk_overview: { label: 'Risk Overview', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskOverviewWidget {...props} /> },
   milestone_timeline: { label: 'Milestone Timeline', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <MilestoneTimelineWidget {...props} /> },
+  milestone_trend_chart: { label: 'Milestone Trend Chart', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <MilestoneTrendChartWidget {...props} /> },
   risk_exposure: { label: 'Risk Exposure', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskExposureWidget {...props} /> },
   top_risks: { label: 'Top 5 Risks', category: 'Risk', defaultSize: { w: 12, h: 5 }, render: props => <TopRisksWidget {...props} /> },
   float_distribution: { label: 'Float Distribution', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <FloatDistributionWidget {...props} /> },
