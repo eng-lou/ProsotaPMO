@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.baseline_set import BaselineLinkUpdate, BaselineSetResponse, CaptureAllCreate
+from app.schemas.baseline_set import BaselineLinkUpdate, BaselineSetCreate, BaselineSetResponse, CaptureAllCreate
 from app.services import baseline_set as svc
 
 router = APIRouter(prefix="/baseline-sets", tags=["baseline-sets"])
@@ -15,6 +15,14 @@ router = APIRouter(prefix="/baseline-sets", tags=["baseline-sets"])
 @router.get("/", response_model=list[BaselineSetResponse])
 async def list_baseline_sets(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list:
     return await svc.list_baseline_sets(db, project_id)
+
+
+@router.post("/", response_model=BaselineSetResponse, status_code=201)
+async def create_baseline_set(data: BaselineSetCreate, db: AsyncSession = Depends(get_db)):
+    """A bare, empty BaselineSet — the frontend links already-existing
+    standalone module baselines into it afterward, one /link call per
+    module (BaselineComparison.tsx's own "Link Existing" flow)."""
+    return await svc.create_baseline_set(db, data)
 
 
 @router.post("/capture-all", response_model=BaselineSetResponse, status_code=201)

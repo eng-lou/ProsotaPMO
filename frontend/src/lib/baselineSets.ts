@@ -36,9 +36,20 @@ export function useBaselineSets(projectId: string | undefined) {
     return data
   }
 
+  // A bare, empty set — used by the "Link Existing" flow (BaselineComparison.tsx)
+  // to bundle already-existing standalone module baselines together, as
+  // opposed to captureAll's "snapshot everything right now" path.
+  const createSet = async (name: string, baselineDate: string) => {
+    const { data } = await api.post<BaselineSet>('/api/v1/baseline-sets/', {
+      project_id: projectId, name, baseline_date: baselineDate,
+    })
+    await load()
+    return data
+  }
+
   const linkBaseline = async (module: BaselineModule, baselineId: string, baselineSetId: string | null) => {
     await api.post('/api/v1/baseline-sets/link', { module, baseline_id: baselineId, baseline_set_id: baselineSetId })
   }
 
-  return { baselineSets, loading, captureAll, linkBaseline, refetch: load }
+  return { baselineSets, loading, captureAll, createSet, linkBaseline, refetch: load }
 }

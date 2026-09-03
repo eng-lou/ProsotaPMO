@@ -14,7 +14,7 @@ from app.models.risk_baseline import RiskBaseline
 from app.models.schedule_baseline import ScheduleBaseline
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
-from app.schemas.baseline_set import BaselineLinkUpdate, CaptureAllCreate
+from app.schemas.baseline_set import BaselineLinkUpdate, BaselineSetCreate, CaptureAllCreate
 from app.schemas.cost_baseline import CostBaselineCreate
 from app.schemas.icd_baseline import IcdBaselineCreate
 from app.schemas.risk_baseline import RiskBaselineCreate
@@ -38,6 +38,23 @@ async def list_baseline_sets(db: AsyncSession, project_id: uuid.UUID) -> list[Ba
         .order_by(BaselineSet.baseline_date.desc(), BaselineSet.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def create_baseline_set(db: AsyncSession, data: BaselineSetCreate) -> BaselineSet:
+    """A bare, empty BaselineSet with nothing linked into it yet (2026-09-03,
+    per Maro: "i set a schedule baseline and assigned it but its not shown
+    here" — a real, previously-acknowledged gap: BaselineManagerWidget.tsx's
+    own comment already said "Baseline Sets are managed from the Dashboard's
+    Baseline Comparison, not here," but no UI there ever actually called
+    link_baseline below — this is the missing other half, alongside
+    capture_all's own one-click "snapshot everything now" path, for "I
+    already baselined Schedule/Cost/... separately, just bundle the ones I
+    already have.\""""
+    baseline_set = BaselineSet(project_id=data.project_id, name=data.name, baseline_date=data.baseline_date)
+    db.add(baseline_set)
+    await db.commit()
+    await db.refresh(baseline_set)
+    return baseline_set
 
 
 async def capture_all(db: AsyncSession, data: CaptureAllCreate) -> BaselineSet:

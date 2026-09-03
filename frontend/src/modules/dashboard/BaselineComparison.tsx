@@ -55,11 +55,24 @@ function formatDelta(
   )
 }
 
+// Risk/Cost/ICD/Schedule baseline records all share this same {id, name,
+// baseline_date} shape server-side (see BaselineManagerWidget.tsx's own
+// header comment on RiskBaselineResponse/CostBaselineResponse/
+// IcdBaselineResponse being byte-for-byte identical) — one minimal local
+// type instead of importing four near-duplicate ones.
+interface LinkableBaseline {
+  id: string
+  name: string
+  baseline_date: string
+}
+
+type LinkModule = 'schedule' | 'risk' | 'cost' | 'icd'
+
 export function BaselineComparison() {
   const { selectedProject } = useProject()
   const { period } = useActivePeriod(selectedProject?.id)
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
-  const { baselineSets, loading: setsLoading, captureAll } = useBaselineSets(selectedProject?.id)
+  const { baselineSets, loading: setsLoading, captureAll, createSet, linkBaseline } = useBaselineSets(selectedProject?.id)
 
   const [selectedSetId, setSelectedSetId] = useState<string>('')
   const [subTab, setSubTab] = useState<SubTab>('Overview')
@@ -69,6 +82,57 @@ export function BaselineComparison() {
   const [captureName, setCaptureName] = useState('')
   const [captureDate, setCaptureDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [capturing, setCapturing] = useState(false)
+
+  // "Link Existing" (2026-09-03, per Maro: "i set a schedule baseline and
+  // assigned it but its not shown here") — Capture All Now always snapshots
+  // fresh, brand-new baselines for all 4 modules at once; it has no way to
+  // reuse a baseline someone already captured separately (e.g. from
+  // Scheduling's own Baseline tab). BaselineManagerWidget.tsx's own header
+  // already documented the intended fix ("Baseline Sets are managed from
+  // the Dashboard's Baseline Comparison, not here") but no UI here ever
+  // actually called the backend's already-complete link_baseline endpoint
+  // until now — bundles whichever already-existing standalone baselines the
+  // user picks (any subset of the 4 modules) into a new set.
+  const [showLinkForm, setShowLinkForm] = useState(false)
+  const [linkName, setLinkName] = useState('')
+  const [linkDate, setLinkDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [linkOptions, setLinkOptions] = useState<Record<LinkModule, LinkableBaseline[]>>({
+    schedule: [], risk: [], cost: [], icd: [],
+  })
+  const [linkSelections, setLinkSelections] = useState<Record<LinkModule, string>>({
+    schedule: '', risk: '', cost: '', icd: '',
+  })
+  const [linking, setLinking] = useState(false)
+
+  const openLinkForm = async () => {
+    setShowLinkForm(true)
+    setShowCaptureForm(false)
+    if (!period || !schedulePeriod) return
+    const [schedule, risk, cost, icd] = await Promise.all([
+      api.get<LinkableBaseline[]>('/api/v1/schedule-baselines/', { params: { schedule_period_id: schedulePeriod.id } }),
+      api.get<LinkableBaseline[]>('/api/v1/risk-baselines/', { params: { period_id: period.id } }),
+      api.get<LinkableBaseline[]>('/api/v1/cost-baselines/', { params: { period_id: period.id } }),
+      api.get<LinkableBaseline[]>('/api/v1/icd-baselines/', { params: { period_id: period.id } }),
+    ])
+    setLinkOptions({ schedule: schedule.data, risk: risk.data, cost: cost.data, icd: icd.data })
+  }
+
+  const handleLink = async () => {
+    if (!linkName.trim() || !linkDate) return
+    const chosen = (Object.entries(linkSelections) as [LinkModule, string][]).filter(([, id]) => id !== '')
+    if (chosen.length === 0) return
+    setLinking(true)
+    try {
+      const created = await createSet(linkName.trim(), linkDate)
+      await Promise.all(chosen.map(([module, baselineId]) => linkBaseline(module, baselineId, created.id)))
+      setSelectedSetId(created.id)
+      setShowLinkForm(false)
+      setLinkName('')
+      setLinkSelections({ schedule: '', risk: '', cost: '', icd: '' })
+    } finally {
+      setLinking(false)
+    }
+  }
 
   useEffect(() => {
     if (!selectedSetId && baselineSets.length > 0) setSelectedSetId(baselineSets[0].id)
@@ -114,13 +178,76 @@ export function BaselineComparison() {
           </select>
           {data && <span className="text-gray-400 dark:text-prosota-muted">Comparing against: {data.baseline_set_name}</span>}
         </div>
-        <button
-          className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-md hover:bg-blue-700"
-          onClick={() => setShowCaptureForm(v => !v)}
-        >
-          + Capture All Now
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="text-sm px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
+            onClick={() => { setShowCaptureForm(false); if (showLinkForm) setShowLinkForm(false); else openLinkForm() }}
+            title="Bundle baselines you've already captured separately (e.g. from Scheduling's own Baseline tab) into a set, instead of snapshotting fresh ones"
+          >
+            + Link Existing
+          </button>
+          <button
+            className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-md hover:bg-blue-700"
+            onClick={() => { setShowLinkForm(false); setShowCaptureForm(v => !v) }}
+          >
+            + Capture All Now
+          </button>
+        </div>
       </div>
+
+      {showLinkForm && (
+        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4 space-y-3 text-sm">
+          <div className="flex items-end gap-3">
+            <div>
+              <label className="block text-xs text-gray-400 dark:text-prosota-muted mb-1">Name</label>
+              <input
+                className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5"
+                value={linkName}
+                onChange={e => setLinkName(e.target.value)}
+                placeholder="e.g. Contract Baseline"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 dark:text-prosota-muted mb-1">Date</label>
+              <input
+                type="date"
+                className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5"
+                value={linkDate}
+                onChange={e => setLinkDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            {([
+              ['schedule', 'Schedule'], ['risk', 'Risk'], ['cost', 'Cost'], ['icd', 'ICD'],
+            ] as [LinkModule, string][]).map(([module, label]) => (
+              <div key={module}>
+                <label className="block text-xs text-gray-400 dark:text-prosota-muted mb-1">{label}</label>
+                <select
+                  className="w-full border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1.5"
+                  value={linkSelections[module]}
+                  onChange={e => setLinkSelections(prev => ({ ...prev, [module]: e.target.value }))}
+                >
+                  <option value="">(none)</option>
+                  {linkOptions[module].map(b => (
+                    <option key={b.id} value={b.id}>{b.name} — {formatDate(b.baseline_date)}</option>
+                  ))}
+                </select>
+                {linkOptions[module].length === 0 && (
+                  <p className="text-[11px] text-gray-400 dark:text-prosota-muted mt-1">No {label} baselines captured yet.</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            className="bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            disabled={linking || !linkName.trim() || Object.values(linkSelections).every(v => v === '')}
+            onClick={handleLink}
+          >
+            {linking ? 'Linking…' : 'Create Set From Selected'}
+          </button>
+        </div>
+      )}
 
       {showCaptureForm && (
         <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4 flex items-end gap-3 text-sm">
@@ -156,7 +283,9 @@ export function BaselineComparison() {
         <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
       ) : !data ? (
         <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-8 text-center text-gray-400 dark:text-prosota-muted text-sm">
-          No baseline set yet — click "Capture All Now" to snapshot the current Schedule, Risk, Cost, and ICD state.
+          No baseline set yet — click "Capture All Now" to snapshot the current Schedule, Risk, Cost, and ICD state,
+          or "Link Existing" if you've already captured one or more of these separately (e.g. from Scheduling's own
+          Baseline tab) and just want to bundle them together for comparison here.
         </div>
       ) : (
         <>
