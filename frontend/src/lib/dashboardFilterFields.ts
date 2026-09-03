@@ -135,6 +135,17 @@ const LOOKAHEAD_ITEM_FIELDS: DashboardFieldDef[] = [
   { key: 'has_incomplete_predecessor', label: 'Has Incomplete Predecessor', type: 'boolean' },
 ]
 
+// MilestoneTrendSeries (2026-09-03, per Maro: "the filter should be exposed
+// so i can pick the milestones to show") — a different shape from
+// MilestoneTimelineItem (one row per milestone across every saved baseline,
+// not one row per baseline), so its own short list — code/task_name are
+// the only two fields this shape actually has to filter on (no finish/
+// variance here, those live one level down in each series' own points).
+const MILESTONE_TREND_FIELDS: DashboardFieldDef[] = [
+  { key: 'code', label: 'Code', type: 'text' },
+  { key: 'task_name', label: 'Milestone Name', type: 'text' },
+]
+
 const MITIGATION_ACTION_FIELDS: DashboardFieldDef[] = [
   { key: 'risk_code', label: 'Risk Code', type: 'text' },
   { key: 'code', label: 'Action Code', type: 'text' },
@@ -200,6 +211,7 @@ const WIDGET_FIELD_MAP: Record<string, { fields: DashboardFieldDef[]; udfEntity?
   lookahead_planner: { fields: LOOKAHEAD_ITEM_FIELDS },
   mitigation_actions_table: { fields: MITIGATION_ACTION_FIELDS },
   clash_detail_table: { fields: CLASH_PAIR_FIELDS },
+  milestone_trend_chart: { fields: MILESTONE_TREND_FIELDS },
 }
 
 function udfRecords(data: DashboardOverviewResponse, entity: UdfEntity): { udf: Record<string, string> }[] {

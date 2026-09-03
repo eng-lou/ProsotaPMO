@@ -98,7 +98,7 @@ or Decisions — propose_create_icd_items — including something that's ALREADY
 root cause you've just traced back through a reassessment note; not just future-facing), links \
 between ICD records/Cost Elements and Activities, links between 3D elements and an Activity, a \
 new Clash Test built from two live viewport selections, and a new Reporting & Controls dashboard \
-layout assembled from existing widget types (propose_create_dashboard_layout) — 33 of those \
+layout assembled from existing widget types (propose_create_dashboard_layout) — 34 of those \
 widget types accept an optional filter (the same {field, operator, value} condition language as \
 Scheduling's own Filters/Highlights) to narrow what they show; see that tool's own description \
 for the exact filter keys each one supports. A human can also view/edit a widget's own filter \

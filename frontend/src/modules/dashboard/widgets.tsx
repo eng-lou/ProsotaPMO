@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
 import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
@@ -44,8 +44,10 @@ export interface WidgetProps {
   // one of the same six raw per-record arrays (data.risks/cost_elements/
   // icd_items/resource_assignments/schedule_activities/milestones), or one
   // of the two smaller ones added at the same time (data.lookahead_items,
-  // data.mitigation_actions), or data.clash_pairs — 33 widget_types total
-  // now, see FILTERABLE_WIDGET_TYPES. Deliberately NOT extended to the
+  // data.mitigation_actions), or data.clash_pairs — plus milestone_trend_chart
+  // (its own, genuinely different milestone-across-baselines shape, added
+  // 2026-09-03) — 34 widget_types total now, see FILTERABLE_WIDGET_TYPES.
+  // Deliberately NOT extended to the
   // handful of widgets that read a server-pre-aggregated summary instead
   // of a raw array (kpi_strip, schedule_performance, risk_overview,
   // risk_exposure, dcma_score, clash_summary, eac_forecast_comparison,
@@ -187,7 +189,7 @@ function buildMilestoneTrendAxis(series: MilestoneTrendSeries[]): MilestoneTrend
   return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
-export function MilestoneTrendChartWidget({ projectId }: WidgetProps) {
+export function MilestoneTrendChartWidget({ projectId, filterConditions, filterMatchMode }: WidgetProps) {
   const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
   const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
 
@@ -202,7 +204,18 @@ export function MilestoneTrendChartWidget({ projectId }: WidgetProps) {
   if (periodLoading || series === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
   if (series.length === 0) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones in this schedule yet.</span>
 
-  const axis = buildMilestoneTrendAxis(series)
+  // Filterable on code/task_name (2026-09-03, per Maro: "the filter should
+  // be exposed so i can pick the milestones to show") — e.g.
+  // {field:'code', operator:'eq', value:'M-0002'} isolates one milestone,
+  // or {field:'task_name', operator:'contains', value:'Completion'} shows
+  // a themed subset. Filtered before the axis is built so a narrowed view
+  // never shows a baseline column that's now entirely empty.
+  const visibleSeries = series.filter(s => evaluateDashboardFilter(s, filterConditions, filterMatchMode))
+  if (visibleSeries.length === 0) {
+    return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones match this filter.</span>
+  }
+
+  const axis = buildMilestoneTrendAxis(visibleSeries)
   if (axis.length < 2) {
     return (
       <span className="text-xs text-gray-400 dark:text-prosota-muted">
@@ -212,39 +225,80 @@ export function MilestoneTrendChartWidget({ projectId }: WidgetProps) {
   }
   const chartData = axis.map(a => {
     const row: Record<string, string | number | null> = { label: a.label }
-    for (const s of series) {
+    for (const s of visibleSeries) {
       const point = s.points.find(p => (p.baseline_id ?? 'current') === a.key)
       row[s.code] = point?.finish ? new Date(point.finish).getTime() : null
     }
     return row
   })
+  const lastLabel = axis[axis.length - 1].label
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={chartData} margin={{ left: 8, right: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+      {/* horizontal-only gridlines, no axis box, and each line labelled
+          directly at its own last point (via a zero-radius ReferenceDot —
+          far more reliable than Line's own `label` prop, which silently
+          rendered nothing at all when first tried: Line delegates a
+          function `label` to LabelList/Label's own content-render path,
+          whose exact prop shape isn't the simple {x,y,index,value} it
+          looks like from the docs, confirmed by inspecting the real
+          rendered SVG in a live browser and finding zero label <text>
+          nodes; ReferenceDot's x/y are real DATA values Recharts resolves
+          through its own scale itself, so this doesn't depend on guessing
+          an internal prop shape) instead of a separate legend (2026-09-03,
+          per Maro: the bottom-legend/full-grid-box version "looks like
+          trash" next to a clean reference chart) — reads which line is
+          which without eye travel back and forth to a key, and survives
+          lines clustering close together far better than colour alone
+          would. */}
+      <LineChart data={chartData} margin={{ top: 10, right: 150, bottom: 10, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
         <YAxis
           domain={['dataMin', 'dataMax']}
           tickFormatter={(v: number) => formatDate(new Date(v).toISOString())}
           tick={{ fontSize: 11 }}
+          tickLine={false}
+          axisLine={{ stroke: '#d1d5db' }}
           width={90}
         />
         <Tooltip
           labelFormatter={(label: string) => label}
           formatter={(v: number, name: string) => [formatDate(new Date(v).toISOString()), name]}
         />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-        {series.map((s, i) => (
-          <Line
-            key={s.activity_id}
-            type="monotone"
-            dataKey={s.code}
-            name={`${s.code} ${s.task_name}`}
-            stroke={MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]}
-            dot={{ r: 3 }}
-          />
-        ))}
+        {visibleSeries.map((s, i) => {
+          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          return (
+            <Line
+              key={s.activity_id}
+              type="monotone"
+              dataKey={s.code}
+              name={s.task_name}
+              stroke={color}
+              strokeWidth={2}
+              dot={{ r: 3, strokeWidth: 0, fill: color }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+            />
+          )
+        })}
+        {visibleSeries.map((s, i) => {
+          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          const lastValue = chartData[chartData.length - 1][s.code]
+          if (typeof lastValue !== 'number') return null
+          return (
+            <ReferenceDot
+              key={`${s.activity_id}-end-label`}
+              x={lastLabel}
+              y={lastValue}
+              r={0}
+              fill="transparent"
+              stroke="transparent"
+              label={{ value: s.task_name, position: 'right', fill: color, fontSize: 11 }}
+              isFront
+            />
+          )
+        })}
       </LineChart>
     </ResponsiveContainer>
   )
@@ -1681,7 +1735,7 @@ export const FILTERABLE_WIDGET_TYPES = new Set([
   // Milestones (data.milestones)
   'milestones_table', 'milestone_timeline',
   // Smaller, single-widget data sources
-  'lookahead_planner', 'mitigation_actions_table', 'clash_detail_table',
+  'lookahead_planner', 'mitigation_actions_table', 'clash_detail_table', 'milestone_trend_chart',
 ])
 
 export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
