@@ -6,7 +6,7 @@ import { formatDateTime } from './dateTime'
 import { buildBarLabel, CONNECTOR_STUB, GANTT_ROW_HEIGHT, HEADER_HEIGHT, LABEL_GAP } from './GanttChart'
 import { computeTimeMarks, type GanttZoom } from './ganttZoom'
 import { buildCalendarLookup, formatFloatDays, type CalendarLookup } from './durationDisplay'
-import { formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
+import { activityStatus, formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
 import {
   indicatorOption, isMilestoneType,
   type Activity, type ActivityRelationship, type Calendar, type ResourceAssignment,
@@ -404,6 +404,7 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
     cellClassName: a => a.sub_is_critical ? 'text-orange-600 font-semibold' : NORMAL_GREY,
   },
   { key: 'pct_complete', label: '% Comp', align: 'right', render: a => `${a.pct_complete ?? 0}%` },
+  { key: 'status', label: 'Status', render: a => activityStatus(a) },
   {
     key: 'resources', label: 'Resources',
     render: (a, resourceAssignments) => resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name).join(', ') || '—',

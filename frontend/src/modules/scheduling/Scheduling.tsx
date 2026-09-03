@@ -70,9 +70,43 @@ const PANE_MAX_HEIGHT = 600
 
 export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
-  | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical' | 'pct_complete' | 'resources'
+  | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical' | 'pct_complete' | 'status' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
   | 'element_count' | 'elements' | 'animation_profile'
+
+// Activity status (2026-09-03, per Maro: "we need an activity status
+// field/column. Planned, In Progress, Suspended, Completed") — deliberately
+// NOT a new stored/manually-set field: every input it needs (% Complete,
+// Suspend/Resume Date) already exists and is already editable right here in
+// this same grid, so a second, independent "status" a planner sets by hand
+// could silently disagree with those — the exact "derivable value exposed
+// as a manual input" bug class [[feedback_computed_fields]] already caught
+// repeatedly elsewhere in this app. Same 4-state classification the
+// dashboard's own ActivityStatusWidget (widgets.tsx) already uses
+// (Suspended takes priority over the % Complete-driven states, matching
+// "suspended but 40% done" reading as Suspended, not In Progress) — labels
+// here use Maro's own words for this column ("Planned"/"Completed") rather
+// than that widget's chart-axis labels ("Not Started"/"Complete"), which
+// are two different UI surfaces for the same 4 states, not a data
+// disagreement.
+export type ActivityStatus = 'Planned' | 'In Progress' | 'Suspended' | 'Completed'
+
+export function activityStatus(a: Pick<Activity, 'pct_complete' | 'suspend_date' | 'resume_date'>): ActivityStatus {
+  if (a.suspend_date !== null && a.resume_date === null) return 'Suspended'
+  const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
+  if (pct >= 100) return 'Completed'
+  if (pct > 0) return 'In Progress'
+  return 'Planned'
+}
+
+const ACTIVITY_STATUS_CLASSES: Record<ActivityStatus, string> = {
+  Planned: 'text-gray-500 dark:text-prosota-muted',
+  'In Progress': 'text-blue-600 dark:text-blue-400 font-medium',
+  Suspended: 'text-amber-600 dark:text-amber-400 font-medium',
+  Completed: 'text-green-600 dark:text-green-400 font-medium',
+}
+
+const ACTIVITY_STATUS_RANK: Record<ActivityStatus, number> = { Planned: 0, 'In Progress': 1, Suspended: 2, Completed: 3 }
 
 export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?: string }[] = [
   { key: 'code', label: 'Code', width: 'w-24' },
@@ -90,6 +124,7 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'sub_float', label: 'Sub Total Float (d)', width: 'w-24', title: 'Total Float within its own tagged sub-project\'s branch, calculated in isolation from the rest of the schedule — blank for anything outside a tagged sub-project. See the 🏗️ Sub-Projects widget.' },
   { key: 'sub_critical', label: 'Sub Critical', width: 'w-20', title: 'Critical within its own tagged sub-project\'s branch, even if not critical on the master schedule — the whole point of tagging a sub-project. Blank for anything outside a tagged sub-project.' },
   { key: 'pct_complete', label: '% Comp', width: 'w-20' },
+  { key: 'status', label: 'Status', width: 'w-24', title: 'Planned, In Progress, Suspended, or Completed — computed from % Complete and Suspend/Resume Date, not a separate field of its own. Edit those to change this.' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
@@ -164,7 +199,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   activity: 220, code: 70, wbs: 56, type: 90, duration: 70,
   start: 120, bl_start: 120, finish: 120, bl_finish: 120,
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
-  pct_complete: 70, resources: 130,
+  pct_complete: 70, status: 90, resources: 130,
   bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
   element_count: 70, elements: 130, animation_profile: 110,
 }
@@ -204,6 +239,7 @@ function sortValue(
     case 'sub_float': return a.sub_total_float_hours
     case 'sub_critical': return a.sub_is_critical === null ? null : a.sub_is_critical ? 1 : 0
     case 'pct_complete': return a.pct_complete !== null ? Number(a.pct_complete) : null
+    case 'status': return ACTIVITY_STATUS_RANK[activityStatus(a)]
     case 'resources': {
       const names = (resourceAssignments.get(a.id) ?? []).map(ra => ra.resource_name)
       return names.length ? names.join(', ') : null
@@ -330,6 +366,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   code: 96, wbs: 64, activity: 224, type: 96, duration: 64, start: 96, bl_start: 96,
   finish: 96, bl_finish: 96, variance: 80, float: 80, critical: 72, free_float: 80, sub_float: 96, sub_critical: 80,
   pct_complete: 80,
+  status: 96,
   resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
   element_count: 80, elements: 130, animation_profile: 110,
@@ -3330,6 +3367,7 @@ export function Scheduling() {
               {isColumnVisible('sub_float') && <col style={{ width: columnWidths.sub_float }} />}
               {isColumnVisible('sub_critical') && <col style={{ width: columnWidths.sub_critical }} />}
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
+              {isColumnVisible('status') && <col style={{ width: columnWidths.status }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
               {isColumnVisible('element_count') && <col style={{ width: columnWidths.element_count }} />}
               {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
@@ -3383,6 +3421,7 @@ export function Scheduling() {
                 {isColumnVisible('sub_float') && <ResizableTh width={columnWidths.sub_float} onResizeStart={startColumnResize('sub_float')} {...sortHeader('sub_float')} title="Total Float within its own tagged sub-project's branch, calculated in isolation — blank outside any tagged sub-project">Sub Total Float (d)</ResizableTh>}
                 {isColumnVisible('sub_critical') && <ResizableTh width={columnWidths.sub_critical} onResizeStart={startColumnResize('sub_critical')} {...sortHeader('sub_critical')} title="Critical within its own tagged sub-project's branch, even if not critical on the master schedule — blank outside any tagged sub-project">Sub Critical</ResizableTh>}
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
+                {isColumnVisible('status') && <ResizableTh width={columnWidths.status} onResizeStart={startColumnResize('status')} {...sortHeader('status')} title="Computed from % Complete and Suspend/Resume Date">Status</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
@@ -3629,6 +3668,11 @@ export function Scheduling() {
                           className="w-16 border border-blue-400 dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5 text-sm"
                         />
                       ) : `${a.pct_complete ?? 0}%`}
+                    </td>
+                  )}
+                  {isColumnVisible('status') && (
+                    <td className={`px-3 py-1 whitespace-nowrap ${ACTIVITY_STATUS_CLASSES[activityStatus(a)]}`}>
+                      {activityStatus(a)}
                     </td>
                   )}
                   {isColumnVisible('resources') && (() => {
