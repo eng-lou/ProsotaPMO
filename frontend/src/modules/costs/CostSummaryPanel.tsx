@@ -33,10 +33,11 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
   }
   const groupRows = [...byGroup.entries()].sort(([a], [b]) => a.localeCompare(b))
 
-  // Budget vs Forecast (EAC) is more useful than budget vs Rev A baseline here: it
-  // covers every element (percentage elements have a computed forecast too, unlike
-  // baseline which only applies to fixed elements), and it updates live as soon as
-  // % complete/actuals are entered — not only once someone manually re-forecasts.
+  // Budget vs Forecast (EAC): Budget here is the live, continuously-revised
+  // estimate total (2026-09-03, per Maro: "the budget field... is a forecast");
+  // Forecast (EAC) is the performance-projected figure, computed off whichever
+  // Cost Baseline is assigned (see app/services/cost_element.py's bac/EAC
+  // resolution) and updates live as soon as % complete/actuals are entered.
   const totalForecast = elements.reduce((sum, el) => sum + effectiveForecast(el), 0)
   const forecastVariance = totalForecast - totalBudget
   const forecastVariancePct = totalBudget !== 0 ? (forecastVariance / totalBudget) * 100 : null

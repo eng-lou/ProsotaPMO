@@ -45,15 +45,29 @@ class CostElement(Base, TimestampMixin):
     variance_commentary: Mapped[str | None] = mapped_column(Text)
     qs_signoff_name: Mapped[str | None] = mapped_column(String(255))
     qs_signoff_date: Mapped[date | None] = mapped_column(Date)
+    # A live, continuously-revised forecast (2026-09-03, per Maro — a real domain
+    # correction: "the budget field in cost plan is a forecast" — NOT the fixed
+    # Budget At Completion an EVM formula should measure against). Free to edit at
+    # any time as the team's estimate evolves; never itself BAC. See bl_budget below.
     budget: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     actuals: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    rev_a_baseline: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # The true Budget At Completion — synced verbatim from CostBaselineItem.bac
+    # whenever a Cost Baseline is assigned (services/cost_baseline.py:assign_baseline,
+    # mirroring Activity.bl_finish syncing from an assigned ScheduleBaseline), frozen
+    # until the next assign/unassign. Null until a baseline has ever been assigned —
+    # every EVM formula (CV/CPI/EAC/ETC/VAC/TCPI/cost_per_m2/variance) resolves BAC as
+    # bl_budget-if-set-else-live-budget (services/cost_element.py:_apply_computed),
+    # the same "fall back until X hasn't happened yet" discipline pct_complete/forecast
+    # already use elsewhere in this model. Replaces the old rev_a_baseline field (which
+    # froze once at creation and could never be re-baselined) — a real Cost Baseline,
+    # deliberately assigned, is the correct mechanism for "the approved figure."
+    bl_budget: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     # Physical progress assessment (0-100) — a manual progress estimate, the standard
     # technique for Earned Value without a network-schedule integration: EV = BAC x
     # pct_complete. forecast/variance/cpi/eac/etc/vac/tcpi/cost_per_m2 are all computed at
-    # query time from this + budget/actuals/rev_a_baseline/project.gfa_m2 — never stored.
+    # query time from this + budget/bl_budget/actuals/project.gfa_m2 — never stored.
     # forecast is not a separate field: it IS the computed EAC (same concept, "what do we
-    # now expect this to finally cost"), falling back to budget before any progress exists.
+    # now expect this to finally cost"), falling back to BAC before any progress exists.
     pct_complete: Mapped[int | None] = mapped_column(Integer)
     # Bumped automatically whenever a reassessment is logged (see Reassessment);
     # editable directly too, mirroring Risk/ICD's Monitor-Costs pattern.
@@ -76,8 +90,8 @@ class CostElement(Base, TimestampMixin):
     # the difference") — e.g. the equivalent line from a comparable project,
     # a tender return, or a cost plan revision being checked against this
     # one. Deliberately NOT forecast/EAC (that's a performance projection off
-    # THIS element's own progress) and NOT rev_a_baseline (that's THIS
-    # element's own frozen-at-creation budget) — a third, independent figure
+    # THIS element's own progress) and NOT bl_budget (that's THIS element's
+    # own approved Budget At Completion) — a third, independent figure
     # with its own simple variance (budget - comparison_cost, see
     # CostElementResponse.comparison_variance), same "leave it blank rather
     # than show a fake number" discipline as everywhere else in this model.

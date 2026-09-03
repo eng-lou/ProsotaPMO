@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,10 +13,19 @@ from app.models.base import Base, TimestampMixin
 
 class CostBaseline(Base, TimestampMixin):
     """A named, repeatable Cost Plan snapshot (2026-07-20, per Maro — Controls
-    Dashboard Phase 1b), mirroring ScheduleBaseline's own shape. No
-    "assign"/is_active step, same reasoning as RiskBaseline — CPI/EAC are
-    always recomputed live off CostElement, never synced from a saved
-    capture."""
+    Dashboard Phase 1b), mirroring ScheduleBaseline's own shape.
+
+    2026-09-03, per Maro (a real domain correction): "the budget field in
+    cost plan is a forecast. the baseline of the figures becomes the
+    approved budget... we can create multiple baselines and choose to
+    assign a particular baseline as the budget figures to measure against."
+    So this DOES now have an "assign"/is_active step after all, mirroring
+    ScheduleBaseline exactly — CostElement.budget is a live, continuously-
+    revised forecast (never itself BAC), and CostElement.bl_budget (the true
+    Budget At Completion every EVM formula uses) is synced from whichever
+    CostBaseline is assigned, same as Activity.bl_finish syncs from an
+    assigned ScheduleBaseline. Only one baseline per period is ever active
+    at a time. See cost_element.py's own bl_budget docstring."""
 
     __tablename__ = "cost_baselines"
 
@@ -29,6 +38,7 @@ class CostBaseline(Base, TimestampMixin):
     baseline_set_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("baseline_sets.id", ondelete="SET NULL"), index=True
     )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CostBaselineItem(Base):

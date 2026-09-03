@@ -11,7 +11,7 @@ const COLUMNS: { key: keyof CostElement; label: string }[] = [
   { key: 'budget', label: 'Budget (£)' },
   { key: 'forecast', label: 'Forecast (£)' },
   { key: 'actuals', label: 'Actuals (£)' },
-  { key: 'rev_a_baseline', label: 'Rev A Baseline (£)' },
+  { key: 'bl_budget', label: 'Approved Budget (£)' },
   { key: 'variance', label: 'Variance (£)' },
   { key: 'pct_complete', label: '% Complete' },
   { key: 'pv', label: 'PV (£)' },

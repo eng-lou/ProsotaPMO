@@ -79,14 +79,15 @@ _MONEY = Decimal("0.01")
 
 
 def _resolve_bac_ac(el) -> tuple[Decimal | None, Decimal | None]:
-    """BAC/AC resolution _apply_computed (app/services/cost_element.py)
-    already does per element — computed_budget/computed_actuals for a
-    percentage element, budget/actuals for a fixed one. Pulled out here so
-    both the live KPI rollup and the baseline comparison's "current" side
-    read it identically."""
-    bac = el.computed_budget if el.element_type == "percentage" else el.budget
+    """AC resolution _apply_computed (app/services/cost_element.py) already
+    does per element — computed_actuals for a percentage element, actuals
+    for a fixed one. BAC is simply el.bac (2026-09-03, per Maro's domain
+    correction: bl_budget-with-live-fallback, already fully resolved server-
+    side, cascaded for percentage elements too) — pulled out here so both
+    the live KPI rollup and the baseline comparison's "current" side read it
+    identically."""
     ac = el.computed_actuals if el.element_type == "percentage" else el.actuals
-    return bac, ac
+    return el.bac, ac
 
 
 async def _live_schedule_spi(db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID) -> tuple[Decimal | None, list]:
@@ -129,9 +130,9 @@ async def _kpis(
     schedule_spi, elements = await _live_schedule_spi(db, project_id, period_id)
 
     # Portfolio BAC/EAC/CPI — every element contributes (not just schedule-linked
-    # ones), unlike SPI above. BAC/AC read the same computed_budget/computed_actuals
-    # (percentage elements) or budget/actuals (fixed elements) _apply_computed
-    # already resolves; EV = BAC x pct_complete/100, same formula that file's own
+    # ones), unlike SPI above. BAC/AC read el.bac (bl_budget-with-live-fallback)
+    # and computed_actuals/actuals, the same resolution _resolve_bac_ac above
+    # already applies; EV = BAC x pct_complete/100, same formula that file's own
     # docstring documents (never a second, independently-invented one). Summed
     # first, then run through the one shared rollup — never averaging per-element
     # CPIs directly (see rollup_evm_from_totals's own docstring on why that

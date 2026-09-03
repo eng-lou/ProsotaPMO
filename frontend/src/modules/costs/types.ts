@@ -15,9 +15,16 @@ export interface CostElement {
   variance_commentary: string | null
   qs_signoff_name: string | null
   qs_signoff_date: string | null
+  // A live, continuously-revised forecast (2026-09-03, per Maro: "the budget
+  // field in cost plan is a forecast") — NOT the fixed Budget At Completion
+  // an EVM formula measures against. See bl_budget/bac below.
   budget: string | null
   actuals: string | null
-  rev_a_baseline: string | null
+  // The approved figure, synced from whichever Cost Baseline is assigned
+  // (services/cost_baseline.py:assign_baseline) — null until that's ever
+  // happened. Most reads should use `bac` below instead, which already
+  // falls back to the live budget before a baseline exists.
+  bl_budget: string | null
   pct_complete: number | null
   last_reviewed_date: string | null
   // An independent benchmark figure (2026-07-18, per Maro: "make that
@@ -31,10 +38,16 @@ export interface CostElement {
   computed_budget: string | null
   computed_forecast: string | null
   computed_actuals: string | null
+  // The resolved Budget At Completion every EVM field below actually uses:
+  // bl_budget if assigned, else the live budget/computed_budget as a
+  // fallback (2026-09-03, per Maro's domain correction).
+  bac: string | null
   // Cost-side EVM — always server-computed, never sent as input. forecast is not
-  // a separate manual field — it IS the computed EAC (falling back to budget
+  // a separate manual field — it IS the computed EAC (falling back to bac
   // before any progress exists).
   forecast: string | null
+  // How far the live budget/computed_budget has drifted from bac — null
+  // until a Cost Baseline has actually been assigned.
   variance: string | null
   cost_per_m2: string | null
   cv: string | null

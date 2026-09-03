@@ -20,6 +20,10 @@ class CostBaselineResponse(BaseModel):
     period_id: uuid.UUID
     name: str
     baseline_date: date
+    # Whether this is the baseline currently populating bl_budget on cost
+    # elements — never accepted as input, only flipped by
+    # app/services/cost_baseline.py:assign_baseline.
+    is_active: bool
     baseline_set_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

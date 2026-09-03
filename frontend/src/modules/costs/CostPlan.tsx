@@ -1015,6 +1015,8 @@ export function CostPlan() {
           moduleLabel="the Cost Plan"
           dismissKeyPrefix="cost"
           onClose={() => setBaselineWidgetOpen(false)}
+          supportsAssign
+          onAssignedChange={updated => setElements(updated as CostElement[])}
         />
       )}
 

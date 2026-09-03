@@ -348,46 +348,91 @@ async def test_evm_fields_null_without_pct_complete(client: AsyncClient, project
     assert el["eac"] is None
 
 
-async def test_rev_a_baseline_auto_set_from_budget_on_creation(
+async def test_bl_budget_null_and_bac_falls_back_to_live_budget_before_baseline(
     client: AsyncClient, project: Project, live_period: Period
 ):
-    """rev_a_baseline is not a separate input — the budget entered now IS the
-    baseline, since there's no prior revision to compare against yet."""
+    """2026-09-03, per Maro's domain correction: "the budget field in cost
+    plan is a forecast... the baseline of the figures becomes the approved
+    budget." Before any Cost Baseline has ever been assigned, bac falls back
+    to the live budget — never a guessed/frozen number — and variance (which
+    measures drift *since* an approval) stays null, since there's nothing
+    approved yet to measure drift against."""
     el = await _create(client, project, live_period, description="Steelwork", budget="2150000.00")
-    assert float(el["rev_a_baseline"]) == 2150000.00
-    assert float(el["variance"]) == 0.00  # budget == baseline at creation
-
-
-async def test_rev_a_baseline_frozen_after_budget_updates(
-    client: AsyncClient, project: Project, live_period: Period
-):
-    """Once set, the baseline must not move when budget changes later — otherwise
-    variance would always read zero and the whole point of a baseline is lost."""
-    el = await _create(client, project, live_period, description="Steelwork", budget="2150000.00")
+    assert el["bl_budget"] is None
+    assert float(el["bac"]) == 2150000.00
+    assert el["variance"] is None
 
     resp = await client.patch(f"/api/v1/cost-elements/{el['id']}", json={"budget": "2290467.00"})
     assert resp.status_code == 200
-    assert float(resp.json()["rev_a_baseline"]) == 2150000.00  # frozen, unchanged
-    assert float(resp.json()["variance"]) == 140467.00
+    assert resp.json()["bl_budget"] is None
+    assert float(resp.json()["bac"]) == 2290467.00  # still tracks the live, revised forecast
+    assert resp.json()["variance"] is None
 
 
-async def test_rev_a_baseline_rejected_as_manual_input(client: AsyncClient, project: Project, live_period: Period):
-    """rev_a_baseline is server-managed — sending it directly should have no effect
-    (it's not part of the accepted schema, same discipline as EAC/CPI)."""
+async def test_bl_budget_rejected_as_manual_input(client: AsyncClient, project: Project, live_period: Period):
+    """bl_budget is server-managed, only ever set by assign_baseline — sending
+    it directly should have no effect (same discipline as EAC/CPI)."""
     resp = await client.post("/api/v1/cost-elements/", json={
         "project_id": str(project.id), "period_id": str(live_period.id),
-        "description": "Bad baseline", "budget": "100000.00", "rev_a_baseline": "999999.00",
+        "description": "Bad baseline", "budget": "100000.00", "bl_budget": "999999.00",
     })
     assert resp.status_code == 201
-    assert float(resp.json()["rev_a_baseline"]) == 100000.00  # ignored — set from budget, not the submitted value
+    assert resp.json()["bl_budget"] is None
 
 
-async def test_percentage_element_has_no_baseline(client: AsyncClient, project: Project, live_period: Period):
-    """Percentage elements (Prelims, Contingency) have no budget of their own, so
-    no baseline concept applies — matches the prototype's "—" for these rows."""
-    await _create(client, project, live_period, description="Works", budget="1000000.00")
-    prelims = await _create(client, project, live_period, description="Prelims", element_type="percentage", rate="0.15")
-    assert prelims["rev_a_baseline"] is None
+async def test_assign_baseline_sets_bl_budget_and_variance(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """Assigning a Cost Baseline is the only thing that ever sets bl_budget —
+    the true BAC every EVM formula measures against from then on, with
+    variance now showing real drift between the live (post-baseline-revised)
+    budget and the approved figure. Percentage elements get bl_budget too
+    (unlike the old, retired rev_a_baseline mechanism, which had no baseline
+    concept for them at all) — CostBaselineItem.bac already resolved their
+    cascaded figure once at capture time, so assign just copies it straight
+    across, same as a fixed element."""
+    fixed = await _create(client, project, live_period, description="Steelwork", budget="2150000.00")
+    prelims = await _create(client, project, live_period, description="Prelims", element_type="percentage", rate="0.10")
+    assert float(prelims["bac"]) == 215000.00  # 10% of the live 2,150,000, pre-baseline fallback
+
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Approved Budget", "baseline_date": "2026-09-03",
+    })).json()
+    assign_resp = await client.post(f"/api/v1/cost-baselines/{baseline['id']}/assign")
+    assert assign_resp.status_code == 200
+
+    # Live budget keeps moving after assignment — bac/variance now correctly
+    # diverge from it, reflecting the approved figure instead.
+    resp = await client.patch(f"/api/v1/cost-elements/{fixed['id']}", json={"budget": "2290467.00"})
+    updated = resp.json()
+    assert float(updated["bl_budget"]) == 2150000.00
+    assert float(updated["bac"]) == 2150000.00  # the approved figure, not the revised live budget
+    assert float(updated["variance"]) == 140467.00  # live budget (2,290,467) - bac (2,150,000)
+
+    prelims_resp = await client.get(f"/api/v1/cost-elements/{prelims['id']}")
+    prelims_updated = prelims_resp.json()
+    assert float(prelims_updated["bl_budget"]) == 215000.00
+    assert float(prelims_updated["bac"]) == 215000.00  # frozen — doesn't follow Steelwork's live revision
+    # computed_budget (the live cascade) DOES follow Steelwork's revision, so
+    # variance now shows real drift here too.
+    assert float(prelims_updated["computed_budget"]) == 229046.70
+    assert float(prelims_updated["variance"]) == 14046.70
+
+
+async def test_unassign_baseline_clears_bl_budget(client: AsyncClient, project: Project, live_period: Period):
+    el = await _create(client, project, live_period, description="Steelwork", budget="2150000.00")
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Approved Budget", "baseline_date": "2026-09-03",
+    })).json()
+    await client.post(f"/api/v1/cost-baselines/{baseline['id']}/assign")
+
+    unassign_resp = await client.post(f"/api/v1/cost-baselines/{baseline['id']}/unassign")
+    assert unassign_resp.status_code == 200
+
+    resp = await client.get(f"/api/v1/cost-elements/{el['id']}")
+    assert resp.json()["bl_budget"] is None
+    assert float(resp.json()["bac"]) == 2150000.00  # falls back to live budget again
+    assert resp.json()["variance"] is None
 
 
 async def test_cost_per_m2_computed_from_project_gfa(client: AsyncClient, project: Project, live_period: Period):

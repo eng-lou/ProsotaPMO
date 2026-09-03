@@ -111,9 +111,9 @@ class Activity(Base, TimestampMixin):
     # app/services/scheduling_cpm.py) — same discipline as Risk's EMV and Cost's
     # CPI/SPI fixes. bl_start/bl_finish/bl_duration_hours are set only by the "Set
     # Baseline" action (app/services/scheduling_baseline.py) — snapshotting current
-    # start/finish/duration_hours, not the one-shot-at-creation freeze Cost Plan's
-    # rev_a_baseline uses, since a schedule baseline is a deliberate, repeatable
-    # capture (client-agreed revisions), not a value fixed forever at row creation.
+    # start/finish/duration_hours, same "assign a Baseline" discipline Cost Plan's
+    # own bl_budget now uses too (app/models/cost_element.py) — a deliberate,
+    # repeatable capture (client-agreed revisions), not a value fixed forever at row creation.
     # total_float_hours/free_float_hours/is_critical are null for wbs_summary rows
     # (outside the CPM network).
     bl_start: Mapped[datetime | None] = mapped_column(DateTime)

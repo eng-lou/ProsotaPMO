@@ -31,33 +31,47 @@ async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
         )
 
 
-def _element_forecast(
-    budget: Decimal | None, actuals: Decimal | None, pct_complete: int | None
+def _element_eac_or_bac(
+    bac: Decimal | None, actuals: Decimal | None, pct_complete: int | None
 ) -> Decimal | None:
-    """forecast IS the computed EAC (Estimate at Completion) — the same concept as
-    "what do we now expect this line to finally cost", not a separate manual figure.
-    Falls back to budget before any progress has been assessed."""
-    if budget is None:
+    """One fixed element's own EAC (Estimate at Completion), or its bac
+    before any progress has been assessed — used to cascade a percentage
+    element's own forecast up from the fixed elements underneath it, so an
+    on-cost genuinely reflects those elements' performance (a fixed line
+    running over its approved BAC pushes Prelims/Overhead/etc.'s own
+    forecast up too, not just a static rate of the live budget). bac here
+    must already be resolved (bl_budget-with-live-fallback — see
+    CostElement.bl_budget's own docstring), same input _apply_computed's
+    own unified bac/eac path uses for that same fixed element."""
+    if bac is None:
         return None
-    budget = Decimal(str(budget))
+    bac = Decimal(str(bac))
     if pct_complete is not None and actuals is not None:
         actuals = Decimal(str(actuals))
         if actuals != 0:
-            ev = budget * Decimal(pct_complete) / Decimal(100)
+            ev = bac * Decimal(pct_complete) / Decimal(100)
             cpi = ev / actuals
             if cpi != 0:
-                return (budget / cpi).quantize(_MONEY)
-    return budget.quantize(_MONEY)
+                return (bac / cpi).quantize(_MONEY)
+    return bac.quantize(_MONEY)
 
 
 async def _fixed_subtotals(
     db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID
 ) -> tuple[Decimal, Decimal, Decimal]:
-    """Return (sum_budget, sum_forecast, sum_actuals) for all fixed elements in this
-    project/period. sum_forecast is the sum of each element's derived forecast
-    (EAC, or budget before any progress is assessed) — computed in Python since
-    forecast is no longer a stored column."""
-    q = select(CostElement.budget, CostElement.actuals, CostElement.pct_complete).where(
+    """Return (sum_budget, sum_forecast, sum_actuals) for all fixed elements
+    in this project/period. sum_budget is the live-estimate cascade base for
+    a percentage element's own computed_budget (unchanged meaning).
+    sum_forecast is the cascade base for computed_forecast — each fixed
+    row's own _element_eac_or_bac (using ITS resolved bac: bl_budget-with-
+    live-fallback), not a raw budget-based figure. A percentage element's
+    own BAC does NOT reuse this cascade (2026-09-03, per Maro's domain
+    correction): CostBaselineItem.bac already resolved it once at capture
+    time (see cost_baseline.py:create_baseline), and assign_baseline copies
+    that resolved figure straight onto CostElement.bl_budget for every
+    element, percentage included — a flat, verbatim copy, no runtime
+    re-cascading needed for BAC itself, only for the forecast cascade above."""
+    q = select(CostElement.budget, CostElement.bl_budget, CostElement.actuals, CostElement.pct_complete).where(
         CostElement.project_id == project_id,
         CostElement.period_id == period_id,
         CostElement.element_type == "fixed",
@@ -66,7 +80,12 @@ async def _fixed_subtotals(
     sum_budget = sum((Decimal(str(r.budget)) for r in rows if r.budget is not None), Decimal(0))
     sum_actuals = sum((Decimal(str(r.actuals)) for r in rows if r.actuals is not None), Decimal(0))
     sum_forecast = sum(
-        (_element_forecast(r.budget, r.actuals, r.pct_complete) or Decimal(0) for r in rows), Decimal(0)
+        (
+            _element_eac_or_bac(r.bl_budget if r.bl_budget is not None else r.budget, r.actuals, r.pct_complete)
+            or Decimal(0)
+            for r in rows
+        ),
+        Decimal(0),
     )
     return sum_budget, sum_forecast, sum_actuals
 
@@ -170,7 +189,7 @@ async def _period_data_dates(db: AsyncSession, period_ids: set[uuid.UUID]) -> di
 
 
 def _schedule_evm(
-    budget: Decimal | None,
+    bac: Decimal | None,
     pct_complete: int | None,
     start: datetime | None,
     finish: datetime | None,
@@ -182,17 +201,20 @@ def _schedule_evm(
     elapsed), distinct from the manually-assessed Physical % Complete that
     drives EV. Day-granularity proration (consistent with variance_days staying
     day-based post-Phase-10; a documented interpretation, not a rigorously-
-    derived one, same as the DCMA thresholds elsewhere in this codebase).
+    derived one, same as the DCMA thresholds elsewhere in this codebase). bac
+    is the resolved Budget At Completion (bl_budget-with-live-fallback, see
+    CostElement.bl_budget's own docstring) — every caller already resolves
+    this before calling in, never a raw live budget field directly.
     EV/SV/SPI follow directly from PV once it exists. Returns (pv, ev, sv, spi)
-    — any of which can be None if the inputs aren't there yet (no budget, the
+    — any of which can be None if the inputs aren't there yet (no bac, the
     activity isn't scheduled yet, no progress assessed)."""
     fraction = elapsed_duration_fraction(start, finish, data_date)
-    if budget is None or fraction is None:
+    if bac is None or fraction is None:
         return None, None, None, None
-    budget = Decimal(str(budget))
+    bac = Decimal(str(bac))
 
-    pv = (budget * fraction).quantize(_MONEY)
-    ev = (budget * Decimal(pct_complete) / Decimal(100)).quantize(_MONEY) if pct_complete is not None else None
+    pv = (bac * fraction).quantize(_MONEY)
+    ev = (bac * Decimal(pct_complete) / Decimal(100)).quantize(_MONEY) if pct_complete is not None else None
     sv = (ev - pv).quantize(_MONEY) if ev is not None else None
     spi = (ev / pv).quantize(_RATIO) if ev is not None and pv != 0 else None
     return pv, ev, sv, spi
@@ -241,16 +263,20 @@ def compute_schedule_linked_evm(
     """AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC for a single schedule-linked cost
     element — used by app/services/activity.py to surface these as Scheduling
     columns. Schedule-linked elements are always element_type='fixed' (see
-    app/services/cost_sync.py), so BAC/AC are simply budget/actuals, no
-    percentage-element resolution needed. start/finish are the activity's live,
-    current dates (not bl_start/bl_finish — see _linked_activity_dates).
-    data_date is the period's own data date (scheduling_cpm.data_date_for_period
-    — moved by Reschedule), not necessarily today. Reuses _schedule_evm/
-    _cost_side_evm so these numbers are always identical to what Cost Plan
-    shows for the same line, never a second, independently-derived set."""
-    bac = Decimal(str(element.budget)) if element.budget is not None else None
+    app/services/cost_sync.py), so AC is simply actuals, no percentage-element
+    resolution needed. BAC is bl_budget if a Cost Baseline has been assigned to
+    this element, else its live budget as a fallback (2026-09-03, per Maro's
+    domain correction — see CostElement.bl_budget's own docstring). start/finish
+    are the activity's live, current dates (not bl_start/bl_finish — see
+    _linked_activity_dates). data_date is the period's own data date
+    (scheduling_cpm.data_date_for_period — moved by Reschedule), not necessarily
+    today. Reuses _schedule_evm/_cost_side_evm so these numbers are always
+    identical to what Cost Plan shows for the same line, never a second,
+    independently-derived set."""
+    bac = element.bl_budget if element.bl_budget is not None else element.budget
+    bac = Decimal(str(bac)) if bac is not None else None
     ac = Decimal(str(element.actuals)) if element.actuals is not None else None
-    pv, ev, sv, spi = _schedule_evm(element.budget, element.pct_complete, start, finish, data_date)
+    pv, ev, sv, spi = _schedule_evm(bac, element.pct_complete, start, finish, data_date)
     cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
     return {
         "bac": bac, "ac": ac, "pv": pv, "ev": ev,
@@ -269,23 +295,38 @@ def _apply_computed(
 ) -> CostElementResponse:
     data = CostElementResponse.model_validate(element)
 
-    if activity_dates is not None:
-        data.pv, data.ev, data.sv, data.spi = _schedule_evm(
-            element.budget, element.pct_complete, activity_dates[0], activity_dates[1], data_date or datetime.now()
-        )
-
     if element.element_type == "percentage" and element.rate is not None:
         rate = Decimal(str(element.rate))
         data.computed_budget = (rate * sub_budget).quantize(_MONEY)
-        data.computed_forecast = (rate * sub_forecast).quantize(_MONEY)
         data.computed_actuals = (rate * sub_actuals).quantize(_MONEY)
-    else:
-        data.forecast = _element_forecast(element.budget, element.actuals, element.pct_complete)
+        # Cascaded from the fixed elements underneath (_element_eac_or_bac per
+        # row, via _fixed_subtotals) — a genuine aggregate of THEIR own EAC
+        # performance, not a static rate of the live budget, so an on-cost
+        # like Prelims/Overhead correctly moves when what it's a percentage
+        # OF is running over or under its own approved BAC.
+        data.computed_forecast = (rate * sub_forecast).quantize(_MONEY)
 
-    # BAC/AC resolve to the computed value for percentage elements, the stored value for
-    # fixed elements — everything below is derived from these two, plus pct_complete and
-    # rev_a_baseline, never accepted as API input.
+    # current_estimate = the live, continuously-revised figure (computed_budget's
+    # cascade for a percentage element, budget for a fixed one) — Maro's own
+    # framing, 2026-09-03: "the budget field in cost plan is a forecast." Used
+    # for comparison_variance/cost_per_m2 (independent benchmarking tools that
+    # track the current plan, not formal EVM) and as bac's own fallback.
     #
+    # bac = the true Budget At Completion every EVM formula below actually
+    # needs — element.bl_budget if a Cost Baseline has ever been assigned
+    # (services/cost_baseline.py:assign_baseline copies CostBaselineItem.bac
+    # onto bl_budget verbatim for every element, percentage included — no
+    # runtime re-cascading needed, since CostBaselineItem.bac was already
+    # resolved once at capture time), else current_estimate as a fallback
+    # before that's ever happened.
+    current_estimate = data.computed_budget if element.element_type == "percentage" else element.budget
+    current_estimate = Decimal(str(current_estimate)) if current_estimate is not None else None
+    bac = Decimal(str(element.bl_budget)) if element.bl_budget is not None else current_estimate
+    data.bac = bac
+
+    ac = data.computed_actuals if element.element_type == "percentage" else element.actuals
+    ac = Decimal(str(ac)) if ac is not None else None
+
     # Cost-side EVM (CV/CPI/EAC/ETC/VAC/TCPI) is computed here unconditionally. Schedule-
     # side EVM (PV/EV/SV/SPI) needed a genuine time-phased planned value — "how much
     # should have been done by this date on the schedule" — which only exists for
@@ -293,19 +334,22 @@ def _apply_computed(
     # — see _schedule_evm/activity_dates above). Every other element still leaves
     # PV/EV/SV/SPI null rather than showing a fake number (e.g. SPI would always equal
     # pct_complete/100 exactly without a real schedule position to compare to).
-    bac = data.computed_budget if element.element_type == "percentage" else element.budget
-    ac = data.computed_actuals if element.element_type == "percentage" else element.actuals
-    bac = Decimal(str(bac)) if bac is not None else None
-    ac = Decimal(str(ac)) if ac is not None else None
+    if activity_dates is not None:
+        data.pv, data.ev, data.sv, data.spi = _schedule_evm(
+            bac, element.pct_complete, activity_dates[0], activity_dates[1], data_date or datetime.now()
+        )
 
-    if bac is not None and element.rev_a_baseline is not None:
-        data.variance = (bac - Decimal(str(element.rev_a_baseline))).quantize(_MONEY)
+    # Drift since the last approved baseline — null (not a misleadingly precise
+    # £0) until a Cost Baseline has actually been assigned to this element,
+    # since bac is otherwise just current_estimate reflected back at itself.
+    if element.bl_budget is not None and current_estimate is not None:
+        data.variance = (current_estimate - bac).quantize(_MONEY)
 
-    if bac is not None and element.comparison_cost is not None:
-        data.comparison_variance = (bac - Decimal(str(element.comparison_cost))).quantize(_MONEY)
+    if current_estimate is not None and element.comparison_cost is not None:
+        data.comparison_variance = (current_estimate - Decimal(str(element.comparison_cost))).quantize(_MONEY)
 
-    if bac is not None and gfa_m2 is not None:
-        data.cost_per_m2 = (bac / gfa_m2).quantize(_MONEY)
+    if current_estimate is not None and gfa_m2 is not None:
+        data.cost_per_m2 = (current_estimate / gfa_m2).quantize(_MONEY)
 
     ev: Decimal | None = None
     if bac is not None and element.pct_complete is not None:
@@ -316,6 +360,17 @@ def _apply_computed(
         data.vac = (bac - data.eac).quantize(_MONEY)
     if bac is not None and ev is not None and ac is not None and (bac - ac) != 0:
         data.tcpi = ((bac - ev) / (bac - ac)).quantize(_RATIO)
+
+    # forecast IS the computed EAC ("what do we now expect this line to finally
+    # cost"), falling back to bac before any progress has been assessed — only
+    # for a fixed element (its own eac, computed above from ITS OWN bac/ac/ev).
+    # A percentage element's forecast is computed_forecast instead (the
+    # fixed-elements-underneath cascade above) — its own top-level data.eac is
+    # usually None (percentage elements have no independent pct_complete of
+    # their own to drive an EV), so falling back to `bac` here would silently
+    # replace a real cascaded figure with a flat, non-performance-based one.
+    if element.element_type != "percentage":
+        data.forecast = data.eac if data.eac is not None else bac
 
     return data
 
@@ -388,12 +443,6 @@ async def create_cost_element(db: AsyncSession, data: CostElementCreate) -> Cost
     await _require_live_period(db, data.period_id)
     code = await next_code(db, CostElement, "CST", data.project_id)
     el = CostElement(**data.model_dump(), code=code)
-    # rev_a_baseline is not a separate input — the budget entered now IS the baseline,
-    # since there's no prior revision to compare against yet. Frozen from here on;
-    # routine budget updates never touch it (a genuine re-baseline would be a distinct,
-    # deliberate action, not implemented yet).
-    if el.element_type == "fixed":
-        el.rev_a_baseline = el.budget
     db.add(el)
     await db.commit()
     await db.refresh(el)

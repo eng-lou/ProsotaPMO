@@ -218,10 +218,11 @@ class CostElementSummary(BaseModel):
     widgets (breakdown by group/owner, budget utilisation, BAC vs EAC,
     elements table) to aggregate client-side from one shared fetch — same
     "one fetch, many views" split schedule_activities/risks already use.
-    bac/ac are the already-resolved figures (computed_budget/computed_actuals
-    for a percentage element, budget/actuals for a fixed one — see
-    cost_element._resolve_bac_ac's own docstring), never the raw possibly-
-    None budget/actuals columns a percentage element leaves blank."""
+    bac/ac are the already-resolved figures (el.bac — bl_budget-with-live-
+    fallback, see CostElement.bl_budget's own docstring — and computed_actuals
+    for a percentage element, actuals for a fixed one; see
+    dashboard._resolve_bac_ac's own docstring), never the raw possibly-None
+    budget/actuals columns a percentage element leaves blank."""
 
     id: uuid.UUID
     code: str

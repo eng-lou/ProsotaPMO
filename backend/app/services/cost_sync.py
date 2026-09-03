@@ -162,9 +162,6 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
             # this covers the case where the activity already had progress
             # recorded before its first resource was ever assigned.
             pct_complete=int(activity.pct_complete) if activity.pct_complete is not None else None,
-            # Same "set once at creation, frozen thereafter" discipline as every
-            # other cost element's rev_a_baseline — see app/models/cost_element.py.
-            rev_a_baseline=total_budget,
         )
         db.add(element)
         await db.flush()

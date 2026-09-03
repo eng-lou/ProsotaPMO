@@ -81,26 +81,42 @@ class CostElementResponse(CostElementBase):
     # server-managed. See app/services/cost_sync.py.
     source: Literal["manual", "schedule"] = "manual"
     linked_activity_id: uuid.UUID | None = None
-    # Populated at query time for percentage elements; None for fixed elements
+    # The raw, un-fallback-applied approved figure — None until a Cost Baseline has
+    # ever been assigned to this element (see CostElement.bl_budget's own docstring).
+    # Most consumers should read `bac` below instead, which already applies the
+    # "fall back to live budget before a baseline exists" rule.
+    bl_budget: Decimal | None = None
+    # Populated at query time for percentage elements; None for fixed elements.
+    # computed_budget is the LIVE estimate cascade (rate x sum of fixed elements'
+    # own live budgets) — a percentage element's own "current forecast" figure,
+    # distinct from computed_bac below.
     computed_budget: Decimal | None = None
     computed_forecast: Decimal | None = None
     computed_actuals: Decimal | None = None
+    # The resolved Budget At Completion actually used by every EVM formula below
+    # (2026-09-03, per Maro's domain correction — see CostElement.bl_budget's own
+    # docstring): bl_budget if a Cost Baseline has been assigned, else the live
+    # budget/computed_budget as a fallback before that's ever happened. Never
+    # accepted as input, always derived — this is what "BAC" means everywhere
+    # else in this app now reads (dashboard.py's _resolve_bac_ac, the EAC/CPI/SPI
+    # trend charts, Baseline Comparison, Poe).
+    bac: Decimal | None = None
     # Cost-side EVM, computed server-side — never accepted as input (same discipline as
-    # Risk's EMV fix). AC = actuals, EV = BAC x pct_complete/100, BAC = budget.
+    # Risk's EMV fix). AC = actuals, EV = BAC x pct_complete/100.
     # Schedule-side EVM (SV/SPI) is deliberately not exposed — see cost_element service.
     # forecast = EAC once progress has been assessed (they're the same concept — "what do
-    # we now expect this line to finally cost"); budget is the best available forecast
+    # we now expect this line to finally cost"); BAC is the best available forecast
     # before then. No longer a separate manual input.
     forecast: Decimal | None = None
-    # rev_a_baseline is set ONCE, automatically, to whatever budget was at creation —
-    # it IS the original budget, not a second figure to type in. It's then frozen
-    # (never touched by routine budget updates) so variance stays meaningful; a genuine
-    # re-baseline is a distinct, deliberate action, not implemented yet.
-    rev_a_baseline: Decimal | None = None
+    # How far the current live estimate (budget/computed_budget) has drifted from
+    # the approved bac — null until a Cost Baseline has actually been assigned
+    # (nothing to measure drift against yet). Replaces the old rev_a_baseline-based
+    # figure (frozen once at creation, never re-baselineable) with a real one tied
+    # to a deliberate baseline assignment.
     variance: Decimal | None = None
     # budget (or computed_budget for a percentage element) - comparison_cost,
     # a plain difference — never accepted as input, always derived. Distinct
-    # from `variance` above (budget vs rev_a_baseline) and from vac below
+    # from `variance` above (live estimate vs approved bac) and from vac below
     # (bac vs eac) — three different comparisons, three different fields.
     comparison_variance: Decimal | None = None
     cost_per_m2: Decimal | None = None

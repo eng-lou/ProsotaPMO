@@ -225,13 +225,16 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
       ) : (
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={labelClass}>Budget (£)</label>
+            <label className={labelClass}>Budget (£) — current forecast</label>
             <input
               type="number" step="0.01"
               value={values.budget}
               onChange={e => set('budget', e.target.value)}
               className={inputClass}
             />
+            {costElement?.bl_budget && (
+              <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1">Approved budget (BAC): £{Number(costElement.bl_budget).toLocaleString()} — from the assigned Cost Baseline.</p>
+            )}
           </div>
           <div>
             <label className={labelClass}>Actuals (£)</label>
@@ -249,8 +252,9 @@ export function CostForm({ costElement, onCancel, onSubmit }: CostFormProps) {
       )}
       {!isPercentage && (
         <p className="text-xs text-gray-400 dark:text-prosota-muted -mt-2">
-          Forecast isn't entered here — it's the computed EAC (Estimate at Completion) once % complete is set below, or the budget itself before then.
-          {!costElement && ' The budget entered here also becomes the Rev A baseline, since there\'s no prior revision yet — it stays fixed after this, even if budget changes later.'}
+          Budget is a live, editable forecast, free to revise as the estimate evolves — it's never itself the fixed figure EVM measures against.
+          That figure (BAC) comes from whichever Cost Baseline is assigned (see the Baseline panel), falling back to this Budget field until one ever is.
+          Forecast isn't entered here — it's the computed EAC (Estimate at Completion) once % complete is set below, or BAC itself before then.
         </p>
       )}
 

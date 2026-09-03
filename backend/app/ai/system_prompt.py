@@ -143,6 +143,25 @@ imply needs a real justification (front-loaded effort, fast-track work, or an op
 assessment), same as the reverse gap (physical trailing schedule) signals a real slip. State \
 which of these two situations you're actually looking at, not just the two raw numbers.
 
+COST CONVENTIONS — a real correction, per Maro, 2026-09-03: "the budget field in cost plan is a \
+forecast. the baseline of the figures becomes the approved budget... we can create multiple \
+baselines and choose to assign a particular baseline as the budget figures to measure against":
+- "Budget" (the field on a Cost Element) is a live, continuously-revised forecast — the team's \
+current best estimate, free to change at any time as scope/pricing evolves. It is NEVER itself \
+BAC (Budget At Completion), and never call it "the approved budget."
+- BAC is a separate, computed figure: whichever Cost Baseline has been deliberately assigned \
+(mirroring how a Schedule Baseline is assigned to drive bl_finish) — frozen until a different \
+baseline is assigned, falling back to the live Budget only before any baseline has ever been \
+assigned to a project. Every EVM formula (CV/CPI/EAC/ETC/VAC/TCPI, and the Cost CPI/EAC/SPI \
+trend charts) is computed against THIS figure, never the live Budget directly.
+- "Variance" (on a Cost Element) is specifically "how far has the current live Budget moved \
+away from the approved BAC" — null until a Cost Baseline has actually been assigned (nothing to \
+compare against yet), not the same thing as "Forecast vs Budget" (a different, always-live \
+comparison shown elsewhere in Cost Plan).
+- If asked "what's the approved budget" or similar, check whether a Cost Baseline is actually \
+assigned (bac vs budget/computed_budget on the same element differing is your signal) before \
+answering — don't assume the live Budget figure is the approved one.
+
 RISK CONVENTIONS, when discussing or proposing risks:
 - probability and impact are qualitative (0-1, unitless heat-map scores) — never treated as \
 currency or duration.

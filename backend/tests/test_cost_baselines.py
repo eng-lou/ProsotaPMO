@@ -48,3 +48,79 @@ async def test_delete_baseline(client: AsyncClient, project: Project, live_perio
 
     assert (await client.delete(f"/api/v1/cost-baselines/{baseline['id']}")).status_code == 204
     assert (await client.get(f"/api/v1/cost-baselines/{baseline['id']}/snapshot")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Assign/unassign (2026-09-03, per Maro's domain correction — "the baseline of
+# the figures becomes the approved budget... we can create multiple baselines
+# and choose to assign a particular baseline as the budget figures to measure
+# against"). Mirrors schedule_baselines' own assign/unassign test coverage.
+# ---------------------------------------------------------------------------
+
+async def test_assign_baseline_sets_bl_budget(client: AsyncClient, project: Project, live_period: Period):
+    el = await _create_cost_element(client, project, live_period, "Substructure", budget="100000")
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-07-20",
+    })).json()
+
+    resp = await client.post(f"/api/v1/cost-baselines/{baseline['id']}/assign")
+    assert resp.status_code == 200
+    updated = next(e for e in resp.json() if e["id"] == el["id"])
+    assert float(updated["bl_budget"]) == 100000.00
+
+    listed = (await client.get("/api/v1/cost-baselines/", params={"period_id": str(live_period.id)})).json()
+    assert listed[0]["is_active"] is True
+
+
+async def test_only_one_baseline_active_per_period(client: AsyncClient, project: Project, live_period: Period):
+    await _create_cost_element(client, project, live_period, "Substructure", budget="100000")
+    baseline_a = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "A", "baseline_date": "2026-07-20",
+    })).json()
+    baseline_b = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "B", "baseline_date": "2026-07-21",
+    })).json()
+
+    await client.post(f"/api/v1/cost-baselines/{baseline_a['id']}/assign")
+    await client.post(f"/api/v1/cost-baselines/{baseline_b['id']}/assign")
+
+    listed = {b["id"]: b for b in (await client.get("/api/v1/cost-baselines/", params={"period_id": str(live_period.id)})).json()}
+    assert listed[baseline_a["id"]]["is_active"] is False
+    assert listed[baseline_b["id"]]["is_active"] is True
+
+
+async def test_unassign_baseline(client: AsyncClient, project: Project, live_period: Period):
+    el = await _create_cost_element(client, project, live_period, "Substructure", budget="100000")
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-07-20",
+    })).json()
+    await client.post(f"/api/v1/cost-baselines/{baseline['id']}/assign")
+
+    resp = await client.post(f"/api/v1/cost-baselines/{baseline['id']}/unassign")
+    assert resp.status_code == 200
+    updated = next(e for e in resp.json() if e["id"] == el["id"])
+    assert updated["bl_budget"] is None
+
+    listed = (await client.get("/api/v1/cost-baselines/", params={"period_id": str(live_period.id)})).json()
+    assert listed[0]["is_active"] is False
+
+
+async def test_unassign_baseline_that_is_not_assigned_rejected(client: AsyncClient, project: Project, live_period: Period):
+    await _create_cost_element(client, project, live_period, "Substructure", budget="100000")
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-07-20",
+    })).json()
+    resp = await client.post(f"/api/v1/cost-baselines/{baseline['id']}/unassign")
+    assert resp.status_code == 422
+
+
+async def test_delete_active_baseline_clears_bl_budget(client: AsyncClient, project: Project, live_period: Period):
+    el = await _create_cost_element(client, project, live_period, "Substructure", budget="100000")
+    baseline = (await client.post("/api/v1/cost-baselines/", json={
+        "period_id": str(live_period.id), "name": "Baseline 1", "baseline_date": "2026-07-20",
+    })).json()
+    await client.post(f"/api/v1/cost-baselines/{baseline['id']}/assign")
+
+    assert (await client.delete(f"/api/v1/cost-baselines/{baseline['id']}")).status_code == 204
+    resp = await client.get(f"/api/v1/cost-elements/{el['id']}")
+    assert resp.json()["bl_budget"] is None
