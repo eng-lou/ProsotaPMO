@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -34,6 +34,8 @@ from app.schemas.dashboard import (
     CostComparisonItem,
     CostComparisonSummary,
     CostElementSummary,
+    CostPerformanceTrendPoint,
+    CostPerformanceTrendResponse,
     DashboardKpis,
     DashboardOverviewResponse,
     DcmaQualitySummary,
@@ -42,6 +44,8 @@ from app.schemas.dashboard import (
     IcdComparisonSummary,
     IcdComparisonTypeCounts,
     IcdItemSummary,
+    IcdOpenItemsTrendPoint,
+    IcdOpenItemsTrendResponse,
     LookaheadItem,
     LookaheadSummary,
     MilestoneTimelineItem,
@@ -49,6 +53,8 @@ from app.schemas.dashboard import (
     RiskComparison,
     RiskComparisonItem,
     RiskComparisonSummary,
+    RiskEmvTrendPoint,
+    RiskEmvTrendResponse,
     RiskMitigationActionSummary,
     ResourceAssignmentSummary,
     RiskExposureBand,
@@ -59,6 +65,8 @@ from app.schemas.dashboard import (
     ScheduleComparison,
     ScheduleComparisonItem,
     ScheduleComparisonSummary,
+    SpiTrendPoint,
+    SpiTrendResponse,
     TopRisk,
 )
 from app.services import clash_test as clash_test_svc
@@ -984,3 +992,189 @@ async def get_baseline_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) 
         cost=await _cost_comparison(db, baseline_set_id),
         icd=await _icd_comparison(db, baseline_set_id),
     )
+
+
+async def get_risk_emv_trend(db: AsyncSession, period_id: uuid.UUID) -> RiskEmvTrendResponse:
+    """Risk EMV Trend (2026-09-03, per Maro — see schemas/dashboard.py's own
+    header comment): portfolio-level open-risk EMV exposure at each saved
+    RiskBaseline (chronological) plus a live Current point, so a planner can
+    see at a glance whether overall risk exposure has been growing, shrinking,
+    or stagnant across periods — not just today's single snapshot. "Open"
+    matches _risk_overview_and_exposure's own convention (status != "closed")
+    rather than _risk_comparison's portfolio-total (which deliberately
+    includes closed risks for a different purpose, tracking total EMV
+    movement including risks retired since the baseline) — a closed risk no
+    longer contributes real exposure, so it's excluded here the same way the
+    live Risk Exposure widget already excludes it."""
+    period = await db.get(Period, period_id)
+    if period is None:
+        raise HTTPException(status_code=404, detail="Period not found")
+
+    baselines = (await db.execute(
+        select(RiskBaseline).where(RiskBaseline.period_id == period_id)
+        .order_by(RiskBaseline.baseline_date.asc(), RiskBaseline.created_at.asc())
+    )).scalars().all()
+
+    points = []
+    for b in baselines:
+        snapshots = (await db.execute(
+            select(RiskBaselineItem).where(RiskBaselineItem.baseline_id == b.id)
+        )).scalars().all()
+        open_snapshots = [s for s in snapshots if s.status != "closed"]
+        emv_cost_total = sum((s.emv_cost for s in open_snapshots if s.emv_cost is not None), Decimal(0))
+        emv_days_total = sum((s.emv_schedule_days for s in open_snapshots if s.emv_schedule_days is not None), Decimal(0))
+        points.append(RiskEmvTrendPoint(
+            baseline_id=b.id, baseline_name=b.name, baseline_date=b.baseline_date,
+            open_count=len(open_snapshots),
+            emv_cost_total=emv_cost_total.quantize(_MONEY), emv_schedule_days_total=emv_days_total.quantize(Decimal("0.1")),
+        ))
+
+    live_risks = (await db.execute(select(Risk).where(Risk.period_id == period_id))).scalars().all()
+    open_live = [r for r in live_risks if r.status != "closed"]
+    current_emv_cost = sum((r.emv_cost for r in open_live if r.emv_cost is not None), Decimal(0))
+    current_emv_days = sum((r.emv_schedule_days for r in open_live if r.emv_schedule_days is not None), Decimal(0))
+    points.append(RiskEmvTrendPoint(
+        baseline_id=None, baseline_name="Current", baseline_date=date.today(),
+        open_count=len(open_live),
+        emv_cost_total=current_emv_cost.quantize(_MONEY), emv_schedule_days_total=current_emv_days.quantize(Decimal("0.1")),
+    ))
+    return RiskEmvTrendResponse(points=points)
+
+
+async def get_cost_performance_trend(db: AsyncSession, period_id: uuid.UUID) -> CostPerformanceTrendResponse:
+    """Cost CPI/EAC Trend (2026-09-03, per Maro): portfolio-level BAC/CPI/EAC
+    at each saved CostBaseline (chronological) plus a live Current point —
+    same _cost_comparison rollup (sum bac/ac/ev across snapshot rows, then
+    rollup_evm_from_totals once over the totals, never averaging per-element
+    CPIs), just walked across *every* baseline instead of only the most
+    recent one. Both CPI and EAC come out of this single fetch (they share
+    the same underlying bac/ac/ev totals per point) — the frontend renders
+    them as two separate widgets (different units/scales) off one series."""
+    period = await db.get(Period, period_id)
+    if period is None:
+        raise HTTPException(status_code=404, detail="Period not found")
+
+    baselines = (await db.execute(
+        select(CostBaseline).where(CostBaseline.period_id == period_id)
+        .order_by(CostBaseline.baseline_date.asc(), CostBaseline.created_at.asc())
+    )).scalars().all()
+
+    points = []
+    for b in baselines:
+        snapshots = (await db.execute(
+            select(CostBaselineItem).where(CostBaselineItem.baseline_id == b.id)
+        )).scalars().all()
+        bac_total = ac_total = ev_total = Decimal(0)
+        for s in snapshots:
+            bac_total += s.bac
+            ac_total += s.ac or Decimal(0)
+            if s.pct_complete is not None:
+                ev_total += s.bac * Decimal(s.pct_complete) / Decimal(100)
+        rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total)
+        points.append(CostPerformanceTrendPoint(
+            baseline_id=b.id, baseline_name=b.name, baseline_date=b.baseline_date,
+            bac=bac_total.quantize(_MONEY), cpi=rollup["cpi"], eac=rollup["eac"],
+        ))
+
+    elements = await list_cost_elements(db, period.project_id, period_id)
+    bac_total = ac_total = ev_total = Decimal(0)
+    has_cost_evm = False
+    for el in elements:
+        bac, ac = _resolve_bac_ac(el)
+        if bac is None:
+            continue
+        has_cost_evm = True
+        bac_total += bac
+        ac_total += ac or Decimal(0)
+        if el.pct_complete is not None:
+            ev_total += bac * Decimal(el.pct_complete) / Decimal(100)
+    current_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total) if has_cost_evm else {}
+    points.append(CostPerformanceTrendPoint(
+        baseline_id=None, baseline_name="Current", baseline_date=date.today(),
+        bac=bac_total.quantize(_MONEY) if has_cost_evm else None,
+        cpi=current_rollup.get("cpi"), eac=current_rollup.get("eac"),
+    ))
+    return CostPerformanceTrendResponse(points=points)
+
+
+async def get_spi_trend(db: AsyncSession, project_id: uuid.UUID) -> SpiTrendResponse:
+    """SPI Trend (2026-09-03, per Maro): unlike the other three trends here,
+    SPI is genuinely cross-pillar (needs a schedule-linked cost element's
+    baseline bac/pct_complete *and* its activity's baseline start/finish
+    together — see _baseline_schedule_spi), so this walks BaselineSets (the
+    thing that actually links a ScheduleBaseline to its sibling CostBaseline),
+    not a single per-pillar baseline table. A BaselineSet with no linked
+    ScheduleBaseline, or one whose schedule-linked cost data isn't there yet,
+    simply has no point — never a guessed number, same "no snapshot = no
+    point" rule Milestone Trend already established."""
+    baseline_sets = (await db.execute(
+        select(BaselineSet).where(BaselineSet.project_id == project_id)
+        .order_by(BaselineSet.baseline_date.asc(), BaselineSet.created_at.asc())
+    )).scalars().all()
+
+    points = []
+    for bset in baseline_sets:
+        sched_baseline = (await db.execute(
+            select(ScheduleBaseline).where(ScheduleBaseline.baseline_set_id == bset.id)
+            .order_by(ScheduleBaseline.created_at.desc())
+        )).scalars().first()
+        if sched_baseline is None:
+            continue
+        snapshots = (await db.execute(
+            select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == sched_baseline.id)
+        )).scalars().all()
+        spi = await _baseline_schedule_spi(db, bset.id, snapshots)
+        if spi is None:
+            continue
+        points.append(SpiTrendPoint(baseline_set_id=bset.id, baseline_name=bset.name, baseline_date=bset.baseline_date, spi=spi))
+
+    live_period = (await db.execute(
+        select(Period).where(Period.project_id == project_id, Period.freeze_status == "live")
+    )).scalars().first()
+    if live_period is not None:
+        current_spi, _elements = await _live_schedule_spi(db, project_id, live_period.id)
+        if current_spi is not None:
+            points.append(SpiTrendPoint(baseline_set_id=None, baseline_name="Current", baseline_date=date.today(), spi=current_spi))
+    return SpiTrendResponse(points=points)
+
+
+async def get_icd_open_items_trend(db: AsyncSession, period_id: uuid.UUID) -> IcdOpenItemsTrendResponse:
+    """Issues/Changes/Decisions Open-Count Trend (2026-09-03, per Maro:
+    "tracking how many open over periods") — open count per item_type at each
+    saved IcdBaseline (chronological) plus a live Current point, so a planner
+    can see whether the backlog of open items has been growing, shrinking, or
+    stagnant. "Open" matches _icd_comparison's own convention (status !=
+    "closed")."""
+    period = await db.get(Period, period_id)
+    if period is None:
+        raise HTTPException(status_code=404, detail="Period not found")
+
+    baselines = (await db.execute(
+        select(IcdBaseline).where(IcdBaseline.period_id == period_id)
+        .order_by(IcdBaseline.baseline_date.asc(), IcdBaseline.created_at.asc())
+    )).scalars().all()
+
+    points = []
+    for b in baselines:
+        snapshots = (await db.execute(
+            select(IcdBaselineItem).where(IcdBaselineItem.baseline_id == b.id)
+        )).scalars().all()
+        counts = {"issue": 0, "change": 0, "decision": 0}
+        for s in snapshots:
+            if s.status != "closed":
+                counts[s.item_type] += 1
+        points.append(IcdOpenItemsTrendPoint(
+            baseline_id=b.id, baseline_name=b.name, baseline_date=b.baseline_date,
+            open_issues=counts["issue"], open_changes=counts["change"], open_decisions=counts["decision"],
+        ))
+
+    live_items = (await db.execute(select(IcdItem).where(IcdItem.period_id == period_id))).scalars().all()
+    current_counts = {"issue": 0, "change": 0, "decision": 0}
+    for i in live_items:
+        if i.status != "closed":
+            current_counts[i.item_type] += 1
+    points.append(IcdOpenItemsTrendPoint(
+        baseline_id=None, baseline_name="Current", baseline_date=date.today(),
+        open_issues=current_counts["issue"], open_changes=current_counts["change"], open_decisions=current_counts["decision"],
+    ))
+    return IcdOpenItemsTrendResponse(points=points)

@@ -478,3 +478,68 @@ class BaselineComparisonResponse(BaseModel):
     risk: RiskComparison | None
     cost: CostComparison | None
     icd: IcdComparison | None
+
+
+# Trend-across-baselines charts (2026-09-03, per Maro: "Do a trend chart for
+# Risk EMV, do for CPI, SPI, Cost EAC, Issues, Changes and Decisions Status
+# changes... more comprehensive analysis, not just a snapshot but we have
+# baseline data/s, being able to see the trend is important") — the same
+# "one point per saved baseline, chronological, plus a final live Current
+# point" shape MilestoneTrendResponse already established, applied to the
+# other three baseline-bearing pillars (Risk/Cost/ICD) plus one genuinely
+# cross-pillar metric (SPI, which needs a BaselineSet's linked Schedule+Cost
+# pair together, see _baseline_schedule_spi). None is always "genuinely not
+# computable at that point" (no schedule-linked EVM, no BaselineSet-linked
+# ScheduleBaseline, etc.), never a guessed number.
+class RiskEmvTrendPoint(BaseModel):
+    baseline_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    open_count: int
+    emv_cost_total: Decimal
+    emv_schedule_days_total: Decimal
+
+
+class RiskEmvTrendResponse(BaseModel):
+    points: list[RiskEmvTrendPoint]
+
+
+class CostPerformanceTrendPoint(BaseModel):
+    baseline_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    bac: Decimal | None
+    cpi: Decimal | None
+    eac: Decimal | None
+
+
+class CostPerformanceTrendResponse(BaseModel):
+    points: list[CostPerformanceTrendPoint]
+
+
+class SpiTrendPoint(BaseModel):
+    # Keyed to the BaselineSet, not a raw ScheduleBaseline — SPI genuinely
+    # needs the sibling CostBaseline linked in the same set (see
+    # _baseline_schedule_spi), so unlike Milestone Trend this can't walk
+    # ScheduleBaseline alone.
+    baseline_set_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    spi: Decimal | None
+
+
+class SpiTrendResponse(BaseModel):
+    points: list[SpiTrendPoint]
+
+
+class IcdOpenItemsTrendPoint(BaseModel):
+    baseline_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    open_issues: int
+    open_changes: int
+    open_decisions: int
+
+
+class IcdOpenItemsTrendResponse(BaseModel):
+    points: list[IcdOpenItemsTrendPoint]

@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  getCostPerformanceTrend, getIcdOpenItemsTrend, getRiskEmvTrend, getSpiTrend,
+  type CostPerformanceTrendPoint, type IcdOpenItemsTrendPoint, type RiskEmvTrendPoint, type SpiTrendPoint,
+} from './baselineTrends'
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
 import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
+import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { getMilestoneTrend, type MilestoneTrendSeries } from './milestoneTrend'
 import { MilestoneTrack } from './MilestoneTrack'
@@ -47,6 +52,14 @@ export interface WidgetProps {
   // data.mitigation_actions), or data.clash_pairs — plus milestone_trend_chart
   // (its own, genuinely different milestone-across-baselines shape, added
   // 2026-09-03) — 34 widget_types total now, see FILTERABLE_WIDGET_TYPES.
+  // risk_emv_trend/cost_cpi_trend/cost_eac_trend/spi_trend/
+  // icd_open_items_trend (added same day, per Maro: "Do a trend chart for
+  // Risk EMV, do for CPI, SPI, Cost EAC, Issues, Changes and Decisions
+  // Status changes... being able to see the trend is important") are
+  // deliberately NOT in that set — like kpi_strip/risk_exposure below, they
+  // read a server-pre-aggregated portfolio rollup (total EMV, portfolio
+  // CPI/EAC/SPI, open counts) computed across baselines, not a raw
+  // per-record array there's anything to filter down to.
   // Deliberately NOT extended to the
   // handful of widgets that read a server-pre-aggregated summary instead
   // of a raw array (kpi_strip, schedule_performance, risk_overview,
@@ -301,6 +314,248 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
         })}
       </LineChart>
     </ResponsiveContainer>
+  )
+}
+
+// Trend-across-baselines charts (2026-09-03, per Maro: "Do a trend chart for
+// Risk EMV, do for CPI, SPI, Cost EAC, Issues, Changes and Decisions Status
+// changes... more comprehensive analysis, not just a snapshot but we have
+// baseline data/s, being able to see the trend is important") — same visual
+// language as Milestone Trend Chart above (horizontal-only gridlines, no
+// legend, each line labelled at its own last point via a zero-radius
+// ReferenceDot), factored into one shared renderer since these four widgets
+// are otherwise near-identical: a handful of named numeric series plotted
+// against the same {baseline_name, baseline_date}-shaped x-axis. Unlike
+// Milestone Trend Chart, these read a server-pre-aggregated rollup (total
+// EMV, portfolio CPI/EAC/SPI, open counts) rather than one row per record —
+// same "not filterable" bucket as kpi_strip/risk_exposure/dcma_score (see
+// WidgetProps' own filterConditions doc) since there's no raw per-record
+// array here to filter.
+interface TrendChartPoint { baseline_name: string; baseline_date: string }
+interface TrendSeriesDef<T> { key: string; label: string; getValue: (point: T) => number | null }
+
+function BaselineTrendChart<T extends TrendChartPoint>({
+  points, series, yTickFormatter, tooltipFormatter, referenceValue,
+}: {
+  points: T[]
+  series: TrendSeriesDef<T>[]
+  yTickFormatter?: (v: number) => string
+  tooltipFormatter?: (v: number) => string
+  referenceValue?: number
+}) {
+  const sorted = [...points].sort((a, b) => a.baseline_date.localeCompare(b.baseline_date))
+  const chartData = sorted.map(p => {
+    const row: Record<string, string | number | null> = { label: p.baseline_name }
+    for (const s of series) row[s.key] = s.getValue(p)
+    return row
+  })
+  const lastLabel = chartData[chartData.length - 1].label as string
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={chartData} margin={{ top: 10, right: 140, bottom: 10, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+        <YAxis
+          tickFormatter={yTickFormatter}
+          tick={{ fontSize: 11 }}
+          tickLine={false}
+          axisLine={{ stroke: '#d1d5db' }}
+          width={70}
+        />
+        <Tooltip formatter={(v: number, name: string) => [tooltipFormatter ? tooltipFormatter(v) : v, name]} />
+        {referenceValue !== undefined && <ReferenceLine y={referenceValue} stroke="#9ca3af" strokeDasharray="4 4" />}
+        {series.map((s, i) => {
+          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          return (
+            <Line
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              name={s.label}
+              stroke={color}
+              strokeWidth={2}
+              dot={{ r: 3, strokeWidth: 0, fill: color }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+          )
+        })}
+        {series.map((s, i) => {
+          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          const lastValue = chartData[chartData.length - 1][s.key]
+          if (typeof lastValue !== 'number') return null
+          return (
+            <ReferenceDot
+              key={`${s.key}-end-label`}
+              x={lastLabel}
+              y={lastValue}
+              r={0}
+              fill="transparent"
+              stroke="transparent"
+              label={{ value: s.label, position: 'right', fill: color, fontSize: 11 }}
+              isFront
+            />
+          )
+        })}
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function RiskEmvTrendWidget({ projectId }: WidgetProps) {
+  const { period, loading: periodLoading } = useActivePeriod(projectId)
+  const [points, setPoints] = useState<RiskEmvTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!period) return
+    let cancelled = false
+    getRiskEmvTrend(period.id).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [period?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved Risk Baselines yet) — save at least one Risk Baseline to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[{ key: 'emv', label: 'Open Risk EMV (Cost)', getValue: p => Number(p.emv_cost_total) }]}
+      yTickFormatter={v => formatCurrency(v)}
+      tooltipFormatter={v => formatCurrency(v)}
+    />
+  )
+}
+
+export function CostCpiTrendWidget({ projectId }: WidgetProps) {
+  const { period, loading: periodLoading } = useActivePeriod(projectId)
+  const [points, setPoints] = useState<CostPerformanceTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!period) return
+    let cancelled = false
+    getCostPerformanceTrend(period.id).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [period?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved Cost Baselines yet) — save at least one Cost Baseline to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[{ key: 'cpi', label: 'CPI', getValue: p => (p.cpi !== null ? Number(p.cpi) : null) }]}
+      yTickFormatter={v => v.toFixed(2)}
+      tooltipFormatter={v => v.toFixed(2)}
+      referenceValue={1}
+    />
+  )
+}
+
+export function CostEacTrendWidget({ projectId }: WidgetProps) {
+  const { period, loading: periodLoading } = useActivePeriod(projectId)
+  const [points, setPoints] = useState<CostPerformanceTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!period) return
+    let cancelled = false
+    getCostPerformanceTrend(period.id).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [period?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved Cost Baselines yet) — save at least one Cost Baseline to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[{ key: 'eac', label: 'EAC', getValue: p => (p.eac !== null ? Number(p.eac) : null) }]}
+      yTickFormatter={v => formatCurrency(v)}
+      tooltipFormatter={v => formatCurrency(v)}
+    />
+  )
+}
+
+export function SpiTrendWidget({ projectId }: WidgetProps) {
+  const [points, setPoints] = useState<SpiTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!projectId) return
+    let cancelled = false
+    getSpiTrend(projectId).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [projectId])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far — SPI needs a "Capture All Now" Baseline Set (linking a Schedule
+        and Cost baseline together) to compute a historical point; save at least one to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[{ key: 'spi', label: 'SPI', getValue: p => (p.spi !== null ? Number(p.spi) : null) }]}
+      yTickFormatter={v => v.toFixed(2)}
+      tooltipFormatter={v => v.toFixed(2)}
+      referenceValue={1}
+    />
+  )
+}
+
+export function IcdOpenItemsTrendWidget({ projectId }: WidgetProps) {
+  const { period, loading: periodLoading } = useActivePeriod(projectId)
+  const [points, setPoints] = useState<IcdOpenItemsTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!period) return
+    let cancelled = false
+    getIcdOpenItemsTrend(period.id).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [period?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved ICD Baselines yet) — save at least one ICD Baseline to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[
+        { key: 'issues', label: 'Open Issues', getValue: p => p.open_issues },
+        { key: 'changes', label: 'Open Changes', getValue: p => p.open_changes },
+        { key: 'decisions', label: 'Open Decisions', getValue: p => p.open_decisions },
+      ]}
+      yTickFormatter={v => String(Math.round(v))}
+      tooltipFormatter={v => String(v)}
+    />
   )
 }
 
@@ -1744,6 +1999,11 @@ export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   risk_overview: { label: 'Risk Overview', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskOverviewWidget {...props} /> },
   milestone_timeline: { label: 'Milestone Timeline', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <MilestoneTimelineWidget {...props} /> },
   milestone_trend_chart: { label: 'Milestone Trend Chart', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <MilestoneTrendChartWidget {...props} /> },
+  risk_emv_trend: { label: 'Risk EMV Trend', category: 'Risk', defaultSize: { w: 8, h: 5 }, render: props => <RiskEmvTrendWidget {...props} /> },
+  cost_cpi_trend: { label: 'Cost CPI Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostCpiTrendWidget {...props} /> },
+  cost_eac_trend: { label: 'Cost EAC Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostEacTrendWidget {...props} /> },
+  spi_trend: { label: 'SPI Trend', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <SpiTrendWidget {...props} /> },
+  icd_open_items_trend: { label: 'Issues/Changes/Decisions Open Trend', category: 'Issues, Changes & Decisions', defaultSize: { w: 8, h: 5 }, render: props => <IcdOpenItemsTrendWidget {...props} /> },
   risk_exposure: { label: 'Risk Exposure', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskExposureWidget {...props} /> },
   top_risks: { label: 'Top 5 Risks', category: 'Risk', defaultSize: { w: 12, h: 5 }, render: props => <TopRisksWidget {...props} /> },
   float_distribution: { label: 'Float Distribution', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <FloatDistributionWidget {...props} /> },

@@ -541,6 +541,12 @@ TOOLS: list[dict] = [
             "- milestone_trend_chart — one row per milestone (not per baseline): code, task_name "
             "only. E.g. isolate one milestone's own trend line: {field:'code', operator:'eq', "
             "value:'M-0002'} (no UDF support).\n"
+            "- risk_emv_trend, cost_cpi_trend, cost_eac_trend, spi_trend, icd_open_items_trend — "
+            "each plots a portfolio-level rollup (total open-risk EMV, CPI, EAC, SPI, or open "
+            "Issue/Change/Decision counts) across every saved baseline plus a live Current point. "
+            "No filter — same as kpi_strip/risk_exposure/dcma_score below, these are a "
+            "server-computed aggregate over the whole project at each point in time, not a "
+            "per-record list to narrow.\n"
             "User Defined Fields — a project can define custom fields for entity_type "
             "'activity'/'cost_element'/'resource' (Scheduling/Cost Plan/Resources' own \"UDF\" "
             "screens, e.g. a text field literally named \"Discipline\" — the same field Radial "
@@ -580,7 +586,8 @@ TOOLS: list[dict] = [
                                     "near_critical_watch_list", "activity_status", "project_info",
                                     "camera_view_gallery", "fourd_video_gallery", "lookahead_planner",
                                     "mitigation_actions_table", "risk_ageing_table", "project_narrative",
-                                    "milestone_trend_chart",
+                                    "milestone_trend_chart", "risk_emv_trend", "cost_cpi_trend",
+                                    "cost_eac_trend", "spi_trend", "icd_open_items_trend",
                                 ],
                             },
                             "filter": {
