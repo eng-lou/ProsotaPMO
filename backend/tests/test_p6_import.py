@@ -10,6 +10,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.activity import Activity
 from app.models.calendar import Calendar, CalendarBreak
 from app.models.organisation import Organisation
@@ -26,6 +27,18 @@ from tests.test_p6_export import _seed_schedule
 # dialect. Skipped, not failed, when the environment doesn't have them (CI,
 # a fresh clone) rather than pretending this coverage exists everywhere.
 _FIXTURE_DIR = pathlib.Path(r"C:\Users\Maro\Documents\ProsotaPMO\source\schedule")
+
+# 2026-09-03 — every import in this file now round-trips through real R2
+# object storage (see app/api/p6_import.py's own header for why: a real
+# PMXML export routinely exceeds Vercel's 4.5MB request-body cap, so this
+# had to move off multipart onto the same presign/PUT/download pattern
+# ai_attachments.py/model3d_files.py/site_capture.py already use). None of
+# those other presign-based features have R2-touching tests either — R2
+# credentials were never configured for local dev (confirmed: r2_account_id
+# is blank in backend/.env), only in the real deployed environment. Skipped,
+# not failed, same "environment doesn't have it" discipline as the external
+# fixture files above, rather than pretending this coverage exists locally.
+_R2_CONFIGURED = bool(settings.r2_account_id)
 
 
 @pytest_asyncio.fixture
@@ -49,10 +62,20 @@ async def _export_xml(client: AsyncClient, period: SchedulePeriod) -> bytes:
 
 
 async def _import_xml(client: AsyncClient, project: Project, data: bytes, filename: str = "schedule.xml") -> dict:
+    if not _R2_CONFIGURED:
+        pytest.skip("R2 credentials not configured in this environment")
+    # Direct-to-R2 (2026-09-03) — uploads real bytes to the real object store
+    # first (same call the presigned PUT url would eventually reach), then
+    # calls /xml with the resulting storage_key, exercising the real
+    # download-from-R2 + parse + import + cleanup path end to end, not just
+    # a mocked request body. See app/api/p6_import.py's own header for why
+    # this replaced the old multipart-upload shape.
+    from app.services import object_storage
+    storage_key = object_storage.generate_storage_key("p6-imports", filename)
+    object_storage.upload_bytes(storage_key, data, "application/xml")
     resp = await client.post(
         "/api/v1/p6-import/xml",
-        data={"project_id": str(project.id)},
-        files={"file": (filename, data, "application/xml")},
+        json={"project_id": str(project.id), "storage_key": storage_key},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -201,23 +224,47 @@ async def test_import_zeroes_out_milestone_duration(client: AsyncClient, project
 
 
 async def test_p6_import_404_for_unknown_project(client: AsyncClient):
+    if not _R2_CONFIGURED:
+        pytest.skip("R2 credentials not configured in this environment")
+    from app.services import object_storage
+
     valid_but_empty = (
         b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
         b"<Project><Id>Ghost Project</Id></Project>"
         b"</APIBusinessObjects>"
     )
+    storage_key = object_storage.generate_storage_key("p6-imports", "ghost.xml")
+    object_storage.upload_bytes(storage_key, valid_but_empty, "application/xml")
     resp = await client.post(
         "/api/v1/p6-import/xml",
-        data={"project_id": str(uuid.uuid4())},
-        files={"file": ("ghost.xml", valid_but_empty, "application/xml")},
+        json={"project_id": str(uuid.uuid4()), "storage_key": storage_key},
     )
     assert resp.status_code == 404
 
 
 async def test_p6_import_422s_for_malformed_xml(client: AsyncClient, project: Project):
+    if not _R2_CONFIGURED:
+        pytest.skip("R2 credentials not configured in this environment")
+    from app.services import object_storage
+
+    storage_key = object_storage.generate_storage_key("p6-imports", "bad.xml")
+    object_storage.upload_bytes(storage_key, b"not xml at all", "application/xml")
     resp = await client.post(
         "/api/v1/p6-import/xml",
-        data={"project_id": str(project.id)},
-        files={"file": ("bad.xml", b"not xml at all", "application/xml")},
+        json={"project_id": str(project.id), "storage_key": storage_key},
     )
     assert resp.status_code == 422
+
+
+async def test_p6_import_presign_returns_upload_url(client: AsyncClient):
+    if not _R2_CONFIGURED:
+        pytest.skip("R2 credentials not configured in this environment")
+    # 2026-09-03 — the presign step itself: confirms the endpoint returns a
+    # real storage_key + upload_url shape without needing to actually PUT
+    # through it (that's exercised for real by every _import_xml call above,
+    # which uploads real bytes to the real object store first).
+    resp = await client.post("/api/v1/p6-import/presign", json={"name": "schedule.xml"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["storage_key"].startswith("p6-imports/") and body["storage_key"].endswith(".xml")
+    assert body["upload_url"].startswith("https://")

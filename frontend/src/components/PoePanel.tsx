@@ -497,6 +497,21 @@ export function PoePanel({
     window.addEventListener('pointerup', onUp)
   }
 
+  // Copy/paste attach (2026-09-03, per Maro: "simply copy a file/image then
+  // paste in Poe chat without having to click the attach icon") — reuses
+  // handleFilesSelected as-is: clipboardData.files is a real FileList for a
+  // copied image (screenshot tools, "Copy image" in a browser) or a file
+  // copied straight from Explorer/Finder, so there's no separate
+  // attachment-adding path to maintain here. Only preventDefault when a
+  // file was actually found, so a plain text paste (the overwhelmingly
+  // common case) is untouched.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (e.clipboardData.files.length > 0) {
+      e.preventDefault()
+      handleFilesSelected(e.clipboardData.files)
+    }
+  }
+
   const handleFilesSelected = (files: FileList | null) => {
     if (!files) return
     for (const file of Array.from(files)) {
@@ -1329,7 +1344,8 @@ export function PoePanel({
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e) } }}
-              placeholder="Ask Poe a question…"
+              onPaste={handlePaste}
+              placeholder="Ask Poe a question… (paste an image or file to attach it)"
               rows={2}
               className="flex-1 min-w-0 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-prosota-amber resize-y"
             />
