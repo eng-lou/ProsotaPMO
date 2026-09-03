@@ -121,18 +121,85 @@ const MILESTONE_FIELDS: DashboardFieldDef[] = [
   { key: 'variance_days', label: 'Variance (days)', type: 'number' },
 ]
 
+// LookaheadItem — a different shape from ScheduleActivitySummary (no
+// wbs_path/udf; has has_incomplete_predecessor instead), so its own list
+// rather than reusing SCHEDULE_ACTIVITY_FIELDS.
+const LOOKAHEAD_ITEM_FIELDS: DashboardFieldDef[] = [
+  { key: 'code', label: 'Code', type: 'text' },
+  { key: 'task_name', label: 'Activity Name', type: 'text' },
+  { key: 'start', label: 'Start', type: 'date' },
+  { key: 'finish', label: 'Finish', type: 'date' },
+  { key: 'pct_complete', label: '% Complete', type: 'number' },
+  { key: 'total_float_hours', label: 'Total Float (h)', type: 'number' },
+  { key: 'is_critical', label: 'Critical', type: 'boolean' },
+  { key: 'has_incomplete_predecessor', label: 'Has Incomplete Predecessor', type: 'boolean' },
+]
+
+const MITIGATION_ACTION_FIELDS: DashboardFieldDef[] = [
+  { key: 'risk_code', label: 'Risk Code', type: 'text' },
+  { key: 'code', label: 'Action Code', type: 'text' },
+  { key: 'description', label: 'Description', type: 'text' },
+  { key: 'owner', label: 'Owner', type: 'text' },
+  { key: 'due_date', label: 'Due Date', type: 'date' },
+  { key: 'status', label: 'Status', type: 'text' },
+  { key: 'pct_complete', label: '% Complete', type: 'number' },
+]
+
+const CLASH_PAIR_FIELDS: DashboardFieldDef[] = [
+  { key: 'test_name', label: 'Test Name', type: 'text' },
+  { key: 'element_a_label', label: 'Element A', type: 'text' },
+  { key: 'element_b_label', label: 'Element B', type: 'text' },
+  { key: 'distance_mm', label: 'Distance (mm)', type: 'number' },
+  { key: 'status', label: 'Status (new/reviewed/approved)', type: 'text' },
+]
+
 type UdfEntity = 'activity' | 'cost_element' | 'resource'
 
+// One entry per widget_type in FILTERABLE_WIDGET_TYPES (widgets.tsx) —
+// widgets sharing an underlying record type share the same field list, so
+// e.g. every data.risks-driven widget (charts and tables alike) offers the
+// same dropdown even though only some of them render a table.
 const WIDGET_FIELD_MAP: Record<string, { fields: DashboardFieldDef[]; udfEntity?: UdfEntity }> = {
+  // Risk
   top_risks: { fields: RISK_FIELDS },
   risk_register_table: { fields: RISK_FIELDS },
+  risks_by_category: { fields: RISK_FIELDS },
+  risks_by_owner: { fields: RISK_FIELDS },
+  threats_vs_opportunities: { fields: RISK_FIELDS },
+  response_strategy_breakdown: { fields: RISK_FIELDS },
+  risk_ageing_table: { fields: RISK_FIELDS },
+  // Cost
   cost_elements_table: { fields: COST_ELEMENT_FIELDS, udfEntity: 'cost_element' },
-  resource_assignments_table: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  cost_breakdown_by_group: { fields: COST_ELEMENT_FIELDS, udfEntity: 'cost_element' },
+  cost_breakdown_by_owner: { fields: COST_ELEMENT_FIELDS, udfEntity: 'cost_element' },
+  budget_utilisation: { fields: COST_ELEMENT_FIELDS, udfEntity: 'cost_element' },
+  bac_vs_eac_by_group: { fields: COST_ELEMENT_FIELDS, udfEntity: 'cost_element' },
+  // Issues/Changes/Decisions
   open_items_by_owner: { fields: ICD_ITEM_FIELDS },
+  issues_by_status: { fields: ICD_ITEM_FIELDS },
+  issues_ageing_table: { fields: ICD_ITEM_FIELDS },
+  decisions_pending_table: { fields: ICD_ITEM_FIELDS },
+  changes_by_ccb_decision: { fields: ICD_ITEM_FIELDS },
+  // Resources
+  resource_assignments_table: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  resource_budget_by_type: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  resource_budget_by_discipline: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  resource_budget_by_company: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  top_resources_by_budget: { fields: RESOURCE_ASSIGNMENT_FIELDS, udfEntity: 'resource' },
+  // Schedule activities
   baseline_variance_table: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
   critical_activities_table: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
   near_critical_watch_list: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
+  float_distribution: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
+  activities_by_category: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
+  activity_status: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
+  // Milestones
   milestones_table: { fields: MILESTONE_FIELDS },
+  milestone_timeline: { fields: MILESTONE_FIELDS },
+  // Smaller, single-widget data sources
+  lookahead_planner: { fields: LOOKAHEAD_ITEM_FIELDS },
+  mitigation_actions_table: { fields: MITIGATION_ACTION_FIELDS },
+  clash_detail_table: { fields: CLASH_PAIR_FIELDS },
 }
 
 function udfRecords(data: DashboardOverviewResponse, entity: UdfEntity): { udf: Record<string, string> }[] {

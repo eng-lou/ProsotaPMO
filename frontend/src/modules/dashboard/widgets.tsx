@@ -33,12 +33,28 @@ export interface WidgetProps {
   // lib/schedulingFilters.ts's evaluateCondition), not a flat equals-only
   // dict — this app's first-pass dashboard filter shape, which couldn't
   // express a numeric/date comparison or a WBS-subtree scope
-  // (wbs_path+starts_with). Undefined/empty = no filter. Currently wired
-  // into TopRisksWidget/RiskRegisterTableWidget/CostElementsTableWidget/
-  // ResourceAssignmentsTableWidget/OpenItemsByOwnerWidget/
-  // BaselineVarianceTableWidget/MilestonesTableWidget/
-  // CriticalActivitiesTableWidget/NearCriticalWatchListWidget —
-  // everything else ignores both fields.
+  // (wbs_path+starts_with). Undefined/empty = no filter.
+  //
+  // 2026-09-03, per Maro: "you didnt apply them to the existing widgets" —
+  // the original 9 (see FILTERABLE_WIDGET_TYPES below) were only ever the
+  // ones a live Poe request had actually exercised, not "every widget this
+  // COULD apply to." Extended to every other widget that reads straight off
+  // one of the same six raw per-record arrays (data.risks/cost_elements/
+  // icd_items/resource_assignments/schedule_activities/milestones), or one
+  // of the two smaller ones added at the same time (data.lookahead_items,
+  // data.mitigation_actions), or data.clash_pairs — 33 widget_types total
+  // now, see FILTERABLE_WIDGET_TYPES. Deliberately NOT extended to the
+  // handful of widgets that read a server-pre-aggregated summary instead
+  // of a raw array (kpi_strip, schedule_performance, risk_overview,
+  // risk_exposure, dcma_score, clash_summary, eac_forecast_comparison,
+  // earned_value_summary_table) — those numbers are computed server-side
+  // over the WHOLE project (dashboard.py's own EVM/DCMA/clash rollups), so
+  // "filtering" one would mean re-deriving that computation client-side
+  // over a subset, a materially different (and riskier to get subtly
+  // wrong) change than reusing an already-fetched raw array; a real
+  // follow-up if ever asked for, not silently out of scope. project_info/
+  // project_narrative aren't per-record at all; camera_view_gallery/
+  // fourd_video_gallery fetch their own, unrelated 4D-module data.
   filterConditions?: DashboardFilterCondition[]
   filterMatchMode?: 'all' | 'any'
 }
@@ -123,10 +139,11 @@ export function RiskOverviewWidget({ data }: WidgetProps) {
   )
 }
 
-export function MilestoneTimelineWidget({ data }: WidgetProps) {
+export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const milestones = data.milestones.filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
   return (
     <div className="h-full overflow-auto">
-      <MilestoneTrack milestones={data.milestones} />
+      <MilestoneTrack milestones={milestones} />
     </div>
   )
 }
@@ -207,8 +224,10 @@ const FLOAT_BUCKETS: [label: string, min: number, max: number][] = [
   ['>160', 161, Infinity],
 ]
 
-export function FloatDistributionWidget({ data }: WidgetProps) {
-  const withFloat = data.schedule_activities.filter(a => a.total_float_hours !== null)
+export function FloatDistributionWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const withFloat = data.schedule_activities
+    .filter(a => a.total_float_hours !== null)
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
   const chartData = FLOAT_BUCKETS.map(([label, min, max]) => ({
     label,
     count: withFloat.filter(a => {
@@ -229,9 +248,10 @@ export function FloatDistributionWidget({ data }: WidgetProps) {
   )
 }
 
-export function ActivitiesByCategoryWidget({ data }: WidgetProps) {
+export function ActivitiesByCategoryWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const a of data.schedule_activities) {
+    if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
     const key = a.schedule_category ?? 'Unspecified'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -365,9 +385,10 @@ export function CriticalActivitiesTableWidget({ data, filterConditions, filterMa
 // docstring). Same "one fetch, many views" split as the Schedule widgets
 // above; none of these fetch anything of their own.
 
-export function RisksByCategoryWidget({ data }: WidgetProps) {
+export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
+    if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     const key = r.category ?? 'Uncategorised'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -388,10 +409,11 @@ export function RisksByCategoryWidget({ data }: WidgetProps) {
   )
 }
 
-export function RisksByOwnerWidget({ data }: WidgetProps) {
+export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
+    if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     const key = r.risk_owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -412,11 +434,11 @@ export function RisksByOwnerWidget({ data }: WidgetProps) {
   )
 }
 
-export function ThreatsVsOpportunitiesWidget({ data }: WidgetProps) {
+export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   // emv_cost is signed (threats negative, opportunities positive — see
   // RiskExposureWidget's own note) — magnitude is what's worth comparing
   // here, the sign is already implied by which bar it is.
-  const open = data.risks.filter(r => r.status !== 'closed')
+  const open = data.risks.filter(r => r.status !== 'closed').filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
   const threatExposure = open.filter(r => r.risk_type === 'threat').reduce((sum, r) => sum + Math.abs(Number(r.emv_cost ?? 0)), 0)
   const opportunityExposure = open.filter(r => r.risk_type === 'opportunity').reduce((sum, r) => sum + Number(r.emv_cost ?? 0), 0)
   const chartData = [
@@ -439,10 +461,11 @@ export function ThreatsVsOpportunitiesWidget({ data }: WidgetProps) {
   )
 }
 
-export function ResponseStrategyBreakdownWidget({ data }: WidgetProps) {
+export function ResponseStrategyBreakdownWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
+    if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     const key = r.response_strategy ?? 'Not set'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -507,10 +530,11 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditi
 // function's docstring) for exactly this purpose. Same "one fetch, many
 // views" split as the Schedule/Risk widgets above.
 
-export function CostBreakdownByGroupWidget({ data }: WidgetProps) {
+export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const totals = new Map<string, number>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
+    if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     const key = el.element_group ?? 'Ungrouped'
     totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
   }
@@ -531,10 +555,11 @@ export function CostBreakdownByGroupWidget({ data }: WidgetProps) {
   )
 }
 
-export function CostBreakdownByOwnerWidget({ data }: WidgetProps) {
+export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const totals = new Map<string, number>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
+    if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     const key = el.cost_owner ?? 'Unassigned'
     totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
   }
@@ -555,8 +580,8 @@ export function CostBreakdownByOwnerWidget({ data }: WidgetProps) {
   )
 }
 
-export function BudgetUtilisationWidget({ data }: WidgetProps) {
-  const withBac = data.cost_elements.filter(el => el.bac !== null)
+export function BudgetUtilisationWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const withBac = data.cost_elements.filter(el => el.bac !== null).filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
   const bacTotal = withBac.reduce((sum, el) => sum + Number(el.bac), 0)
   const acTotal = withBac.reduce((sum, el) => sum + Number(el.ac ?? 0), 0)
   const pct = bacTotal > 0 ? Math.round((acTotal / bacTotal) * 100) : 0
@@ -577,10 +602,11 @@ export function BudgetUtilisationWidget({ data }: WidgetProps) {
   )
 }
 
-export function BacVsEacByGroupWidget({ data }: WidgetProps) {
+export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const groups = new Map<string, { bac: number; eac: number }>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
+    if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     const key = el.element_group ?? 'Ungrouped'
     const entry = groups.get(key) ?? { bac: 0, eac: 0 }
     entry.bac += Number(el.bac)
@@ -656,10 +682,11 @@ function daysBetween(from: string, to: Date): number {
   return Math.floor((to.getTime() - new Date(from).getTime()) / 86_400_000)
 }
 
-export function IssuesByStatusWidget({ data }: WidgetProps) {
+export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'issue') continue
+    if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     counts.set(i.status, (counts.get(i.status) ?? 0) + 1)
   }
   const chartData = [...counts.entries()].map(([status, count]) => ({ status, count }))
@@ -676,10 +703,11 @@ export function IssuesByStatusWidget({ data }: WidgetProps) {
   )
 }
 
-export function IssuesAgeingTableWidget({ data }: WidgetProps) {
+export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'issue' && i.status !== 'closed' && i.raised_date !== null)
+    .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
     .map(i => ({ ...i, daysOpen: daysBetween(i.raised_date!, now) }))
     .sort((a, b) => b.daysOpen - a.daysOpen)
     .slice(0, 10)
@@ -739,10 +767,11 @@ export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode
   )
 }
 
-export function DecisionsPendingTableWidget({ data }: WidgetProps) {
+export function DecisionsPendingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'decision' && i.status !== 'closed')
+    .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
     .sort((a, b) => {
       if (a.required_by === null) return 1
       if (b.required_by === null) return -1
@@ -780,10 +809,11 @@ export function DecisionsPendingTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function ChangesByCcbDecisionWidget({ data }: WidgetProps) {
+export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'change') continue
+    if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     const key = i.ccb_decision ?? 'Pending'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -817,8 +847,9 @@ function sumBudgetBy(assignments: ResourceAssignmentSummary[], keyOf: (a: Resour
   return [...totals.entries()].map(([key, budget]) => ({ key, budget })).sort((a, b) => b.budget - a.budget)
 }
 
-export function ResourceBudgetByTypeWidget({ data }: WidgetProps) {
-  const chartData = sumBudgetBy(data.resource_assignments, a => a.resource_type)
+export function ResourceBudgetByTypeWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+  const chartData = sumBudgetBy(filtered, a => a.resource_type)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -832,8 +863,9 @@ export function ResourceBudgetByTypeWidget({ data }: WidgetProps) {
   )
 }
 
-export function ResourceBudgetByDisciplineWidget({ data }: WidgetProps) {
-  const chartData = sumBudgetBy(data.resource_assignments, a => a.discipline ?? 'Unspecified').slice(0, 10)
+export function ResourceBudgetByDisciplineWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+  const chartData = sumBudgetBy(filtered, a => a.discipline ?? 'Unspecified').slice(0, 10)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -847,8 +879,9 @@ export function ResourceBudgetByDisciplineWidget({ data }: WidgetProps) {
   )
 }
 
-export function ResourceBudgetByCompanyWidget({ data }: WidgetProps) {
-  const chartData = sumBudgetBy(data.resource_assignments, a => a.company ?? 'Unassigned').slice(0, 10)
+export function ResourceBudgetByCompanyWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+  const chartData = sumBudgetBy(filtered, a => a.company ?? 'Unassigned').slice(0, 10)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -898,9 +931,10 @@ export function ResourceAssignmentsTableWidget({ data, filterConditions, filterM
   )
 }
 
-export function TopResourcesByBudgetWidget({ data }: WidgetProps) {
+export function TopResourcesByBudgetWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const byResource = new Map<string, { type: string; budget: number; activityCount: number }>()
   for (const a of data.resource_assignments) {
+    if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
     const entry = byResource.get(a.resource_name) ?? { type: a.resource_type, budget: 0, activityCount: 0 }
     entry.budget += Number(a.budget)
     entry.activityCount += 1
@@ -1014,8 +1048,10 @@ export function ClashSummaryWidget({ data }: WidgetProps) {
   )
 }
 
-export function ClashDetailTableWidget({ data }: WidgetProps) {
-  const rows = [...data.clash_pairs].sort((a, b) => {
+export function ClashDetailTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const rows = data.clash_pairs
+    .filter(p => evaluateDashboardFilter(p, filterConditions, filterMatchMode))
+    .sort((a, b) => {
     // Unreviewed clashes first (new, then reviewed, then approved), same
     // priority Navisworks-style triage would use — worst-first, not
     // alphabetical or insertion order.
@@ -1159,9 +1195,10 @@ const ACTIVITY_STATUS_COLORS: Record<string, string> = {
   'Not Started': '#9ca3af', 'In Progress': '#2563eb', 'Complete': '#16a34a', 'Suspended': '#d97706',
 }
 
-export function ActivityStatusWidget({ data }: WidgetProps) {
+export function ActivityStatusWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const counts = { 'Not Started': 0, 'In Progress': 0, 'Complete': 0, 'Suspended': 0 }
   for (const a of data.schedule_activities) {
+    if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
     const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
     if (a.suspend_date !== null && a.resume_date === null) counts.Suspended++
     else if (pct >= 100) counts.Complete++
@@ -1314,7 +1351,7 @@ export function FourDVideoGalleryWidget({ projectId }: WidgetProps) {
 
 // --- Batch 8: more Tier-1 quick wins (2026-07-20) ---
 
-export function LookaheadPlannerWidget({ data }: WidgetProps) {
+export function LookaheadPlannerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const [windowWeeks, setWindowWeeks] = useState<2 | 4 | 6>(4)
   const now = new Date()
   const cutoff = new Date(now.getTime() + windowWeeks * 7 * 86_400_000)
@@ -1322,6 +1359,7 @@ export function LookaheadPlannerWidget({ data }: WidgetProps) {
   // same "one fetch, many views" split every other batch uses.
   const rows = data.lookahead_items
     .filter(i => i.start !== null && new Date(i.start) <= cutoff)
+    .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
     .sort((a, b) => new Date(a.start!).getTime() - new Date(b.start!).getTime())
   const { lookahead_summary: s } = data
   return (
@@ -1378,8 +1416,10 @@ export function LookaheadPlannerWidget({ data }: WidgetProps) {
   )
 }
 
-export function MitigationActionsTableWidget({ data }: WidgetProps) {
-  const rows = [...data.mitigation_actions].sort((a, b) => {
+export function MitigationActionsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+  const rows = data.mitigation_actions
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .sort((a, b) => {
     if (a.due_date === null) return 1
     if (b.due_date === null) return -1
     return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
@@ -1415,10 +1455,11 @@ export function MitigationActionsTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function RiskAgeingTableWidget({ data }: WidgetProps) {
+export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
   const now = new Date()
   const rows = data.risks
     .filter(r => r.status !== 'closed' && r.date_raised !== null)
+    .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
     .map(r => ({ ...r, daysOpen: Math.floor((now.getTime() - new Date(r.date_raised!).getTime()) / 86_400_000) }))
     .sort((a, b) => b.daysOpen - a.daysOpen)
     .slice(0, 10)
@@ -1520,9 +1561,25 @@ export interface WidgetDefinition {
 // (backend/app/ai/tools.py) — that's the authoritative source for which
 // widget_types support a filter at all.
 export const FILTERABLE_WIDGET_TYPES = new Set([
-  'top_risks', 'risk_register_table', 'cost_elements_table', 'resource_assignments_table',
-  'open_items_by_owner', 'baseline_variance_table', 'critical_activities_table',
-  'near_critical_watch_list', 'milestones_table',
+  // Risk (data.risks)
+  'top_risks', 'risk_register_table', 'risks_by_category', 'risks_by_owner',
+  'threats_vs_opportunities', 'response_strategy_breakdown', 'risk_ageing_table',
+  // Cost (data.cost_elements)
+  'cost_elements_table', 'cost_breakdown_by_group', 'cost_breakdown_by_owner',
+  'budget_utilisation', 'bac_vs_eac_by_group',
+  // Issues/Changes/Decisions (data.icd_items)
+  'open_items_by_owner', 'issues_by_status', 'issues_ageing_table',
+  'decisions_pending_table', 'changes_by_ccb_decision',
+  // Resources (data.resource_assignments)
+  'resource_assignments_table', 'resource_budget_by_type', 'resource_budget_by_discipline',
+  'resource_budget_by_company', 'top_resources_by_budget',
+  // Schedule activities (data.schedule_activities)
+  'baseline_variance_table', 'critical_activities_table', 'near_critical_watch_list',
+  'float_distribution', 'activities_by_category', 'activity_status',
+  // Milestones (data.milestones)
+  'milestones_table', 'milestone_timeline',
+  // Smaller, single-widget data sources
+  'lookahead_planner', 'mitigation_actions_table', 'clash_detail_table',
 ])
 
 export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {

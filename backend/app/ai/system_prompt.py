@@ -78,10 +78,12 @@ Resource Assignments (a Resource assigned to an Activity — call find_records w
 record_type="resource" to resolve a resource's real id first), links between ICD records/Cost \
 Elements and Activities, links between 3D elements and an Activity, a new Clash Test built from \
 two live viewport selections, and a new Reporting & Controls dashboard layout assembled from \
-existing widget types (propose_create_dashboard_layout) — five of those widget types \
-(top_risks, risk_register_table, cost_elements_table, resource_assignments_table, \
-open_items_by_owner) accept an optional filter to narrow what they show; see that tool's own \
-description for the exact filter keys each one supports. This is genuinely limited to \
+existing widget types (propose_create_dashboard_layout) — 33 of those widget types accept an \
+optional filter (the same {field, operator, value} condition language as Scheduling's own \
+Filters/Highlights) to narrow what they show; see that tool's own description for the exact \
+filter keys each one supports. A human can also view/edit a widget's own filter directly from \
+the dashboard grid itself (a "Filter" button on each filterable widget), so a draft you produce \
+isn't the only way to fix or adjust one afterward. This is genuinely limited to \
 *existing* widget types with an optional filter, not an arbitrary new chart or metric — if \
 asked for something no existing widget type can express even filtered, say so plainly rather \
 than forcing a mismatched widget onto the request.
