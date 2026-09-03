@@ -60,6 +60,30 @@ interface LinkProposalDraft {
   note?: string | null
 }
 
+// IcdItemProposalDraft <-> propose_create_icd_items' own per-item shape
+// (2026-09-03, per a real gap Maro hit live: traced a schedule slip back to
+// its root cause, then asked Poe to raise the Issue for it, and there was
+// no tool — mirrors backend/app/schemas/icd_item.py's own IcdItemCreate,
+// scoped to what a drafting conversation would supply (see tools.py's own
+// header on why closed_date/resolution/rejection_reason/... are left out —
+// those get filled in LATER, during the item's own lifecycle).
+interface IcdItemProposalDraft {
+  item_type: 'issue' | 'change' | 'decision'
+  title: string
+  description?: string | null
+  priority?: string | null
+  owner?: string | null
+  raised_by?: string | null
+  raised_date?: string | null
+  due_date?: string | null
+  severity?: 'low' | 'medium' | 'high' | 'critical' | null
+  change_type?: 'variation' | 'client_instruction' | 'omission' | null
+  cost_impact?: number | null
+  schedule_impact_days?: number | null
+  decision_maker?: string | null
+  required_by?: string | null
+}
+
 // ResourceAssignmentProposalDraft <-> propose_create_resource_assignments'
 // own per-item shape (2026-09-02, per Maro: "can poe also work on
 // resources") — mirrors resource.py's own ResourceAssignmentCreate.
@@ -153,6 +177,7 @@ type PendingProposal =
   | { kind: 'clash_test'; toolUseId: string; draft: ClashTestProposalDraft }
   | { kind: 'resource_assignments'; toolUseId: string; assignments: ResourceAssignmentProposalDraft[] }
   | { kind: 'dashboard_layout'; toolUseId: string; name: string; widgets: DashboardWidgetProposalDraft[] }
+  | { kind: 'icd_items'; toolUseId: string; items: IcdItemProposalDraft[] }
 
 // Only the LAST message can hold a genuinely still-pending proposal — the
 // moment one gets resolved, a new user message carrying its tool_result is
@@ -168,7 +193,8 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
     b.type === 'tool_use'
     && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'
       || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'
-      || b.name === 'propose_create_resource_assignments' || b.name === 'propose_create_dashboard_layout'),
+      || b.name === 'propose_create_resource_assignments' || b.name === 'propose_create_dashboard_layout'
+      || b.name === 'propose_create_icd_items'),
   )
   if (!block) return null
   const toolUseId = block.id as string
@@ -198,6 +224,9 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
       kind: 'resource_assignments', toolUseId,
       assignments: (input.assignments as ResourceAssignmentProposalDraft[] | undefined) ?? [],
     }
+  }
+  if (block.name === 'propose_create_icd_items') {
+    return { kind: 'icd_items', toolUseId, items: (input.items as IcdItemProposalDraft[] | undefined) ?? [] }
   }
   if (block.name === 'propose_create_dashboard_layout') {
     return {
@@ -305,11 +334,11 @@ const POE_CAPABILITY_LINES = [
   'Risk Register — risk scoring, EMV, threats vs opportunities',
   'Resources — assignments and committed cost',
   'Cost & Quantity Takeoff — earned value (CPI/SPI, EAC), BOQ — reads only, can\'t draft new cost elements yet',
-  'Issues, Changes & Decisions — reads only for now, can\'t draft new ones yet',
-  'Explain WHY something happened — trace real linked Issues/Changes/Decisions/Risks back through Activities/Cost Elements, e.g. behind a Baseline Comparison variance',
+  'Issues, Changes & Decisions — can draft new Issues/Changes/Decisions now, including for something that\'s already happened, not just future ones',
+  'Explain WHY something happened — traces real linked Issues/Changes/Decisions/Risks (e.g. behind a Baseline Comparison variance), AND checks a record\'s own logged reassessment notes (why a duration/probability/forecast was actually changed) — the two together, not just one',
   'Attach a photo, PDF, or spreadsheet for Poe to read',
   'On the BIM/Reality Capture page: highlight, isolate, colour, or set up and run a clash test between two selections',
-  'Ask it to draft new risks, activities, resource assignments, relationships, links between records/3D elements and an activity, or a custom Reporting & Controls dashboard layout — you approve before anything saves',
+  'Ask it to draft new risks, activities, ICD items, resource assignments, relationships, links between records/3D elements and an activity, or a custom Reporting & Controls dashboard layout — you approve before anything saves',
 ]
 const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.map(l => `• ${l}`).join('\n')}`
 
@@ -434,6 +463,7 @@ export function PoePanel({
     else if (pendingProposal.kind === 'link_elements') setSelectedIndices(new Set(pendingProposal.elements.map((_, i) => i)))
     else if (pendingProposal.kind === 'resource_assignments') setSelectedIndices(new Set(pendingProposal.assignments.map((_, i) => i)))
     else if (pendingProposal.kind === 'dashboard_layout') setSelectedIndices(new Set(pendingProposal.widgets.map((_, i) => i)))
+    else if (pendingProposal.kind === 'icd_items') setSelectedIndices(new Set(pendingProposal.items.map((_, i) => i)))
     else if (pendingProposal.kind === 'clash_test') setClashTestApproved(true)
     else setActivitiesApproved(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -712,6 +742,27 @@ export function PoePanel({
         const rejectedCount = pendingProposal.assignments.length - approved.length
         summary = `Created ${createdCount} of ${approved.length} approved assignment(s)` +
           `${failedCount > 0 ? ` (${failedCount} failed — a stale id or an invalid quantity/utilisation for that resource's type)` : ''}` +
+          `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
+      } else if (pendingProposal.kind === 'icd_items') {
+        // icd_items (2026-09-03) — one POST /icd-items/ per approved item,
+        // same per-item try/catch loop as resource_assignments above (no
+        // bulk-create endpoint exists for ICD items, unlike Risk's own
+        // /risk-bulk-generate/).
+        if (!period) { setResolvingProposal(false); return }
+        const approved = pendingProposal.items.filter((_, i) => selectedIndices.has(i))
+        let createdCount = 0
+        let failedCount = 0
+        for (const it of approved) {
+          try {
+            await api.post('/api/v1/icd-items/', { project_id: projectId, period_id: period.id, ...it })
+            createdCount += 1
+          } catch {
+            failedCount += 1
+          }
+        }
+        const rejectedCount = pendingProposal.items.length - approved.length
+        summary = `Created ${createdCount} of ${approved.length} approved item(s)` +
+          `${failedCount > 0 ? ` (${failedCount} failed)` : ''}` +
           `${rejectedCount > 0 ? `; ${rejectedCount} rejected` : ''}.`
       } else if (pendingProposal.kind === 'dashboard_layout') {
         // dashboard_layout (2026-09-02) — x/y/w/h are computed here, not
@@ -1133,6 +1184,38 @@ export function PoePanel({
                           <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
                             {[a.role, a.quantity != null ? `qty ${a.quantity}` : null, a.utilisation_pct != null ? `${a.utilisation_pct}% utilisation` : null]
                               .filter(Boolean).join(' · ') || 'No role/quantity/utilisation set'}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </>
+                )}
+
+                {pendingProposal.kind === 'icd_items' && (
+                  <>
+                    <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
+                      {pendingProposal.items.length} ICD item{pendingProposal.items.length === 1 ? '' : 's'} proposed — review before saving:
+                    </p>
+                    {pendingProposal.items.map((it, i) => (
+                      <label key={i} className="flex items-start gap-2 rounded-md border border-gray-200 dark:border-prosota-line px-2 py-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedIndices.has(i)}
+                          onChange={e => setSelectedIndices(prev => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(i); else next.delete(i)
+                            return next
+                          })}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-prosota-paper truncate">
+                            <span className="uppercase text-[10px] font-semibold text-gray-400 dark:text-prosota-muted mr-1">{it.item_type}</span>
+                            {it.title}
+                          </p>
+                          {it.description && <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{it.description}</p>}
+                          <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                            {[it.priority, it.owner, it.severity, it.change_type, it.decision_maker].filter(Boolean).join(' · ') || 'No priority/owner set'}
                           </p>
                         </div>
                       </label>

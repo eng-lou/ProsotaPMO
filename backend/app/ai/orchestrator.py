@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import run_turn
 from app.ai.context_tools import get_project_snapshot
-from app.ai.record_tools import explain_causal_baseline, find_records, find_relationships
+from app.ai.record_tools import explain_causal_baseline, find_records, find_relationships, get_reassessment_history
 from app.ai.system_prompt import build_system_prompt
 from app.ai.tools import CLIENT_TOOL_NAMES, PROPOSAL_TOOL_NAMES, TOOLS
 from app.services import object_storage
@@ -37,6 +37,8 @@ async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, pr
         )
     if name == "find_relationships":
         return await find_relationships(db, uuid.UUID(tool_input["activity_id"]))
+    if name == "get_reassessment_history":
+        return await get_reassessment_history(db, tool_input["record_type"], uuid.UUID(tool_input["record_id"]))
     raise ValueError(f"Unknown server tool: {name}")
 
 

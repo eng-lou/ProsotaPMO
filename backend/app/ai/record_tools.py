@@ -13,6 +13,7 @@ from app.models.record_link import RecordLink
 from app.models.resource import Resource
 from app.models.risk import Risk
 from app.services.record_link import list_links
+from app.services.reassessment import list_reassessments
 
 # find_records + explain_causal_baseline (2026-09-01, per Maro: "in one run
 # include all the server/proposal and client tools needed") — both exist to
@@ -202,6 +203,27 @@ async def explain_causal_baseline(
              "target": {**edge["target"], "name": names.get((edge["target"]["type"], edge["target"]["id"]))}}
             for edge in edges
         ],
+    }
+
+
+async def get_reassessment_history(db: AsyncSession, record_type: str, record_id: uuid.UUID) -> dict:
+    """One record's own "Log a review" entries (2026-09-03, per a real live
+    gap: asked why a schedule slipped 16 days, Poe's first pass correctly
+    reported no Risk/ICD/RecordLink explained it — but the actual cause
+    ("Delays due to approval officer unavailability... duration changed
+    from 20 to 30 working days") was sitting the whole time in T-0004's own
+    Reassessment log, a real record this tool simply couldn't see yet.
+    reassessments.Reassessment is genuinely cross-module (record_type
+    'activity'|'risk'|'cost_element'|'icd_item' — see
+    app/services/reassessment.py's own _PARENT_MODELS), so any future root-
+    cause trace should check this alongside explain_causal_baseline, not
+    instead of it — a reassessment note explains *why* someone changed a
+    record's own numbers; a RecordLink explains what OTHER records that
+    change is connected to. Neither substitutes for the other."""
+    entries = await list_reassessments(db, record_type, record_id)
+    return {
+        "record_type": record_type, "record_id": str(record_id),
+        "entries": [{"note": e.note, "reviewed_at": e.reviewed_at.isoformat()} for e in entries],
     }
 
 

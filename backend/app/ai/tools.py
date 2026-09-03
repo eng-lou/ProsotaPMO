@@ -108,6 +108,66 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    # propose_create_icd_items (2026-09-03, per Maro hitting this exact gap
+    # live: "raise an Issue for what's already happened" against a real
+    # schedule slip, and being told there was no tool for it — the
+    # previously-documented "Cost and ICD have zero proposal tools" gap,
+    # now closed for ICD). Mirrors backend/app/schemas/icd_item.py's own
+    # IcdItemCreate, scoped down to the subset a drafting conversation would
+    # actually supply — same "never let the model guess a field it has no
+    # real basis for" reasoning propose_create_risks/propose_create_activities
+    # already follow (closed_date/resolution/rejection_reason/
+    # contract_reference/cost_claim/eot_claim_days/quality_impact/
+    # if_late_consequence are all things that get filled in LATER, during
+    # the item's own lifecycle, not drafted at creation). No bulk-create
+    # endpoint exists for ICD items (unlike Risk's own
+    # /risk-bulk-generate/) — approval POSTs one at a time to the real
+    # /icd-items/ endpoint, same per-item loop
+    # propose_create_resource_assignments' own approval already uses.
+    {
+        "name": "propose_create_icd_items",
+        "description": (
+            "Draft one or more Issues, Changes, or Decisions for human review in the ICD "
+            "Tracker (Issues, Changes & Decisions) — nothing is saved until the human "
+            "explicitly approves each one. Use this whenever asked to raise/log/record an "
+            "issue, change, or decision — including something that has ALREADY happened (a "
+            "root cause you've just traced, a problem already occurred), not just future "
+            "risks. If a link to the record(s) it affects/was caused by is known (an activity, "
+            "a risk, ...), draft this first, then use propose_link_records once it's approved "
+            "and has a real id — this tool alone doesn't create links."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item_type": {"type": "string", "enum": ["issue", "change", "decision"]},
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "priority": {"type": "string", "description": "Free text, e.g. 'High'/'Medium'/'Low' — check get_project_snapshot/existing items for this project's own convention rather than guessing one."},
+                            "owner": {"type": "string", "description": "Who's resolving it — distinct from raised_by."},
+                            "raised_by": {"type": "string"},
+                            "raised_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+                            "due_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+                            "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Issue-specific."},
+                            "change_type": {"type": "string", "enum": ["variation", "client_instruction", "omission"], "description": "Change-specific."},
+                            "cost_impact": {"type": "number", "description": "Change-specific — positive magnitude."},
+                            "schedule_impact_days": {"type": "integer", "description": "Change-specific — positive magnitude."},
+                            "decision_maker": {"type": "string", "description": "Decision-specific."},
+                            "required_by": {"type": "string", "description": "Decision-specific — ISO date (YYYY-MM-DD)."},
+                        },
+                        "required": ["item_type", "title"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+    },
     # find_records (2026-09-01) — closes a real gap propose_link_records
     # otherwise has: RecordLink's own source_id/target_id must be real
     # existing UUIDs (see record_link.py's own docstring), and
@@ -191,6 +251,39 @@ TOOLS: list[dict] = [
                 "activity_id": {"type": "string", "description": "Real activity UUID from get_project_snapshot or find_records."},
             },
             "required": ["activity_id"],
+            "additionalProperties": False,
+        },
+    },
+    # get_reassessment_history (2026-09-03, per a real live gap: asked why a
+    # schedule slipped 16 days, Poe's first pass correctly reported no
+    # Risk/ICD/RecordLink explained it — but the actual root cause was
+    # sitting the whole time in the driving activity's own "Log a review"
+    # entry, a real record no existing tool could read. Reassessment is
+    # genuinely cross-module (record_type 'activity'|'risk'|'cost_element'|
+    # 'icd_item', see app/services/reassessment.py) — checking it is now
+    # part of proper root-cause tracing, alongside (not instead of)
+    # explain_causal_baseline: a reassessment note explains *why* a
+    # record's own numbers changed; a RecordLink explains what OTHER
+    # records that change touches.
+    {
+        "name": "get_reassessment_history",
+        "description": (
+            "Read one record's own logged reassessment/review notes — the actual reasoning a "
+            "human wrote down when they changed something (e.g. why a duration grew, why a "
+            "risk's probability was revised, why a cost forecast moved). ALWAYS check this "
+            "when asked to explain why something changed (a schedule slip, a cost variance, a "
+            "risk rating shift) before concluding there's no recorded cause — a reassessment "
+            "note is exactly the kind of root-cause record explain_causal_baseline's RecordLink "
+            "walk can't see, since it's a log entry on the record itself, not a link to another "
+            "record. record_id must be a real UUID from get_project_snapshot or find_records."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "record_type": {"type": "string", "enum": ["activity", "risk", "cost_element", "icd_item"]},
+                "record_id": {"type": "string", "description": "Real UUID of the record to check."},
+            },
+            "required": ["record_type", "record_id"],
             "additionalProperties": False,
         },
     },
@@ -824,4 +917,5 @@ PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
     "propose_create_risks", "propose_create_activities", "propose_link_records",
     "propose_edit_relationships", "propose_link_elements", "propose_clash_test",
     "propose_create_resource_assignments", "propose_create_dashboard_layout",
+    "propose_create_icd_items",
 })
