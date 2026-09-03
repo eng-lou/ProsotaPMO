@@ -318,13 +318,21 @@ class ActivityResponse(ActivityBase):
     # Never accepted as API input; sort_order is exposed for future drag-reorder use.
     wbs_path: str | None = None
     sort_order: int | None = None
-    # "Duration % Complete" (0-100) — how far along its own current start/finish
+    # "Schedule % Complete" (0-100) — how far along its own current start/finish
     # this activity should be by the data date, per Maro's confirmed P6
-    # correction. Distinct from pct_complete (Physical % Complete, manually
-    # assessed, drives EV) — shown side by side as the direct input PV is
-    # prorated from (see app/services/activity.py:_attach_evm_fields). Null
-    # until the activity is scheduled (no live start/finish yet).
-    duration_pct_complete: Decimal | None = None
+    # correction. Renamed from duration_pct_complete (2026-09-03, per Maro:
+    # "rename Duration % to Schedule %" — this is what the field actually
+    # represents; "Duration %" read as a comment on the activity's own
+    # duration, not the time-elapsed-vs-data-date calculation it really is,
+    # which is exactly what led Poe to misread a 0% here as casting doubt on
+    # a separately-assessed Physical % Complete rather than a routine
+    # data-date-not-yet-advanced state — see backend/app/ai/system_prompt.py's
+    # own SCHEDULE CONVENTIONS entry on this). Distinct from pct_complete
+    # (Physical % Complete, manually assessed, drives EV) — shown side by
+    # side as the direct input PV is prorated from (see
+    # app/services/activity.py:_attach_evm_fields). Null until the activity
+    # is scheduled (no live start/finish yet).
+    schedule_pct_complete: Decimal | None = None
     # EVM — sourced from this activity's linked "schedule" Cost Element (Resources
     # module), the same figures Cost Plan already shows for that line, never a
     # second independently-derived set. Null until the activity has a resourced

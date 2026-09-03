@@ -363,7 +363,7 @@ function groupHeaderPlaceholder(key: string): Activity {
     variance_days: null, total_float_hours: null, free_float_hours: null, is_critical: null,
     sub_total_float_hours: null, sub_is_critical: null, pct_complete: null, commentary: null,
     constraint_type: null, constraint_date: null, calendar_id: null, animation_profile_id: null,
-    created_at: '', updated_at: '', duration_pct_complete: null,
+    created_at: '', updated_at: '', schedule_pct_complete: null,
     bac: null, ac: null, pv: null, ev: null, cv: null, sv: null, cpi: null, spi: null, eac: null, etc: null,
     wbs_role: '', is_archived: false, is_archive_container: false,
     schedule_category: null, schedule_phase_key: null, schedule_quantity: null,
@@ -2030,7 +2030,7 @@ export function Scheduling() {
     // duration_hours defaults to one nominal working day, not left blank —
     // a zero/null-duration task is a degenerate zero-length span, which
     // (since it starts and finishes at the very same instant as today's
-    // data date) reads as 100% "Duration % Complete" the moment it's
+    // data date) reads as 100% "Schedule % Complete" the moment it's
     // created, rather than 0% at the start of its first working day
     // (2026-07-03, per Maro).
     const { data } = await api.post<Activity>('/api/v1/activities/', {

@@ -38,7 +38,7 @@ def data_date_for_period(period: SchedulePeriod) -> date:
 
 def data_date_time_for_period(period: SchedulePeriod, default_day_start: time) -> datetime:
     """Full datetime version of data_date_for_period, for the (now
-    hour-precision — see elapsed_duration_fraction) Duration % Complete / PV
+    hour-precision — see elapsed_duration_fraction) Schedule % Complete / PV
     proration callers. period.start_time is the exact instant Reschedule's
     "set data date directly" mode may have pinned (app/services/
     scheduling_reschedule.py:set_data_date); default_day_start is the
@@ -66,11 +66,15 @@ async def default_day_start_times(db: AsyncSession, project_ids: set[uuid.UUID])
 
 def elapsed_duration_fraction(start: datetime | None, finish: datetime | None, data_date: datetime) -> Decimal | None:
     """What fraction (0-1) of an activity's own start-finish span has elapsed
-    as of the data date — "Duration % Complete" in P6 terms, distinct from the
-    manually-assessed Physical % Complete (Activity.pct_complete) that drives
-    Earned Value. This is the exact input Planned Value prorates against (see
-    app/services/cost_element.py:_schedule_evm) — extracted here so both PV and
-    the "Duration % Complete" figure shown directly on the activity (a
+    as of the data date — "Schedule % Complete" (renamed from "Duration %
+    Complete" 2026-09-03, per Maro: that name read as a comment on the
+    activity's own duration, not the time-elapsed-vs-data-date calculation
+    it actually is — see app/schemas/activity.py's own schedule_pct_complete
+    field for the full story), distinct from the manually-assessed Physical
+    % Complete (Activity.pct_complete) that drives Earned Value. This is the
+    exact input Planned Value prorates against (see
+    app/services/cost_element.py:_schedule_evm) — extracted here so both PV
+    and the "Schedule % Complete" figure shown directly on the activity (a
     transparency aid, per Maro) can never drift apart. None if the activity
     isn't scheduled yet (no live start/finish).
 

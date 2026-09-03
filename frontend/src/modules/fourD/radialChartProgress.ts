@@ -3,8 +3,9 @@ import type { Activity } from '@/modules/scheduling/types'
 // Direct TS port of scheduling_cpm.py's own elapsed_duration_fraction — same
 // degenerate-window handling (a same-day activity reads as 0 before it
 // starts and 1 from the moment it finishes, never a division by ~0), kept
-// in lockstep with the backend's own "Duration % Complete" so this ring and
-// that figure can never silently drift apart from each other.
+// in lockstep with the backend's own "Schedule % Complete" (renamed from
+// "Duration % Complete" 2026-09-03) so this ring and that figure can never
+// silently drift apart from each other.
 export function elapsedFraction(start: Date, finish: Date, asOf: Date): number {
   const startMs = start.getTime()
   const finishMs = finish.getTime()

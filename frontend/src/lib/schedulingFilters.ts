@@ -30,7 +30,7 @@ function getFieldValue(activity: Activity, field: FilterFieldKey): unknown {
     case 'sub_total_float_hours': return activity.sub_total_float_hours
     case 'sub_is_critical': return activity.sub_is_critical
     case 'pct_complete': return activity.pct_complete
-    case 'duration_pct_complete': return activity.duration_pct_complete
+    case 'schedule_pct_complete': return activity.schedule_pct_complete
     case 'bac': return activity.bac
     case 'ac': return activity.ac
     case 'pv': return activity.pv

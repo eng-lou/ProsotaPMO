@@ -164,12 +164,13 @@ async def test_pv_tracks_period_data_date_not_wall_clock(
     assert float(resp.json()["pv"]) == 5000.0  # 5 of 10 days elapsed against the new data date -> 50% of 10000
 
 
-async def test_duration_pct_complete_is_independent_of_resources(
+async def test_schedule_pct_complete_is_independent_of_resources(
     client: AsyncClient, db, project: Project, live_schedule_period: SchedulePeriod):
-    """Duration % Complete (how far along its own schedule an activity should
-    be by the data date) needs no resources/BAC — a pure schedule figure,
-    distinct from the resource-gated EVM fields. Requested by Maro as a
-    transparency aid showing exactly what PV is prorated from."""
+    """Schedule % Complete (renamed from Duration % Complete, 2026-09-03 —
+    how far along its own schedule an activity should be by the data date)
+    needs no resources/BAC — a pure schedule figure, distinct from the
+    resource-gated EVM fields. Requested by Maro as a transparency aid
+    showing exactly what PV is prorated from."""
     activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     # Set at the default calendar's day start (08:00), matching the actual
     # instant "today" resolves to as a data date (2026-07-03 fix — see
@@ -185,13 +186,13 @@ async def test_duration_pct_complete_is_independent_of_resources(
     assert resp.status_code == 200
     data = resp.json()
     assert data["bac"] is None  # no resources — EVM fields stay null
-    assert float(data["duration_pct_complete"]) == 30.0  # 3 of 10 days elapsed
+    assert float(data["schedule_pct_complete"]) == 30.0  # 3 of 10 days elapsed
 
 
-async def test_duration_pct_complete_is_zero_for_brand_new_same_day_activity(
+async def test_schedule_pct_complete_is_zero_for_brand_new_same_day_activity(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     """Regression (Maro, 2026-07-03): a freshly-created 1-day activity
-    starting "now" read as 100% Duration % Complete the instant it was
+    starting "now" read as 100% Schedule % Complete the instant it was
     created, since its start and finish both fell on the same calendar date
     and the old date-only comparison treated "data_date >= finish_date" as
     true from hour zero. A brand-new activity anchored to today should read
@@ -199,7 +200,7 @@ async def test_duration_pct_complete_is_zero_for_brand_new_same_day_activity(
     app/services/scheduling_cpm.py:elapsed_duration_fraction."""
     activity = await _create_activity(client, project, live_schedule_period, "New Activity", duration_hours=8)  # 1 day
     assert activity["start"][:10] == activity["finish"][:10]  # same calendar day, the exact case that broke
-    assert float(activity["duration_pct_complete"]) == 0.0
+    assert float(activity["schedule_pct_complete"]) == 0.0
 
 
 async def test_activity_list_includes_evm(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):

@@ -40,12 +40,12 @@ _EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc")
 
 
 async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> None:
-    """duration_pct_complete, plus AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC sourced
+    """schedule_pct_complete, plus AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC sourced
     from each activity's linked "schedule" Cost Element (if any) — see
     app/services/cost_sync.py. An activity with no resources assigned (no
     linked element yet) simply shows nulls for the cost-side fields, same
     "leave it blank rather than fake a number" rule used everywhere else.
-    duration_pct_complete itself needs no resources — it's a pure schedule
+    schedule_pct_complete itself needs no resources — it's a pure schedule
     figure. Batched (one query for the whole list) rather than per-activity,
     matching the resource-assignment N+1 fix in
     app/services/resource_assignment.py.
@@ -83,11 +83,15 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
     for a in activities:
         data_date = data_dates[a.schedule_period_id]
         fraction = elapsed_duration_fraction(a.start, a.finish, data_date)
-        # "Duration % Complete" — how far along its own current schedule this
-        # activity should be, distinct from the manually-assessed pct_complete
-        # (Physical % Complete) that drives EV. The direct transparency aid
-        # Maro asked for: exactly the input PV below is prorated from.
-        a.duration_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
+        # "Schedule % Complete" (renamed from duration_pct_complete, 2026-09-03,
+        # per Maro: "rename Duration % to Schedule %" — this is what it actually
+        # represents, a time-elapsed-vs-data-date calculation, not a comment on
+        # the activity's own duration) — how far along its own current schedule
+        # this activity should be, distinct from the manually-assessed
+        # pct_complete (Physical % Complete) that drives EV. The direct
+        # transparency aid Maro asked for: exactly the input PV below is
+        # prorated from.
+        a.schedule_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
 
         element = elements_by_activity.get(a.id)
         if element is None:

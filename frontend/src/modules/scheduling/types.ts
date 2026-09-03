@@ -123,12 +123,15 @@ export interface Activity {
   animation_profile_id: string | null
   created_at: string
   updated_at: string
-  // "Duration % Complete" (0-100) — how far along its own current start/finish
-  // this activity should be by the data date, distinct from pct_complete
-  // (Physical % Complete, manually assessed, drives EV). The direct input PV
-  // below is prorated from. Null until the activity is scheduled. See backend
+  // "Schedule % Complete" (0-100, renamed from Duration % Complete 2026-09-03
+  // — per Maro, that name read as a comment on the activity's own duration,
+  // not the time-elapsed-vs-data-date calculation it actually is) — how far
+  // along its own current start/finish this activity should be by the data
+  // date, distinct from pct_complete (Physical % Complete, manually
+  // assessed, drives EV). The direct input PV below is prorated from. Null
+  // until the activity is scheduled. See backend
   // app/services/activity.py:_attach_evm_fields.
-  duration_pct_complete: string | null
+  schedule_pct_complete: string | null
   // EVM — sourced from this activity's linked "schedule" Cost Element (Resources
   // module); the same figures Cost Plan shows for that line. Null until the
   // activity has a resourced cost line. PV is prorated against this activity's
@@ -512,7 +515,7 @@ export type FilterFieldKey =
   | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
   | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
   | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'sub_total_float_hours' | 'sub_is_critical'
-  | 'pct_complete' | 'duration_pct_complete'
+  | 'pct_complete' | 'schedule_pct_complete'
   | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
 export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
@@ -616,7 +619,7 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'sub_total_float_hours', label: 'Sub Total Float (h)', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'sub_is_critical', label: 'Sub Critical', type: 'boolean', operators: BOOLEAN_OPERATORS },
   { key: 'pct_complete', label: '% Complete', type: 'number', operators: NUMBER_OPERATORS },
-  { key: 'duration_pct_complete', label: 'Duration % Complete', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'schedule_pct_complete', label: 'Schedule % Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'bac', label: 'BAC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'ac', label: 'AC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'pv', label: 'PV', type: 'number', operators: NUMBER_OPERATORS },

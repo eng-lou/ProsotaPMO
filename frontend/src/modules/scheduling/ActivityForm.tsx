@@ -248,9 +248,9 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
             </div>
           </div>
           <div>
-            <div className="text-gray-400 dark:text-prosota-muted mb-0.5" title="How far along its own current Start/Finish this activity should be by the data date — the input Planned Value (PV) is prorated from. Distinct from % Complete below, which is manually assessed physical progress.">Duration % Complete</div>
+            <div className="text-gray-400 dark:text-prosota-muted mb-0.5" title="How far along its own current Start/Finish this activity should be by the data date — the input Planned Value (PV) is prorated from. Distinct from % Complete below, which is manually assessed physical progress. Reads 0% until the project's data date is advanced (via Reschedule) past this activity's own start — that alone doesn't mean % Complete below is wrong.">Schedule % Complete</div>
             <div className="font-medium text-gray-700 dark:text-prosota-muted">
-              {activity.duration_pct_complete != null ? `${Number(activity.duration_pct_complete).toFixed(1)}%` : '—'}
+              {activity.schedule_pct_complete != null ? `${Number(activity.schedule_pct_complete).toFixed(1)}%` : '—'}
             </div>
           </div>
         </div>

@@ -17,7 +17,7 @@ FilterFieldKey = Literal[
     "start", "finish", "actual_start", "actual_finish", "bl_start", "bl_finish", "constraint_date",
     "duration_hours", "duration_days", "remaining_duration_hours", "bl_duration_hours",
     "variance_days", "total_float_hours", "free_float_hours", "sub_total_float_hours", "sub_is_critical",
-    "pct_complete", "duration_pct_complete",
+    "pct_complete", "schedule_pct_complete",
     "bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc",
 ]
 FilterOperator = Literal["eq", "neq", "gt", "gte", "lt", "lte", "is_true", "is_false", "contains", "starts_with"]
