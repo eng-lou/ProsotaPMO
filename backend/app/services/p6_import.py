@@ -651,6 +651,15 @@ async def apply_progress_snapshot(
         period = await db.get(SchedulePeriod, schedule_period_id)
         if period is not None:
             period.start_date = as_of_date
+            # Keep the Cost Plan's own (deliberately separate) live Period in
+            # step with each new monthly snapshot too — see promote_variant's
+            # matching comment (schedule_variant.py) for why this anchor
+            # exists at all. Without this, only the *initial* import's data
+            # date ever reaches Cost Plan's PV, and every later snapshot's
+            # progress moves the schedule forward while Cost Plan keeps
+            # computing PV against the stale original date.
+            cost_period = await cost_sync._get_or_create_live_period(db, project_id)
+            cost_period.start_date = as_of_date
 
     udf_def = (await db.execute(
         select(UserDefinedFieldDefinition).where(

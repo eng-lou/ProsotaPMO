@@ -348,4 +348,38 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
             if v.value_number is not None:
                 await cost_sync.sync_activity_actuals(db, v.record_id, v.value_number)
 
+    # A P6 import's own real DataDate, propagated onto the (deliberately
+    # separate — see this function's own docstring) Cost Period's start_date
+    # (2026-09-04, found verifying PV against P6's own report: Cost Plan's
+    # own list_cost_elements/_apply_computed falls back to date.today() via
+    # scheduling_cpm.data_date_for_period whenever a Period's start_date is
+    # null, and cost_sync._get_or_create_live_period always creates one with
+    # no start_date — so a 2011-dated P6 import's own resourced Cost Elements
+    # were silently computing PV against "today," reading as ~fully elapsed
+    # for a project years in the past). Detected via the "P6 Activity ID"
+    # UDF (always present on a P6-imported master, not just ones with real
+    # Actual Cost data) rather than reusing actual_cost_udf above, since
+    # those two UDFs' presence isn't otherwise coupled. Only ever sets a
+    # still-null start_date — never overwrites a value a user (or an
+    # independent Cost-side reporting cadence, the entire point of the
+    # Period split) may have deliberately set.
+    p6_activity_id_udf = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == new_master.project_id,
+            UserDefinedFieldDefinition.entity_type == "activity",
+            UserDefinedFieldDefinition.name == "P6 Activity ID",
+        )
+    )).scalar_one_or_none()
+    if p6_activity_id_udf is not None:
+        live_schedule_period = (await db.execute(
+            select(SchedulePeriod).where(
+                SchedulePeriod.schedule_variant_id == new_master.id, SchedulePeriod.freeze_status == "live"
+            )
+        )).scalar_one_or_none()
+        if live_schedule_period is not None and live_schedule_period.start_date is not None:
+            cost_period = await cost_sync._get_or_create_live_period(db, new_master.project_id)
+            if cost_period.start_date is None:
+                cost_period.start_date = live_schedule_period.start_date
+                await db.commit()
+
     return new_master, unmatched_codes
