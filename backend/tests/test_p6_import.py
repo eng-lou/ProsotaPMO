@@ -433,7 +433,13 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
        internal engine used to land on its real number (same class of gap
        apply_progress_snapshot's own trusted-finish fix already covers for
        the Excel-extract case — this is the same fix for a plain PMXML
-       import with no Excel layering at all)."""
+       import with no Excel layering at all).
+
+    Also covers a not-yet-reached milestone (0% complete, no duration of
+    its own — its CPM position is purely relationship-driven, the same
+    class of P6-vs-Prosota network divergence, and it's very often the
+    schedule's own overall "when does this finish" marker) getting the
+    same trusted-finish treatment regardless of % complete."""
     xml = (
         b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
         b"<Project><Id>Status Test</Id><DataDate>2011-06-01T00:00:00</DataDate>"
@@ -449,6 +455,10 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
         b"</Activity>"
         b"<Activity><ObjectId>3</ObjectId><Id>A3</Id><Name>Not Started Yet</Name><Type>Task Dependent</Type>"
         b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"</Activity>"
+        b"<Activity><ObjectId>4</ObjectId><Id>A4</Id><Name>Overall Finish</Name><Type>Finish Milestone</Type>"
+        b"<PlannedDuration>0</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<FinishDate>2098-06-15T10:40:00</FinishDate>"
         b"</Activity>"
         b"</Project></APIBusinessObjects>"
     )
@@ -471,6 +481,10 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
 
     not_started = next(a for a in activities if a.task_name == "Not Started Yet")
     assert not_started.status == "planned"
+
+    milestone = next(a for a in activities if a.task_name == "Overall Finish")
+    assert milestone.status == "planned"
+    assert milestone.finish == datetime(2098, 6, 15, 10, 40)
 
 
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):

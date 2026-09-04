@@ -526,12 +526,27 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # apply_progress_snapshot's own trusted-finish fix documents for the
     # Excel-extract case) — so this trusts the PMXML's own value directly
     # instead, the same way actual_finish already is for a truly completed
-    # one. Run before the second _recompute_hierarchy below so the WBS/root
+    # one.
+    #
+    # Milestones get the same treatment regardless of pct_complete — a
+    # milestone has no duration of its own to recompute a finish FROM in the
+    # first place (0 duration), so its CPM position is entirely driven by
+    # predecessor chains, which is exactly the kind of network-wide P6-vs-
+    # Prosota CPM divergence this file can't fully reproduce either. A
+    # not-yet-reached milestone is very often the schedule's own overall
+    # "when does this finish" marker (confirmed: this file's own overall
+    # project Finish is driven by a single not-yet-reached Finish Milestone)
+    # — trusting the file's own stated date for it, same as any other
+    # imported fact, is more useful than an independently-recomputed one
+    # neither side can fully justify.
+    #
+    # Run before the second _recompute_hierarchy below so the WBS/root
     # rollup reflects the corrected leaf dates, not the discarded ones.
     for pa in parsed.activities:
         if pa.finish is None or pa.actual_finish is not None:
             continue
-        if pa.pct_complete is None or pa.pct_complete <= 0:
+        has_progress = pa.pct_complete is not None and pa.pct_complete > 0
+        if not has_progress and not is_milestone_type(pa.activity_type):
             continue
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:
