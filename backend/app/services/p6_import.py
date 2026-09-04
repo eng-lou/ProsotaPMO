@@ -21,6 +21,7 @@ from app.models.schedule_period import SchedulePeriod
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.activity import ActivityStatus, is_milestone_type
 from app.schemas.schedule_variant import ScheduleVariantCreate
+from app.services import calendar as calendar_service
 from app.services import cost_sync, schedule_variant, scheduling_cpm
 from app.services.activity import (
     _activity_role,
@@ -116,10 +117,26 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     existing_default_exists = any(c.is_project_default for c in existing_calendar_by_name.values())
     default_calendar_assigned = existing_default_exists
     first_created_calendar: Calendar | None = None
+    # The file's own explicit default (ActivityDefaultCalendarObjectId,
+    # parse_pmxml's own header explains why per-<Calendar> IsDefault can't
+    # be trusted) is authoritative and OVERRIDES whatever the project's
+    # calendar default already was — including a lazy-seeded placeholder no
+    # real activity ever references (2026-09-04, found on a real production
+    # import: the project already had one seeded before the import ran, so
+    # the old "only fill in a default if the project doesn't have one yet"
+    # rule left every genuinely-imported calendar non-default). Tracks the
+    # real ORM object, not just an id, since it may turn out to be either a
+    # freshly created row or one matched to an existing same-named calendar.
+    explicit_default_object_id = next((pc.object_id for pc in parsed.calendars if pc.is_default), None)
+    if explicit_default_object_id is not None:
+        default_calendar_assigned = False
+    explicit_default_calendar: Calendar | None = None
     for pc in parsed.calendars:
         existing = existing_calendar_by_name.get(pc.name)
         if existing is not None:
             calendar_real_id_by_object_id[pc.object_id] = existing.id
+            if pc.object_id == explicit_default_object_id:
+                explicit_default_calendar = existing
             continue
         make_default = not default_calendar_assigned and pc.is_default
         calendar = Calendar(
@@ -129,6 +146,8 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         )
         if make_default:
             default_calendar_assigned = True
+        if pc.object_id == explicit_default_object_id:
+            explicit_default_calendar = calendar
         if first_created_calendar is None:
             first_created_calendar = calendar
         db.add(calendar)
@@ -141,7 +160,10 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
                 start_date=ex.start_date, end_date=ex.end_date, is_working=ex.is_working,
                 start_time=ex.start_time, end_time=ex.end_time,
             ))
-    if not default_calendar_assigned and first_created_calendar is not None:
+    if explicit_default_calendar is not None:
+        await calendar_service._clear_existing_default(db, project_id, exclude_id=explicit_default_calendar.id)
+        explicit_default_calendar.is_project_default = True
+    elif not default_calendar_assigned and first_created_calendar is not None:
         first_created_calendar.is_project_default = True
     if parsed.calendars:
         default_pc = next((c for c in parsed.calendars if c.is_default), parsed.calendars[0])

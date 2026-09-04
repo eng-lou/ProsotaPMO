@@ -345,6 +345,34 @@ async def test_import_root_dates_udf_and_baseline(db: AsyncSession, project: Pro
     assert snap.duration_hours == Decimal("8")
 
 
+async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
+    """The exact real production scenario found 2026-09-04: the project
+    already had Prosota's own lazy-seeded "Standard Calendar" (is_project_
+    default=True) from an earlier, unrelated visit to Scheduling/Resources
+    *before* the P6 import ran — the old "only fill in a default if the
+    project doesn't already have one" rule saw that pre-existing default
+    and left every genuinely-imported calendar (and the schedule that
+    actually uses them) on Prosota's own placeholder instead. The file's
+    own explicit default must win regardless."""
+    existing = Calendar(id=uuid.uuid4(), project_id=project.id, name="Standard Calendar", is_project_default=True)
+    db.add(existing)
+    await db.commit()
+
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Calendar><ObjectId>1</ObjectId><Name>Trades</Name><IsDefault>0</IsDefault></Calendar>"
+        b"<Project><Id>Cal Override Test</Id><ActivityDefaultCalendarObjectId>1</ActivityDefaultCalendarObjectId>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    await import_pmxml(db, project.id, parsed)
+
+    calendars = (await db.execute(select(Calendar).where(Calendar.project_id == project.id))).scalars().all()
+    by_name = {c.name: c for c in calendars}
+    assert by_name["Trades"].is_project_default is True
+    assert by_name["Standard Calendar"].is_project_default is False
+
+
 def test_default_calendar_from_project_activity_default_not_per_calendar_isdefault():
     """A real P6 file routinely writes <IsDefault>0</IsDefault> on every
     single <Calendar> (confirmed against a real export) — the project's
