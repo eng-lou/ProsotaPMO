@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
+import { useElapsedSeconds } from '@/lib/useElapsedSeconds'
 import type { ScheduleVariant } from './types'
 
 function apiErrorDetail(err: unknown): string | undefined {
@@ -34,6 +35,12 @@ export function ScheduleVariantWidget({
   const [duplicateCurrent, setDuplicateCurrent] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Separate from busyId (2026-09-04, per Maro: "the promote to master
+  // schedule process takes quite a long time") — busyId also covers the
+  // instant Select/Delete, which never need a timer; this tracks only a
+  // genuine in-flight promote so the elapsed counter never shows for those.
+  const [promotingId, setPromotingId] = useState<string | null>(null)
+  const promoteElapsed = useElapsedSeconds(promotingId !== null)
 
   const active = variants.find(v => v.id === activeVariantId) ?? null
 
@@ -92,12 +99,14 @@ export function ScheduleVariantWidget({
       }) will be re-linked onto "${v.name}"'s matching activity codes — anything with no matching code will be unlinked and reported.`
     ))) return
     setBusyId(v.id)
+    setPromotingId(v.id)
     try {
       await onPromote(v.id)
     } catch (err) {
       setError(apiErrorDetail(err) ?? 'Could not promote that schedule — check your connection and try again.')
     } finally {
       setBusyId(null)
+      setPromotingId(null)
     }
   }
 
@@ -169,8 +178,13 @@ export function ScheduleVariantWidget({
                     title="Make this the master schedule — Risk/Cost/ICD links follow, matched by activity code"
                     className="text-gray-500 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper mr-2 disabled:opacity-40"
                   >
-                    Promote
+                    {promotingId === v.id ? `Promoting… (${promoteElapsed}s)` : 'Promote'}
                   </button>
+                )}
+                {promotingId === v.id && promoteElapsed >= 15 && (
+                  <span className="block text-[10px] text-gray-400 dark:text-prosota-muted mt-0.5">
+                    Larger schedules can take a minute or two, still working
+                  </span>
                 )}
                 {v.is_master ? (
                   <span className="text-gray-300 dark:text-prosota-line" title="The master schedule can't be deleted directly — create or duplicate another schedule and promote it to master first">

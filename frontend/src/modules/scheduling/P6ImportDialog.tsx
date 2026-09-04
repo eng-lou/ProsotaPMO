@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { useElapsedSeconds } from '@/lib/useElapsedSeconds'
 import type { ScheduleVariant } from './types'
 import { importP6Xml, type P6ImportSummary } from './importP6'
 
@@ -23,6 +24,8 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
   const [promoting, setPromoting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<P6ImportSummary | null>(null)
+  const importElapsed = useElapsedSeconds(importing)
+  const promoteElapsed = useElapsedSeconds(promoting)
 
   const handleImport = async () => {
     if (!file) return
@@ -86,9 +89,14 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                 className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1.5"
               />
               {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+              {importing && (
+                <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                  Importing… {importElapsed}s{importElapsed >= 15 ? ' — larger schedules can take a minute or two, still working' : ''}
+                </p>
+              )}
             </div>
             <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-end gap-2">
-              <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
+              <button onClick={onClose} disabled={importing} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50">
                 Cancel
               </button>
               <button
@@ -96,7 +104,7 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                 disabled={!file || importing}
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
               >
-                {importing ? 'Importing…' : 'Import'}
+                {importing ? `Importing… (${importElapsed}s)` : 'Import'}
               </button>
             </div>
           </>
@@ -123,6 +131,11 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                 </div>
               )}
               {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+              {promoting && (
+                <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                  Promoting… {promoteElapsed}s{promoteElapsed >= 15 ? ' — larger schedules can take a minute or two, still working' : ''}
+                </p>
+              )}
             </div>
             <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-end gap-2">
               <button
@@ -138,7 +151,7 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
                 title="Promotes this import to the project's master schedule — Cost Plan lines get created from its resource assignments only once it's the master."
               >
-                {promoting ? 'Promoting…' : 'Promote to Master Schedule'}
+                {promoting ? `Promoting… (${promoteElapsed}s)` : 'Promote to Master Schedule'}
               </button>
             </div>
           </>

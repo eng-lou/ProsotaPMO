@@ -152,7 +152,7 @@ class Activity(Base, TimestampMixin):
     # date it was captured for. None for every hand-created Prosota
     # activity, which always computes PV from live start/finish/calendar,
     # same as before this existed.
-    duration_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(9, 8))
+    duration_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     duration_pct_complete_date: Mapped[date | None] = mapped_column(Date)
     # Renamed from total_float/free_float (Integer, whole working days) — Phase 10
     # makes float a genuinely fractional, hour-precision quantity (e.g. "4.5 hours of
