@@ -353,7 +353,18 @@ def _derive_activity_status(
     as its pct_complete)."""
     pct = pct_complete if pct_complete is not None else Decimal(0)
     if is_milestone_type(activity_type):
-        return "completed" if pct >= 100 else "planned"
+        # actual_start alone (not just pct >= 100) also marks a milestone
+        # completed (2026-09-04, per Maro — real P6 comparison: a P6 Start
+        # Milestone that's genuinely already occurred still reports
+        # PercentComplete=0, signalling completion purely via
+        # ActualStartDate/ActualFinishDate being set — confirmed against a
+        # real file's own "Building Pad Delivered by Owner", ActualStartDate
+        # = ActualFinishDate = its real 2010 date, PercentComplete = 0.
+        # pct-only detection left every such milestone "planned" at import,
+        # which then meant recompute_schedule's own "already progressed,
+        # keep its real position" branch never fired for it either — it got
+        # rescheduled forward to the data date as if not yet started at all.
+        return "completed" if pct >= 100 or actual_start is not None else "planned"
     if pct >= 100:
         return "completed"
     if suspend_date is not None and resume_date is None:

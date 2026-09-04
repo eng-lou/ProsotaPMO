@@ -1092,11 +1092,19 @@ async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *,
         # purely informational display figure, never a scheduling input — logging
         # progress isn't evidence of finishing early, only an explicit Actual Finish
         # (a harder fact, handled below) or reaching the full planned span is.
-        # actual_start is deliberately not a separate CPM signal here — redundant
-        # once % Complete > 0 exists, since the currently-stored start already IS
-        # the date it started (app/services/activity.py auto-records the field
-        # itself for display, but the CPM engine only ever needs a.start).
-        has_progress = a.pct_complete is not None and a.pct_complete > 0
+        # actual_start IS also a separate CPM signal here (2026-09-04, per Maro
+        # — real P6 comparison), not just redundant once % Complete > 0 exists
+        # as originally reasoned: a genuinely-occurred P6 milestone can and
+        # does report PercentComplete=0 regardless, signalling completion
+        # purely via ActualStartDate/ActualFinishDate (confirmed against a
+        # real file's own "Building Pad Delivered by Owner" — Start Milestone,
+        # ActualStartDate = ActualFinishDate = its real 2010 date,
+        # PercentComplete = 0). Without this, such a milestone's own status
+        # also read "planned" (see _derive_activity_status's matching fix),
+        # and this branch never fired for it either — it got rescheduled
+        # forward to the data date as if not yet started at all, discarding
+        # its real historical position entirely.
+        has_progress = (a.pct_complete is not None and a.pct_complete > 0) or a.actual_start is not None
         if has_progress and a.start is not None:
             activity_es = a.start
             if a.actual_finish is not None:
@@ -1204,10 +1212,10 @@ async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *,
         # computed above, against this activity's ES/EF) remains valid
         # exactly as-is once this activity moves anywhere inside that slack,
         # including all the way to LS/LF. Skipped once progress exists (%
-        # Complete > 0) — a started activity's Start is a recorded fact, not
-        # a placement choice (same precedent the has_progress branch above
-        # already applies to every other constraint type).
-        has_progress = a.pct_complete is not None and a.pct_complete > 0
+        # Complete > 0, or actual_start is set — see the matching has_progress
+        # branch above for why that second condition is also needed) — a
+        # started activity's Start is a recorded fact, not a placement choice.
+        has_progress = (a.pct_complete is not None and a.pct_complete > 0) or a.actual_start is not None
         if a.constraint_type == "alap" and not has_progress:
             a.start = ls[a.id]
             a.finish = lf[a.id]

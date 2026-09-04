@@ -489,6 +489,49 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
     assert milestone.finish == datetime(2098, 6, 15, 10, 40)
 
 
+async def test_completed_start_milestone_with_zero_percent_complete_is_not_rescheduled(
+    db: AsyncSession, project: Project,
+):
+    """A real, fourth bug found the same day, on a real live import (Maro:
+    "you've not even properly actualised certain activities" — a real P6
+    "Building Pad Delivered by Owner" Start Milestone, genuinely delivered
+    in September 2010, showing as Status "Planned" with Start rescheduled
+    all the way forward to the file's own 2011 DataDate).
+
+    Confirmed against the real file: a P6 Start Milestone that has actually
+    occurred reports PercentComplete=0 regardless — P6 signals its
+    completion purely via ActualStartDate/ActualFinishDate being set, not
+    via PercentComplete the way a Task Dependent activity would.
+    _derive_activity_status's own milestone branch only ever checked
+    pct >= 100, so this milestone's status landed "planned" at import; that
+    wrong status meant recompute_schedule's own "already progressed, keep
+    its real Start" preservation branch (which also only checked
+    pct_complete > 0) never fired for it either, so it got rescheduled
+    forward as if it hadn't happened at all — discarding a delivery date
+    from over half a year before the data date."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Milestone Actualised Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Building Pad Delivered by Owner</Name>"
+        b"<Type>Start Milestone</Type><PlannedDuration>0</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2010-09-01T08:00:00</StartDate><FinishDate>2010-09-01T08:00:00</FinishDate>"
+        b"<ActualStartDate>2010-09-01T08:00:00</ActualStartDate><ActualFinishDate>2010-09-01T08:00:00</ActualFinishDate>"
+        b"</Activity></Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == summary.schedule_period_id)
+    )).scalars().all()
+    milestone = next(a for a in activities if a.task_name == "Building Pad Delivered by Owner")
+    assert milestone.status == "completed"
+    # Real 2010 delivery date preserved — NOT rescheduled forward to the
+    # file's own 2011-05-01 DataDate.
+    assert milestone.start == datetime(2010, 9, 1, 8, 0)
+    assert milestone.finish == datetime(2010, 9, 1, 8, 0)
+
+
 async def test_actual_cost_applied_via_the_canonical_sync_activity_actuals_path(db: AsyncSession, project: Project):
     """A third real gap found the same day: AC/CV/CPI/EAC/ETC all stayed
     blank on a real import despite a fully-costed schedule — the importer
