@@ -189,6 +189,12 @@ async def test_duplicate_variant_is_independent_of_master(client: AsyncClient, p
 
 async def test_promote_flips_master_flag(client: AsyncClient, project: Project):
     master = await _bootstrap_master(client, project)
+    # A real activity on the old master (2026-09-04, per Maro's own "only one
+    # schedule after import" fix — promote_variant now deletes an old master
+    # outright if it was never actually used, so this test needs one with
+    # real data to exercise the ordinary "just demoted" path instead).
+    master_period = await _bootstrap_period(client, master["id"])
+    await _create_activity(client, project, master_period, "Existing task")
     other = (await client.post("/api/v1/schedule-variants/", json={
         "project_id": str(project.id), "name": "Recovery Schedule",
     })).json()
@@ -200,8 +206,27 @@ async def test_promote_flips_master_flag(client: AsyncClient, project: Project):
     assert data["variant"]["is_master"] is True
     assert data["unmatched_codes"] == []
 
-    old_master = (await client.get(f"/api/v1/schedule-variants/{master['id']}")).json()
-    assert old_master["is_master"] is False
+    old_master_resp = await client.get(f"/api/v1/schedule-variants/{master['id']}")
+    assert old_master_resp.status_code == 200
+    assert old_master_resp.json()["is_master"] is False
+
+
+async def test_promote_deletes_a_never_used_empty_old_master(client: AsyncClient, project: Project):
+    # The exact real-world case this behavior exists for (2026-09-04, per
+    # Maro: "if i import from P6 i expect only one schedule in the working
+    # schedule" — every brand new project auto-seeds a blank master the
+    # first time Scheduling is opened; promoting a real import over it
+    # should leave just the one real schedule, not an empty leftover).
+    master = await _bootstrap_master(client, project)
+    other = (await client.post("/api/v1/schedule-variants/", json={
+        "project_id": str(project.id), "name": "Imported: Something",
+    })).json()
+
+    resp = await client.post(f"/api/v1/schedule-variants/{other['id']}/promote")
+    assert resp.status_code == 200, resp.text
+
+    old_master_resp = await client.get(f"/api/v1/schedule-variants/{master['id']}")
+    assert old_master_resp.status_code == 404
 
 
 async def test_promoting_the_current_master_is_a_noop(client: AsyncClient, project: Project):

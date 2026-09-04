@@ -27,7 +27,7 @@ from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
-from app.services.reference_codes import next_code
+from app.services.reference_codes import next_code, next_codes_batch
 from app.services.resource_costing import compute_assignment_budget, compute_assignment_rate_line_qty
 
 
@@ -183,6 +183,140 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
         await db.commit()
     else:
         await db.flush()
+
+
+async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids: list[uuid.UUID]) -> None:
+    """Batched sibling of sync_cost_element_from_resources, for exactly one
+    caller: promote_variant's own retroactive "create Cost Elements for a
+    newly-promoted master's never-synced activities" pass. That pass calls
+    the single-activity version once per resource-assigned activity — each
+    call doing 5-7 of its own awaited round trips (db.get(Activity),
+    db.get(ScheduleVariant), the linked-element lookup, assignments,
+    resources, discipline, next_code, plus a flush) — which measured out to
+    roughly 1000 sequential round trips promoting a real 148-activity/417-
+    assignment P6 import (2026-09-04, per Maro: "i clearly clicked this once
+    and nothing happened... had to refresh" — the promote request wasn't
+    stuck, just genuinely that slow with no loading feedback on the button).
+    This does the same work — same compute_assignment_budget/
+    compute_assignment_rate_line_qty math, same discipline/description/
+    manual-unlink rules — in a fixed small number of batched queries
+    regardless of how many activities are involved.
+
+    Every activity_id here is assumed to belong to the schedule that just
+    became master (promote_variant's own is_master gate already applies at
+    the call site — this function doesn't re-check it per activity the way
+    the single-activity version does) and to already have at least one
+    ResourceAssignment (promote_variant only ever calls this with activity
+    ids drawn from a ResourceAssignment query) — so, unlike the
+    single-activity version, this never needs to handle "assignments were
+    removed, delete the now-orphaned element" here.
+    """
+    if not activity_ids:
+        return
+
+    activities = (await db.execute(select(Activity).where(Activity.id.in_(activity_ids)))).scalars().all()
+    activities_by_id = {a.id: a for a in activities}
+    if not activities_by_id:
+        return
+    project_id = next(iter(activities_by_id.values())).project_id
+
+    existing_elements = (await db.execute(
+        select(CostElement).where(CostElement.linked_activity_id.in_(activity_ids))
+    )).scalars().all()
+    element_by_activity_id = {e.linked_activity_id: e for e in existing_elements}
+
+    assignments = (await db.execute(
+        select(ResourceAssignment).where(ResourceAssignment.activity_id.in_(activity_ids))
+    )).scalars().all()
+    assignments_by_activity_id: dict[uuid.UUID, list[ResourceAssignment]] = {}
+    for a in assignments:
+        assignments_by_activity_id.setdefault(a.activity_id, []).append(a)
+
+    resources = (await db.execute(
+        select(Resource).where(Resource.id.in_({a.resource_id for a in assignments}))
+    )).scalars().all()
+    resources_by_id = {r.id: r for r in resources}
+
+    discipline_def = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == project_id,
+            UserDefinedFieldDefinition.entity_type == "activity",
+            UserDefinedFieldDefinition.name == "Discipline",
+        )
+    )).scalar_one_or_none()
+    discipline_by_activity_id: dict[uuid.UUID, str | None] = {}
+    if discipline_def is not None:
+        discipline_values = (await db.execute(
+            select(UserDefinedFieldValue).where(
+                UserDefinedFieldValue.field_definition_id == discipline_def.id,
+                UserDefinedFieldValue.record_id.in_(activity_ids),
+            )
+        )).scalars().all()
+        discipline_by_activity_id = {v.record_id: v.value_text for v in discipline_values}
+
+    live_period = await _get_or_create_live_period(db, project_id)
+
+    to_create: list[uuid.UUID] = []
+    updating_element_ids: list[uuid.UUID] = []
+    for activity_id in activity_ids:
+        activity = activities_by_id.get(activity_id)
+        activity_assignments = assignments_by_activity_id.get(activity_id)
+        if activity is None or not activity_assignments:
+            continue
+        element = element_by_activity_id.get(activity_id)
+        if element is not None and element.source == "manual":
+            continue  # unlinked — same rule as the single-activity version
+        if element is None:
+            to_create.append(activity_id)
+        else:
+            updating_element_ids.append(element.id)
+
+    # Old rate lines for every element being updated are cleared up front, in
+    # one statement — before the loop below adds this call's own new ones,
+    # so there's no risk of the delete catching rows it just inserted.
+    if updating_element_ids:
+        await db.execute(delete(CostRateLine).where(CostRateLine.cost_element_id.in_(updating_element_ids)))
+
+    new_codes = iter(await next_codes_batch(db, CostElement, "CST", project_id, len(to_create)))
+
+    for activity_id in activity_ids:
+        activity = activities_by_id.get(activity_id)
+        activity_assignments = assignments_by_activity_id.get(activity_id)
+        if activity is None or not activity_assignments:
+            continue
+        element = element_by_activity_id.get(activity_id)
+        if element is not None and element.source == "manual":
+            continue
+
+        total_budget = sum(
+            (compute_assignment_budget(resources_by_id[a.resource_id], activity, a) for a in activity_assignments),
+            Decimal(0),
+        )
+        description = f"{activity.code}: {activity.task_name}"
+        discipline = discipline_by_activity_id.get(activity_id)
+
+        if element is None:
+            element = CostElement(
+                id=uuid.uuid4(), project_id=project_id, period_id=live_period.id, code=next(new_codes),
+                element_type="fixed", element_group=discipline, description=description,
+                source="schedule", linked_activity_id=activity.id, budget=total_budget,
+                pct_complete=int(activity.pct_complete) if activity.pct_complete is not None else None,
+            )
+            db.add(element)  # id assigned client-side above — no per-row flush needed for the CostRateLine rows below
+        else:
+            element.description = description
+            element.element_group = discipline
+            element.budget = total_budget
+
+        for a in activity_assignments:
+            resource = resources_by_id[a.resource_id]
+            label = resource.name if not a.role else f"{resource.name} ({a.role})"
+            qty = compute_assignment_rate_line_qty(resource, activity, a)
+            db.add(CostRateLine(
+                cost_element_id=element.id, description=label, qty=qty, unit=resource.unit, rate=resource.rate,
+            ))
+
+    await db.flush()
 
 
 async def sync_cost_element_pct_complete(db: AsyncSession, activity: Activity) -> None:

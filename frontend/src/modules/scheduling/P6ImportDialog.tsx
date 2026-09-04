@@ -20,6 +20,7 @@ interface Props {
 export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
+  const [promoting, setPromoting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<P6ImportSummary | null>(null)
 
@@ -42,8 +43,25 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
 
   const handleSwitchToImported = async () => {
     if (!summary) return
-    const { data } = await api.get<ScheduleVariant>(`/api/v1/schedule-variants/${summary.schedule_variant_id}`)
-    onImported(data)
+    setError(null)
+    setPromoting(true)
+    try {
+      const { data } = await api.get<ScheduleVariant>(`/api/v1/schedule-variants/${summary.schedule_variant_id}`)
+      // Properly awaited (2026-09-04, per Maro: "i clearly clicked this once
+      // and nothing happened" — this used to fire-and-forget onImported,
+      // so the button gave no feedback while promotion ran, and any error
+      // from it was an unhandled rejection nobody ever saw) — see
+      // cost_sync.sync_cost_elements_from_resources_bulk for the real,
+      // separate backend slowness this was also masking.
+      await onImported(data)
+    } catch (err) {
+      const message = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined
+      setError(message ?? 'Could not promote this schedule — check your connection and try again.')
+    } finally {
+      setPromoting(false)
+    }
   }
 
   return (
@@ -104,17 +122,23 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
                   </ul>
                 </div>
               )}
+              {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
             </div>
             <div className="px-4 py-3 border-t border-gray-100 dark:border-prosota-line flex justify-end gap-2">
-              <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">
+              <button
+                onClick={onClose}
+                disabled={promoting}
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
+              >
                 Close
               </button>
               <button
                 onClick={handleSwitchToImported}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800"
+                disabled={promoting}
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
                 title="Promotes this import to the project's master schedule — Cost Plan lines get created from its resource assignments only once it's the master."
               >
-                Promote to Master Schedule
+                {promoting ? 'Promoting…' : 'Promote to Master Schedule'}
               </button>
             </div>
           </>

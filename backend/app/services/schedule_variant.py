@@ -297,6 +297,23 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
     await db.commit()
     await db.refresh(new_master)
 
+    # Clean up the old master if it was never actually used (2026-09-04, per
+    # Maro: "if i import from P6 i expect only one schedule in the working
+    # schedule" — every brand new project lazily auto-seeds one live variant
+    # named "Working Schedule" the moment its Scheduling page is first
+    # opened, and since it's a project's *first* variant it's created as
+    # master by default. A first attempt at this fix lived in p6_import.py
+    # and explicitly skipped anything flagged is_master — exactly backwards
+    # for this exact case, since the untouched auto-seed *is* the master at
+    # that point. Doing it here instead, once old_master has already been
+    # safely demoted above (never a masterless window), correctly targets
+    # it: old_ids is empty only when the old master never had a single real
+    # activity in it — anything promoted from a real schedule (P6 import or
+    # not) always has old_ids non-empty and is left untouched.
+    if old_master is not None and not old_ids:
+        await db.delete(old_master)
+        await db.commit()
+
     # sync_cost_element_from_resources's own is_master gate (see
     # cost_sync.py) means a variant's resource assignments never create
     # real Cost Plan lines while it's still non-master — deliberate, so a
@@ -309,14 +326,17 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
     # a brand-new master's own never-synced ones). Runs for every resource-
     # assigned activity, not just newly-linked ones — idempotent either way
     # (element exists and correct -> no-op write), and simpler than trying
-    # to work out which ones are actually new.
+    # to work out which ones are actually new. Batched (2026-09-04, per
+    # Maro: promoting a real 148-activity import looked hung with no
+    # feedback — the per-activity single version was doing ~1000 sequential
+    # round trips here) — see cost_sync.sync_cost_elements_from_resources_bulk's
+    # own header for the measured cost this replaced.
     assigned_activity_ids = (await db.execute(
         select(ResourceAssignment.activity_id).join(Activity, ResourceAssignment.activity_id == Activity.id)
         .where(Activity.schedule_variant_id == new_master.id).distinct()
     )).scalars().all()
-    for activity_id in assigned_activity_ids:
-        await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
     if assigned_activity_ids:
+        await cost_sync.sync_cost_elements_from_resources_bulk(db, assigned_activity_ids)
         await db.commit()
 
     # A P6 import's own real Actual Cost (2026-09-04, per Maro: "AC is

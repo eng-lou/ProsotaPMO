@@ -220,7 +220,7 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
     captured baseline — available as soon as the activity is scheduled, per
     Maro's confirmed P6 domain correction (Session 16): "Set Baseline" drives
     schedule variance, not Planned Value."""
-    from datetime import date, datetime, time, timedelta
+    from datetime import date, datetime
     import uuid as uuid_mod
 
     from app.models.activity import Activity
@@ -235,16 +235,22 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
     assert float(element["budget"]) == 10000.0
     assert element["pv"] is not None  # live start/finish already exist from CPM -> no baseline needed
 
-    # Directly set live start/finish spanning today (10 days either side) for a
-    # deterministic 50% elapsed fraction — set at the default calendar's day
-    # start (08:00), matching the actual instant "today" resolves to as a
-    # data date (2026-07-03 fix: data date now compares at full datetime
-    # precision, not just calendar date, so a midnight-anchored start would
-    # no longer land on a clean 50%).
+    # Fixed dates (2026-09-04, was date.today() — flaky once PV became
+    # working-day-prorated rather than calendar-time: whether "10 calendar
+    # days either side of today" lands on exactly 50% now depends on how
+    # many weekends fall in that span, which varies by which real day the
+    # suite happens to run on. datetime(2024,1,1) is a Monday, +25 days is a
+    # Friday — 20 working days apart; date(2024,1,12) (Friday) is 10
+    # working days in, an unconditional 50% regardless of wall-clock date —
+    # same fixed-date pattern test_activity_evm.py's own working-day tests
+    # already use. Both the activity's own dates AND the Cost Period's data
+    # date (normally "today" when start_date is null — see
+    # scheduling_cpm.data_date_for_period) need pinning, or PV would still
+    # be prorated against the real wall-clock date instead of this window.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
-    today = date.today()
-    db_activity.start = datetime.combine(today - timedelta(days=10), time(8, 0))
-    db_activity.finish = datetime.combine(today + timedelta(days=10), time(8, 0))
+    db_activity.start = datetime(2024, 1, 1, 8, 0)
+    db_activity.finish = datetime(2024, 1, 26, 8, 0)
+    live_period.start_date = date(2024, 1, 12)
     await db.commit()
     await db.refresh(db_activity)
 
