@@ -337,6 +337,23 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             task_name=pa.name[:500], activity_type=pa.activity_type, parent_id=parent_real_id,
             sort_order=activity_sort_counter,
             duration_hours=duration_hours, pct_complete=pa.pct_complete,
+            # start/finish (2026-09-04, per Maro — a real historical import
+            # showed PV=£0 for every activity, even long-completed ones):
+            # scheduling_cpm.recompute_schedule below has its own "once an
+            # activity has progress, its Start is a recorded fact" branch
+            # (has_progress and a.start is not None) built specifically to
+            # preserve an already-progressed activity's real position
+            # instead of rescheduling it forward from the data date — but
+            # it only fires when a.start is already set to *something*,
+            # and this row's own .start was never set before that first
+            # recompute ran. Every already-progressed activity (even ones
+            # that finished years before the file's own DataDate) was
+            # rescheduled as if starting fresh from the data date, PV's own
+            # elapsed-fraction formula then always seeing "hasn't started
+            # yet" and returning 0. Confirmed against the real file: this
+            # activity's own <StartDate>/<FinishDate> already hold its real
+            # 2010 position, identical to actual_start/actual_finish below.
+            start=pa.start, finish=pa.finish,
             actual_start=pa.actual_start, actual_finish=pa.actual_finish,
             constraint_type=pa.constraint_type, constraint_date=pa.constraint_date,
             calendar_id=calendar_real_id_by_object_id.get(pa.calendar_object_id) if pa.calendar_object_id else None,

@@ -345,6 +345,46 @@ async def test_import_root_dates_udf_and_baseline(db: AsyncSession, project: Pro
     assert snap.duration_hours == Decimal("8")
 
 
+async def test_progressed_activity_keeps_real_historical_position_not_rescheduled(db: AsyncSession, project: Project):
+    """A real bug found on a real historical import (2026-09-04, per Maro:
+    PV showed £0 across the board on the PV/EV/AC Trend chart, even for
+    activities completed years before the file's own DataDate, then "if
+    that's the figure for May, clearly october had to be higher... you need
+    to check properly again"). scheduling_cpm.recompute_schedule's own "an
+    already-progressed activity's Start is a recorded fact" preservation
+    branch (has_progress and a.start is not None) only fires when .start is
+    already set to *something* before that first recompute runs —
+    import_pmxml never set it, so every activity, even ones already 100%
+    complete years before the data date, got rescheduled as if starting
+    fresh from it, and PV's own elapsed-fraction formula always saw
+    "hasn't started yet".
+
+    Also covers the sibling bug found alongside it: a real P6
+    <PercentComplete> is a 0-1 fraction (confirmed against the real file:
+    0.2/0.82/0.9/0.92 alongside plain 0/1), not Prosota's own 0-100 scale."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Progress Position Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Groundworks</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>800</PlannedDuration><PercentComplete>0.82</PercentComplete>"
+        b"<StartDate>2010-01-04T08:00:00</StartDate><FinishDate>2010-06-01T17:00:00</FinishDate>"
+        b"<ActualStartDate>2010-01-04T08:00:00</ActualStartDate><ActualFinishDate>2010-06-01T17:00:00</ActualFinishDate>"
+        b"</Activity></Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == summary.schedule_period_id)
+    )).scalars().all()
+    groundworks = next(a for a in activities if a.task_name == "Groundworks")
+    assert groundworks.pct_complete == Decimal("82.00")
+    # Real historical position preserved — NOT rescheduled forward to on/after
+    # the file's own 2011-05-01 DataDate.
+    assert groundworks.start == datetime(2010, 1, 4, 8, 0)
+    assert groundworks.finish == datetime(2010, 6, 1, 17, 0)
+
+
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
     """The exact real production scenario found 2026-09-04: the project
     already had Prosota's own lazy-seeded "Standard Calendar" (is_project_

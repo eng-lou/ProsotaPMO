@@ -226,7 +226,11 @@ def _activity_xml(a, udf_values_by_task: dict[int, list]) -> str:  # noqa: ANN00
         f"{_el('Id', a.code)}"
         f"{_el('Name', a.name)}"
         f"<ObjectId>{a.id}</ObjectId>"
-        f"<PercentComplete>{_fmt_dec(a.pct_complete, 2)}</PercentComplete>"
+        # P6's own convention is a 0-1 fraction, not Prosota's 0-100 scale
+        # — see p6_import_parse.py's own header on _parse_activity's
+        # matching /100 fix (2026-09-04, real-file-confirmed: 0.2/0.82/0.9
+        # etc. alongside plain 0/1, never a bare "82").
+        f"<PercentComplete>{_fmt_dec(a.pct_complete / 100, 4)}</PercentComplete>"
         f"<PercentCompleteType>Physical</PercentCompleteType>"
         f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
         f"{f'<PlannedFinishDate>{_fmt_datetime(a.finish)}</PlannedFinishDate>' if a.finish else '<PlannedFinishDate xsi:nil=\"true\" />'}"

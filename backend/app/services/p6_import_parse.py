@@ -340,7 +340,19 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         start=_datetime(el, "StartDate") or _datetime(el, "PlannedStartDate"),
         finish=_datetime(el, "FinishDate") or _datetime(el, "PlannedFinishDate"),
         actual_start=_datetime(el, "ActualStartDate"), actual_finish=_datetime(el, "ActualFinishDate"),
-        pct_complete=_decimal(el, "PercentComplete") or Decimal(0),
+        # P6's own <PercentComplete> is a 0-1 fraction (confirmed against a
+        # real file: values like 0.2/0.82/0.9/0.92 alongside plain 0/1),
+        # not Prosota's own 0-100 scale — 2026-09-04, found chasing a real
+        # PV discrepancy Maro caught (this specific field wasn't actually
+        # the cause that time, since p6_import.py's own progress-layering
+        # overwrites it anyway, but it's a real, separate correctness bug
+        # for any straight PMXML import with no such follow-up: an activity
+        # genuinely 82% complete was landing as 0.82%). p6_export_xml.py's
+        # own writer has the matching /100 fix — this bug was invisible to
+        # the round-trip tests because both sides used the same wrong
+        # scale, cancelling out; only importing a real external file (which
+        # correctly follows the true 0-1 convention) exposed it.
+        pct_complete=(_decimal(el, "PercentComplete") or Decimal(0)) * 100,
         constraint_type=constraint_type, constraint_date=_datetime(el, "PrimaryConstraintDate"),
         commentary=_text(el, "Notes"), udf_values=udf_values,
     )
