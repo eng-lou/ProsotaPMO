@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
-  getCostPerformanceTrend, getIcdOpenItemsTrend, getRiskEmvTrend, getSpiTrend,
-  type CostPerformanceTrendPoint, type IcdOpenItemsTrendPoint, type RiskEmvTrendPoint, type SpiTrendPoint,
+  getCostPerformanceTrend, getIcdOpenItemsTrend, getPvEvAcTrend, getRiskEmvTrend, getSpiTrend,
+  type CostPerformanceTrendPoint, type IcdOpenItemsTrendPoint, type PvEvAcTrendPoint, type RiskEmvTrendPoint,
+  type SpiTrendPoint,
 } from './baselineTrends'
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
@@ -332,7 +333,15 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
 // WidgetProps' own filterConditions doc) since there's no raw per-record
 // array here to filter.
 interface TrendChartPoint { baseline_name: string; baseline_date: string }
-interface TrendSeriesDef<T> { key: string; label: string; getValue: (point: T) => number | null }
+interface TrendSeriesDef<T> {
+  key: string
+  label: string
+  getValue: (point: T) => number | null
+  // Overrides the default MILESTONE_TREND_COLORS[i] palette pick — for PV/EV/AC
+  // Trend below, which needs the industry-standard blue/green/red convention
+  // (PMBOK's own Figure 4), not whatever falls out of series order.
+  color?: string
+}
 
 function BaselineTrendChart<T extends TrendChartPoint>({
   points, series, yTickFormatter, tooltipFormatter, referenceValue,
@@ -365,7 +374,7 @@ function BaselineTrendChart<T extends TrendChartPoint>({
         <Tooltip formatter={(v: number, name: string) => [tooltipFormatter ? tooltipFormatter(v) : v, name]} />
         {referenceValue !== undefined && <ReferenceLine y={referenceValue} stroke="#9ca3af" strokeDasharray="4 4" />}
         {series.map((s, i) => {
-          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          const color = s.color ?? MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
           return (
             <Line
               key={s.key}
@@ -382,7 +391,7 @@ function BaselineTrendChart<T extends TrendChartPoint>({
           )
         })}
         {series.map((s, i) => {
-          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
+          const color = s.color ?? MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
           const lastValue = chartData[chartData.length - 1][s.key]
           if (typeof lastValue !== 'number') return null
           return (
@@ -521,6 +530,45 @@ export function SpiTrendWidget({ projectId }: WidgetProps) {
       yTickFormatter={v => v.toFixed(2)}
       tooltipFormatter={v => v.toFixed(2)}
       referenceValue={1}
+    />
+  )
+}
+
+// PV/EV/AC Trend (2026-09-04, per Maro — the classic PMBOK Figure 4 S-curve,
+// with baseline captures on the x-axis instead of continuous calendar time).
+// Colors match Figure 4's own convention (PV blue, EV green, AC red) via
+// BaselineTrendChart's per-series color override above, not whatever falls
+// out of series order.
+export function PvEvAcTrendWidget({ projectId }: WidgetProps) {
+  const [points, setPoints] = useState<PvEvAcTrendPoint[] | null>(null)
+
+  useEffect(() => {
+    if (!projectId) return
+    let cancelled = false
+    getPvEvAcTrend(projectId).then(p => { if (!cancelled) setPoints(p) })
+    return () => { cancelled = true }
+  }, [projectId])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (points === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (points.length < 2) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far — PV/EV/AC needs a "Capture All Now" Baseline Set (linking a Schedule
+        and Cost baseline together) to compute a historical point; save at least one to start a trend.
+      </span>
+    )
+  }
+  return (
+    <BaselineTrendChart
+      points={points}
+      series={[
+        { key: 'pv', label: 'Planned Value (PV)', getValue: p => (p.pv !== null ? Number(p.pv) : null), color: '#2563eb' },
+        { key: 'ev', label: 'Earned Value (EV)', getValue: p => (p.ev !== null ? Number(p.ev) : null), color: '#16a34a' },
+        { key: 'ac', label: 'Actual Cost (AC)', getValue: p => (p.ac !== null ? Number(p.ac) : null), color: '#dc2626' },
+      ]}
+      yTickFormatter={v => formatCurrency(v)}
+      tooltipFormatter={v => formatCurrency(v)}
     />
   )
 }
@@ -2004,6 +2052,7 @@ export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   cost_eac_trend: { label: 'Cost EAC Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostEacTrendWidget {...props} /> },
   spi_trend: { label: 'SPI Trend', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <SpiTrendWidget {...props} /> },
   icd_open_items_trend: { label: 'Issues/Changes/Decisions Open Trend', category: 'Issues, Changes & Decisions', defaultSize: { w: 8, h: 5 }, render: props => <IcdOpenItemsTrendWidget {...props} /> },
+  pv_ev_ac_trend: { label: 'PV/EV/AC Trend (S-Curve)', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <PvEvAcTrendWidget {...props} /> },
   risk_exposure: { label: 'Risk Exposure', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskExposureWidget {...props} /> },
   top_risks: { label: 'Top 5 Risks', category: 'Risk', defaultSize: { w: 12, h: 5 }, render: props => <TopRisksWidget {...props} /> },
   float_distribution: { label: 'Float Distribution', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <FloatDistributionWidget {...props} /> },

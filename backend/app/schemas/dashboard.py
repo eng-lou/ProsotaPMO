@@ -533,6 +533,22 @@ class SpiTrendResponse(BaseModel):
     points: list[SpiTrendPoint]
 
 
+class PvEvAcTrendPoint(BaseModel):
+    # Keyed to the BaselineSet, same reasoning as SpiTrendPoint above — PV
+    # needs the sibling ScheduleBaseline's own activity-date snapshot
+    # alongside the CostBaseline's bac/pct_complete.
+    baseline_set_id: uuid.UUID | None
+    baseline_name: str
+    baseline_date: date
+    pv: Decimal | None
+    ev: Decimal | None
+    ac: Decimal | None
+
+
+class PvEvAcTrendResponse(BaseModel):
+    points: list[PvEvAcTrendPoint]
+
+
 class IcdOpenItemsTrendPoint(BaseModel):
     baseline_id: uuid.UUID | None
     baseline_name: str

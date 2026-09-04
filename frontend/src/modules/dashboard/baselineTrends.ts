@@ -56,6 +56,28 @@ export async function getSpiTrend(projectId: string): Promise<SpiTrendPoint[]> {
   return data.points
 }
 
+export interface PvEvAcTrendPoint {
+  baseline_set_id: string | null
+  baseline_name: string
+  baseline_date: string
+  pv: string | null
+  ev: string | null
+  ac: string | null
+}
+
+// PV/EV/AC Trend (2026-09-04, per Maro — the classic PMBOK Figure 4 S-curve,
+// but sampled at baseline captures instead of continuous calendar time). See
+// backend/app/services/dashboard.py's get_pv_ev_ac_trend for why PV/EV/AC
+// here are scoped to schedule-linked cost elements only, same population
+// SPI Trend already uses — PV has no meaning for cost with no linked
+// activity to give it a timeline.
+export async function getPvEvAcTrend(projectId: string): Promise<PvEvAcTrendPoint[]> {
+  const { data } = await api.get<{ points: PvEvAcTrendPoint[] }>('/api/v1/dashboard/pv-ev-ac-trend', {
+    params: { project_id: projectId },
+  })
+  return data.points
+}
+
 export interface IcdOpenItemsTrendPoint {
   baseline_id: string | null
   baseline_name: string

@@ -11,6 +11,7 @@ from app.schemas.dashboard import (
     CostPerformanceTrendResponse,
     DashboardOverviewResponse,
     IcdOpenItemsTrendResponse,
+    PvEvAcTrendResponse,
     RiskEmvTrendResponse,
     SpiTrendResponse,
 )
@@ -68,6 +69,17 @@ async def get_spi_trend(
     """Portfolio schedule SPI across every BaselineSet that has a linked
     Schedule+Cost baseline pair, plus a live Current point."""
     return await svc.get_spi_trend(db, project_id)
+
+
+@router.get("/pv-ev-ac-trend", response_model=PvEvAcTrendResponse)
+async def get_pv_ev_ac_trend(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PvEvAcTrendResponse:
+    """Planned Value / Earned Value / Actual Cost across every BaselineSet
+    that has a linked Schedule+Cost baseline pair, plus a live Current
+    point — the classic PMBOK S-curve, sampled at baseline captures."""
+    return await svc.get_pv_ev_ac_trend(db, project_id)
 
 
 @router.get("/icd-open-items-trend", response_model=IcdOpenItemsTrendResponse)

@@ -50,6 +50,8 @@ from app.schemas.dashboard import (
     LookaheadSummary,
     MilestoneTimelineItem,
     ProjectInfoSummary,
+    PvEvAcTrendPoint,
+    PvEvAcTrendResponse,
     RiskComparison,
     RiskComparisonItem,
     RiskComparisonSummary,
@@ -644,15 +646,19 @@ async def get_overview(
     )
 
 
-async def _baseline_schedule_spi(
+async def _baseline_schedule_pv_ev_ac(
     db: AsyncSession, baseline_set_id: uuid.UUID, snapshots: list[ScheduleBaselineActivity],
-) -> Decimal | None:
-    """The same PV/EV-based SPI formula _live_schedule_spi uses, evaluated at
-    the baseline's own capture date instead of now — needs a sibling
-    CostBaseline linked to this same set (for each schedule-linked element's
-    baseline bac/pct_complete) plus this ScheduleBaseline's own activity
-    snapshots (for baseline start/finish) — None whenever either side isn't
-    there, never a guessed number."""
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    """Shared by _baseline_schedule_spi (ratio only) and get_pv_ev_ac_trend
+    (the raw totals) — schedule-linked cost elements' PV/EV via the same
+    _schedule_evm formula the live PV column uses, evaluated at the
+    baseline's own capture date against the sibling ScheduleBaseline's own
+    activity-date snapshots. AC is each element's own baseline-captured
+    actual cost, same schedule-linked population as PV/EV — never a wider
+    "all cost elements" total, since PV genuinely has no meaning for cost
+    with no linked activity to give it a timeline. None whenever there's no
+    sibling CostBaseline or no schedule-linked overlap, never a guessed
+    number."""
     cost_baseline = (await db.execute(
         select(CostBaseline).where(CostBaseline.baseline_set_id == baseline_set_id)
         .order_by(CostBaseline.created_at.desc())
@@ -675,7 +681,7 @@ async def _baseline_schedule_spi(
 
     activity_snap_by_id = {s.activity_id: s for s in snapshots}
     data_date = datetime.combine(baseline_set.baseline_date, time.min)
-    pv_total = ev_total = Decimal(0)
+    pv_total = ev_total = ac_total = Decimal(0)
     has_schedule_evm = False
     for el in schedule_linked_elements:
         activity_snap = activity_snap_by_id.get(el.linked_activity_id)
@@ -689,8 +695,22 @@ async def _baseline_schedule_spi(
         pv_total += pv
         if ev is not None:
             ev_total += ev
+        ac_total += cost_snap.ac or Decimal(0)
 
-    return rollup_evm_from_totals(None, None, pv_total, ev_total)["spi"] if has_schedule_evm else None
+    return (pv_total, ev_total, ac_total) if has_schedule_evm else None
+
+
+async def _baseline_schedule_spi(
+    db: AsyncSession, baseline_set_id: uuid.UUID, snapshots: list[ScheduleBaselineActivity],
+) -> Decimal | None:
+    """The same PV/EV-based SPI formula _live_schedule_spi uses, evaluated at
+    the baseline's own capture date instead of now — see
+    _baseline_schedule_pv_ev_ac for the shared totals computation."""
+    totals = await _baseline_schedule_pv_ev_ac(db, baseline_set_id, snapshots)
+    if totals is None:
+        return None
+    pv_total, ev_total, _ac_total = totals
+    return rollup_evm_from_totals(None, None, pv_total, ev_total)["spi"]
 
 
 async def _schedule_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> ScheduleComparison | None:
@@ -1182,6 +1202,80 @@ async def get_spi_trend(db: AsyncSession, project_id: uuid.UUID) -> SpiTrendResp
         if current_spi is not None:
             points.append(SpiTrendPoint(baseline_set_id=None, baseline_name="Current", baseline_date=date.today(), spi=current_spi))
     return SpiTrendResponse(points=points)
+
+
+async def get_pv_ev_ac_trend(db: AsyncSession, project_id: uuid.UUID) -> PvEvAcTrendResponse:
+    """PV/EV/AC Trend (2026-09-04, per Maro — the classic PMBOK Figure 4
+    S-curve, but sampled at baseline captures instead of continuous calendar
+    time). Walks BaselineSets chronologically, same shape as SPI Trend
+    above (PV is genuinely a schedule+cost cross-pillar concept — see
+    _baseline_schedule_pv_ev_ac), plus a live Current point. Scoped to
+    schedule-linked cost elements only for all three lines, not the whole
+    cost plan, so PV/EV/AC represent the same body of work — PV has no
+    meaning at all for cost with no linked activity to give it a timeline."""
+    baseline_sets = (await db.execute(
+        select(BaselineSet).where(BaselineSet.project_id == project_id)
+        .order_by(BaselineSet.baseline_date.asc(), BaselineSet.created_at.asc())
+    )).scalars().all()
+
+    sched_baselines_by_set: dict[uuid.UUID, ScheduleBaseline] = {}
+    snapshots_by_sched_baseline: dict[uuid.UUID, list[ScheduleBaselineActivity]] = {}
+    if baseline_sets:
+        set_ids = [bset.id for bset in baseline_sets]
+        all_sched_baselines = (await db.execute(
+            select(ScheduleBaseline).where(ScheduleBaseline.baseline_set_id.in_(set_ids))
+            .order_by(ScheduleBaseline.created_at.desc())
+        )).scalars().all()
+        for sb in all_sched_baselines:
+            sched_baselines_by_set.setdefault(sb.baseline_set_id, sb)  # first (most recent) wins
+
+        sched_baseline_ids = [sb.id for sb in sched_baselines_by_set.values()]
+        snapshots_by_sched_baseline = {bid: [] for bid in sched_baseline_ids}
+        if sched_baseline_ids:
+            all_snapshots = (await db.execute(
+                select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id.in_(sched_baseline_ids))
+            )).scalars().all()
+            for snap in all_snapshots:
+                snapshots_by_sched_baseline[snap.baseline_id].append(snap)
+
+    points = []
+    for bset in baseline_sets:
+        sched_baseline = sched_baselines_by_set.get(bset.id)
+        if sched_baseline is None:
+            continue
+        snapshots = snapshots_by_sched_baseline[sched_baseline.id]
+        totals = await _baseline_schedule_pv_ev_ac(db, bset.id, snapshots)
+        if totals is None:
+            continue
+        pv_total, ev_total, ac_total = totals
+        points.append(PvEvAcTrendPoint(
+            baseline_set_id=bset.id, baseline_name=bset.name, baseline_date=bset.baseline_date,
+            pv=pv_total.quantize(_MONEY), ev=ev_total.quantize(_MONEY), ac=ac_total.quantize(_MONEY),
+        ))
+
+    live_period = (await db.execute(
+        select(Period).where(Period.project_id == project_id, Period.freeze_status == "live")
+    )).scalars().first()
+    if live_period is not None:
+        _spi, elements = await _live_schedule_spi(db, project_id, live_period.id)
+        pv_total = ev_total = ac_total = Decimal(0)
+        has_schedule_evm = False
+        for el in elements:
+            if el.pv is None:
+                continue
+            has_schedule_evm = True
+            pv_total += el.pv
+            if el.ev is not None:
+                ev_total += el.ev
+            _bac, ac = _resolve_bac_ac(el)
+            if ac is not None:
+                ac_total += ac
+        if has_schedule_evm:
+            points.append(PvEvAcTrendPoint(
+                baseline_set_id=None, baseline_name="Current", baseline_date=date.today(),
+                pv=pv_total.quantize(_MONEY), ev=ev_total.quantize(_MONEY), ac=ac_total.quantize(_MONEY),
+            ))
+    return PvEvAcTrendResponse(points=points)
 
 
 async def get_icd_open_items_trend(db: AsyncSession, period_id: uuid.UUID) -> IcdOpenItemsTrendResponse:
