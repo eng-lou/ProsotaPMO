@@ -76,6 +76,7 @@ from app.services import scheduling_quality as quality_svc
 from app.services.activity import _subtree_ids
 from app.services.cost_element import _schedule_evm, list_cost_elements, rollup_evm_from_totals
 from app.services.resource_costing import compute_assignment_budget
+from app.services.scheduling_cpm import _build_calendar_lookup
 
 _MONEY = Decimal("0.01")
 
@@ -679,6 +680,20 @@ async def _baseline_schedule_pv_ev_ac(
         )
     )).scalars().all()
 
+    # A ScheduleBaselineActivity snapshot carries no calendar_id of its own
+    # (see that model's own header) — resolved via the *live* Activity's own
+    # calendar instead (a project's calendars don't churn), same "elapsed_
+    # duration_fraction now needs a real calendar, not just start/finish"
+    # requirement _schedule_evm's own header explains (2026-09-04, per Maro
+    # — exact P6 parity: working-day proration, not calendar-time).
+    lookup = await _build_calendar_lookup(db, baseline_set.project_id)
+    linked_activities = (await db.execute(
+        select(Activity.id, Activity.calendar_id).where(
+            Activity.id.in_({el.linked_activity_id for el in schedule_linked_elements})
+        )
+    )).all()
+    calendar_id_by_activity_id = {row.id: row.calendar_id for row in linked_activities}
+
     activity_snap_by_id = {s.activity_id: s for s in snapshots}
     data_date = datetime.combine(baseline_set.baseline_date, time.min)
     pv_total = ev_total = ac_total = Decimal(0)
@@ -688,7 +703,11 @@ async def _baseline_schedule_pv_ev_ac(
         cost_snap = cost_snapshots.get(el.id)
         if activity_snap is None or cost_snap is None:
             continue
-        pv, ev, _sv, _spi = _schedule_evm(cost_snap.bac, cost_snap.pct_complete, activity_snap.start, activity_snap.finish, data_date)
+        activity_calendar = lookup.resolve_calendar_id(calendar_id_by_activity_id.get(el.linked_activity_id))
+        pv, ev, _sv, _spi = _schedule_evm(
+            cost_snap.bac, cost_snap.pct_complete, activity_snap.start, activity_snap.finish, data_date,
+            lookup, activity_calendar,
+        )
         if pv is None:
             continue
         has_schedule_evm = True

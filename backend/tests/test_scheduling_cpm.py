@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
+from app.services.scheduling_cpm import _build_calendar_lookup, elapsed_duration_fraction
 
 # Monday anchor — keeps expected dates deterministic without replicating
 # working-day-skipping arithmetic in the tests themselves. Standard Calendar is
@@ -54,6 +56,29 @@ async def _link(client: AsyncClient, pred: dict, succ: dict, **overrides) -> dic
     resp = await client.post("/api/v1/activity-relationships/", json=payload)
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def test_elapsed_duration_fraction_is_working_days_not_calendar_time(db: AsyncSession, project: Project):
+    """Confirmed against a real P6 export (2026-09-04, per Maro — exact P6
+    interoperability: "it needs to be the exact match or Prosota loses
+    complete credibility"). A real in-progress activity's own PV/BAC ratio
+    in P6's own report was exactly 14/18 = 7/9 = 0.77778 — 14 working days
+    elapsed (12-Apr-2011 to the 1-May-2011 data date) of 18 working days
+    total (12-Apr to the activity's own 5-May forecast finish). The
+    previous version of this formula instead divided straight calendar
+    seconds elapsed over calendar seconds total (18.556/23 calendar days =
+    0.80672 for these exact same three datetimes) — wrong by design, not
+    by a rounding artifact, since P6 simply never counts weekends as
+    elapsed schedule progress."""
+    lookup = await _build_calendar_lookup(db, project.id)
+    calendar = lookup.resolve_calendar_id(None)  # the project's lazily-seeded Mon-Fri default
+
+    start = datetime(2011, 4, 12, 10, 40)
+    finish = datetime(2011, 5, 5, 10, 40)
+    data_date = datetime(2011, 5, 1, 0, 0)
+
+    fraction = elapsed_duration_fraction(lookup, calendar, start, finish, data_date)
+    assert fraction == Decimal(14) / Decimal(18)
 
 
 async def _get(client: AsyncClient, activity_id: str) -> dict:

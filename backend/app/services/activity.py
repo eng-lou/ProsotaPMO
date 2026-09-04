@@ -80,9 +80,19 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         p.id: data_date_time_for_period(p, default_starts.get(project_id_by_period_id.get(p.id), time(8, 0)))
         for p in periods
     }
+    # One _CalendarLookup per distinct project among these activities (almost
+    # always just one — every real caller passes a single-project batch, see
+    # this function's own header) — elapsed_duration_fraction now needs the
+    # activity's own resolved calendar, not just its start/finish.
+    calendar_lookups = {
+        project_id: await scheduling_cpm._build_calendar_lookup(db, project_id)
+        for project_id in {a.project_id for a in activities}
+    }
     for a in activities:
         data_date = data_dates[a.schedule_period_id]
-        fraction = elapsed_duration_fraction(a.start, a.finish, data_date)
+        lookup = calendar_lookups[a.project_id]
+        calendar = lookup.resolve(a)
+        fraction = elapsed_duration_fraction(lookup, calendar, a.start, a.finish, data_date)
         # "Schedule % Complete" (renamed from duration_pct_complete, 2026-09-03,
         # per Maro: "rename Duration % to Schedule %" — this is what it actually
         # represents, a time-elapsed-vs-data-date calculation, not a comment on
@@ -98,7 +108,7 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             for field in _EVM_FIELDS:
                 setattr(a, field, None)
             continue
-        evm = compute_schedule_linked_evm(element, a.start, a.finish, data_date)
+        evm = compute_schedule_linked_evm(element, a.start, a.finish, data_date, lookup, calendar)
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
 

@@ -142,6 +142,17 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         calendar = Calendar(
             id=uuid.uuid4(), project_id=project_id, name=pc.name, is_project_default=make_default,
             day_start_time=pc.day_start, day_end_time=pc.day_end,
+            # Calendar.whole_day_scheduling defaults to True (2026-07-13, per
+            # Maro — a deliberate Prosota-native UX choice: day-only
+            # granularity for schedules built inside the app). Wrong for a
+            # P6 import specifically — whole-day mode discards a real
+            # imported activity's own historical start time-of-day entirely
+            # (pushes to the next whole day if it isn't exactly at
+            # day_start_time) and rounds every duration up to a whole extra
+            # day, both silently diverging from P6's own hour-precision
+            # dates (2026-09-04, found chasing a real PV mismatch Maro
+            # caught against his own P6 export).
+            whole_day_scheduling=False,
             **{_P6_DAY_TO_WORKS_FIELD[d]: working for d, working in pc.works.items()},
         )
         if make_default:
@@ -608,6 +619,20 @@ async def apply_progress_snapshot(
         elif target == "in_progress":
             activity.actual_start = row.start or activity.actual_start
             activity.actual_finish = None
+            # Trust the extract's own reported forecast finish for this
+            # exact snapshot date, rather than letting Prosota's own CPM
+            # engine recompute one from duration+calendar (2026-09-04, per
+            # Maro: "it needs to be the exact match or Prosota loses
+            # complete credibility"). Found chasing a real per-activity PV
+            # mismatch: Prosota's own duration-to-date math (even after
+            # fixing whole_day_scheduling) still lands roughly 2 days off
+            # P6's own reported finish for an in-progress activity — this
+            # bypasses that reconciliation question entirely by using the
+            # number P6 already computed, the same way actual_finish
+            # already does for a completed one. Nothing recomputes .finish
+            # again after this (no CPM pass runs inside this function), so
+            # it survives into whatever baseline gets captured next.
+            activity.finish = row.finish or activity.finish
             if row.bac is not None and row.bac != 0 and row.earned_value_cost is not None:
                 pct = row.earned_value_cost / row.bac * Decimal(100)
                 activity.pct_complete = min(Decimal(99), max(Decimal(1), pct)).quantize(Decimal("1"))

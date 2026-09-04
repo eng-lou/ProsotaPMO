@@ -9,6 +9,7 @@ from app.models.activity import Activity
 from app.models.period import Period
 from app.models.schedule_period import SchedulePeriod
 from app.models.project import Project
+from app.services.scheduling_cpm import _build_calendar_lookup, elapsed_duration_fraction
 
 
 async def _create_activity(client: AsyncClient, project: Project, period: SchedulePeriod, task_name: str, **overrides) -> dict:
@@ -84,17 +85,32 @@ async def test_activity_evm_mirrors_linked_cost_element(
     element = await _linked_element(client, project, live_period)
     assert element["pct_complete"] == 60
 
-    # Deterministic 50% elapsed fraction: live start/finish span 10 days either
-    # side of today, set at the default calendar's day start (08:00) to match
-    # the actual instant "today" resolves to as a data date (2026-07-03 fix —
-    # data date now compares at full datetime precision, not just calendar
-    # date, so a midnight-anchored start would no longer land on a clean 50%).
-    # Set directly (bypassing the CPM engine) after the pct_complete update
-    # above so nothing recomputes them again afterwards.
+    # Deterministic 50% elapsed fraction: PV is now working-day-prorated, not
+    # calendar-time (2026-09-04, per Maro — exact P6 interoperability, see
+    # elapsed_duration_fraction's own header), so both the activity's own
+    # span and the data date are pinned to fixed dates instead of "today"
+    # ± N days — a calendar-day-relative span's own working-day ratio
+    # depends on which weekday "today" happens to be, which would make this
+    # test flaky. _count_working_days counts BOTH endpoints inclusive, so
+    # 2024-01-01 (Monday) to 2024-01-26 (Friday, 4 full Mon-Fri weeks later)
+    # is exactly 20 working days; 2024-01-12 (also a Friday, 2 weeks in) is
+    # exactly 10 — verified directly against a standalone count, not by
+    # hand, before picking these (a Monday-to-Monday span double-counts one
+    # extra boundary day and isn't a clean multiple of 5). Set directly
+    # (bypassing the CPM engine) after the pct_complete update above so
+    # nothing recomputes them again afterwards.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
-    today = date.today()
-    db_activity.start = datetime.combine(today - timedelta(days=10), time(8, 0))
-    db_activity.finish = datetime.combine(today + timedelta(days=10), time(8, 0))
+    db_activity.start = datetime(2024, 1, 1, 8, 0)
+    db_activity.finish = datetime(2024, 1, 26, 8, 0)
+    db_schedule_period = await db.get(SchedulePeriod, uuid_mod.UUID(activity["schedule_period_id"]))
+    db_schedule_period.start_date = date(2024, 1, 12)
+    # Cost Plan's own PV read (cost_element["pv"] below) uses Cost/Risk/ICD's
+    # own separate Period.start_date, not SchedulePeriod's (two genuinely
+    # independent data-date anchors — see scheduling_cpm.py:data_date_
+    # time_for_period's own header) — both need pinning or the two sides
+    # this test is meant to cross-check would read different data dates.
+    db_live_period = await db.get(Period, live_period.id)
+    db_live_period.start_date = date(2024, 1, 12)
     await db.commit()
     # Same session as the test client (see conftest.py) — without this refresh, the
     # identity-mapped Activity's other attributes (e.g. updated_at) stay expired
@@ -155,13 +171,30 @@ async def test_pv_tracks_period_data_date_not_wall_clock(
     assert float(resp.json()["pv"]) == 0.0  # data date defaults to today == start -> 0% elapsed
 
     db_period = await db.get(SchedulePeriod, live_schedule_period.id)
-    db_period.start_date = today + timedelta(days=5)  # data date moved 5 days forward, e.g. via Reschedule
+    new_data_date = today + timedelta(days=5)
+    db_period.start_date = new_data_date  # data date moved 5 days forward, e.g. via Reschedule
     await db.commit()
     await db.refresh(db_period)
 
+    # Expected PV computed via the real production formula, not a hardcoded
+    # literal — PV is now working-day-prorated (2026-09-04, per Maro — exact
+    # P6 interoperability), so "5 of 10 calendar days elapsed" no longer maps
+    # to a fixed 50% regardless of which weekday "today" (this test's own
+    # anchor) happens to be. What this test actually verifies — that PV
+    # moved because the *period's* data date moved, not real wall-clock time
+    # — doesn't need a hardcoded ratio to prove.
+    await db.refresh(db_activity)
+    lookup = await _build_calendar_lookup(db, project.id)
+    calendar = lookup.resolve(db_activity)
+    expected_fraction = elapsed_duration_fraction(
+        lookup, calendar, db_activity.start, db_activity.finish, datetime.combine(new_data_date, time(8, 0)),
+    )
+    expected_pv = round(10000 * float(expected_fraction), 2)
+
     resp = await client.get(f"/api/v1/activities/{activity['id']}")
     assert resp.status_code == 200
-    assert float(resp.json()["pv"]) == 5000.0  # 5 of 10 days elapsed against the new data date -> 50% of 10000
+    assert float(resp.json()["pv"]) == expected_pv
+    assert expected_pv > 0.0  # moved off the earlier 0.0 — the actual thing under test
 
 
 async def test_schedule_pct_complete_is_independent_of_resources(
@@ -182,11 +215,23 @@ async def test_schedule_pct_complete_is_independent_of_resources(
     await db.commit()
     await db.refresh(db_activity)
 
+    # Expected % computed via the real production formula, not a hardcoded
+    # "3 of 10 days" literal — Schedule % Complete is now working-day-
+    # prorated (2026-09-04, per Maro — exact P6 interoperability), so the
+    # real ratio depends on which weekday "today" (this test's own anchor)
+    # happens to be, same reasoning as test_pv_tracks_period_data_date_not_wall_clock.
+    lookup = await _build_calendar_lookup(db, project.id)
+    calendar = lookup.resolve(db_activity)
+    expected_fraction = elapsed_duration_fraction(
+        lookup, calendar, db_activity.start, db_activity.finish, datetime.combine(today, time(8, 0)),
+    )
+    expected_pct = round(float(expected_fraction) * 100, 2)
+
     resp = await client.get(f"/api/v1/activities/{activity['id']}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["bac"] is None  # no resources — EVM fields stay null
-    assert float(data["schedule_pct_complete"]) == 30.0  # 3 of 10 days elapsed
+    assert float(data["schedule_pct_complete"]) == expected_pct
 
 
 async def test_schedule_pct_complete_is_zero_for_brand_new_same_day_activity(
