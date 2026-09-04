@@ -415,6 +415,64 @@ def test_calendar_worktime_finish_is_inclusive_last_minute():
     assert cal.breaks == [(time(12, 0), time(13, 0))]
 
 
+async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSession, project: Project):
+    """Two real bugs found on a real, plain (no Excel-layering) UI import
+    (2026-09-04, per Maro: "activities that are completed in P6 are showing
+    as still planned in prosota" + "some dates are not accurate see overal
+    finish"):
+
+    1. pct_complete/actual_start/actual_finish were already carried through
+       at import, but nothing ever derived Activity.status from them — every
+       imported row sat at the model's own "planned" default regardless of
+       what the file said.
+    2. An activity still genuinely in progress (real % complete, no
+       ActualFinishDate) had its own reported <FinishDate> discarded —
+       scheduling_cpm.recompute_schedule's preservation branch keeps a
+       progressed activity's .start but still recomputes .finish from
+       duration+calendar, which has no way to reproduce whatever P6's own
+       internal engine used to land on its real number (same class of gap
+       apply_progress_snapshot's own trusted-finish fix already covers for
+       the Excel-extract case — this is the same fix for a plain PMXML
+       import with no Excel layering at all)."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Status Test</Id><DataDate>2011-06-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Foundation Done</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>1</PercentComplete>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2011-01-10T17:00:00</FinishDate>"
+        b"<ActualStartDate>2011-01-01T08:00:00</ActualStartDate><ActualFinishDate>2011-01-10T17:00:00</ActualFinishDate>"
+        b"</Activity>"
+        b"<Activity><ObjectId>2</ObjectId><Id>A2</Id><Name>Groundworks 2</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0.5</PercentComplete>"
+        b"<StartDate>2011-06-01T08:00:00</StartDate><FinishDate>2099-01-01T08:00:00</FinishDate>"
+        b"<ActualStartDate>2011-06-01T08:00:00</ActualStartDate>"
+        b"</Activity>"
+        b"<Activity><ObjectId>3</ObjectId><Id>A3</Id><Name>Not Started Yet</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"</Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == summary.schedule_period_id)
+    )).scalars().all()
+
+    completed = next(a for a in activities if a.task_name == "Foundation Done")
+    assert completed.status == "completed"
+
+    in_progress = next(a for a in activities if a.task_name == "Groundworks 2")
+    assert in_progress.status == "in_progress"
+    # The absurd 2099 date is deliberate — proves this is genuinely trusted
+    # from the file, not coincidentally matching whatever CPM would have
+    # computed from duration+calendar on its own.
+    assert in_progress.finish == datetime(2099, 1, 1, 8, 0)
+
+    not_started = next(a for a in activities if a.task_name == "Not Started Yet")
+    assert not_started.status == "planned"
+
+
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
     """The exact real production scenario found 2026-09-04: the project
     already had Prosota's own lazy-seeded "Standard Calendar" (is_project_

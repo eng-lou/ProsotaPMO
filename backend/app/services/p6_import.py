@@ -27,6 +27,7 @@ from app.services.activity import (
     _activity_role,
     _apply_computed_fields,
     _apply_status_change,
+    _derive_activity_status,
     _next_role_code,
     _recompute_hierarchy,
 )
@@ -366,6 +367,17 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             # 2010 position, identical to actual_start/actual_finish below.
             start=pa.start, finish=pa.finish,
             actual_start=pa.actual_start, actual_finish=pa.actual_finish,
+            # status (2026-09-04, per Maro: "activities that are completed
+            # in P6 are showing as still planned in prosota") — pct_complete/
+            # actual_start/actual_finish were already carried through, but
+            # nothing ever derived the Activity.status column itself from
+            # them at import time, so every imported row sat at the model's
+            # own "planned" default regardless of what the file's real
+            # Status/PercentComplete/ActualStartDate said. Reuses the exact
+            # same derivation ActivityForm's own Status field and
+            # _recompute_hierarchy's WBS rollup already use — never a
+            # second, independently-guessed rule.
+            status=_derive_activity_status(pa.activity_type, pa.pct_complete, None, None, pa.actual_start),
             constraint_type=pa.constraint_type, constraint_date=pa.constraint_date,
             calendar_id=calendar_real_id_by_object_id.get(pa.calendar_object_id) if pa.calendar_object_id else None,
             commentary=pa.commentary,
@@ -500,6 +512,35 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # not once per row.
     await _recompute_hierarchy(db, period.id)
     await scheduling_cpm.recompute_schedule(db, period.id)
+
+    # For an activity still genuinely in progress (real % complete, no
+    # ActualFinishDate yet), recompute_schedule's own preservation branch
+    # keeps its preserved .start but still recomputes .finish from
+    # duration+calendar, discarding this exact file's own reported
+    # <FinishDate>/<PlannedFinishDate> forecast (2026-09-04, per Maro: "some
+    # dates are not accurate see overal finish" — a real, direct import
+    # showed the wrong overall/root Finish because leaf in-progress
+    # activities' own recomputed finishes didn't match P6's). Prosota's own
+    # duration+calendar math has no way to bit-for-bit reproduce whatever
+    # P6's internal engine used to land on that number (same reasoning
+    # apply_progress_snapshot's own trusted-finish fix documents for the
+    # Excel-extract case) — so this trusts the PMXML's own value directly
+    # instead, the same way actual_finish already is for a truly completed
+    # one. Run before the second _recompute_hierarchy below so the WBS/root
+    # rollup reflects the corrected leaf dates, not the discarded ones.
+    for pa in parsed.activities:
+        if pa.finish is None or pa.actual_finish is not None:
+            continue
+        if pa.pct_complete is None or pa.pct_complete <= 0:
+            continue
+        activity_id = activity_real_id_by_object_id.get(pa.object_id)
+        if activity_id is None:
+            continue
+        activity = await db.get(Activity, activity_id)
+        if activity is not None:
+            activity.finish = pa.finish
+    await db.commit()
+
     await _recompute_hierarchy(db, period.id)
     for activity_id in activities_with_assignments:
         await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
