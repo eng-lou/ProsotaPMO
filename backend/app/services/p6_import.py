@@ -36,6 +36,7 @@ from app.services.p6_import_parse import ParsedActivity, ParsedP6Schedule, Parse
 from app.services.scheduling_cpm import _find_cycle
 
 _P6_ACTIVITY_ID_UDF_NAME = "P6 Activity ID"
+_P6_ACTUAL_COST_UDF_NAME = "P6 Actual Cost"
 
 
 @dataclass
@@ -244,6 +245,28 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         )
         db.add(p6_activity_id_udf)
     p6_activity_id_udf_id = p6_activity_id_udf.id
+
+    # P6's own real Actual Cost (2026-09-04, per Maro: "AC is blank...
+    # something very wrong", then, on the fix: "actuals are derived from
+    # the actual cost/resources spent etc. so it all has to align
+    # intelligently... credibility is paramount"). Stashed the same way as
+    # the Activity Id above, for the same reason: a schedule-linked Cost
+    # Element only ever gets created once this variant is promoted to
+    # master (sync_cost_element_from_resources's own is_master gate —
+    # nothing exists yet at import time to write actuals onto). Applied at
+    # promotion time via cost_sync.sync_activity_actuals — the exact same
+    # function Scheduling's own "record Actual Cost against a resourced
+    # activity" feature already uses (see that function's own docstring:
+    # "matching how P6 captures Actual Cost alongside resource
+    # assignments") — not a second, independently-invented write path.
+    p6_actual_cost_udf = existing_udf_by_name.get(_P6_ACTUAL_COST_UDF_NAME)
+    if p6_actual_cost_udf is None:
+        p6_actual_cost_udf = UserDefinedFieldDefinition(
+            id=uuid.uuid4(), project_id=project_id, entity_type="activity",
+            name=_P6_ACTUAL_COST_UDF_NAME, data_type="cost",
+        )
+        db.add(p6_actual_cost_udf)
+    p6_actual_cost_udf_id = p6_actual_cost_udf.id
 
     # --- WBS -> wbs_summary Activities, parent-before-child ---
     wbs_by_object_id: dict[str, ParsedWbs] = {w.object_id: w for w in parsed.wbs_nodes}
@@ -459,6 +482,12 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             db.add(UserDefinedFieldValue(
                 id=uuid.uuid4(), field_definition_id=p6_activity_id_udf_id, record_id=activity_id,
                 value_text=pa.code,
+            ))
+            udf_value_count += 1
+        if pa.actuals is not None:
+            db.add(UserDefinedFieldValue(
+                id=uuid.uuid4(), field_definition_id=p6_actual_cost_udf_id, record_id=activity_id,
+                value_number=pa.actuals,
             ))
             udf_value_count += 1
         for v in pa.udf_values:

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.activity import Activity
 from app.models.calendar import Calendar, CalendarBreak
+from app.models.cost_element import CostElement
 from app.models.organisation import Organisation
 from app.models.project import Project
 from app.models.resource import Resource
@@ -22,6 +23,7 @@ from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user import User
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
+from app.services import schedule_variant as schedule_variant_svc
 from app.services.p6_import import import_pmxml
 from app.services.p6_import_parse import parse_pmxml
 from tests.test_p6_export import _seed_schedule
@@ -485,6 +487,58 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
     milestone = next(a for a in activities if a.task_name == "Overall Finish")
     assert milestone.status == "planned"
     assert milestone.finish == datetime(2098, 6, 15, 10, 40)
+
+
+async def test_actual_cost_applied_via_the_canonical_sync_activity_actuals_path(db: AsyncSession, project: Project):
+    """A third real gap found the same day: AC/CV/CPI/EAC/ETC all stayed
+    blank on a real import despite a fully-costed schedule — the importer
+    captured BAC from resource assignments but had no mechanism for AC at
+    all (2026-09-04, per Maro: "AC is blank... something very wrong").
+
+    P6's own <Activity> carries its own already-rolled-up ActualLaborCost/
+    ActualNonLaborCost (confirmed against a real activity: 49500 + 0,
+    matching the flat P6 Excel report's own Actual Cost column exactly).
+    But the Cost Element these actuals belong on doesn't exist until this
+    variant is promoted to master (sync_cost_element_from_resources's own
+    is_master gate), so p6_import.py stashes them as a "P6 Actual Cost"
+    UDF at import time and promote_variant applies it once the element is
+    actually created — via cost_sync.sync_activity_actuals, the exact same
+    function Scheduling's own "record Actual Cost against a resourced
+    activity" feature already uses (per Maro: "actuals are derived from
+    the actual cost/resources spent etc. so it all has to align
+    intelligently... credibility is paramount" — this is that alignment:
+    the same single write path a human user would go through, not a
+    second, independently-invented one)."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Resource><ObjectId>50</ObjectId><Name>J. Davies</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<Project><ObjectId>1</ObjectId><Id>Actuals Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>A1</Id><Name>Foundation</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>1</PercentComplete>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2011-01-06T17:00:00</FinishDate>"
+        b"<ActualStartDate>2011-01-01T08:00:00</ActualStartDate><ActualFinishDate>2011-01-06T17:00:00</ActualFinishDate>"
+        b"<ActualLaborCost>4950</ActualLaborCost><ActualNonLaborCost>50</ActualNonLaborCost>"
+        b"</Activity>"
+        b"<ResourceAssignment><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>40</PlannedUnits></ResourceAssignment>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    # Not yet promoted — nothing exists to apply actuals onto yet, same gate
+    # sync_cost_element_from_resources itself already enforces.
+    elements_before = (await db.execute(
+        select(CostElement).where(CostElement.project_id == project.id)
+    )).scalars().all()
+    assert elements_before == []
+
+    await schedule_variant_svc.promote_variant(db, summary.schedule_variant_id)
+
+    element = (await db.execute(
+        select(CostElement).where(CostElement.project_id == project.id, CostElement.source == "schedule")
+    )).scalar_one()
+    assert element.actuals == Decimal("5000.00")  # 4950 + 50, exactly P6's own reported total
 
 
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):

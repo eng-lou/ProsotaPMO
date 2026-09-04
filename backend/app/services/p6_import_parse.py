@@ -137,6 +137,18 @@ class ParsedActivity:
     constraint_date: datetime | None
     commentary: str | None
     udf_values: list[ParsedUdfValue]
+    # Real actual cost incurred to date (2026-09-04, per Maro: "AC is
+    # blank... something very wrong" — the importer captured BAC from
+    # resource assignments but had no mechanism for AC at all, so every
+    # cost-side EVM figure that needs it — CV/CPI/EAC/ETC — stayed blank
+    # even on a fully-costed schedule). <Activity>'s own ActualLaborCost +
+    # ActualNonLaborCost is P6's own already-rolled-up per-activity total
+    # (confirmed against a real activity: 49500 + 0, matching the flat P6
+    # Excel report's own Actual Cost column exactly; PlannedLaborCost +
+    # PlannedNonLaborCost = 48000 the same way, matching that same
+    # activity's own BAC) — never re-derived from individual
+    # ResourceAssignment-level actuals, which would double-count.
+    actuals: Decimal | None
 
 
 @dataclass
@@ -344,6 +356,20 @@ def _parse_udf_value(udf_el: ET.Element) -> ParsedUdfValue | None:
     return None
 
 
+def _actuals(el: ET.Element) -> Decimal | None:
+    """An activity's own real actual cost to date — ActualLaborCost +
+    ActualNonLaborCost, both already rolled up to the activity level by P6
+    itself (confirmed against a real activity: 49500 + 0, matching the
+    flat P6 Excel report's own Actual Cost column exactly). None (not 0)
+    when the file has neither field, so a genuinely un-costed activity
+    stays blank rather than showing a fake £0 actual."""
+    labor = _decimal(el, "ActualLaborCost")
+    non_labor = _decimal(el, "ActualNonLaborCost")
+    if labor is None and non_labor is None:
+        return None
+    return (labor or Decimal(0)) + (non_labor or Decimal(0))
+
+
 def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
     type_name = _text(el, "Type") or "Task Dependent"
     activity_type = _ACTIVITY_TYPE_BY_NAME.get(type_name)
@@ -381,6 +407,7 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         pct_complete=(_decimal(el, "PercentComplete") or Decimal(0)) * 100,
         constraint_type=constraint_type, constraint_date=_datetime(el, "PrimaryConstraintDate"),
         commentary=_text(el, "Notes"), udf_values=udf_values,
+        actuals=_actuals(el),
     )
 
 

@@ -17,6 +17,7 @@ from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActiv
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
+from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.schedule_variant import ScheduleVariantCreate, ScheduleVariantUpdate
 from app.services import cost_sync
 from app.services.project import _clone_row
@@ -317,4 +318,34 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
         await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
     if assigned_activity_ids:
         await db.commit()
+
+    # A P6 import's own real Actual Cost (2026-09-04, per Maro: "AC is
+    # blank... something very wrong", then, on fixing it: "actuals are
+    # derived from the actual cost/resources spent etc... credibility is
+    # paramount") — stashed as a "P6 Actual Cost" UDF at import time
+    # (p6_import.py), since the Cost Element these actuals belong on
+    # doesn't exist until *this exact promotion* creates it above. Applied
+    # via cost_sync.sync_activity_actuals — the same function Scheduling's
+    # own "record Actual Cost against a resourced activity" feature
+    # already uses, never a second, independently-invented write path.
+    # Silently a no-op for any variant with no such UDF (every promotion
+    # that isn't a P6 import).
+    actual_cost_udf = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == new_master.project_id,
+            UserDefinedFieldDefinition.entity_type == "activity",
+            UserDefinedFieldDefinition.name == "P6 Actual Cost",
+        )
+    )).scalar_one_or_none()
+    if actual_cost_udf is not None and assigned_activity_ids:
+        stashed_actuals = (await db.execute(
+            select(UserDefinedFieldValue).where(
+                UserDefinedFieldValue.field_definition_id == actual_cost_udf.id,
+                UserDefinedFieldValue.record_id.in_(assigned_activity_ids),
+            )
+        )).scalars().all()
+        for v in stashed_actuals:
+            if v.value_number is not None:
+                await cost_sync.sync_activity_actuals(db, v.record_id, v.value_number)
+
     return new_master, unmatched_codes
