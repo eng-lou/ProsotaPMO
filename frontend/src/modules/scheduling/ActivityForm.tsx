@@ -117,7 +117,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
   task: 'Task',
   start_milestone: 'Start Milestone',
   finish_milestone: 'Finish Milestone',
-  wbs_summary: 'WBS Summary',
+  wbs_summary: 'Work Package',
 }
 
 // Mirrors Scheduling.tsx's own ACTIVITY_STATUS_LABELS (not imported directly

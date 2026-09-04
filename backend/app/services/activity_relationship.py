@@ -90,19 +90,26 @@ async def create_relationship(
             )
     _validate_relationship_type_for_milestone(successor, data.relationship_type)
 
-    # Exact duplicate pair (same ordered predecessor/successor) is also a DB-level
-    # unique constraint (uq_activity_relationship_pair) — checked explicitly first so
-    # it surfaces as a clean 422, not an unhandled IntegrityError.
+    # Exact duplicate (same ordered predecessor/successor AND same relationship
+    # type) is also a DB-level unique constraint (uq_activity_relationship_pair)
+    # — checked explicitly first so it surfaces as a clean 422, not an
+    # unhandled IntegrityError. A second link of a *different* type between the
+    # same pair is allowed (2026-09-04, per Maro — real P6 data can legitimately
+    # constrain the same pair two ways at once, e.g. a Start-to-Start lag AND a
+    # separate Finish-to-Start lag; the CPM engine already iterates every
+    # relationship row for a pair, so this was purely an over-restrictive
+    # schema rule, not an engine limitation).
     existing = await db.execute(
         select(ActivityRelationship).where(
             ActivityRelationship.predecessor_id == data.predecessor_id,
             ActivityRelationship.successor_id == data.successor_id,
+            ActivityRelationship.relationship_type == data.relationship_type,
         )
     )
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=422,
-            detail="A relationship already exists between these two activities",
+            detail=f"A {data.relationship_type} relationship already exists between these two activities",
         )
 
     # Direct reverse of an existing link (checked here, cheaply, before the general

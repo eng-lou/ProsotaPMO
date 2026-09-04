@@ -131,7 +131,7 @@ export function SubProjectsWidget({ activities, subprojects, onCreate, onUpdate,
             activities={eligibleRoots}
             value={rootWbsId}
             onChange={setRootWbsId}
-            placeholder="Select the root WBS summary node…"
+            placeholder="Select the root Work Package…"
           />
           {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
           <div className="flex gap-2 justify-end">

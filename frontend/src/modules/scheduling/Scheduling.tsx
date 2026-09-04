@@ -315,7 +315,7 @@ const BASE_GROUP_OPTIONS = [
 type GroupByField = (typeof BASE_GROUP_OPTIONS)[number]['value'] | `udf:${string}`
 
 const GROUP_TYPE_LABELS: Record<Activity['activity_type'], string> = {
-  task: 'Task', start_milestone: 'Start Milestone', finish_milestone: 'Finish Milestone', wbs_summary: 'WBS Summary',
+  task: 'Task', start_milestone: 'Start Milestone', finish_milestone: 'Finish Milestone', wbs_summary: 'Work Package',
 }
 
 function groupKeyFor(
@@ -3226,12 +3226,12 @@ export function Scheduling() {
           <div className="w-px h-4 bg-gray-200 mx-1" />
           <button
             onClick={handleCollapseAll}
-            title="Collapse every WBS summary"
+            title="Collapse every Work Package"
             className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
           ><CollapseIcon expanded={false} /> Collapse All</button>
           <button
             onClick={handleExpandAll}
-            title="Expand every WBS summary"
+            title="Expand every Work Package"
             className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan px-1.5"
           ><CollapseIcon expanded /> Expand All</button>
           <select

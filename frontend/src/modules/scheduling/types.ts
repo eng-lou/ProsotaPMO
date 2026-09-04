@@ -200,7 +200,7 @@ export interface ActivityCodeHistory {
 }
 
 export const CODE_HISTORY_REASON_LABELS: Record<ActivityCodeHistory['reason'], string> = {
-  promoted_to_wbs: 'Promoted to WBS summary',
+  promoted_to_wbs: 'Promoted to Work Package',
   demoted_to_task: 'Demoted to task',
   wbs_reparented: 'Moved between top-level and nested WBS',
   manual_edit: 'Manually renamed',

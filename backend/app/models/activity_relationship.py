@@ -20,7 +20,19 @@ class ActivityRelationship(Base, TimestampMixin):
 
     __tablename__ = "activity_relationships"
     __table_args__ = (
-        UniqueConstraint("predecessor_id", "successor_id", name="uq_activity_relationship_pair"),
+        # Scoped to relationship_type too (2026-09-04, per Maro — a real P6
+        # import found the same activity pair legitimately linked twice: a
+        # 320h Start-to-Start AND a separate 560h Finish-to-Start. P6 allows
+        # multiple constraint types between the same pair; this used to be
+        # (predecessor_id, successor_id) only, so the second link 500'd on
+        # insert and import silently dropped it. The CPM engine already
+        # iterates every row for a pair (scheduling_cpm.py's
+        # predecessors_of/successors_of are keyed lists, not a single-row
+        # lookup) — this was purely a schema-level restriction, not an
+        # engine assumption.
+        UniqueConstraint(
+            "predecessor_id", "successor_id", "relationship_type", name="uq_activity_relationship_pair"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

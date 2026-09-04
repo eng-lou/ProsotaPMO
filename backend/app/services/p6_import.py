@@ -214,10 +214,14 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     )
     existing_udf_by_name = {d.name: d for d in existing_udf_result.scalars().all()}
     udf_def_real_id_by_object_id: dict[str, uuid.UUID] = {}
+    # A P6 UDF's own SubjectArea (Activity/WBS/Project) doesn't need its own
+    # separate Prosota entity_type (2026-09-04, per Maro: "allow udfs for
+    # all activity types") — Prosota already models both a P6 WBS node and
+    # the P6 Project itself as real Activity rows (wbs_real_id_by_object_id
+    # / root_activity_id below, both activity_type="wbs_summary"), so every
+    # UDF here is created as a plain "activity" one and just gets its values
+    # attached to whichever kind of Activity row P6 says it belongs on.
     for pu in parsed.udf_types:
-        if pu.subject_area != "Activity":
-            skipped.append(f"UDF \"{pu.title}\" applies to {pu.subject_area}, not Activity — skipped (only activity UDFs are supported).")
-            continue
         existing = existing_udf_by_name.get(pu.title)
         if existing is not None:
             udf_def_real_id_by_object_id[pu.object_id] = existing.id
@@ -419,22 +423,28 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     edges: list[tuple[uuid.UUID, uuid.UUID]] = []
     relationship_edges: list[tuple[uuid.UUID, uuid.UUID, ParsedActivity | None]] = []
     # Prosota allows only one relationship row per ordered (predecessor,
-    # successor) pair (uq_activity_relationship_pair) — a real external P6
-    # file can legitimately list the same pair twice (e.g. once from each
-    # side's own Relationship block), which P6 itself tolerates but Prosota's
-    # schema doesn't. First one wins; found importing EC00610 - B1.xml
-    # (2026-07-16), which 500'd on the second insert before this dedupe.
-    seen_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    # successor, relationship_type) triple (uq_activity_relationship_pair) — a
+    # real external P6 file can legitimately list the exact same triple twice
+    # (e.g. once from each side's own Relationship block), which P6 itself
+    # tolerates but Prosota's schema doesn't. First one wins; found importing
+    # EC00610 - B1.xml (2026-07-16), which 500'd on the second insert before
+    # this dedupe. A genuinely *different* type between the same pair (e.g. a
+    # 320h Start-to-Start alongside a separate 560h Finish-to-Start — found
+    # 2026-09-04 re-verifying EC00610.xml against P6's own report) is real P6
+    # data, not a duplicate, and is now allowed through (see
+    # uq_activity_relationship_pair's own migration/model comment).
+    seen_triples: set[tuple[uuid.UUID, uuid.UUID, str]] = set()
     for rel in parsed.relationships:
         predecessor_id = resolve_activity(rel.predecessor_object_id)
         successor_id = resolve_activity(rel.successor_object_id)
         if predecessor_id is None or successor_id is None:
             skipped.append("A relationship referenced an activity that wasn't imported — skipped.")
             continue
-        if (predecessor_id, successor_id) in seen_pairs:
-            skipped.append("Duplicate relationship between the same two activities — skipped (only one link between any pair is kept).")
+        triple = (predecessor_id, successor_id, rel.relationship_type)
+        if triple in seen_triples:
+            skipped.append("Duplicate relationship between the same two activities (same type) — skipped (only one is kept).")
             continue
-        seen_pairs.add((predecessor_id, successor_id))
+        seen_triples.add(triple)
         candidate_edges = edges + [(predecessor_id, successor_id)]
         node_ids = {n for edge in candidate_edges for n in edge}
         if _find_cycle(candidate_edges, node_ids):
@@ -472,8 +482,34 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         activities_with_assignments.add(activity_id)
         assignment_count += 1
 
-    # --- UDF values (activity-scoped only, matching p6_export.py's own scope) ---
+    # --- UDF values ---
     udf_value_count = 0
+    # Project-subject-area values (2026-09-04, per Maro: "allow udfs for all
+    # activity types") — attach to the synthetic project-root Activity, the
+    # same row every top-level WBS branch already nests under.
+    for v in parsed.project_udf_values:
+        definition_id = udf_def_real_id_by_object_id.get(v.udf_type_object_id)
+        if definition_id is None:
+            continue
+        db.add(UserDefinedFieldValue(
+            id=uuid.uuid4(), field_definition_id=definition_id, record_id=root_activity_id,
+            value_text=v.text, value_number=v.number, value_date=v.date_value,
+        ))
+        udf_value_count += 1
+    # WBS-subject-area values, onto each WBS node's own real wbs_summary Activity row.
+    for pw in parsed.wbs_nodes:
+        wbs_activity_id = wbs_real_id_by_object_id.get(pw.object_id)
+        if wbs_activity_id is None:
+            continue
+        for v in pw.udf_values:
+            definition_id = udf_def_real_id_by_object_id.get(v.udf_type_object_id)
+            if definition_id is None:
+                continue
+            db.add(UserDefinedFieldValue(
+                id=uuid.uuid4(), field_definition_id=definition_id, record_id=wbs_activity_id,
+                value_text=v.text, value_number=v.number, value_date=v.date_value,
+            ))
+            udf_value_count += 1
     for pa in parsed.activities:
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:

@@ -62,7 +62,7 @@ function buildItems(style: GanttStyle): { swatch: ReactNode; label: string }[] {
           ))}
         </span>
       ),
-      label: 'WBS summary (shade = nesting level)',
+      label: 'Work Package (shade = nesting level)',
     },
     {
       swatch: <div className="rounded-sm border" style={{ width: 24, height: Math.max(style.baseline_thickness, 4), backgroundColor: withAlpha(style.baseline_color, 0.55), borderColor: style.baseline_color }} />,

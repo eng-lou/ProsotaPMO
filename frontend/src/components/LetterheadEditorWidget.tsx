@@ -424,7 +424,7 @@ export function LetterheadEditorWidget({ letterhead, previewTokens, onSave, onCl
                 className="mt-0.5"
               />
               <span>
-                📊 Include the Gantt legend in the footer (critical/non-critical, progress, milestone, dependency link, WBS summary, baseline)
+                📊 Include the Gantt legend in the footer (critical/non-critical, progress, milestone, dependency link, Work Package, baseline)
               </span>
             </label>
           )}

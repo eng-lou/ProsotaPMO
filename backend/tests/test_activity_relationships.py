@@ -57,13 +57,39 @@ async def test_self_relationship_rejected(client: AsyncClient, project: Project,
     assert resp.status_code == 422
 
 
-async def test_duplicate_pair_rejected(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+async def test_exact_duplicate_rejected(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     a = await _create_activity(client, project, live_schedule_period, "Excavation")
     b = await _create_activity(client, project, live_schedule_period, "Piling")
     resp = await client.post("/api/v1/activity-relationships/", json={
         "predecessor_id": a["id"], "successor_id": b["id"],
     })
     assert resp.status_code == 201
+
+    resp = await client.post("/api/v1/activity-relationships/", json={
+        "predecessor_id": a["id"], "successor_id": b["id"],
+    })
+    assert resp.status_code == 422
+
+
+async def test_different_type_between_same_pair_allowed(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    # Real P6 data can legitimately constrain the same activity pair two
+    # ways at once (2026-09-04, found re-verifying EC00610.xml: a genuine
+    # Start-to-Start lag AND a separate Finish-to-Start lag between the same
+    # two activities) — only an exact same-type duplicate should be
+    # rejected, not any second link to an already-linked pair.
+    a = await _create_activity(client, project, live_schedule_period, "Excavation")
+    b = await _create_activity(client, project, live_schedule_period, "Piling")
+    resp = await client.post("/api/v1/activity-relationships/", json={
+        "predecessor_id": a["id"], "successor_id": b["id"], "relationship_type": "SS",
+    })
+    assert resp.status_code == 201, resp.text
+
+    resp = await client.post("/api/v1/activity-relationships/", json={
+        "predecessor_id": a["id"], "successor_id": b["id"], "relationship_type": "FS",
+    })
+    assert resp.status_code == 201, resp.text
 
     resp = await client.post("/api/v1/activity-relationships/", json={
         "predecessor_id": a["id"], "successor_id": b["id"], "relationship_type": "SS",

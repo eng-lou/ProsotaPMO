@@ -109,6 +109,7 @@ class ParsedWbs:
     name: str
     code: str
     commentary: str | None
+    udf_values: list["ParsedUdfValue"] = field(default_factory=list)
 
 
 @dataclass
@@ -229,6 +230,12 @@ class ParsedP6Schedule:
     assignments: list[ParsedAssignment] = field(default_factory=list)
     udf_types: list[ParsedUdfType] = field(default_factory=list)
     baselines: list[ParsedBaseline] = field(default_factory=list)
+    # A P6 "Project"-subject-area UDF has no WBS/Activity ObjectId of its own
+    # to attach to (2026-09-04, per Maro: "allow udfs for all activity
+    # types" — Prosota already models the P6 <Project> itself as a synthetic
+    # root wbs_summary Activity, see p6_import.py's own root_activity_id, so
+    # these attach there instead of being skipped).
+    project_udf_values: list[ParsedUdfValue] = field(default_factory=list)
     # Human-readable notes on anything the file contained that Prosota has
     # no model for, or a real file's actual values genuinely couldn't be
     # mapped cleanly — surfaced in the import summary rather than silently
@@ -499,11 +506,18 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
             title=_text(udf_type_el, "Title") or "Imported Field", data_type=data_type,
         ))
 
+    # Project-subject-area UDF values (2026-09-04, per Maro: "allow udfs for
+    # all activity types") — live directly under <Project>, not under any
+    # WBS/Activity ObjectId, since P6 itself has exactly one Project per
+    # file. Applied onto p6_import.py's own synthetic root_activity_id.
+    out.project_udf_values = [v for v in (_parse_udf_value(u) for u in project_el.findall(_tag("UDF"))) if v is not None]
+
     for wbs_el in project_el.findall(_tag("WBS")):
+        wbs_udf_values = [v for v in (_parse_udf_value(u) for u in wbs_el.findall(_tag("UDF"))) if v is not None]
         out.wbs_nodes.append(ParsedWbs(
             object_id=_text(wbs_el, "ObjectId") or "", parent_object_id=_text(wbs_el, "ParentObjectId"),
             name=_text(wbs_el, "Name") or "Imported WBS", code=_text(wbs_el, "Code") or "",
-            commentary=_text(wbs_el, "Description"),
+            commentary=_text(wbs_el, "Description"), udf_values=wbs_udf_values,
         ))
 
     for activity_el in project_el.findall(_tag("Activity")):
