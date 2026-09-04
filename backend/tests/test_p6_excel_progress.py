@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.cost_element import CostElement
 from app.models.project import Project
+from app.models.schedule_period import SchedulePeriod
 from app.services import schedule_variant as schedule_variant_svc
 from app.services.p6_excel_progress import ParsedProgressRow, extract_date_from_filename
 from app.services.p6_import import apply_progress_snapshot, import_pmxml
@@ -57,7 +58,9 @@ async def test_apply_progress_snapshot_updates_matched_activity_and_cost_element
         start=datetime(2011, 6, 1, 8, 0), finish=None,
         actual_cost=Decimal("5000"), earned_value_cost=Decimal("4000"), bac=Decimal("8000"),
     )
-    result = await apply_progress_snapshot(db, project.id, summary.schedule_period_id, [row])
+    result = await apply_progress_snapshot(
+        db, project.id, summary.schedule_period_id, [row], as_of_date=date(2011, 6, 1),
+    )
     assert result.matched == 1
     assert result.unmatched == []
     assert result.cost_elements_updated == 1
@@ -71,6 +74,15 @@ async def test_apply_progress_snapshot_updates_matched_activity_and_cost_element
     await db.refresh(element_before)
     assert element_before.actuals == Decimal("5000.00")
     assert element_before.pct_complete == 50
+
+    # The SchedulePeriod's own data-date anchor must advance to match this
+    # snapshot's date — otherwise every PV/SPI figure the Scheduling grid
+    # shows keeps evaluating against the *original* import's DataDate
+    # forever (2026-09-04, per Maro's own real-data catch: "the current
+    # working schedule is based on the October snapshot but the data date
+    # is still 1st May").
+    period = await db.get(SchedulePeriod, summary.schedule_period_id)
+    assert period.start_date == date(2011, 6, 1)
 
 
 async def test_apply_progress_snapshot_reports_unmatched_activity_id(db: AsyncSession, project: Project):

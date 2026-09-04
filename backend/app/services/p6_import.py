@@ -495,6 +495,7 @@ class ProgressUpdateSummary:
 
 async def apply_progress_snapshot(
     db: AsyncSession, project_id: uuid.UUID, schedule_period_id: uuid.UUID, rows: list[ParsedProgressRow],
+    as_of_date: date | None = None,
 ) -> ProgressUpdateSummary:
     """Applies one P6 Excel progress extract onto an already-imported
     schedule's own activities (2026-09-04, per Maro — a series of monthly
@@ -520,7 +521,24 @@ async def apply_progress_snapshot(
     EV/BAC (both already P6-computed), clamped to 1-99: a real cost overrun
     can push EV above BAC, which would otherwise misrepresent a genuinely
     in-progress activity as complete if taken at face value.
+
+    as_of_date advances the SchedulePeriod's own start_date (the anchor
+    scheduling_cpm.data_date_for_period reads for every PV/SPI calc this
+    schedule drives — see compute_schedule_linked_evm's own docstring) to
+    match this extract's date (2026-09-04, per Maro's own real-data catch:
+    "the current working schedule is based on the October snapshot but the
+    data date is still 1st May" — import_pmxml anchors it once at the
+    original import, but nothing advanced it as later snapshots moved
+    progress forward, so PV stayed evaluated against the wrong, stale
+    date). Left unset only for a caller with no real "as of" date to
+    apply — the field is optional so tests exercising just the progress
+    fields aren't forced to fabricate one.
     """
+    if as_of_date is not None:
+        period = await db.get(SchedulePeriod, schedule_period_id)
+        if period is not None:
+            period.start_date = as_of_date
+
     udf_def = (await db.execute(
         select(UserDefinedFieldDefinition).where(
             UserDefinedFieldDefinition.project_id == project_id,
