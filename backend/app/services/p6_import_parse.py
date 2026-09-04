@@ -29,6 +29,32 @@ def _text(el: ET.Element | None, name: str) -> str | None:
     return child.text
 
 
+def _finish_time(el: ET.Element | None, name: str) -> time | None:
+    """A WorkTime <Finish> is P6's own last *inclusive* working minute, not
+    an exclusive boundary — confirmed against a real file: every single
+    <Finish> across all 3 calendars ends in ":59" (11:59/15:59/16:59),
+    against Start times always exactly on the hour, and each calendar's own
+    <HoursPerDay> only comes out to its stated round number once each
+    Finish is read as "+1 minute" (e.g. 08:00-11:59 + 13:00-16:59, read
+    literally, nets 7h58m against a calendar declaring 8 — treating Finish
+    as inclusive gives the intended clean 08:00-12:00 + 13:00-17:00 = 8h
+    exactly). 2026-09-04, found chasing a real BAC/duration discrepancy
+    against P6's own report (Maro: "fix that rounding gap") — this was
+    the actual source, not a genuine rounding artifact: every calendar
+    Prosota imported was silently running ~2 minutes/day short of what P6
+    itself considers a working day, which understated every resource's
+    day-rate conversion and every duration-to-days calculation by the same
+    small amount."""
+    raw = _text(el, name)
+    if raw is None:
+        return None
+    t = time.fromisoformat(raw)
+    total_minutes = t.hour * 60 + t.minute + 1
+    if total_minutes >= 24 * 60:
+        return time(23, 59)  # never actually reached by a real work-day boundary; just a safe clamp
+    return time(total_minutes // 60, total_minutes % 60, t.second)
+
+
 def _decimal(el: ET.Element | None, name: str) -> Decimal | None:
     raw = _text(el, name)
     if raw is None:
@@ -250,7 +276,7 @@ def _parse_calendar(el: ET.Element, skipped: list[str]) -> ParsedCalendar:
             if p6_day is None:
                 continue
             segments = [
-                (time.fromisoformat(_text(wt, "Start") or "00:00:00"), time.fromisoformat(_text(wt, "Finish") or "00:00:00"))
+                (time.fromisoformat(_text(wt, "Start") or "00:00:00"), _finish_time(wt, "Finish") or time(0, 0))
                 for wt in day_el.findall(_tag("WorkTime"))
                 if _text(wt, "Start") is not None
             ]
@@ -283,7 +309,7 @@ def _parse_calendar(el: ET.Element, skipped: list[str]) -> ParsedCalendar:
             exceptions.append(ParsedCalendarException(
                 start_date=d.date(), end_date=d.date(), is_working=is_working,
                 start_time=time.fromisoformat(_text(wt, "Start") or "00:00:00") if is_working else None,
-                end_time=time.fromisoformat(_text(wt, "Finish") or "00:00:00") if is_working else None,
+                end_time=(_finish_time(wt, "Finish") or time(0, 0)) if is_working else None,
             ))
 
     return ParsedCalendar(

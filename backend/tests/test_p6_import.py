@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 import pytest
@@ -383,6 +383,36 @@ async def test_progressed_activity_keeps_real_historical_position_not_reschedule
     # the file's own 2011-05-01 DataDate.
     assert groundworks.start == datetime(2010, 1, 4, 8, 0)
     assert groundworks.finish == datetime(2010, 6, 1, 17, 0)
+
+
+def test_calendar_worktime_finish_is_inclusive_last_minute():
+    """A real P6 export's every single WorkTime <Finish> ends in ":59"
+    (11:59/15:59/16:59), never a clean hour boundary, while every <Start>
+    sits exactly on the hour — and every one of its 3 calendars declares
+    <HoursPerDay>8</HoursPerDay> but their literal Start-to-Finish windows
+    only net 7h58m if Finish is read as an exclusive boundary. Reading
+    Finish as inclusive of that minute (08:00-11:59 + 13:00-16:59 becomes
+    08:00-12:00 + 13:00-17:00 = 8h exactly) is what actually matches the
+    calendar's own declared day length (2026-09-04, per Maro: "fix that
+    rounding gap" — this was silently understating every resource's
+    day-rate conversion and every duration-to-days calculation by the same
+    ~2 minutes/day)."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Calendar><ObjectId>1</ObjectId><Name>Trades</Name><HoursPerDay>8</HoursPerDay>"
+        b"<StandardWorkWeek>"
+        b"<StandardWorkHours><DayOfWeek>Monday</DayOfWeek>"
+        b"<WorkTime><Start>08:00:00</Start><Finish>11:59:00</Finish></WorkTime>"
+        b"<WorkTime><Start>13:00:00</Start><Finish>16:59:00</Finish></WorkTime>"
+        b"</StandardWorkHours>"
+        b"</StandardWorkWeek></Calendar>"
+        b"<Project><Id>Calendar Test</Id></Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    cal = parsed.calendars[0]
+    assert cal.day_start == time(8, 0)
+    assert cal.day_end == time(17, 0)
+    assert cal.breaks == [(time(12, 0), time(13, 0))]
 
 
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
