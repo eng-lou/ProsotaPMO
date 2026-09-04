@@ -112,8 +112,9 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
               <button
                 onClick={handleSwitchToImported}
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800"
+                title="Promotes this import to the project's master schedule — Cost Plan lines get created from its resource assignments only once it's the master."
               >
-                Switch to Imported Schedule
+                Promote to Master Schedule
               </button>
             </div>
           </>

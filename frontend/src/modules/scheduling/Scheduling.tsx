@@ -3294,8 +3294,26 @@ export function Scheduling() {
           projectId={selectedProject.id}
           onClose={() => setP6ImportOpen(false)}
           onImported={async v => {
-            await refetchVariants()
-            await selectVariant(v)
+            // "Switch to Imported Schedule" used to only change which variant
+            // the UI was *looking at* (selectVariant) — never actually
+            // promoted it, so it silently stayed a non-master review copy
+            // forever and its resource assignments never got real Cost Plan
+            // lines (sync_cost_element_from_resources only ever runs for the
+            // master variant) — every BAC/PV/EV/AC column showing blank was
+            // the correct, by-design behaviour for a non-master variant, not
+            // a bug in the numbers themselves (2026-09-04, per Maro: "the
+            // evm fields are completely blank... something is very wrong").
+            // Promoting here is what the button's own label always implied.
+            if (!(await confirmWithDontAsk(
+              'scheduling.p6-import-promote',
+              `Make "${v.name}" the master schedule? Risk/Cost/ICD linked to activities in the current master will be re-linked onto this import's matching activity codes — anything with no matching code will be unlinked and reported.`,
+            ))) {
+              await refetchVariants()
+              await selectVariant(v)
+              setP6ImportOpen(false)
+              return
+            }
+            await promoteVariant(v.id)
             setP6ImportOpen(false)
           }}
         />
