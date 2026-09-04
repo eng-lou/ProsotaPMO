@@ -364,9 +364,29 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
                 UserDefinedFieldValue.record_id.in_(assigned_activity_ids),
             )
         )).scalars().all()
-        for v in stashed_actuals:
-            if v.value_number is not None:
-                await cost_sync.sync_activity_actuals(db, v.record_id, v.value_number)
+        actuals_by_activity_id = {v.record_id: v.value_number for v in stashed_actuals if v.value_number is not None}
+        if actuals_by_activity_id:
+            # Batched (2026-09-04, per Maro: "promoting seems to be taking
+            # just as long" — the loop below used to call
+            # sync_activity_actuals once per activity, each doing its own
+            # lookup query *and* its own commit; a real 148-activity import
+            # meant well over a hundred individual commits back-to-back,
+            # roughly on top of the sync_cost_elements_from_resources_bulk
+            # cost this was already meant to have fixed). One query for
+            # every linked element that needs an actuals figure, one
+            # Python-side assignment loop, one commit — same effect as the
+            # single-activity function, just not through it, since that
+            # function's own per-call commit is exactly what made looping
+            # it expensive.
+            elements = (await db.execute(
+                select(CostElement).where(
+                    CostElement.linked_activity_id.in_(actuals_by_activity_id.keys()),
+                    CostElement.source == "schedule",
+                )
+            )).scalars().all()
+            for element in elements:
+                element.actuals = actuals_by_activity_id[element.linked_activity_id]
+            await db.commit()
 
     # A P6 import's own real DataDate, propagated onto the (deliberately
     # separate — see this function's own docstring) Cost Period's start_date

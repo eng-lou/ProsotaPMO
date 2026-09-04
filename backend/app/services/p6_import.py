@@ -28,7 +28,7 @@ from app.services.activity import (
     _apply_computed_fields,
     _apply_status_change,
     _derive_activity_status,
-    _next_role_code,
+    _next_role_codes_batch,
     _recompute_hierarchy,
 )
 from app.services.p6_excel_progress import ParsedProgressRow
@@ -277,6 +277,27 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     wbs_real_id_by_object_id: dict[str, uuid.UUID] = {}
     wbs_sort_counter = 0
 
+    # Per-role code cache (2026-09-04, per Maro: "took more than a minute
+    # to... get to this part" — a real 148-activity/~20-WBS import was
+    # calling _next_role_code once per row, each its own aggregate query;
+    # ~170 sequential round trips just for numbering, before any actual
+    # insert work). _next_role_codes_batch's own first call per role
+    # (P/W/T/M — at most 4 across an entire import) finds the true starting
+    # number from the DB; every following code for that same role is a
+    # plain Python increment. Safe against interleaving with the WBS
+    # recursion below (which needs a P/W code the instant each node
+    # resolves, not in one final batch) since each role's own cache only
+    # needs to be seeded once, however many are drawn from it after.
+    next_seq_by_role: dict[str, int] = {}
+
+    async def next_role_code_cached(role: str) -> str:
+        if role not in next_seq_by_role:
+            first = (await _next_role_codes_batch(db, project_id, role, 1))[0]
+            next_seq_by_role[role] = int(first.split("-")[1])
+            return first
+        next_seq_by_role[role] += 1
+        return f"{role}-{next_seq_by_role[role]:04d}"
+
     # One root Activity representing the true P6 <Project> itself (role P) —
     # in real P6, the Project always sits *above* the WBS tree as its own
     # distinct object (confirmed against a real file: <Project> and <WBS>
@@ -289,7 +310,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # "Garage 1" etc. each showing as their own P-000N when they should all
     # be W under one Saratoga-level P).
     root_activity_id = uuid.uuid4()
-    root_code = await _next_role_code(db, project_id, "P")
+    root_code = await next_role_code_cached("P")
     root_activity = Activity(
         id=root_activity_id, code=root_code, wbs_role="P", project_id=project_id,
         schedule_variant_id=variant.id, schedule_period_id=period.id,
@@ -324,7 +345,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         # promotion to wbs_summary happens in the final _recompute_hierarchy
         # pass below once every child is actually in place, not set here.
         role = _activity_role("task", parent_real_id)
-        code = await _next_role_code(db, project_id, role)
+        code = await next_role_code_cached(role)
         activity_id = uuid.uuid4()
         activity = Activity(
             id=activity_id, code=code, wbs_role=role, project_id=project_id,
@@ -359,7 +380,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         if parent_real_id is None:
             parent_real_id = root_activity_id
         role = _activity_role(pa.activity_type, parent_real_id)
-        code = await _next_role_code(db, project_id, role)
+        code = await next_role_code_cached(role)
         activity_id = uuid.uuid4()
         # ActivityBase's own milestones_have_zero_duration validator 500s the
         # *response* serialization (not the import itself, which has no such
@@ -463,7 +484,6 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
 
     # --- Resource assignments ---
     assignment_count = 0
-    activities_with_assignments: set[uuid.UUID] = set()
     for asg in parsed.assignments:
         activity_id = activity_real_id_by_object_id.get(asg.activity_object_id)
         resource_id = resource_real_id_by_object_id.get(asg.resource_object_id)
@@ -479,7 +499,6 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             utilisation = (asg.planned_units / duration_hours * Decimal(100)) if duration_hours else Decimal(100)
             utilisation = min(Decimal(100), max(Decimal("0.01"), utilisation))
             db.add(ResourceAssignment(id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id, utilisation_pct=utilisation))
-        activities_with_assignments.add(activity_id)
         assignment_count += 1
 
     # --- UDF values ---
@@ -623,6 +642,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     #
     # Run before the second _recompute_hierarchy below so the WBS/root
     # rollup reflects the corrected leaf dates, not the discarded ones.
+    trusted_finish_by_activity_id: dict[uuid.UUID, datetime] = {}
     for pa in parsed.activities:
         if pa.finish is None or pa.actual_finish is not None:
             continue
@@ -632,15 +652,29 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:
             continue
-        activity = await db.get(Activity, activity_id)
-        if activity is not None:
-            activity.finish = pa.finish
+        trusted_finish_by_activity_id[activity_id] = pa.finish
+    if trusted_finish_by_activity_id:
+        # Batched (2026-09-04, per Maro: a real 148-activity import took over
+        # a minute — this loop used to do one db.get(Activity, ...) per
+        # qualifying row). One query for every activity this pass touches,
+        # not one round trip each.
+        to_correct = (await db.execute(
+            select(Activity).where(Activity.id.in_(trusted_finish_by_activity_id.keys()))
+        )).scalars().all()
+        for activity in to_correct:
+            activity.finish = trusted_finish_by_activity_id[activity.id]
     await db.commit()
 
     await _recompute_hierarchy(db, period.id)
-    for activity_id in activities_with_assignments:
-        await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
-    await db.commit()
+    # No Cost Element sync here (2026-09-04, per Maro — same "over a
+    # minute" report): this variant is always freshly created and never
+    # master (see this function's own header), and
+    # sync_cost_element_from_resources's own is_master gate makes every one
+    # of these calls a guaranteed no-op — up to ~300 round trips
+    # (db.get(Activity) + db.get(ScheduleVariant) each) accomplishing
+    # nothing. promote_variant's own batched
+    # sync_cost_elements_from_resources_bulk is what actually creates these
+    # once this variant is promoted to master.
 
     return P6ImportSummary(
         schedule_variant_id=variant.id, schedule_period_id=period.id, variant_name=variant.name,
