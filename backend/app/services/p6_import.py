@@ -6,7 +6,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
@@ -18,11 +18,12 @@ from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.activity import ActivityStatus, is_milestone_type
 from app.schemas.schedule_variant import ScheduleVariantCreate
 from app.services import calendar as calendar_service
-from app.services import cost_sync, schedule_variant, scheduling_cpm
+from app.services import cost_sync, schedule_baseline, schedule_variant, scheduling_cpm
 from app.services.activity import (
     _activity_role,
     _apply_computed_fields,
@@ -91,6 +92,32 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     variant = await schedule_variant.create_variant(
         db, ScheduleVariantCreate(project_id=project_id, name=variant_name, variant_type="P6 Import")
     )
+
+    # Clean up the auto-seeded "Working Schedule" (2026-09-04, per Maro: "if
+    # i import from P6, i expect only one schedule in the working schedule
+    # unless i manually start the import process again") — every brand new
+    # project lazily gets one live variant the moment its Scheduling page is
+    # first opened (schedule_variant.py's own bootstrap_variant, so there's
+    # somewhere to put a first hand-created activity), regardless of whether
+    # the user ever actually uses it. Importing into a project where that
+    # seed is still genuinely untouched (zero activities — never renamed,
+    # never given a real schedule) removes it, so the project is left with
+    # just the one real schedule instead of an empty leftover cluttering the
+    # picker. Never touches a variant with any real activity in it, master
+    # or not — only a literally-empty one qualifies.
+    other_variants = (await db.execute(
+        select(ScheduleVariant).where(
+            ScheduleVariant.project_id == project_id, ScheduleVariant.id != variant.id,
+        )
+    )).scalars().all()
+    for other in other_variants:
+        activity_count = (await db.execute(
+            select(func.count()).select_from(Activity).where(Activity.schedule_variant_id == other.id)
+        )).scalar()
+        if activity_count == 0 and not other.is_master:
+            await db.delete(other)
+    await db.commit()
+
     period_result = await db.execute(
         select(SchedulePeriod).where(SchedulePeriod.schedule_variant_id == variant.id, SchedulePeriod.freeze_status == "live")
     )
@@ -539,15 +566,13 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # --- Baselines: this file's own <BaselineProject> snapshots, matched
     # back to the activities just imported by P6's stable Activity Id
     # (2026-09-03, per Maro: "i also exported it with two baselines, i need
-    # those to be captured as well"). Deliberately NOT assigned (is_active
-    # stays False) — same "capture vs. assign are two separate deliberate
-    # actions" rule app/services/schedule_baseline.py's own capture_baseline
-    # already follows; the user picks which one (if any) to assign
-    # afterwards via the normal Baseline Manager UI. WBS/summary rows have
-    # no P6 Activity Id of their own to match on, so only leaf activities
-    # get a snapshot — same scope p6_export.py's own UDF capture already
-    # keeps to (activity-level only).
+    # those to be captured as well"). WBS/summary rows have no P6 Activity Id
+    # of their own to match on, so only leaf activities get a snapshot —
+    # same scope p6_export.py's own UDF capture already keeps to
+    # (activity-level only).
     baseline_count = 0
+    real_baseline_id_by_object_id: dict[str, uuid.UUID] = {}
+    imported_baseline_ids: list[uuid.UUID] = []
     for pb in parsed.baselines:
         baseline = ScheduleBaseline(
             id=uuid.uuid4(), schedule_period_id=period.id,
@@ -569,8 +594,26 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             skipped.append(f"Baseline \"{pb.name}\" had no activities matching this import — skipped.")
         else:
             baseline_count += 1
+            imported_baseline_ids.append(baseline.id)
+            if pb.object_id:
+                real_baseline_id_by_object_id[pb.object_id] = baseline.id
 
     await db.commit()
+
+    # Assign whichever baseline P6 itself has assigned (2026-09-04, per Maro:
+    # "if there are multiple in P6, its clear which baseline is assigned...
+    # it should also be assigned on import") — matched via
+    # CurrentBaselineProjectObjectId when the file says so explicitly, else
+    # the sole baseline when there's only one (equally unambiguous). Two or
+    # more baselines with no explicit "current" marker are left unassigned
+    # rather than guessed, same as everywhere else in this import.
+    assign_baseline_id: uuid.UUID | None = None
+    if parsed.current_baseline_object_id is not None:
+        assign_baseline_id = real_baseline_id_by_object_id.get(parsed.current_baseline_object_id)
+    elif len(imported_baseline_ids) == 1:
+        assign_baseline_id = imported_baseline_ids[0]
+    if assign_baseline_id is not None:
+        await schedule_baseline.assign_baseline(db, assign_baseline_id)
 
     # Same two-pass shape bulk_generate.py uses for its own batch insert —
     # hierarchy -> CPM -> hierarchy again, run once for the whole import,

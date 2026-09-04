@@ -215,6 +215,13 @@ class ParsedBaseline:
     # just the live project's name with a suffix, far less recognisable.
     name: str
     data_date: date | None
+    # The <BaselineProject>'s own ObjectId (2026-09-04, per Maro: "if there
+    # are multiple in P6, its clear which baseline is assigned... it should
+    # also be assigned on import") — matched against <Project>'s own
+    # CurrentBaselineProjectObjectId to know which captured baseline (if
+    # any) P6 itself currently has assigned, so import can assign the same
+    # one rather than leaving every capture unassigned.
+    object_id: str | None = None
     activities: list[ParsedBaselineActivity] = field(default_factory=list)
 
 
@@ -236,6 +243,13 @@ class ParsedP6Schedule:
     # root wbs_summary Activity, see p6_import.py's own root_activity_id, so
     # these attach there instead of being skipped).
     project_udf_values: list[ParsedUdfValue] = field(default_factory=list)
+    # P6's own signal for which captured baseline (if any) is currently
+    # assigned as this project's baseline (2026-09-04, per Maro — see
+    # ParsedBaseline.object_id's own header) — <Project>'s
+    # CurrentBaselineProjectObjectId, matched against each ParsedBaseline's
+    # own object_id. None when P6 itself has nothing assigned (or the field
+    # is simply empty in this file).
+    current_baseline_object_id: str | None = None
     # Human-readable notes on anything the file contained that Prosota has
     # no model for, or a real file's actual values genuinely couldn't be
     # mapped cleanly — surfaced in the import summary rather than silently
@@ -557,6 +571,7 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
     # export could in principle carry baselines for projects other than the
     # one being imported here).
     project_object_id = _text(project_el, "ObjectId")
+    out.current_baseline_object_id = _text(project_el, "CurrentBaselineProjectObjectId")
     for bp_el in root.findall(_tag("BaselineProject")):
         if _text(bp_el, "OriginalProjectObjectId") != project_object_id:
             continue
@@ -564,6 +579,7 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
         baseline = ParsedBaseline(
             name=_text(bp_el, "BaselineTypeName") or _text(bp_el, "Name") or "Imported Baseline",
             data_date=bp_data_date.date() if bp_data_date else None,
+            object_id=_text(bp_el, "ObjectId"),
         )
         for bact_el in bp_el.findall(_tag("Activity")):
             p6_activity_id = _text(bact_el, "Id")
