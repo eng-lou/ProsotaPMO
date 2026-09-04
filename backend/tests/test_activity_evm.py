@@ -319,7 +319,20 @@ async def test_wbs_summary_rolls_up_evm_from_children_not_averaged(
     wrong_averaged_cpi = round((0.5 + 10 / 9) / 2, 4)
     assert abs(float(parent["cpi"]) - correct_cpi) < 0.001
     assert abs(float(parent["cpi"]) - wrong_averaged_cpi) > 0.05
-    assert float(parent["eac"]) == round((100.0 + 10000.0) / correct_cpi, 2)
+
+    # EAC is the one rollup figure that IS additive (2026-09-04, per Maro's
+    # own P6 comparison — real P6 data confirmed P6 itself sums each work
+    # package's own EAC to roll up, rather than reapplying one blended
+    # portfolio-wide CPI to the whole remaining budget the way this test
+    # used to assert): the parent's own eac must equal the sum of its
+    # children's own eac, not (total bac) / (aggregate cpi) — those two are
+    # only the same number when every child happens to share the exact same
+    # CPI, which the 0.5-vs-10/9 setup above specifically avoids.
+    child_a_row = rows[child_a["id"]]
+    child_b_row = rows[child_b["id"]]
+    assert float(parent["eac"]) == round(float(child_a_row["eac"]) + float(child_b_row["eac"]), 2)
+    wrong_blended_eac = round((100.0 + 10000.0) / correct_cpi, 2)
+    assert abs(float(parent["eac"]) - wrong_blended_eac) > 0.1
 
 
 async def test_wbs_summary_with_no_costed_children_stays_null(

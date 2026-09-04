@@ -127,15 +127,35 @@ def _sum_if_any(values: list[Decimal | None]) -> Decimal | None:
 
 def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | None, list[Activity]]) -> None:
     """Sums each WBS summary's own BAC/AC/PV/EV from its direct children,
-    then re-derives CV/SV/CPI/SPI/EAC/ETC from those summed totals via
+    then re-derives CV/SV/CPI/SPI from those summed totals via
     rollup_evm_from_totals (app/services/cost_element.py — see that
     function's own header for why summing is correct for BAC/AC/PV/EV but
-    every other EVM figure has to be *recomputed*, never summed or averaged
-    directly). 2026-07-15, per Maro: "rollup the bac and eac and etc" — a
-    WBS summary/root activity never has its own linked Cost Element (only
-    leaf task activities get resourced by Generate Schedule or manual
-    assignment), so _attach_evm_fields above always left every wbs_summary
-    row blank; this fills them in from what's actually underneath.
+    a *ratio* like CPI/SPI has to be recomputed fresh, never summed or
+    averaged directly). 2026-07-15, per Maro: "rollup the bac and eac and
+    etc" — a WBS summary/root activity never has its own linked Cost
+    Element (only leaf task activities get resourced by Generate Schedule
+    or manual assignment), so _attach_evm_fields above always left every
+    wbs_summary row blank; this fills them in from what's actually
+    underneath.
+
+    EAC/ETC are the one exception to "recompute from the aggregate,
+    never sum": unlike CPI (a ratio, wrong to average), EAC is itself
+    already a dollar *forecast* — each activity's own EAC is genuinely
+    additive, the same way BAC/AC/PV/EV are, and that's what a real
+    rolled-up cost-at-completion actually means (PMBOK: the total
+    project EAC is the sum of every work package's own EAC). Recomputing
+    EAC as (summed BAC)/(aggregate CPI) instead — this function's own
+    original approach — blends every activity's individual cost
+    performance into one portfolio-wide ratio before applying it to the
+    whole remaining budget, which is a different (and less accurate)
+    number than the real remaining-cost forecast whenever performance
+    varies activity to activity, exactly as it does on a real schedule.
+    Confirmed against a real P6 file (2026-09-04, per Maro's own P6
+    export vs Prosota comparison): summing each activity's own EAC landed
+    within the same already-disclosed £73 BAC-rounding residual of P6's
+    own reported root EAC (£6,124,384 vs £6,124,457), while the
+    aggregate-BAC/aggregate-CPI approach was off by ~£177,876 — P6 itself
+    sums leaf EACs to roll up, it doesn't recompute from a blended ratio.
 
     `ordered` must already be in the parent-before-children DFS order
     list_activities produces (_dfs_order) — walked here in *reverse*, which
@@ -151,7 +171,19 @@ def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | N
         ac = _sum_if_any([k.ac for k in kids])
         pv = _sum_if_any([k.pv for k in kids])
         ev = _sum_if_any([k.ev for k in kids])
-        for field, value in rollup_evm_from_totals(bac, ac, pv, ev).items():
+        rolled = rollup_evm_from_totals(bac, ac, pv, ev)
+        # A leaf with no actuals yet deliberately leaves its own eac blank
+        # (same "don't fake a number" rule _apply_computed's own `forecast`
+        # field already follows for Cost Plan — see that field's header) —
+        # falls back to that leaf's own bac here for the same reason
+        # `forecast` does, so a not-yet-started activity's budget still
+        # counts toward the rollup instead of silently vanishing from it
+        # (it's already counted in the summed bac above; excluding it here
+        # too would understate the rolled-up EAC for exactly the same
+        # subtree that's still fully budgeted).
+        rolled["eac"] = _sum_if_any([k.eac if k.eac is not None else k.bac for k in kids])
+        rolled["etc"] = _sum_if_any([k.etc if k.etc is not None else k.bac for k in kids])
+        for field, value in rolled.items():
             setattr(a, field, value)
 
 
