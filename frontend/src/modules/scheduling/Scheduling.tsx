@@ -2960,12 +2960,21 @@ export function Scheduling() {
           </button>
           <button
             onClick={() => setScheduleVariantWidgetOpen(o => !o)}
-            title="More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ..."
+            title={
+              activeVariant && !activeVariant.is_master
+                ? `"${activeVariant.name}" is NOT the master schedule — Risk/Cost/ICD and Cost Plan data are linked to the master instead, so BAC/PV/EV/AC etc. will show blank here. Click to switch.`
+                : 'More than one schedule per project — Working Schedule, Recovery Schedule, scenarios, ...'
+            }
             className={`text-xs px-3 py-1.5 rounded-md font-medium border ${
               scheduleVariantWidgetOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
             }`}
           >
             🗂️ {activeVariant ? activeVariant.name : 'Schedules'}
+            {activeVariant && !activeVariant.is_master && (
+              <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 rounded px-1 py-0.5">
+                Not Master
+              </span>
+            )}
           </button>
           <button
             onClick={() => setCalendarWidgetOpen(o => !o)}
