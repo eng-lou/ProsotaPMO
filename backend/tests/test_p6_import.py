@@ -345,6 +345,46 @@ async def test_import_root_dates_udf_and_baseline(db: AsyncSession, project: Pro
     assert snap.duration_hours == Decimal("8")
 
 
+def test_default_calendar_from_project_activity_default_not_per_calendar_isdefault():
+    """A real P6 file routinely writes <IsDefault>0</IsDefault> on every
+    single <Calendar> (confirmed against a real export) — the project's
+    real default comes from <Project>'s own ActivityDefaultCalendarObjectId
+    instead (2026-09-04, per Maro: "you still use the default prosota
+    calendar when you should be using everything from the imported
+    dataset"). Two calendars, neither self-marked default; the project
+    points at the second one."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Calendar><ObjectId>1</ObjectId><Name>Corporate</Name><IsDefault>0</IsDefault></Calendar>"
+        b"<Calendar><ObjectId>2</ObjectId><Name>Trades</Name><IsDefault>0</IsDefault></Calendar>"
+        b"<Project><Id>Cal Test</Id><ActivityDefaultCalendarObjectId>2</ActivityDefaultCalendarObjectId>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    by_id = {c.object_id: c for c in parsed.calendars}
+    assert by_id["1"].is_default is False
+    assert by_id["2"].is_default is True
+
+
+def test_wbs_summary_activity_type_imports_as_task_not_skipped():
+    """P6's "WBS Summary" ACTIVITY type (a real umbrella/roll-up task, see
+    this module's own _ACTIVITY_TYPE_BY_NAME header for why it's a
+    completely different concept from Prosota's activity_type=="wbs_summary")
+    used to fall through the unrecognised-type branch and get flagged in
+    `skipped` (2026-09-04, per Maro's own screenshot of P6's Activity Type
+    dropdown, pointing out this exact confusion)."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>WBS Summary Test</Id>"
+        b'<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Curbing</Name><Type>WBS Summary</Type>'
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete></Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    assert parsed.skipped == []
+    assert parsed.activities[0].activity_type == "task"
+
+
 async def test_p6_import_404_for_unknown_project(client: AsyncClient):
     if not _R2_CONFIGURED:
         pytest.skip("R2 credentials not configured in this environment")

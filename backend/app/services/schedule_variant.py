@@ -18,6 +18,7 @@ from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
 from app.schemas.schedule_variant import ScheduleVariantCreate, ScheduleVariantUpdate
+from app.services import cost_sync
 from app.services.project import _clone_row
 
 
@@ -294,4 +295,26 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
     new_master.is_master = True
     await db.commit()
     await db.refresh(new_master)
+
+    # sync_cost_element_from_resources's own is_master gate (see
+    # cost_sync.py) means a variant's resource assignments never create
+    # real Cost Plan lines while it's still non-master — deliberate, so a
+    # reviewable schedule (a P6 import, a what-if variant) never budgets
+    # against work that might get discarded. But nothing ever went back and
+    # created those elements once a variant actually *becomes* master
+    # (2026-09-04, found while wiring the PV/EV/AC trend chart up against a
+    # real P6 import: promoted, 462 resource assignments, 0 cost elements —
+    # only a prior master's *existing* elements get re-linked above, never
+    # a brand-new master's own never-synced ones). Runs for every resource-
+    # assigned activity, not just newly-linked ones — idempotent either way
+    # (element exists and correct -> no-op write), and simpler than trying
+    # to work out which ones are actually new.
+    assigned_activity_ids = (await db.execute(
+        select(ResourceAssignment.activity_id).join(Activity, ResourceAssignment.activity_id == Activity.id)
+        .where(Activity.schedule_variant_id == new_master.id).distinct()
+    )).scalars().all()
+    for activity_id in assigned_activity_ids:
+        await cost_sync.sync_cost_element_from_resources(db, activity_id, commit=False)
+    if assigned_activity_ids:
+        await db.commit()
     return new_master, unmatched_codes

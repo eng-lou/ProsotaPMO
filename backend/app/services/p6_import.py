@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -12,16 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
+from app.models.cost_element import CostElement
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
-from app.schemas.activity import is_milestone_type
+from app.schemas.activity import ActivityStatus, is_milestone_type
 from app.schemas.schedule_variant import ScheduleVariantCreate
 from app.services import cost_sync, schedule_variant, scheduling_cpm
-from app.services.activity import _activity_role, _apply_computed_fields, _next_role_code, _recompute_hierarchy
+from app.services.activity import (
+    _activity_role,
+    _apply_computed_fields,
+    _apply_status_change,
+    _next_role_code,
+    _recompute_hierarchy,
+)
+from app.services.p6_excel_progress import ParsedProgressRow
 from app.services.p6_import_parse import ParsedActivity, ParsedP6Schedule, ParsedResource, ParsedWbs
 from app.services.scheduling_cpm import _find_cycle
 
@@ -454,3 +462,106 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         relationship_count=relationship_count, assignment_count=assignment_count, udf_value_count=udf_value_count,
         baseline_count=baseline_count, skipped=skipped,
     )
+
+
+@dataclass
+class ProgressUpdateSummary:
+    matched: int = 0
+    unmatched: list[str] = field(default_factory=list)
+    cost_elements_updated: int = 0
+
+
+async def apply_progress_snapshot(
+    db: AsyncSession, project_id: uuid.UUID, schedule_period_id: uuid.UUID, rows: list[ParsedProgressRow],
+) -> ProgressUpdateSummary:
+    """Applies one P6 Excel progress extract onto an already-imported
+    schedule's own activities (2026-09-04, per Maro — a series of monthly
+    P6 Excel exports, each simulating progress a month further along, meant
+    to be layered onto a schedule already brought in via import_pmxml above
+    and captured as a chronological run of baselines so the PV/EV/AC Trend
+    chart has real data). NOT a fresh import — a targeted update of
+    status/actual dates/% complete on existing rows, matched by the "P6
+    Activity ID" UDF value import_pmxml already captures per activity, plus
+    each matched activity's own linked (source="schedule") Cost Element's
+    actual cost. Doesn't touch duration/relationships/calendar, so no CPM
+    recompute is needed here — only progress moves, never the plan.
+
+    Status -> Prosota's own 4-state machine (_apply_status_change, the
+    single authoritative place status/pct_complete/actual dates get derived
+    together — same function ActivityForm's own Status field already goes
+    through) drives the reset semantics (clearing suspend_date/resume_date
+    etc.), then this overwrites pct_complete/actual_start/actual_finish
+    with the real historical values P6 already computed for this exact
+    date, rather than leaving _apply_status_change's own "now"-based
+    defaults. In Progress has no direct "% Complete" column in this report
+    (unlike a full PMXML export's own <PercentComplete>) — approximated as
+    EV/BAC (both already P6-computed), clamped to 1-99: a real cost overrun
+    can push EV above BAC, which would otherwise misrepresent a genuinely
+    in-progress activity as complete if taken at face value.
+    """
+    udf_def = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == project_id,
+            UserDefinedFieldDefinition.entity_type == "activity",
+            UserDefinedFieldDefinition.name == _P6_ACTIVITY_ID_UDF_NAME,
+        )
+    )).scalar_one_or_none()
+    if udf_def is None:
+        raise HTTPException(
+            status_code=422,
+            detail="This project has no \"P6 Activity ID\" UDF yet — import a PMXML file into it first.",
+        )
+
+    udf_values = (await db.execute(
+        select(UserDefinedFieldValue).where(UserDefinedFieldValue.field_definition_id == udf_def.id)
+    )).scalars().all()
+    activity_id_by_p6_id: dict[str, uuid.UUID] = {v.value_text: v.record_id for v in udf_values if v.value_text}
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == schedule_period_id)
+    )).scalars().all()
+    activity_by_id = {a.id: a for a in activities}
+
+    elements = (await db.execute(
+        select(CostElement).where(
+            CostElement.linked_activity_id.in_(activity_by_id.keys()), CostElement.source == "schedule",
+        )
+    )).scalars().all()
+    element_by_activity_id = {e.linked_activity_id: e for e in elements}
+
+    _STATUS_BY_P6_TEXT: dict[str, ActivityStatus] = {
+        "Not Started": "planned", "In Progress": "in_progress", "Completed": "completed",
+    }
+
+    summary = ProgressUpdateSummary()
+    now = datetime.now()
+    for row in rows:
+        activity_id = activity_id_by_p6_id.get(row.activity_id)
+        activity = activity_by_id.get(activity_id) if activity_id is not None else None
+        if activity is None:
+            summary.unmatched.append(row.activity_id)
+            continue
+        summary.matched += 1
+
+        target = _STATUS_BY_P6_TEXT.get(row.status, "planned")
+        _apply_status_change(activity, target, now)
+        if target == "completed":
+            activity.actual_start = row.start or activity.actual_start
+            activity.actual_finish = row.finish or activity.actual_finish
+        elif target == "in_progress":
+            activity.actual_start = row.start or activity.actual_start
+            activity.actual_finish = None
+            if row.bac is not None and row.bac != 0 and row.earned_value_cost is not None:
+                pct = row.earned_value_cost / row.bac * Decimal(100)
+                activity.pct_complete = min(Decimal(99), max(Decimal(1), pct)).quantize(Decimal("1"))
+        _apply_computed_fields(activity)
+
+        element = element_by_activity_id.get(activity.id)
+        if element is not None and row.actual_cost is not None:
+            element.actuals = row.actual_cost
+            if activity.pct_complete is not None:
+                element.pct_complete = int(activity.pct_complete)
+            summary.cost_elements_updated += 1
+
+    await db.commit()
+    return summary

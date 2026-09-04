@@ -209,9 +209,23 @@ _DAY_NAME_TO_P6_DAY = {
 # <PrimaryConstraintType> value not in these maps falls back to a sane
 # default and gets a note in `skipped` rather than raising — a real external
 # P6 file (unlike our own round-tripped export) can use activity types this
-# app has no equivalent for at all (Level of Effort, WBS Summary bars, ...).
+# app has no equivalent for at all.
+#
+# P6's own "WBS Summary" here is an ACTIVITY type (Activity/Type ==
+# "WBS Summary") — a real leaf Activity row that behaves like an umbrella/
+# roll-up task, entirely distinct from a structural <WBS> element (2026-09-04,
+# per Maro: "in P6 wbs summary is just an umbrella like task... In our own
+# platform its like an actual wbs, P6 has wbs and wbs summary separate, one
+# is a wbs node and the other is summary task"). Confusingly, Prosota's OWN
+# activity_type == "wbs_summary" means something closer to P6's plain <WBS>
+# node (a structural row auto-promoted because it has children) — a
+# different, unrelated concept from this one despite the shared name. There
+# is no Prosota row type that behaves like P6's roll-up-bar activity, so
+# (same as Level of Effort above) it maps to a plain task — better than the
+# old fallback, which treated an unrecognised "WBS Summary" *type name* as
+# genuinely unsupported and flagged every one of them in `skipped`.
 _ACTIVITY_TYPE_BY_NAME = {
-    "Task Dependent": "task", "Resource Dependent": "task", "Level of Effort": "task",
+    "Task Dependent": "task", "Resource Dependent": "task", "Level of Effort": "task", "WBS Summary": "task",
     "Start Milestone": "start_milestone", "Finish Milestone": "finish_milestone",
 }
 _RELATIONSHIP_TYPE_BY_NAME = {
@@ -368,6 +382,24 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
 
     for cal_el in root.findall(_tag("Calendar")):
         out.calendars.append(_parse_calendar(cal_el, skipped))
+
+    # A real P6 file routinely writes <IsDefault>0</IsDefault> on every
+    # single <Calendar> (confirmed against a real export — none ever set to
+    # 1), so is_default off that field alone left every imported calendar
+    # non-default and p6_import.py's own "first created calendar becomes
+    # default" fallback picked whichever happened to be listed first in the
+    # file — right by coincidence for a file where that's also the one
+    # every activity actually uses, wrong in general (2026-09-04, per Maro:
+    # "you still use the default prosota calendar when you should be using
+    # everything from the imported dataset"). <Project>'s own
+    # ActivityDefaultCalendarObjectId is P6's real authoritative signal for
+    # this — every activity's own CalendarObjectId in this file matched it
+    # exactly.
+    default_calendar_object_id = _text(project_el, "ActivityDefaultCalendarObjectId")
+    if default_calendar_object_id is not None:
+        for c in out.calendars:
+            if c.object_id == default_calendar_object_id:
+                c.is_default = True
 
     rates_by_resource: dict[str, Decimal] = {}
     for rate_el in root.findall(_tag("ResourceRate")):

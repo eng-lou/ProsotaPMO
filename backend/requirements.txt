@@ -59,3 +59,10 @@ fal-client==1.0.1
 # kept as a separate, clearly-labeled option alongside fal.ai rather than
 # replacing it.
 google-genai==2.21.0
+# P6 Excel progress extracts (2026-09-04, per Maro — a series of monthly
+# "Export to Excel" snapshots from P6, used to layer real historical
+# progress onto an already-PMXML-imported schedule so the PV/EV/AC Trend
+# chart has real baseline-over-time data to show). Small (~250KB, no heavy
+# transitive deps beyond et-xmlfile) — well within the same 500MB Vercel
+# cap this file's own header already discusses.
+openpyxl==3.1.5

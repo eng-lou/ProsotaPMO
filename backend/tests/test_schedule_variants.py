@@ -214,6 +214,49 @@ async def test_promoting_the_current_master_is_a_noop(client: AsyncClient, proje
     assert data["unmatched_codes"] == []
 
 
+async def test_promote_creates_cost_elements_for_never_synced_master(
+    client: AsyncClient, project: Project, live_period: Period
+):
+    """A non-master variant's resource assignments never create real Cost
+    Plan lines (sync_cost_element_from_resources's own is_master gate) —
+    correct while it's still under review, but nothing ever created them
+    retroactively once such a variant actually becomes master (2026-09-04,
+    found wiring up the PV/EV/AC trend chart against a real P6 import: 462
+    resource assignments promoted to master, 0 cost elements). Unlike
+    test_promote_relinks_cost_element_and_record_link_by_code above, there's
+    no old master at all here — this is a project's first-ever schedule
+    going live, the exact P6-import-then-promote shape."""
+    variant = (await client.post("/api/v1/schedule-variants/", json={
+        "project_id": str(project.id), "name": "Imported: Test Project",
+    })).json()
+    period = (await client.get(
+        "/api/v1/schedule-periods/", params={"schedule_variant_id": variant["id"]}
+    )).json()[0]
+    activity = await _create_activity(client, project, period, "Piling", duration_hours=40)
+
+    resource = (await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "J. Davies", "unit": "day", "rate": "45",
+    })).json()
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+    cost_elements_before = (await client.get(
+        "/api/v1/cost-elements/", params={"project_id": str(project.id), "period_id": str(live_period.id)}
+    )).json()
+    assert cost_elements_before == []
+
+    resp = await client.post(f"/api/v1/schedule-variants/{variant['id']}/promote")
+    assert resp.status_code == 200, resp.text
+
+    cost_elements_after = (await client.get(
+        "/api/v1/cost-elements/", params={"project_id": str(project.id), "period_id": str(live_period.id)}
+    )).json()
+    linked = next((e for e in cost_elements_after if e["source"] == "schedule"), None)
+    assert linked is not None
+    assert linked["linked_activity_id"] == activity["id"]
+    assert float(linked["budget"]) > 0
+
+
 async def test_promote_relinks_cost_element_and_record_link_by_code(
     client: AsyncClient, db: AsyncSession, project: Project, live_period: Period
 ):
