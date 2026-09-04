@@ -92,15 +92,22 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
         calendar = lookup.resolve(a)
-        fraction = elapsed_duration_fraction(lookup, calendar, a.start, a.finish, data_date)
-        # "Schedule % Complete" (renamed from duration_pct_complete, 2026-09-03,
-        # per Maro: "rename Duration % to Schedule %" — this is what it actually
-        # represents, a time-elapsed-vs-data-date calculation, not a comment on
-        # the activity's own duration) — how far along its own current schedule
-        # this activity should be, distinct from the manually-assessed
-        # pct_complete (Physical % Complete) that drives EV. The direct
-        # transparency aid Maro asked for: exactly the input PV below is
-        # prorated from.
+        fraction = elapsed_duration_fraction(
+            lookup, calendar, a.start, a.finish, data_date,
+            a.duration_pct_complete, a.duration_pct_complete_date,
+        )
+        # "Schedule % Complete" (this field itself was internally called
+        # duration_pct_complete before a 2026-09-03 rename, per Maro:
+        # "rename Duration % to Schedule %" — unrelated to, and not to be
+        # confused with, the real Activity.duration_pct_complete column
+        # added 2026-09-04 above; that one is P6's own distinct Duration %
+        # Complete concept, imported verbatim, not Prosota's own calendar
+        # calculation this field represents) — how far along its own
+        # current schedule this activity should be, distinct from the
+        # manually-assessed pct_complete (Physical % Complete) that drives
+        # EV. The direct transparency aid Maro asked for: exactly the input
+        # PV below is prorated from (P6's own Duration % Complete when
+        # valid for today, else this calendar-based calculation).
         a.schedule_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
 
         element = elements_by_activity.get(a.id)
@@ -108,7 +115,10 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             for field in _EVM_FIELDS:
                 setattr(a, field, None)
             continue
-        evm = compute_schedule_linked_evm(element, a.start, a.finish, data_date, lookup, calendar)
+        evm = compute_schedule_linked_evm(
+            element, a.start, a.finish, data_date, lookup, calendar,
+            a.duration_pct_complete, a.duration_pct_complete_date,
+        )
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
 

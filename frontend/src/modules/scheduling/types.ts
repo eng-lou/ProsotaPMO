@@ -132,6 +132,15 @@ export interface Activity {
   // until the activity is scheduled. See backend
   // app/services/activity.py:_attach_evm_fields.
   schedule_pct_complete: string | null
+  // Duration % Complete — a real, distinct P6 concept (2026-09-04, per Maro:
+  // "duration % complete is different from schedule % complete... both and
+  // more exist in P6"), imported directly from P6's own
+  // <DurationPercentComplete> (its internal resource-loaded
+  // RemainingDuration/AtCompletionDuration bookkeeping) — NOT the same
+  // thing as schedule_pct_complete above (Prosota's own purely
+  // calendar-based calculation), even though the two are closely related.
+  // 0-100. Null for any hand-created (non-P6-imported) activity.
+  duration_pct_complete: string | null
   // EVM — sourced from this activity's linked "schedule" Cost Element (Resources
   // module); the same figures Cost Plan shows for that line. Null until the
   // activity has a resourced cost line. PV is prorated against this activity's
@@ -515,7 +524,7 @@ export type FilterFieldKey =
   | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
   | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
   | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'sub_total_float_hours' | 'sub_is_critical'
-  | 'pct_complete' | 'schedule_pct_complete'
+  | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete'
   | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
 export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
@@ -620,6 +629,7 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'sub_is_critical', label: 'Sub Critical', type: 'boolean', operators: BOOLEAN_OPERATORS },
   { key: 'pct_complete', label: '% Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'schedule_pct_complete', label: 'Schedule % Complete', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'duration_pct_complete', label: 'Duration % Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'bac', label: 'BAC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'ac', label: 'AC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'pv', label: 'PV', type: 'number', operators: NUMBER_OPERATORS },

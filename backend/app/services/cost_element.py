@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -158,10 +158,11 @@ async def _project_gfa(db: AsyncSession, project_id: uuid.UUID) -> Decimal | Non
 
 async def _linked_activity_dates(
     db: AsyncSession, elements: list[CostElement]
-) -> dict[uuid.UUID, tuple[datetime | None, datetime | None, uuid.UUID | None]]:
+) -> dict[uuid.UUID, tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None, date | None]]:
     """Live (current, CPM-computed) start/finish (+ the activity's own
     calendar_id, since elapsed_duration_fraction now needs one — see its
-    own header) for every schedule-sourced element's linked activity, in
+    own header — and its own duration_pct_complete, since PV needs
+    that too) for every schedule-sourced element's linked activity, in
     one batched query — the input Planned Value needs. Deliberately the
     LIVE start/finish, not bl_start/bl_finish: per Maro's confirmed
     correction (P6 domain expertise), PV tracks the data date against the
@@ -178,9 +179,18 @@ async def _linked_activity_dates(
     if not activity_ids:
         return {}
     result = await db.execute(
-        select(Activity.id, Activity.start, Activity.finish, Activity.calendar_id).where(Activity.id.in_(activity_ids))
+        select(
+            Activity.id, Activity.start, Activity.finish, Activity.calendar_id,
+            Activity.duration_pct_complete, Activity.duration_pct_complete_date,
+        ).where(Activity.id.in_(activity_ids))
     )
-    return {row.id: (row.start, row.finish, row.calendar_id) for row in result.all()}
+    return {
+        row.id: (
+            row.start, row.finish, row.calendar_id,
+            row.duration_pct_complete, row.duration_pct_complete_date,
+        )
+        for row in result.all()
+    }
 
 
 async def _period_data_dates(db: AsyncSession, period_ids: set[uuid.UUID]) -> dict[uuid.UUID, datetime]:
@@ -205,6 +215,8 @@ def _schedule_evm(
     data_date: datetime,
     lookup: "_CalendarLookup",
     calendar: Calendar,
+    duration_pct_complete: Decimal | None = None,
+    duration_pct_complete_date: date | None = None,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """Planned Value (Rita Mulcahy Ch.9: "as of today, the estimated value of work
     planned to be done") via working-day proration across the activity's own
@@ -219,7 +231,10 @@ def _schedule_evm(
     EV/SV/SPI follow directly from PV once it exists. Returns (pv, ev, sv, spi)
     — any of which can be None if the inputs aren't there yet (no bac, the
     activity isn't scheduled yet, no progress assessed)."""
-    fraction = elapsed_duration_fraction(lookup, calendar, start, finish, data_date)
+    fraction = elapsed_duration_fraction(
+        lookup, calendar, start, finish, data_date,
+        duration_pct_complete, duration_pct_complete_date,
+    )
     if bac is None or fraction is None:
         return None, None, None, None
     bac = Decimal(str(bac))
@@ -270,7 +285,8 @@ def rollup_evm_from_totals(
 
 def compute_schedule_linked_evm(
     element: CostElement, start: datetime | None, finish: datetime | None, data_date: datetime,
-    lookup: "_CalendarLookup", calendar: Calendar,
+    lookup: "_CalendarLookup", calendar: Calendar, duration_pct_complete: Decimal | None = None,
+    duration_pct_complete_date: date | None = None,
 ) -> dict[str, Decimal | None]:
     """AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC for a single schedule-linked cost
     element — used by app/services/activity.py to surface these as Scheduling
@@ -290,7 +306,10 @@ def compute_schedule_linked_evm(
     bac = element.bl_budget if element.bl_budget is not None else element.budget
     bac = Decimal(str(bac)) if bac is not None else None
     ac = Decimal(str(element.actuals)) if element.actuals is not None else None
-    pv, ev, sv, spi = _schedule_evm(bac, element.pct_complete, start, finish, data_date, lookup, calendar)
+    pv, ev, sv, spi = _schedule_evm(
+        bac, element.pct_complete, start, finish, data_date, lookup, calendar,
+        duration_pct_complete, duration_pct_complete_date,
+    )
     cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
     return {
         "bac": bac, "ac": ac, "pv": pv, "ev": ev,
@@ -304,7 +323,7 @@ def _apply_computed(
     sub_forecast: Decimal,
     sub_actuals: Decimal,
     gfa_m2: Decimal | None,
-    activity_dates: tuple[datetime | None, datetime | None, uuid.UUID | None] | None = None,
+    activity_dates: tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None, date | None] | None = None,
     data_date: datetime | None = None,
     lookup: "_CalendarLookup | None" = None,
 ) -> CostElementResponse:
@@ -353,7 +372,7 @@ def _apply_computed(
         activity_calendar = lookup.resolve_calendar_id(activity_dates[2])
         data.pv, data.ev, data.sv, data.spi = _schedule_evm(
             bac, element.pct_complete, activity_dates[0], activity_dates[1], data_date or datetime.now(),
-            lookup, activity_calendar,
+            lookup, activity_calendar, activity_dates[3], activity_dates[4],
         )
 
     # Drift since the last approved baseline — null (not a misleadingly precise

@@ -150,6 +150,16 @@ class ParsedActivity:
     # activity's own BAC) — never re-derived from individual
     # ResourceAssignment-level actuals, which would double-count.
     actuals: Decimal | None
+    # P6's own already-computed "Schedule % Complete" (2026-09-04, per Maro
+    # — real P6 comparison found this diverges meaningfully from a pure
+    # calendar-date recompute for most in-progress activities, since it
+    # reflects P6's own resource-loaded RemainingDuration/
+    # AtCompletionDuration engine, not something recoverable from dates
+    # alone — see Activity.duration_pct_complete's own docstring).
+    # None (not 0) when the file has no such field, so an activity with no
+    # real signal falls back to Prosota's own calendar-based computation
+    # rather than being pinned at a fake 0%.
+    duration_pct_complete: Decimal | None
 
 
 @dataclass
@@ -429,6 +439,7 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         constraint_type=constraint_type, constraint_date=_datetime(el, "PrimaryConstraintDate"),
         commentary=_text(el, "Notes"), udf_values=udf_values,
         actuals=_actuals(el),
+        duration_pct_complete=_decimal(el, "DurationPercentComplete"),
     )
 
 

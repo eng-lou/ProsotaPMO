@@ -125,6 +125,35 @@ class Activity(Base, TimestampMixin):
     # precision, not this summary figure.
     variance_days: Mapped[int | None] = mapped_column(Integer)
     pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    # Duration % Complete — a real, distinct P6 concept in its own right
+    # (2026-09-04, per Maro's own domain correction: "duration % complete is
+    # different from schedule % complete. both and more exist in P6" — this
+    # is NOT a hidden override of Prosota's existing Schedule % Complete
+    # transparency field, which stays a separate, purely calendar-based "how
+    # far along should this be by now" calculation). P6's own value reflects
+    # its internal resource-loaded RemainingDuration/AtCompletionDuration
+    # bookkeeping, not something reproducible from start/finish/calendar
+    # math alone — the same "P6's internal engine can't be bit-for-bit
+    # reproduced" limitation already documented for the .finish-trusting
+    # import correction (found via a real P6 comparison: P6's own raw
+    # <DurationPercentComplete> diverged from Prosota's own calendar
+    # recompute by 1-3 percentage points on 4 of 5 real in-progress
+    # activities checked, driving a real ~£861 PV gap). Imported directly
+    # from that field, pinned to the file's own DataDate in
+    # duration_pct_complete_date below — PV proration prefers this over
+    # Prosota's own calendar-based Schedule % Complete calculation
+    # (elapsed_duration_fraction, scheduling_cpm.py) whenever it's still
+    # valid for the schedule's current live data date, since it's the more
+    # P6-accurate of the two; the instant the data date moves on (Reschedule,
+    # a later progress snapshot, anything not itself re-importing a fresher
+    # P6 value) this stops applying on its own, with no separate
+    # invalidation code needed anywhere — a value with no such expiry would
+    # silently go stale forever the first time the schedule moved past the
+    # date it was captured for. None for every hand-created Prosota
+    # activity, which always computes PV from live start/finish/calendar,
+    # same as before this existed.
+    duration_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(9, 8))
+    duration_pct_complete_date: Mapped[date | None] = mapped_column(Date)
     # Renamed from total_float/free_float (Integer, whole working days) — Phase 10
     # makes float a genuinely fractional, hour-precision quantity (e.g. "4.5 hours of
     # float", not just whole days), so the rename makes the unit change impossible to

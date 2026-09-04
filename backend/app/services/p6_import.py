@@ -429,6 +429,24 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             constraint_type=pa.constraint_type, constraint_date=pa.constraint_date,
             calendar_id=calendar_real_id_by_object_id.get(pa.calendar_object_id) if pa.calendar_object_id else None,
             commentary=pa.commentary,
+            # P6's own real, distinct Duration % Complete (2026-09-04, per
+            # Maro: "duration % complete is different from schedule %
+            # complete... both and more exist in P6") — scaled *100 to
+            # match Prosota's own 0-100 convention every other
+            # percent-complete field already uses (pct_complete above,
+            # schedule_pct_complete), same as <PercentComplete>'s own *100
+            # a few lines up. Also trusted directly for PV (same "P6's
+            # internal engine can't be bit-for-bit reproduced" reasoning as
+            # the finish-trusting correction below — real P6 comparison
+            # found a pure calendar recompute diverges from this for most
+            # in-progress activities), pinned to this file's own DataDate —
+            # see Activity.duration_pct_complete's own docstring for why
+            # it's safe to import unconditionally: the moment the live data
+            # date moves past this one, it stops applying to PV on its own.
+            duration_pct_complete=(
+                pa.duration_pct_complete * 100 if pa.duration_pct_complete is not None else None
+            ),
+            duration_pct_complete_date=parsed.data_date if pa.duration_pct_complete is not None else None,
         )
         activity_sort_counter += 1
         _apply_computed_fields(activity)

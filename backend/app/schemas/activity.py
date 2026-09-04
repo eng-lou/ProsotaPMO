@@ -333,6 +333,18 @@ class ActivityResponse(ActivityBase):
     # app/services/activity.py:_attach_evm_fields). Null until the activity
     # is scheduled (no live start/finish yet).
     schedule_pct_complete: Decimal | None = None
+    # Duration % Complete — a real, distinct P6 concept (2026-09-04, per
+    # Maro's own domain correction: "duration % complete is different from
+    # schedule % complete. both and more exist in P6"), imported directly
+    # from P6's own <DurationPercentComplete> — its internal, resource-
+    # loaded RemainingDuration/AtCompletionDuration bookkeeping, which is
+    # NOT the same thing as schedule_pct_complete above (Prosota's own
+    # purely calendar-based "how far along should this be by now"
+    # calculation) even though the two are closely related and often close
+    # in value. 0-100, matching every other percent-complete field in this
+    # app. Null for any hand-created (non-P6-imported) activity — there's
+    # no equivalent Prosota concept to derive it from.
+    duration_pct_complete: Decimal | None = None
     # EVM — sourced from this activity's linked "schedule" Cost Element (Resources
     # module), the same figures Cost Plan already shows for that line, never a
     # second independently-derived set. Null until the activity has a resourced
