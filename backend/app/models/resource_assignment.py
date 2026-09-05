@@ -44,4 +44,13 @@ class ResourceAssignment(Base, TimestampMixin):
     # conceivably serve a different role on a different assignment.
     role: Mapped[str | None] = mapped_column(String(255))
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    utilisation_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    # Numeric(9, 6), not (5, 2) — a P6 import derives this from the file's own
+    # exact planned_units/duration_hours ratio (p6_import.py), which is
+    # essentially never a round 2dp percentage (e.g. 840/1416 hours is
+    # 59.322033...%, not 59.32%). Rounding to 2dp here fed straight into real
+    # money once duration_days x utilisation_pct/100 x rate multiplied it back
+    # out — a ~£3 BAC error on one activity alone (2026-09-05, per Maro:
+    # "why are they different" comparing a Prosota BAC to P6's own report).
+    # Same "don't round an intermediate that feeds real money" lesson as
+    # resource_costing.py's own _exact_duration_days, just a different field.
+    utilisation_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))

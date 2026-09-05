@@ -18,6 +18,7 @@ from app.models.cost_element import CostElement
 from app.models.organisation import Organisation
 from app.models.project import Project
 from app.models.resource import Resource
+from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
@@ -26,6 +27,7 @@ from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefine
 from app.services import schedule_variant as schedule_variant_svc
 from app.services.p6_import import import_pmxml
 from app.services.p6_import_parse import parse_pmxml
+from app.services.resource_costing import compute_assignment_budget
 from tests.test_p6_export import _seed_schedule
 
 # Real, un-modified P6 reference files Maro supplied outside the repo (see
@@ -595,6 +597,52 @@ async def test_actual_cost_applied_via_the_canonical_sync_activity_actuals_path(
         select(CostElement).where(CostElement.project_id == project.id, CostElement.source == "schedule")
     )).scalar_one()
     assert element.actuals == Decimal("5000.00")  # 4950 + 50, exactly P6's own reported total
+
+
+async def test_imported_assignment_utilisation_reproduces_the_files_own_bac_exactly(db: AsyncSession, project: Project):
+    """Real production BAC mismatch (2026-09-05, per Maro: comparing a
+    Prosota BAC to P6's own report, "why are they different") — a genuine
+    P6 export's own EC2080 "Pool & Deck": 1416h activity, one labour
+    assignment of 840 hours at £105/hr (£88,200 flat, PlannedCost in the raw
+    file). 840/1416 is 59.322033...%, not a round 2dp percentage — the old
+    Numeric(5,2) utilisation_pct column rounded it to 59.32%, which multiplied
+    back out through duration_days x utilisation_pct/100 x rate as
+    £88,196.98, a real ~£3 miss on one activity alone. utilisation_pct is now
+    Numeric(9,6) so the round trip reproduces the file's own BAC exactly."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Resource><ObjectId>50</ObjectId><Name>Pool Installation Subcontractor</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<ResourceRate><ResourceObjectId>50</ResourceObjectId><PricePerUnit>105</PricePerUnit></ResourceRate>"
+        b"<Project><ObjectId>1</ObjectId><Id>BAC Precision Test</Id><DataDate>2012-06-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>EC2080</Id><Name>Pool &amp; Deck</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>1416</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2012-06-28T10:40:00</StartDate><FinishDate>2013-03-11T10:40:00</FinishDate>"
+        b"</Activity>"
+        b"<ResourceAssignment><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>840</PlannedUnits></ResourceAssignment>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    await import_pmxml(db, project.id, parsed)
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Pool & Deck")
+    )).scalar_one()
+    assignment = (await db.execute(
+        select(ResourceAssignment).where(ResourceAssignment.activity_id == activity.id)
+    )).scalar_one()
+    resource = await db.get(Resource, assignment.resource_id)
+
+    exact_utilisation = Decimal(840) / Decimal(1416) * Decimal(100)
+    assert abs(assignment.utilisation_pct - exact_utilisation) < Decimal("0.0001")
+
+    budget = compute_assignment_budget(resource, activity, assignment, Decimal(8))
+    assert budget == Decimal("88200.00")
+    old_rounded_budget = (
+        Decimal(str(activity.duration_hours)) / Decimal(8) * Decimal("59.32") / Decimal(100) * resource.rate
+    ).quantize(Decimal("0.01"))
+    assert old_rounded_budget == Decimal("88196.98")  # what Numeric(5,2) used to produce
+    assert budget != old_rounded_budget
 
 
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
