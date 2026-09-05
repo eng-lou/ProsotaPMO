@@ -506,6 +506,56 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
     assert milestone.finish == datetime(2011, 8, 15, 10, 40)
 
 
+async def test_schedule_pct_complete_uses_actual_over_at_completion_not_duration_pct(
+    db: AsyncSession, project: Project,
+):
+    """Real PV/Remaining-Duration mismatch (2026-09-05, per Maro: "Fab &
+    Delivery" — Prosota showed Schedule % Complete 92.8% and Remaining
+    Duration 16.2 days; P6's own report showed 92.35% and 6 days). Traced to
+    two separate bugs sharing one root cause — Prosota's own
+    remaining_duration_hours/schedule-%-driving-PV both used naive,
+    Physical-%-based formulas instead of P6's own real, resource-loaded
+    figures already sitting in the file:
+
+    1. <DurationPercentComplete> (92.85% here) was being used as PV's own
+       override, but it's genuinely a DIFFERENT ratio from what P6 itself
+       reports as "Schedule % Complete" (92.35%) — the real one is
+       ActualDuration / AtCompletionDuration (624 / 675.4667h = 92.38%,
+       matching P6 far more closely).
+    2. remaining_duration_hours was duration_hours x (1 - pct_complete/100)
+       — P6's own <RemainingDuration> (51.4667h ≈ 6.4d, matching P6's "6")
+       is a real, independently-tracked figure, not a naive Physical-%
+       recompute."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Schedule Pct Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Fab &amp; Delivery</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>720</PlannedDuration><PercentComplete>0.82</PercentComplete>"
+        b"<ActualDuration>624</ActualDuration><AtCompletionDuration>675.466666666666</AtCompletionDuration>"
+        b"<RemainingDuration>51.4666666666667</RemainingDuration>"
+        b"<DurationPercentComplete>0.928518518518519</DurationPercentComplete>"
+        b"<StartDate>2011-01-12T08:00:00</StartDate><FinishDate>2011-05-10T11:28:00</FinishDate>"
+        b"<ActualStartDate>2011-01-12T08:00:00</ActualStartDate>"
+        b"</Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    await import_pmxml(db, project.id, parsed)
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Fab & Delivery")
+    )).scalar_one()
+
+    # Duration % Complete stays exactly what the file said — its own real,
+    # distinct P6 concept, unaffected by this fix.
+    assert activity.duration_pct_complete == Decimal("92.85185185")
+    # The NEW field that actually drives PV — a different, correct ratio.
+    assert abs(activity.schedule_pct_complete_override - Decimal("92.38")) < Decimal("0.01")
+    # Remaining Duration now trusted from the file directly (≈6.43 days),
+    # not the old naive 720h x (1 - 82%) = 129.6h ≈ 16.2 days.
+    assert abs(activity.remaining_duration_hours - Decimal("51.47")) < Decimal("0.01")
+
+
 async def test_pinned_predecessor_finish_propagates_to_its_own_successor(db: AsyncSession, project: Project):
     """The real cascade bug this whole pinning mechanism exists to fix
     (2026-09-05, per Maro, tracing an exact P6-vs-Prosota mismatch by hand):

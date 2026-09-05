@@ -140,20 +140,28 @@ class Activity(Base, TimestampMixin):
     # recompute by 1-3 percentage points on 4 of 5 real in-progress
     # activities checked, driving a real ~£861 PV gap). Imported directly
     # from that field, pinned to the file's own DataDate in
-    # duration_pct_complete_date below — PV proration prefers this over
-    # Prosota's own calendar-based Schedule % Complete calculation
-    # (elapsed_duration_fraction, scheduling_cpm.py) whenever it's still
-    # valid for the schedule's current live data date, since it's the more
-    # P6-accurate of the two; the instant the data date moves on (Reschedule,
-    # a later progress snapshot, anything not itself re-importing a fresher
-    # P6 value) this stops applying on its own, with no separate
-    # invalidation code needed anywhere — a value with no such expiry would
-    # silently go stale forever the first time the schedule moved past the
-    # date it was captured for. None for every hand-created Prosota
-    # activity, which always computes PV from live start/finish/calendar,
-    # same as before this existed.
+    # duration_pct_complete_date below. Display-only, purely for parity —
+    # see schedule_pct_complete_override below for the field that actually
+    # drives PV (2026-09-05, per Maro: a further real comparison found this
+    # field is genuinely NOT the same number P6 itself reports as "Schedule
+    # % Complete" — using it as PV's own override, as this comment
+    # originally described, was itself a bug, not a fix).
     duration_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     duration_pct_complete_date: Mapped[date | None] = mapped_column(Date)
+    # The field that actually feeds PV proration (2026-09-05, per Maro,
+    # correcting the comment above's own past mistake): P6's real "Schedule
+    # % Complete" report column is ActualDuration / AtCompletionDuration, a
+    # DIFFERENT ratio from DurationPercentComplete above (confirmed against
+    # a real activity: 624 / 675.4667h = 92.38%, matching P6's own displayed
+    # 92.35% far more closely than DurationPercentComplete's own 92.85% ever
+    # did — driving a real, visible PV mismatch). Same self-expiring-override
+    # discipline as duration_pct_complete, sharing its own _date column
+    # above (both come from the exact same P6 snapshot) —
+    # elapsed_duration_fraction (scheduling_cpm.py) prefers this over
+    # Prosota's own calendar-based computation only while
+    # duration_pct_complete_date still matches the schedule's live data
+    # date.
+    schedule_pct_complete_override: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     # Units % Complete — a fourth, genuinely distinct P6 progress metric
     # (2026-09-05, per Maro: "unit percent complete" — real, resource-effort-
     # based: ActualUnits / AtCompletionUnits), imported for visibility/parity

@@ -177,6 +177,26 @@ class ParsedActivity:
     # type would need this to actually drive EV for those rows, not built
     # since no real file exercising that has been seen yet.
     units_pct_complete: Decimal | None
+    # P6's own real, resource-loaded Remaining Duration in hours (2026-09-05,
+    # per Maro: Prosota showed 16.2 days remaining, P6 showed 6 — Prosota's
+    # own remaining_duration_hours is a naive duration_hours x
+    # (1 - pct_complete/100), but a real in-progress activity's true
+    # Remaining Duration is whatever P6's own resource-loaded engine
+    # recomputed it to (here: 51.47h ≈ 6.4d, not derivable from Physical %
+    # at all — confirmed against <RemainingDuration> directly). None (not a
+    # recompute) when the file has no such field.
+    remaining_duration_hours: Decimal | None
+    # P6's real "Schedule % Complete" report column (2026-09-05, per Maro —
+    # same real comparison: Prosota showed 92.8%, P6 showed 92.35%, driving
+    # a real PV mismatch). Confirmed this is NOT the same number as
+    # <DurationPercentComplete> above (92.85% in that same file) — it's
+    # ActualDuration / AtCompletionDuration (624 / 675.4667h = 92.38%,
+    # matching P6's 92.35% far more closely than DurationPercentComplete's
+    # own 92.85% ever did). duration_pct_complete above stays exactly what
+    # it was — P6's own distinct "Duration % Complete" concept — this is a
+    # separate number for the separate "Schedule % Complete" one that
+    # actually drives PV. None when AtCompletionDuration is missing/zero.
+    schedule_pct_complete_override: Decimal | None
 
 
 @dataclass
@@ -450,6 +470,14 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
 
     udf_values = [v for v in (_parse_udf_value(u) for u in el.findall(_tag("UDF"))) if v is not None]
 
+    actual_duration_hours = _decimal(el, "ActualDuration")
+    at_completion_duration_hours = _decimal(el, "AtCompletionDuration")
+    schedule_pct_complete_override = (
+        (actual_duration_hours / at_completion_duration_hours * 100)
+        if actual_duration_hours is not None and at_completion_duration_hours
+        else None
+    )
+
     return ParsedActivity(
         object_id=_text(el, "ObjectId") or "", wbs_object_id=_text(el, "WBSObjectId"),
         calendar_object_id=_text(el, "CalendarObjectId"),
@@ -477,6 +505,8 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         duration_pct_complete=_decimal(el, "DurationPercentComplete"),
         status=status,
         units_pct_complete=_decimal(el, "UnitsPercentComplete"),
+        remaining_duration_hours=_decimal(el, "RemainingDuration"),
+        schedule_pct_complete_override=schedule_pct_complete_override,
     )
 
 

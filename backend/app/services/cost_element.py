@@ -161,7 +161,7 @@ async def _linked_activity_dates(
 ) -> dict[uuid.UUID, tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None, date | None]]:
     """Live (current, CPM-computed) start/finish (+ the activity's own
     calendar_id, since elapsed_duration_fraction now needs one — see its
-    own header — and its own duration_pct_complete, since PV needs
+    own header — and its own schedule_pct_complete_override, since PV needs
     that too) for every schedule-sourced element's linked activity, in
     one batched query — the input Planned Value needs. Deliberately the
     LIVE start/finish, not bl_start/bl_finish: per Maro's confirmed
@@ -181,13 +181,13 @@ async def _linked_activity_dates(
     result = await db.execute(
         select(
             Activity.id, Activity.start, Activity.finish, Activity.calendar_id,
-            Activity.duration_pct_complete, Activity.duration_pct_complete_date,
+            Activity.schedule_pct_complete_override, Activity.duration_pct_complete_date,
         ).where(Activity.id.in_(activity_ids))
     )
     return {
         row.id: (
             row.start, row.finish, row.calendar_id,
-            row.duration_pct_complete, row.duration_pct_complete_date,
+            row.schedule_pct_complete_override, row.duration_pct_complete_date,
         )
         for row in result.all()
     }
@@ -215,8 +215,8 @@ def _schedule_evm(
     data_date: datetime,
     lookup: "_CalendarLookup",
     calendar: Calendar,
-    duration_pct_complete: Decimal | None = None,
-    duration_pct_complete_date: date | None = None,
+    schedule_pct_complete_override: Decimal | None = None,
+    schedule_pct_complete_override_date: date | None = None,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """Planned Value (Rita Mulcahy Ch.9: "as of today, the estimated value of work
     planned to be done") via working-day proration across the activity's own
@@ -225,15 +225,20 @@ def _schedule_evm(
     drives EV. Working-day proration, matching real P6 exactly (2026-09-04,
     per Maro — see elapsed_duration_fraction's own header for the full
     derivation), via the activity's own resolved calendar (lookup+calendar).
-    bac is the resolved Budget At Completion (bl_budget-with-live-fallback, see
-    CostElement.bl_budget's own docstring) — every caller already resolves
-    this before calling in, never a raw live budget field directly.
-    EV/SV/SPI follow directly from PV once it exists. Returns (pv, ev, sv, spi)
-    — any of which can be None if the inputs aren't there yet (no bac, the
-    activity isn't scheduled yet, no progress assessed)."""
+    schedule_pct_complete_override is Activity.schedule_pct_complete_override
+    (2026-09-05 — NOT Activity.duration_pct_complete, a different, real P6
+    concept; see that field's own docstring for why conflating the two was
+    itself a bug), prorating from P6's own real "Schedule % Complete" report
+    figure whenever it's still fresh, else falling back to this calendar
+    computation. bac is the resolved Budget At Completion (bl_budget-with-
+    live-fallback, see CostElement.bl_budget's own docstring) — every caller
+    already resolves this before calling in, never a raw live budget field
+    directly. EV/SV/SPI follow directly from PV once it exists. Returns
+    (pv, ev, sv, spi) — any of which can be None if the inputs aren't there
+    yet (no bac, the activity isn't scheduled yet, no progress assessed)."""
     fraction = elapsed_duration_fraction(
         lookup, calendar, start, finish, data_date,
-        duration_pct_complete, duration_pct_complete_date,
+        schedule_pct_complete_override, schedule_pct_complete_override_date,
     )
     if bac is None or fraction is None:
         return None, None, None, None
@@ -285,8 +290,8 @@ def rollup_evm_from_totals(
 
 def compute_schedule_linked_evm(
     element: CostElement, start: datetime | None, finish: datetime | None, data_date: datetime,
-    lookup: "_CalendarLookup", calendar: Calendar, duration_pct_complete: Decimal | None = None,
-    duration_pct_complete_date: date | None = None,
+    lookup: "_CalendarLookup", calendar: Calendar, schedule_pct_complete_override: Decimal | None = None,
+    schedule_pct_complete_override_date: date | None = None,
 ) -> dict[str, Decimal | None]:
     """AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC for a single schedule-linked cost
     element — used by app/services/activity.py to surface these as Scheduling
@@ -308,7 +313,7 @@ def compute_schedule_linked_evm(
     ac = Decimal(str(element.actuals)) if element.actuals is not None else None
     pv, ev, sv, spi = _schedule_evm(
         bac, element.pct_complete, start, finish, data_date, lookup, calendar,
-        duration_pct_complete, duration_pct_complete_date,
+        schedule_pct_complete_override, schedule_pct_complete_override_date,
     )
     cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
     return {

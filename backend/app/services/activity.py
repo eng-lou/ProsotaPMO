@@ -94,7 +94,7 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         calendar = lookup.resolve(a)
         fraction = elapsed_duration_fraction(
             lookup, calendar, a.start, a.finish, data_date,
-            a.duration_pct_complete, a.duration_pct_complete_date,
+            a.schedule_pct_complete_override, a.duration_pct_complete_date,
         )
         # "Schedule % Complete" (this field itself was internally called
         # duration_pct_complete before a 2026-09-03 rename, per Maro:
@@ -106,8 +106,11 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         # current schedule this activity should be, distinct from the
         # manually-assessed pct_complete (Physical % Complete) that drives
         # EV. The direct transparency aid Maro asked for: exactly the input
-        # PV below is prorated from (P6's own Duration % Complete when
-        # valid for today, else this calendar-based calculation).
+        # PV below is prorated from (P6's own real Schedule % Complete —
+        # schedule_pct_complete_override, ActualDuration/AtCompletionDuration
+        # — when valid for today, else this calendar-based calculation; see
+        # that field's own docstring for why it's a different number from
+        # duration_pct_complete, which stays display-only).
         a.schedule_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
 
         element = elements_by_activity.get(a.id)
@@ -117,7 +120,7 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             continue
         evm = compute_schedule_linked_evm(
             element, a.start, a.finish, data_date, lookup, calendar,
-            a.duration_pct_complete, a.duration_pct_complete_date,
+            a.schedule_pct_complete_override, a.duration_pct_complete_date,
         )
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])

@@ -435,18 +435,28 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             # match Prosota's own 0-100 convention every other
             # percent-complete field already uses (pct_complete above,
             # schedule_pct_complete), same as <PercentComplete>'s own *100
-            # a few lines up. Also trusted directly for PV (same "P6's
-            # internal engine can't be bit-for-bit reproduced" reasoning as
-            # the finish-trusting correction below — real P6 comparison
-            # found a pure calendar recompute diverges from this for most
-            # in-progress activities), pinned to this file's own DataDate —
-            # see Activity.duration_pct_complete's own docstring for why
-            # it's safe to import unconditionally: the moment the live data
-            # date moves past this one, it stops applying to PV on its own.
+            # a few lines up. Display-only, kept for parity — see
+            # schedule_pct_complete_override below for the field that
+            # actually drives PV (a real P6 comparison found this is NOT
+            # the same number — see Activity.duration_pct_complete's own
+            # docstring).
             duration_pct_complete=(
                 pa.duration_pct_complete * 100 if pa.duration_pct_complete is not None else None
             ),
-            duration_pct_complete_date=parsed.data_date if pa.duration_pct_complete is not None else None,
+            duration_pct_complete_date=(
+                parsed.data_date
+                if pa.duration_pct_complete is not None or pa.schedule_pct_complete_override is not None
+                else None
+            ),
+            # P6's real "Schedule % Complete" report column — ActualDuration
+            # / AtCompletionDuration, computed at parse time (2026-09-05,
+            # per Maro: real comparison found Prosota showing 92.8% where
+            # P6 showed 92.35%, a genuine PV mismatch — see
+            # Activity.schedule_pct_complete_override's own docstring for
+            # why this is a different number from duration_pct_complete
+            # above). Already 0-100 scale from p6_import_parse.py, sharing
+            # duration_pct_complete_date's own self-expiring freshness gate.
+            schedule_pct_complete_override=pa.schedule_pct_complete_override,
             # Units % Complete (2026-09-05, per Maro: "unit percent
             # complete") — same *100 scaling, visibility only (see
             # Activity.units_pct_complete's own docstring for why it
@@ -455,6 +465,20 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         )
         activity_sort_counter += 1
         _apply_computed_fields(activity)
+        # P6's own real, resource-loaded Remaining Duration (2026-09-05, per
+        # Maro: real comparison found Prosota showing 16.2 days remaining
+        # where P6 showed 6 — _apply_computed_fields's own naive
+        # duration_hours x (1 - pct_complete/100) has no way to reproduce
+        # P6's actual re-projected remaining duration; see
+        # ParsedActivity.remaining_duration_hours's own docstring). Applied
+        # after _apply_computed_fields specifically to override its naive
+        # result — display-only, same as the field itself, so no
+        # self-expiring freshness gate needed: the next time anyone edits
+        # this activity in Prosota, the normal service-layer call to
+        # _apply_computed_fields recomputes it fresh, same as before this
+        # existed.
+        if pa.remaining_duration_hours is not None:
+            activity.remaining_duration_hours = pa.remaining_duration_hours
         db.add(activity)
         activity_real_id_by_object_id[pa.object_id] = activity_id
         if pa.code:
