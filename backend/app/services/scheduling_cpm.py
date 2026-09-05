@@ -1001,7 +1001,11 @@ async def _recompute_subproject_floats(
     return touched
 
 
-async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *, force_all_subprojects: bool = False) -> None:
+async def recompute_schedule(
+    db: AsyncSession, schedule_period_id: uuid.UUID, *, force_all_subprojects: bool = False,
+    pinned_start_by_id: dict[uuid.UUID, datetime] | None = None,
+    pinned_finish_by_id: dict[uuid.UUID, datetime] | None = None,
+) -> None:
     """Forward/backward pass (PMBOK7/Rita Mulcahy Ch.8) over a period's activities.
 
     Writes back start/finish/duration_days/total_float_hours/free_float_hours/
@@ -1016,7 +1020,33 @@ async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *,
     or ActivityRelationship row, so the normal touched-set skip in
     _recompute_subproject_floats (§D.2) would otherwise wrongly skip the very
     branch that just needs its first-ever (or nesting-changed) scoped pass.
-    """
+
+    pinned_start_by_id/pinned_finish_by_id: p6_import.py's own escape hatch for
+    the small set of activities CPM genuinely cannot derive correctly on its
+    own (2026-09-05, per Maro, tracing a real P6-vs-Prosota mismatch down to
+    its actual root cause) — a real *In Progress* activity ("Third Floor
+    Masonry Structure"): PhysicalPercentComplete 90% but DurationPercentComplete
+    77.78%, meaning P6 has already re-projected its at-completion duration
+    longer than the original PlannedDuration once real progress showed it
+    running behind pace. Prosota's own finish_from_start has no way to
+    reproduce that re-projection — it only knows the original planned
+    duration — so it lands 2 real working days early. The file's own
+    FinishDate is the one number that reflects P6's re-projection, so it's
+    pinned directly into `ef` here, INSIDE this same forward pass, so a
+    successor computed later in the same topological order
+    ("Fourth Floor Slab") sees the corrected value and starts on or after it
+    — earlier code applied this kind of correction in a separate pass *after*
+    this whole function returned, which fixed the pinned activity's own
+    display but never propagated to anything downstream of it (found via
+    exactly that successor starting 2 real days before its own predecessor's
+    corrected finish on a plain FS+0 link). Deliberately NOT extended to
+    every activity: a follow-up real comparison ("Pergola and Amenities", 0%
+    complete, no progress at all) found Prosota's own calendar math already
+    landing bit-for-bit on P6's actual value (both correctly accounting for
+    the calendar's own lunch break) while the file's own snapshot was stale
+    by an hour — for genuinely not-yet-started, unconstrained work, trusting
+    a frozen file value over a fresh, correct calendar+logic computation is
+    the wrong default, not a safe one."""
     period = await db.get(SchedulePeriod, schedule_period_id)
     if period is None:
         return
@@ -1158,6 +1188,15 @@ async def recompute_schedule(db: AsyncSession, schedule_period_id: uuid.UUID, *,
                 # for that half).
                 if a.constraint_type == "fnet" and a.constraint_date is not None:
                     activity_ef = max(activity_ef, a.constraint_date)
+
+        # Pins win over anything computed above, for this activity's own
+        # es/ef AND for every later activity in this same topological pass
+        # that reads es[a.id]/ef[a.id] as a predecessor position — see this
+        # function's own docstring for why a pin is ever needed at all.
+        if pinned_start_by_id is not None and a.id in pinned_start_by_id:
+            activity_es = pinned_start_by_id[a.id]
+        if pinned_finish_by_id is not None and a.id in pinned_finish_by_id:
+            activity_ef = pinned_finish_by_id[a.id]
 
         es[a.id] = activity_es
         ef[a.id] = activity_ef

@@ -439,11 +439,13 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
        the Excel-extract case — this is the same fix for a plain PMXML
        import with no Excel layering at all).
 
-    Also covers a not-yet-reached milestone (0% complete, no duration of
-    its own — its CPM position is purely relationship-driven, the same
-    class of P6-vs-Prosota network divergence, and it's very often the
-    schedule's own overall "when does this finish" marker) getting the
-    same trusted-finish treatment regardless of % complete."""
+    Also covers a not-yet-reached milestone (0% complete, no duration or
+    predecessors of its own — nothing for CPM to derive its position from
+    at all) getting the same trusted-finish treatment, and a genuinely
+    not-yet-started, unconstrained task getting the OPPOSITE treatment —
+    trusting Prosota's own fresh CPM computation over a frozen file value
+    (see test_pinned_predecessor_finish_propagates_to_its_own_successor
+    and scheduling_cpm.recompute_schedule's own docstring for why)."""
     xml = (
         b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
         b"<Project><Id>Status Test</Id><DataDate>2011-06-01T00:00:00</DataDate>"
@@ -454,7 +456,7 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
         b"</Activity>"
         b"<Activity><ObjectId>2</ObjectId><Id>A2</Id><Name>Groundworks 2</Name><Type>Task Dependent</Type>"
         b"<PlannedDuration>80</PlannedDuration><PercentComplete>0.5</PercentComplete>"
-        b"<StartDate>2011-06-01T08:00:00</StartDate><FinishDate>2099-01-01T08:00:00</FinishDate>"
+        b"<StartDate>2011-06-01T08:00:00</StartDate><FinishDate>2011-09-01T08:00:00</FinishDate>"
         b"<ActualStartDate>2011-06-01T08:00:00</ActualStartDate>"
         b"</Activity>"
         b"<Activity><ObjectId>3</ObjectId><Id>A3</Id><Name>Not Started Yet</Name><Type>Task Dependent</Type>"
@@ -463,7 +465,7 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
         b"</Activity>"
         b"<Activity><ObjectId>4</ObjectId><Id>A4</Id><Name>Overall Finish</Name><Type>Finish Milestone</Type>"
         b"<PlannedDuration>0</PlannedDuration><PercentComplete>0</PercentComplete>"
-        b"<FinishDate>2098-06-15T10:40:00</FinishDate>"
+        b"<FinishDate>2011-08-15T10:40:00</FinishDate>"
         b"</Activity>"
         b"</Project></APIBusinessObjects>"
     )
@@ -479,29 +481,76 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
 
     in_progress = next(a for a in activities if a.task_name == "Groundworks 2")
     assert in_progress.status == "in_progress"
-    # The absurd 2099 date is deliberate — proves this is genuinely trusted
-    # from the file, not coincidentally matching whatever CPM would have
-    # computed from duration+calendar on its own.
-    assert in_progress.finish == datetime(2099, 1, 1, 8, 0)
+    # 2011-09-01 is deliberately later than Prosota's own finish_from_start
+    # would compute from an 80h/8h-day calendar starting 2011-06-01 (~10
+    # working days, mid-June) — proves this is genuinely pinned from the
+    # file, not coincidentally matching whatever CPM would have computed.
+    assert in_progress.finish == datetime(2011, 9, 1, 8, 0)
 
     not_started = next(a for a in activities if a.task_name == "Not Started Yet")
     assert not_started.status == "planned"
-    # 2026-09-05, per Maro: real dates compared line-by-line against P6's
-    # own report found a plain, 0%-complete, non-milestone, no-predecessor
-    # task landing on Prosota's own from-scratch CPM position (which, with
-    # no predecessors at all, would schedule it at/near the project's data
-    # date) rather than P6's own stated dates — the same "Prosota's own
-    # duration+calendar math can't bit-for-bit reproduce P6's engine"
-    # limitation applies to every activity, not just progressed/milestone
-    # ones. The absurd 2097 dates are deliberate — this activity has no
-    # predecessors, so CPM would otherwise place it at/near the 2011 data
-    # date, nowhere near here.
-    assert not_started.start == datetime(2097, 3, 1, 10, 40)
-    assert not_started.finish == datetime(2097, 3, 6, 10, 40)
+    # 2026-09-05, per Maro, correcting the *previous* version of this
+    # assertion — a follow-up real comparison ("Pergola and Amenities", 0%
+    # complete, no progress at all) found Prosota's own calendar math
+    # already landing bit-for-bit on P6's actual value while the file's own
+    # snapshot was stale by an hour. For genuinely not-yet-started,
+    # unconstrained work, CPM's own fresh computation is the right answer,
+    # not a frozen file value — the absurd 2097 dates are deliberate proof
+    # that Prosota did NOT blindly copy them: with no predecessors, CPM
+    # schedules this at the project's own data date instead.
+    assert not_started.start != datetime(2097, 3, 1, 10, 40)
+    assert not_started.start.year == 2011
 
     milestone = next(a for a in activities if a.task_name == "Overall Finish")
     assert milestone.status == "planned"
-    assert milestone.finish == datetime(2098, 6, 15, 10, 40)
+    assert milestone.finish == datetime(2011, 8, 15, 10, 40)
+
+
+async def test_pinned_predecessor_finish_propagates_to_its_own_successor(db: AsyncSession, project: Project):
+    """The real cascade bug this whole pinning mechanism exists to fix
+    (2026-09-05, per Maro, tracing an exact P6-vs-Prosota mismatch by hand):
+    "Third Floor Masonry Structure" was In Progress (Physical % 90%, but
+    Duration % only 77.78% — P6 had already re-projected its at-completion
+    duration longer than planned once real progress showed it running
+    behind pace, something Prosota's own duration-based finish_from_start
+    has no way to reproduce). Its file-trusted finish gets pinned, but the
+    OLD code applied that pin in a separate pass *after* the full CPM
+    solve — so "Fourth Floor Slab", a plain FS+0 successor with no progress
+    of its own, had already computed its own start from the predecessor's
+    un-pinned (2 real working days too early) finish, and genuinely started
+    before its own predecessor's real finish. Pinning inside the same
+    recompute_schedule call fixes this: the successor is computed AFTER the
+    predecessor in topological order, so it sees the pinned value."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Cascade Test</Id><DataDate>2011-01-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>10</ObjectId><Id>P1</Id><Name>Third Floor Masonry Structure</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0.9</PercentComplete>"
+        b"<StartDate>2011-01-03T08:00:00</StartDate><FinishDate>2011-01-20T08:00:00</FinishDate>"
+        b"<ActualStartDate>2011-01-03T08:00:00</ActualStartDate>"
+        b"</Activity>"
+        b"<Activity><ObjectId>11</ObjectId><Id>S1</Id><Name>Fourth Floor Slab</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"</Activity>"
+        b"<Relationship><PredecessorActivityObjectId>10</PredecessorActivityObjectId>"
+        b"<SuccessorActivityObjectId>11</SuccessorActivityObjectId><Type>Finish to Start</Type></Relationship>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == summary.schedule_period_id)
+    )).scalars().all()
+    predecessor = next(a for a in activities if a.task_name == "Third Floor Masonry Structure")
+    successor = next(a for a in activities if a.task_name == "Fourth Floor Slab")
+
+    # Pinned from the file, not Prosota's own (2 working days earlier) calendar math.
+    assert predecessor.finish == datetime(2011, 1, 20, 8, 0)
+    # The successor must never start before its own predecessor finishes on
+    # a plain FS+0 link — this is the exact real-world violation Maro found.
+    assert successor.start >= predecessor.finish
+    assert successor.start == datetime(2011, 1, 20, 8, 0)
 
 
 async def test_completed_start_milestone_with_zero_percent_complete_is_not_rescheduled(

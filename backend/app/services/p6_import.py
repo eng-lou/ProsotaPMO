@@ -633,57 +633,46 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # Same two-pass shape bulk_generate.py uses for its own batch insert —
     # hierarchy -> CPM -> hierarchy again, run once for the whole import,
     # not once per row.
-    await _recompute_hierarchy(db, period.id)
-    await scheduling_cpm.recompute_schedule(db, period.id)
-
-    # Trust the file's own start/finish for EVERY activity, not just
-    # progressed/milestone ones (2026-09-05, per Maro: real dates compared
-    # line-by-line against P6's own report — a plain "Planned", 0%-complete,
-    # non-milestone task ("Final Inspections and Punchlist") was landing 2
-    # days earlier than P6's own network solution, even though its own
-    # duration matched exactly; the same "Prosota's own duration+calendar
-    # math has no way to bit-for-bit reproduce whatever P6's internal engine
-    # used" limitation already documented for the has_progress/milestone
-    # case turns out to apply to every activity, not a narrow subset of
-    # them). Every activity's own .start/.finish are already set to the
-    # file's own values at construction above — this loop exists purely
-    # because scheduling_cpm.recompute_schedule's own forward pass
-    # overwrites them for anything that doesn't hit its "already progressed"
-    # preservation branch, i.e. every plain not-yet-started, non-milestone
-    # task. Reapplying the file's own values here, after that recompute,
-    # is strictly more accurate than trusting Prosota's own from-scratch
-    # network solve — CPM still runs, and still drives float/criticality,
-    # just not the displayed start/finish for the activities it touches.
+    # Pin the file's own start/finish for activities CPM genuinely can't
+    # derive on its own, and feed them into the SAME recompute_schedule call
+    # below rather than correcting afterward (2026-09-05, per Maro, tracing
+    # a real P6-vs-Prosota mismatch to its root cause — see
+    # scheduling_cpm.recompute_schedule's own docstring for the full story):
+    # a real *In Progress* activity ("Third Floor Masonry Structure") had
+    # PhysicalPercentComplete 90% but DurationPercentComplete 77.78% — P6
+    # had already re-projected its at-completion duration longer than the
+    # original PlannedDuration once real progress showed it running behind
+    # pace, something Prosota's own finish_from_start has no way to
+    # reproduce (it only knows the original planned duration). A milestone
+    # with no predecessors has nothing else to derive its position from at
+    # all. Both need the file's own date pinned directly.
     #
-    # Run before the second _recompute_hierarchy below so the WBS/root
-    # rollup reflects the corrected leaf dates, not the discarded ones.
-    trusted_start_by_activity_id: dict[uuid.UUID, datetime] = {}
-    trusted_finish_by_activity_id: dict[uuid.UUID, datetime] = {}
+    # Deliberately NOT extended to a plain not-yet-started, unconstrained
+    # activity: a follow-up real comparison ("Pergola and Amenities", 0%
+    # complete, no progress at all) found Prosota's own calendar math
+    # already landing bit-for-bit on P6's actual value — both correctly
+    # walking the calendar's own lunch break — while the file's own
+    # snapshot was stale by an hour. For genuinely not-yet-started work,
+    # a fresh, correct calendar+logic computation is more trustworthy than
+    # a frozen file value, not less.
+    pinned_start_by_id: dict[uuid.UUID, datetime] = {}
+    pinned_finish_by_id: dict[uuid.UUID, datetime] = {}
     for pa in parsed.activities:
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:
             continue
+        has_progress = pa.pct_complete > 0 or pa.actual_start is not None
+        if not (has_progress or is_milestone_type(pa.activity_type)):
+            continue
         if pa.start is not None:
-            trusted_start_by_activity_id[activity_id] = pa.start
+            pinned_start_by_id[activity_id] = pa.start
         if pa.finish is not None:
-            trusted_finish_by_activity_id[activity_id] = pa.finish
-    if trusted_start_by_activity_id or trusted_finish_by_activity_id:
-        # Batched (2026-09-04, per Maro: a real 148-activity import took over
-        # a minute — this loop used to do one db.get(Activity, ...) per
-        # qualifying row). One query for every activity this pass touches,
-        # not one round trip each.
-        to_correct = (await db.execute(
-            select(Activity).where(
-                Activity.id.in_(trusted_start_by_activity_id.keys() | trusted_finish_by_activity_id.keys())
-            )
-        )).scalars().all()
-        for activity in to_correct:
-            if activity.id in trusted_start_by_activity_id:
-                activity.start = trusted_start_by_activity_id[activity.id]
-            if activity.id in trusted_finish_by_activity_id:
-                activity.finish = trusted_finish_by_activity_id[activity.id]
-    await db.commit()
+            pinned_finish_by_id[activity_id] = pa.finish
 
+    await _recompute_hierarchy(db, period.id)
+    await scheduling_cpm.recompute_schedule(
+        db, period.id, pinned_start_by_id=pinned_start_by_id, pinned_finish_by_id=pinned_finish_by_id,
+    )
     await _recompute_hierarchy(db, period.id)
     # No Cost Element sync here (2026-09-04, per Maro — same "over a
     # minute" report): this variant is always freshly created and never
