@@ -281,11 +281,30 @@ def rollup_evm_from_totals(
     ratios themselves would silently misrepresent which task actually drives
     the WBS's real cost performance. SV/SPI aren't part of _cost_side_evm
     (that function is BAC/AC/EV only, no PV) so computed here directly with
-    the exact same formula _schedule_evm uses per-element."""
+    the exact same formula _schedule_evm uses per-element.
+
+    Also returns schedule_pct_complete (2026-09-06, per Maro, tracing a real
+    "15.6% vs P6's 12.8%" mismatch on a real project rollup): a WBS
+    summary's own start/finish span its *entire* subtree — running
+    elapsed_duration_fraction against that whole span (what
+    _attach_evm_fields does for every OTHER activity, since it has no way
+    to know a row is a rollup) measures "how far through the whole
+    project's date range are we," a completely different, much coarser
+    question than "how much of the summed budget should be earned by now."
+    schedule_pct_complete = PV/BAC is the exact same identity every leaf's
+    own PV is already defined by (PV = BAC x schedule_pct_complete/100) —
+    applying it here instead just answers it correctly at the rollup level,
+    from the real summed PV/BAC rather than an unrelated calendar span."""
     sv = (ev - pv).quantize(_MONEY) if ev is not None and pv is not None else None
     spi = (ev / pv).quantize(_RATIO) if ev is not None and pv is not None and pv != 0 else None
     cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
-    return {"bac": bac, "ac": ac, "pv": pv, "ev": ev, "cv": cv, "sv": sv, "cpi": cpi, "spi": spi, "eac": eac, "etc": etc}
+    schedule_pct_complete = (
+        (pv / bac * Decimal(100)).quantize(Decimal("0.01")) if pv is not None and bac is not None and bac != 0 else None
+    )
+    return {
+        "bac": bac, "ac": ac, "pv": pv, "ev": ev, "cv": cv, "sv": sv, "cpi": cpi, "spi": spi, "eac": eac, "etc": etc,
+        "schedule_pct_complete": schedule_pct_complete,
+    }
 
 
 def compute_schedule_linked_evm(

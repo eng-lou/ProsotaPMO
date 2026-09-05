@@ -472,9 +472,21 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
 
     actual_duration_hours = _decimal(el, "ActualDuration")
     at_completion_duration_hours = _decimal(el, "AtCompletionDuration")
+    # Only overrides for an activity with real progress (ActualDuration > 0)
+    # — 2026-09-06, per Maro, tracing a real ~£4,745 PV shortfall on a real
+    # project total: a not-yet-started activity always has ActualDuration=0,
+    # which forced this override to a flat 0% and therefore PV=0 — but PV
+    # is a *planned-schedule* figure (Rita Mulcahy Ch.9: "the value of work
+    # PLANNED to be done"), not an actual-progress one. An activity that's
+    # overdue against its own original plan but hasn't started yet still
+    # has real Planned Value (it should have earned some by now); only its
+    # Earned Value is genuinely 0. Leaving this None for a not-started
+    # activity correctly falls through to elapsed_duration_fraction's own
+    # calendar-based proration against the PLANNED start/finish, exactly
+    # the semantics PV needs.
     schedule_pct_complete_override = (
         (actual_duration_hours / at_completion_duration_hours * 100)
-        if actual_duration_hours is not None and at_completion_duration_hours
+        if actual_duration_hours is not None and actual_duration_hours > 0 and at_completion_duration_hours
         else None
     )
 

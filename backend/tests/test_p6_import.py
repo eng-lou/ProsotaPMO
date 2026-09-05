@@ -25,6 +25,8 @@ from app.models.schedule_variant import ScheduleVariant
 from app.models.user import User
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.services import schedule_variant as schedule_variant_svc
+from app.services.activity import _attach_evm_fields
+from app.services.activity import list_activities as _list_activities_with_evm
 from app.services.p6_import import import_pmxml
 from app.services.p6_import_parse import parse_pmxml
 from app.services.resource_costing import compute_assignment_budget
@@ -554,6 +556,84 @@ async def test_schedule_pct_complete_uses_actual_over_at_completion_not_duration
     # Remaining Duration now trusted from the file directly (≈6.43 days),
     # not the old naive 720h x (1 - 82%) = 129.6h ≈ 16.2 days.
     assert abs(activity.remaining_duration_hours - Decimal("51.47")) < Decimal("0.01")
+
+
+async def test_not_started_activity_gets_no_schedule_pct_override(db: AsyncSession, project: Project):
+    """Real ~£4,745 PV shortfall on a real 132-activity project total
+    (2026-09-06, per Maro: "so if schedule % complete is wrong, PV will
+    also be wrong"). A not-yet-started activity always has
+    ActualDuration=0, which the *previous* version of this override forced
+    into schedule_pct_complete_override=0% unconditionally — but PV is a
+    planned-schedule figure (Rita Mulcahy Ch.9: "the value of work PLANNED
+    to be done"), not an actual-progress one. An activity that's overdue
+    against its own original plan but hasn't started yet still has real
+    Planned Value; only its Earned Value is genuinely 0. The override must
+    stay None for a not-started activity so PV falls through to
+    elapsed_duration_fraction's own calendar proration against the
+    *planned* start/finish instead of being wrongly zeroed."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Project><Id>Not Started Override Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Overdue Not Started</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<ActualDuration>0</ActualDuration><AtCompletionDuration>80</AtCompletionDuration>"
+        b"<StartDate>2011-04-01T08:00:00</StartDate><FinishDate>2011-04-11T17:00:00</FinishDate>"
+        b"</Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    await import_pmxml(db, project.id, parsed)
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Overdue Not Started")
+    )).scalar_one()
+    assert activity.schedule_pct_complete_override is None
+
+
+async def test_wbs_summary_schedule_pct_complete_derived_from_pv_over_bac(db: AsyncSession, project: Project):
+    """Real "15.6% vs P6's 12.8%" project-rollup mismatch (2026-09-06, per
+    Maro: "think bout it, schedule % complete times the BAC of that
+    activity gives you the PV.....so ofcourse its all related"). A WBS
+    summary's own start/finish span its *entire* subtree — running
+    elapsed_duration_fraction against that whole span (what
+    _attach_evm_fields does for every activity, since it can't tell a row
+    is a rollup) answers "how far through the whole project's date range
+    are we," a different, coarser question than "how much of the summed
+    budget should be earned by now." schedule_pct_complete = PV/BAC is the
+    same identity every leaf's own PV is already defined by — the rollup
+    must use it too, not an unrelated calendar-span calculation."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Resource><ObjectId>50</ObjectId><Name>Framer</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<ResourceRate><ResourceObjectId>50</ResourceObjectId><PricePerUnit>10</PricePerUnit></ResourceRate>"
+        b"<Project><ObjectId>1</ObjectId><Id>WBS Rollup Pct Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<WBS><ObjectId>900</ObjectId><Name>Phase 1</Name><Code>P1</Code></WBS>"
+        # A long-running, mostly-future activity that would dominate a naive
+        # calendar-span calc but should barely register in a PV/BAC one.
+        b"<Activity><ObjectId>100</ObjectId><WBSObjectId>900</WBSObjectId><Id>A1</Id><Name>Long Future Task</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>8000</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2014-01-01T17:00:00</FinishDate></Activity>"
+        b"<ResourceAssignment><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>8000</PlannedUnits></ResourceAssignment>"
+        # A small, fully-earned activity — nearly all of the real BAC/PV/EV.
+        b"<Activity><ObjectId>101</ObjectId><WBSObjectId>900</WBSObjectId><Id>A2</Id><Name>Small Done Task</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>1</PercentComplete>"
+        b"<ActualDuration>80</ActualDuration><AtCompletionDuration>80</AtCompletionDuration>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2011-01-11T17:00:00</FinishDate>"
+        b"<ActualStartDate>2011-01-01T08:00:00</ActualStartDate><ActualFinishDate>2011-01-11T17:00:00</ActualFinishDate></Activity>"
+        b"<ResourceAssignment><ActivityObjectId>101</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>80</PlannedUnits></ResourceAssignment>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+    await schedule_variant_svc.promote_variant(db, summary.schedule_variant_id)
+
+    activities = await _list_activities_with_evm(db, project.id, summary.schedule_period_id)
+    wbs = next(a for a in activities if a.task_name == "Phase 1")
+    assert wbs.bac is not None and wbs.pv is not None
+    expected = (wbs.pv / wbs.bac * Decimal(100)).quantize(Decimal("0.01"))
+    assert wbs.schedule_pct_complete == expected
 
 
 async def test_pinned_predecessor_finish_propagates_to_its_own_successor(db: AsyncSession, project: Project):
