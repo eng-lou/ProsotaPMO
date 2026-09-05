@@ -522,13 +522,24 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
     except ET.ParseError as exc:
         raise HTTPException(status_code=422, detail=f"Not a well-formed XML file: {exc}") from exc
 
-    project_els = root.findall(_tag("Project"))
-    if not project_els:
+    # A <Project external="true"> is P6's own placeholder for a DIFFERENT
+    # project's activity, referenced only so a cross-project relationship in
+    # THIS project can point at it — a bare Id/Name/ObjectId/Type stub with
+    # no dates, duration, calendars, resources, or relationships of its own
+    # (2026-09-06, per Maro: a real file — "Haitang.xml" — imported as 7
+    # zero-duration activities all sitting on today's date with 0
+    # relationships; every one of them was actually one of these stubs).
+    # These can appear BEFORE the real project in the file, so picking
+    # "just the first <Project> element" silently imported an empty shell
+    # instead of the real schedule. The genuine project is whichever one
+    # lacks this attribute.
+    real_project_els = [el for el in root.findall(_tag("Project")) if el.get("external") != "true"]
+    if not real_project_els:
         raise HTTPException(status_code=422, detail="No <Project> element found — not a recognisable PMXML export.")
-    project_el = project_els[0]
+    project_el = real_project_els[0]
     skipped: list[str] = []
-    if len(project_els) > 1:
-        skipped.append(f"File contains {len(project_els)} projects — only the first (\"{_text(project_el, 'Id')}\") was imported.")
+    if len(real_project_els) > 1:
+        skipped.append(f"File contains {len(real_project_els)} projects — only the first (\"{_text(project_el, 'Id')}\") was imported.")
 
     # Real Name ("Saratoga Senior Community") preferred over Id ("EC00630")
     # — the Id is P6's own short project code, not what the user would

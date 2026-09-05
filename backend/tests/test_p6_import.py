@@ -793,6 +793,39 @@ def test_default_calendar_from_project_activity_default_not_per_calendar_isdefau
     assert by_id["2"].is_default is True
 
 
+def test_external_placeholder_projects_are_skipped_not_imported_as_the_real_one():
+    """Real, serious bug (2026-09-06, per Maro, a genuine P6 export —
+    "Haitang.xml" — imported as 7 zero-duration activities all sitting on
+    today's date with 0 relationships): P6 writes a bare <Project
+    external="true"> placeholder — just Id/Name/ObjectId/Type stubs for
+    each Activity it references, no dates/duration/logic at all — whenever
+    the real project has a cross-project relationship to a DIFFERENT
+    project's activity, and this file had two of them listed BEFORE the
+    real project. Picking "just the first <Project> element" silently
+    imported an empty shell. The real project is whichever one lacks
+    external="true"."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b'<Project external="true"><Id>EXT1</Id><ObjectId>1</ObjectId>'
+        b'<Activity><Id>X1</Id><Name>External stub</Name><ObjectId>100</ObjectId><Type>Task Dependent</Type></Activity>'
+        b"</Project>"
+        b'<Project external="true"><Id>EXT2</Id><ObjectId>2</ObjectId>'
+        b'<Activity><Id>X2</Id><Name>Another external stub</Name><ObjectId>101</ObjectId><Type>Start Milestone</Type></Activity>'
+        b"</Project>"
+        b"<Project><Id>REAL1</Id><Name>The Real Project</Name><DataDate>2011-05-01T00:00:00</DataDate>"
+        b'<Activity><ObjectId>200</ObjectId><Id>A1</Id><Name>Real Activity</Name><Type>Task Dependent</Type>'
+        b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2011-05-02T08:00:00</StartDate><FinishDate>2011-05-06T17:00:00</FinishDate></Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    assert parsed.project_name == "The Real Project"
+    assert len(parsed.activities) == 1
+    assert parsed.activities[0].name == "Real Activity"
+    assert parsed.activities[0].duration_hours == Decimal(40)
+    assert parsed.skipped == []
+
+
 def test_wbs_summary_activity_type_imports_as_task_not_skipped():
     """P6's "WBS Summary" ACTIVITY type (a real umbrella/roll-up task, see
     this module's own _ACTIVITY_TYPE_BY_NAME header for why it's a
