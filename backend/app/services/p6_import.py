@@ -531,7 +531,24 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
 
     # --- Resource assignments ---
     assignment_count = 0
+    # A real export can carry an exact duplicate <ResourceAssignment> for the
+    # same (Activity, Resource) pair with identical PlannedUnits — confirmed
+    # against a real file (2026-09-06, per Maro: BAC showing £5,088,728
+    # where P6's own report said £3,605,744.44 — a genuine data-export
+    # artifact, not a rate/calendar/formula bug; 73 (activity, resource)
+    # pairs each had a byte-identical second <ResourceAssignment>, and
+    # removing exactly those duplicates reproduces P6's own total to the
+    # penny). Same "duplicate relationship, keep only one" precedent already
+    # established for ActivityRelationship above — a second assignment with
+    # the SAME units for the SAME pair isn't a genuinely separate real-world
+    # assignment, it's the same one recorded twice.
+    seen_assignment_keys: set[tuple[str, str, Decimal]] = set()
     for asg in parsed.assignments:
+        assignment_key = (asg.activity_object_id, asg.resource_object_id, asg.planned_units)
+        if assignment_key in seen_assignment_keys:
+            skipped.append("Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept).")
+            continue
+        seen_assignment_keys.add(assignment_key)
         activity_id = activity_real_id_by_object_id.get(asg.activity_object_id)
         resource_id = resource_real_id_by_object_id.get(asg.resource_object_id)
         if activity_id is None or resource_id is None:

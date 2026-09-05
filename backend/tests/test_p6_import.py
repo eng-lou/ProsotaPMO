@@ -646,6 +646,51 @@ async def test_completed_start_milestone_with_zero_percent_complete_is_not_resch
     assert milestone.finish == datetime(2010, 9, 1, 8, 0)
 
 
+async def test_duplicate_resource_assignment_same_units_is_deduplicated_not_double_counted(
+    db: AsyncSession, project: Project,
+):
+    """Real, serious BAC bug (2026-09-06, per Maro: "you're saying its 5m??"
+    — a real file's total BAC was £5,088,728 where P6's own report said
+    £3,605,744.44). Traced to a genuine data-export artifact: 73
+    (Activity, Resource) pairs in the real file each had a byte-identical
+    second <ResourceAssignment> element — same PlannedUnits, same
+    PlannedCost, only the ObjectId and a ~1-hour StartDate/FinishDate
+    difference distinguished them. Removing exactly those duplicates
+    reproduced P6's own total to the penny. A second assignment for the
+    same (activity, resource) pair with the SAME units isn't a genuinely
+    separate real-world assignment — it's the same one recorded twice."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Resource><ObjectId>50</ObjectId><Name>Framer</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<ResourceRate><ResourceObjectId>50</ResourceObjectId><PricePerUnit>50</PricePerUnit></ResourceRate>"
+        b"<Project><ObjectId>1</ObjectId><Id>Dup Assignment Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>A1</Id><Name>Unit Finishes</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0</PercentComplete></Activity>"
+        b"<ResourceAssignment><ObjectId>1</ObjectId><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>80</PlannedUnits></ResourceAssignment>"
+        b"<ResourceAssignment><ObjectId>2</ObjectId><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>80</PlannedUnits></ResourceAssignment>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    assert summary.assignment_count == 1
+    assert any("Duplicate resource assignment" in note for note in summary.skipped)
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Unit Finishes")
+    )).scalar_one()
+    assignment = (await db.execute(
+        select(ResourceAssignment).where(ResourceAssignment.activity_id == activity.id)
+    )).scalar_one()
+    resource = await db.get(Resource, assignment.resource_id)
+    budget = compute_assignment_budget(resource, activity, assignment, Decimal(8))
+    # £50/hr -> £400/day (x8h default calendar) x 10 days (80h/8h-per-day) x
+    # 100% utilisation = £4,000 — not £8,000 if double-counted.
+    assert budget == Decimal("4000.00")
+
+
 async def test_actual_cost_applied_via_the_canonical_sync_activity_actuals_path(db: AsyncSession, project: Project):
     """A third real gap found the same day: AC/CV/CPI/EAC/ETC all stayed
     blank on a real import despite a fully-costed schedule — the importer
