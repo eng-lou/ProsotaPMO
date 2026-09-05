@@ -1243,24 +1243,21 @@ async def recompute_schedule(
 
     for a in participants:
         calendar = lookup.resolve(a)
-        # alap (As Late As Possible, 2026-07-07) displays the activity at its
-        # own Late Start/Late Finish instead of Early Start/Early Finish — no
-        # re-solve of the network needed: total float (LS-ES) is defined
-        # precisely as "how far this activity can slip without delaying
-        # anything downstream," so every successor's own ES/EF (already
-        # computed above, against this activity's ES/EF) remains valid
-        # exactly as-is once this activity moves anywhere inside that slack,
-        # including all the way to LS/LF. Skipped once progress exists (%
-        # Complete > 0, or actual_start is set — see the matching has_progress
-        # branch above for why that second condition is also needed) — a
-        # started activity's Start is a recorded fact, not a placement choice.
-        has_progress = (a.pct_complete is not None and a.pct_complete > 0) or a.actual_start is not None
-        if a.constraint_type == "alap" and not has_progress:
-            a.start = ls[a.id]
-            a.finish = lf[a.id]
-        else:
-            a.start = es[a.id]
-            a.finish = ef[a.id]
+        # alap (As Late As Possible) no longer relocates the *displayed*
+        # Start/Finish to Late Start/Late Finish (2026-09-05, per Maro,
+        # reverting the 2026-07-07 design after a real P6 comparison: three
+        # genuinely ALAP-constrained activities in a row — "Start Garage,"
+        # "Shop Drawings, Review & Approval," "Fab & Delivery" — displayed
+        # 8 months later in Prosota than in P6's own Activity Table for the
+        # exact same file. P6 itself keeps an ALAP activity at its Early
+        # dates for ordinary display; ALAP there mainly governs resource
+        # leveling and float reporting, not the Start/Finish columns, and
+        # only actually relocates an activity once you explicitly run
+        # leveling — a feature Prosota doesn't have yet). total_float_hours
+        # below (LS-ES) still reports the real slack ALAP earns it; only the
+        # displayed position changed back to matching every other activity.
+        a.start = es[a.id]
+        a.finish = ef[a.id]
         hours_per_day = lookup.hours_per_day(calendar)
         # Quantized for the same reason working_hours_between is (above) — a
         # plain division can produce a long repeating decimal that only ever

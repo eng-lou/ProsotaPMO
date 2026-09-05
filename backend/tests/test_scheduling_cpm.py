@@ -352,9 +352,18 @@ async def test_mandatory_finish_constraint_overrides_forward_derived_finish(
     assert b["start"] == "2025-06-05T08:00:00"
 
 
-async def test_alap_activity_schedules_late_without_delaying_successor(
+async def test_alap_activity_displays_at_early_dates_like_p6_default(
     client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
 ):
+    """Reverts the 2026-07-07 "ALAP displays at Late Start/Late Finish"
+    design (2026-09-05, per Maro, after a real P6 comparison): three
+    genuinely ALAP-constrained activities in a row ("Start Garage," "Shop
+    Drawings, Review & Approval," "Fab & Delivery") displayed 8 months later
+    in Prosota than in P6's own Activity Table for the exact same schedule,
+    confirmed byte-for-byte correct once matched against a fresh export —
+    P6 itself keeps an ALAP activity at its Early dates for ordinary
+    display; ALAP there mainly governs resource leveling and float
+    reporting (which Prosota doesn't do yet), not the Start/Finish columns."""
     await _anchor(db, live_schedule_period)
     start = await _create_activity(client, project, live_schedule_period, "Mobilise", duration_hours=8)
     long_path = await _create_activity(client, project, live_schedule_period, "Long task", duration_hours=80)
@@ -373,44 +382,18 @@ async def test_alap_activity_schedules_late_without_delaying_successor(
 
     short_path_plain = await _get(client, short_path_plain["id"])
     short_path_alap = await _get(client, short_path_alap["id"])
-    finish = await _get(client, finish["id"])
 
     # Both short-path activities have the same real slack (same total float) —
-    # ALAP doesn't change *how much* float there is, only where within it the
-    # activity is displayed.
+    # ALAP doesn't change *how much* float there is, only what it means: how
+    # far this could slip in leveling, not where it's displayed today.
     assert short_path_alap["total_float_hours"] == short_path_plain["total_float_hours"]
     assert float(short_path_alap["total_float_hours"]) > 0
-    # "Critical" still means zero float, not "displayed at its late date".
     assert short_path_alap["is_critical"] is False
 
-    # ALAP pushes it later than the plain (early-scheduled) version...
-    assert short_path_alap["start"] > short_path_plain["start"]
-    assert short_path_alap["finish"] > short_path_plain["finish"]
-    # ...and it finishes at exactly its own Late Finish, i.e. right when the
-    # successor needs it — the whole point of "as late as possible".
-    assert short_path_alap["finish"] == finish["start"]
-
-
-async def test_alap_ignored_once_activity_has_progress(
-    client: AsyncClient, db: AsyncSession, project: Project, live_schedule_period: SchedulePeriod
-):
-    await _anchor(db, live_schedule_period)
-    start = await _create_activity(client, project, live_schedule_period, "Mobilise", duration_hours=8)
-    long_path = await _create_activity(client, project, live_schedule_period, "Long task", duration_hours=80)
-    short_path = await _create_activity(
-        client, project, live_schedule_period, "Short task (ALAP)", duration_hours=40, constraint_type="alap",
-    )
-    await _link(client, start, long_path)
-    await _link(client, start, short_path)
-
-    early_start = (await _get(client, short_path["id"]))["start"]
-
-    # Logging progress makes Start a recorded fact — ALAP must not keep
-    # pushing it later after that, same precedent every other constraint type
-    # already follows once pct_complete > 0.
-    resp = await client.patch(f"/api/v1/activities/{short_path['id']}", json={"pct_complete": "10"})
-    assert resp.status_code == 200
-    assert resp.json()["start"] == early_start
+    # Displayed identically to the plain (early-scheduled) version — ALAP no
+    # longer relocates it.
+    assert short_path_alap["start"] == short_path_plain["start"]
+    assert short_path_alap["finish"] == short_path_plain["finish"]
 
 
 async def test_reject_cycle_via_relationship_chain(

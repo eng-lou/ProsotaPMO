@@ -272,19 +272,18 @@ async def test_bulk_generate_schedule_quantity_null_by_default(client: AsyncClie
     assert activity["schedule_quantity"] is None
 
 
-async def test_bulk_generate_alap_constraint_persists_and_pulls_procurement_late(
+async def test_bulk_generate_alap_constraint_persists_but_no_longer_pulls_display_late(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod,
 ):
-    # 2026-07-27, per Maro's own JIT procurement catch: "coverings
-    # procurement starts 27th july and will be delivered 10th sept 26, but
-    # the activity itself will start 12th April" — every generated
-    # procurement item's chain used to anchor off the same start regardless
-    # of how far out its real install actually was. Place Purchase Order/
-    # Procure & Deliver to Site now carry constraint_type="alap"
-    # (scheduleGeneration.ts), so the CPM engine displays them at their own
-    # Late Start/Late Finish instead of clustering at the Early dates
-    # alongside a long, unrelated parallel branch that's the real reason
-    # Install can't start any sooner.
+    # 2026-07-27, per Maro's own JIT procurement catch: Place Purchase
+    # Order/Procure & Deliver to Site carry constraint_type="alap"
+    # (scheduleGeneration.ts) so a real schedule-leveling pass could pull
+    # them to their late position later. 2026-09-05, per Maro (explicit
+    # accept-the-regression call after a real P6 comparison showed ALAP
+    # doesn't relocate an activity's own Start/Finish columns by default):
+    # the constraint itself still gets generated and persists — only the
+    # CPM engine's own display behavior changed, back to Early dates like
+    # every other activity, matching P6's real default.
     payload = {
         "project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id),
         "activities": [
@@ -306,17 +305,13 @@ async def test_bulk_generate_alap_constraint_persists_and_pulls_procurement_late
     po = (await client.get(f"/api/v1/activities/{ids['act-po']}")).json()
     delivery = (await client.get(f"/api/v1/activities/{ids['act-delivery']}")).json()
     long_branch = (await client.get(f"/api/v1/activities/{ids['act-long-branch']}")).json()
-    install = (await client.get(f"/api/v1/activities/{ids['act-install']}")).json()
 
     assert po["constraint_type"] == "alap"
     assert delivery["constraint_type"] == "alap"
-    # Pulled right up against Install's own start, not sitting at its early
-    # dates right after a 2-day Place Purchase Order.
-    assert delivery["finish"] == install["start"]
-    # And genuinely later than the project's own early start (act-long-branch,
-    # which has no predecessor at all) — the whole point of alap: it shows
-    # the late float instead of clustering everything at day one.
-    assert po["start"] > long_branch["start"]
+    # Early-scheduled now, same as any plain activity — starts alongside
+    # act-long-branch (both unconstrained, no predecessors), not pulled
+    # late against Install's own start.
+    assert po["start"] == long_branch["start"]
 
 
 async def test_bulk_generate_creates_discipline_udf(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
