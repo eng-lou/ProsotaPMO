@@ -35,10 +35,23 @@ export function P6ImportDialog({ projectId, onImported, onClose }: Props) {
       const result = await importP6Xml(projectId, file)
       setSummary(result)
     } catch (err) {
-      const message = err && typeof err === 'object' && 'response' in err
+      // The backend already gives a specific reason when the file itself is
+      // genuinely invalid (see p6_import_parse.py's own HTTPException
+      // details — "Not a well-formed XML file", "No <Project> element
+      // found"), surfaced via response.data.detail below. This fallback
+      // only fires when that's absent — which in practice means a
+      // transient failure (a network blip during the direct-to-R2 upload,
+      // a dropped connection) rather than anything wrong with the file
+      // (2026-09-05, per Maro: retrying the exact same file worked, but the
+      // old fallback text told him to go check the file — wrong blame).
+      const detail = err && typeof err === 'object' && 'response' in err
         ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
         : undefined
-      setError(message ?? 'Failed to import this file — check it\'s a real PMXML (.xml) export from P6.')
+      // A backend `detail` means the file itself was genuinely rejected —
+      // show that verbatim, no "try again" (retrying won't fix a bad file).
+      // Anything else (a thrown Error from the upload step, or nothing at
+      // all) means we don't actually know the file was at fault.
+      setError(detail ?? `${err instanceof Error ? err.message : 'Something went wrong during import.'} This is usually temporary — please try again.`)
     } finally {
       setImporting(false)
     }
