@@ -13,6 +13,7 @@ from app.schemas.resource import ResourceAssignmentCreate, ResourceAssignmentUpd
 from app.services import cost_sync
 from app.services.activity import _require_live_schedule_period
 from app.services.resource_costing import compute_assignment_budget
+from app.services.scheduling_cpm import _build_calendar_lookup
 
 
 async def _attach_resource_fields(db: AsyncSession, assignments: list[ResourceAssignment]) -> None:
@@ -29,6 +30,14 @@ async def _attach_resource_fields(db: AsyncSession, assignments: list[ResourceAs
     activities_by_id = {
         a.id: a for a in (await db.execute(select(Activity).where(Activity.id.in_(activity_ids)))).scalars().all()
     }
+    # Exact hours_per_day per activity's own calendar (2026-09-05, per Maro:
+    # "time is costed by the hour" — see compute_assignment_budget's own
+    # header) — one lookup per distinct project among these assignments,
+    # not one query per row.
+    calendar_lookups = {
+        project_id: await _build_calendar_lookup(db, project_id)
+        for project_id in {a.project_id for a in activities_by_id.values()}
+    }
     for a in assignments:
         resource = resources_by_id[a.resource_id]
         activity = activities_by_id.get(a.activity_id)
@@ -37,7 +46,12 @@ async def _attach_resource_fields(db: AsyncSession, assignments: list[ResourceAs
         a.unit = resource.unit
         a.rate = resource.rate
         a.max_hours_per_day = resource.max_hours_per_day
-        a.budget = compute_assignment_budget(resource, activity, a)
+        hours_per_day = None
+        if activity is not None:
+            lookup = calendar_lookups.get(activity.project_id)
+            if lookup is not None:
+                hours_per_day = lookup.hours_per_day(lookup.resolve(activity))
+        a.budget = compute_assignment_budget(resource, activity, a, hours_per_day)
 
 
 def _validate_assignment_fields(resource: Resource, quantity, utilisation_pct: object) -> None:

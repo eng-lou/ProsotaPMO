@@ -70,7 +70,7 @@ const PANE_MAX_HEIGHT = 600
 export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical'
-  | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete' | 'status' | 'resources'
+  | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete' | 'units_pct_complete' | 'status' | 'resources'
   | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
   | 'element_count' | 'elements' | 'animation_profile'
 
@@ -137,6 +137,7 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'pct_complete', label: '% Comp', width: 'w-20', title: 'Physical % Complete — manually assessed, drives Earned Value.' },
   { key: 'schedule_pct_complete', label: 'Sched % Comp', width: 'w-24', title: 'Schedule % Complete — how far along its own current start/finish this activity should be by the data date, calculated from Prosota\'s own calendar. Distinct from Duration % Complete below.' },
   { key: 'duration_pct_complete', label: 'Dur % Comp', width: 'w-24', title: 'Duration % Complete — P6\'s own field, imported directly from a P6 file. Its internal resource-loaded remaining-duration figure, not something Prosota recomputes — blank for any hand-created activity.' },
+  { key: 'units_pct_complete', label: 'Units % Comp', width: 'w-24', title: 'Units % Complete — P6\'s own resource-effort-based field, imported directly. Visibility only — blank for any hand-created activity.' },
   { key: 'resources', label: 'Resources', width: 'w-24', title: 'Click to assign labour, equipment, material or a subcontractor to this activity' },
   { key: 'element_count', label: '3D Elements', width: 'w-16', title: 'How many 3D model elements are linked to this activity — set at schedule generation time, or via the 4D module\'s own element-to-activity linking' },
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
@@ -211,7 +212,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   activity: 220, code: 70, wbs: 56, type: 90, duration: 70,
   start: 120, bl_start: 120, finish: 120, bl_finish: 120,
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
-  pct_complete: 70, schedule_pct_complete: 90, duration_pct_complete: 90, status: 90, resources: 130,
+  pct_complete: 70, schedule_pct_complete: 90, duration_pct_complete: 90, units_pct_complete: 90, status: 90, resources: 130,
   bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
   element_count: 70, elements: 130, animation_profile: 110,
 }
@@ -253,6 +254,7 @@ function sortValue(
     case 'pct_complete': return a.pct_complete !== null ? Number(a.pct_complete) : null
     case 'schedule_pct_complete': return a.schedule_pct_complete !== null ? Number(a.schedule_pct_complete) : null
     case 'duration_pct_complete': return a.duration_pct_complete !== null ? Number(a.duration_pct_complete) : null
+    case 'units_pct_complete': return a.units_pct_complete !== null ? Number(a.units_pct_complete) : null
     case 'status': return ACTIVITY_STATUS_RANK[activityStatus(a)]
     case 'resources': {
       const names = (resourceAssignments.get(a.id) ?? []).map(ra => ra.resource_name)
@@ -367,7 +369,7 @@ function groupHeaderPlaceholder(key: string): Activity {
     variance_days: null, total_float_hours: null, free_float_hours: null, is_critical: null,
     sub_total_float_hours: null, sub_is_critical: null, pct_complete: null, commentary: null,
     constraint_type: null, constraint_date: null, calendar_id: null, animation_profile_id: null,
-    created_at: '', updated_at: '', schedule_pct_complete: null, duration_pct_complete: null,
+    created_at: '', updated_at: '', schedule_pct_complete: null, duration_pct_complete: null, units_pct_complete: null,
     bac: null, ac: null, pv: null, ev: null, cv: null, sv: null, cpi: null, spi: null, eac: null, etc: null,
     wbs_role: '', is_archived: false, is_archive_container: false,
     schedule_category: null, schedule_phase_key: null, schedule_quantity: null,
@@ -382,6 +384,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   pct_complete: 80,
   schedule_pct_complete: 96,
   duration_pct_complete: 96,
+  units_pct_complete: 96,
   status: 96,
   resources: 96,
   bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
@@ -3448,6 +3451,7 @@ export function Scheduling() {
               {isColumnVisible('pct_complete') && <col style={{ width: columnWidths.pct_complete }} />}
               {isColumnVisible('schedule_pct_complete') && <col style={{ width: columnWidths.schedule_pct_complete }} />}
               {isColumnVisible('duration_pct_complete') && <col style={{ width: columnWidths.duration_pct_complete }} />}
+              {isColumnVisible('units_pct_complete') && <col style={{ width: columnWidths.units_pct_complete }} />}
               {isColumnVisible('resources') && <col style={{ width: columnWidths.resources }} />}
               {isColumnVisible('element_count') && <col style={{ width: columnWidths.element_count }} />}
               {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
@@ -3504,6 +3508,7 @@ export function Scheduling() {
                 {isColumnVisible('pct_complete') && <ResizableTh width={columnWidths.pct_complete} onResizeStart={startColumnResize('pct_complete')} {...sortHeader('pct_complete')}>% Comp</ResizableTh>}
                 {isColumnVisible('schedule_pct_complete') && <ResizableTh width={columnWidths.schedule_pct_complete} onResizeStart={startColumnResize('schedule_pct_complete')} {...sortHeader('schedule_pct_complete')} title="Schedule % Complete — Prosota's own calendar-based calculation">Sched % Comp</ResizableTh>}
                 {isColumnVisible('duration_pct_complete') && <ResizableTh width={columnWidths.duration_pct_complete} onResizeStart={startColumnResize('duration_pct_complete')} {...sortHeader('duration_pct_complete')} title="Duration % Complete — P6's own field, imported directly">Dur % Comp</ResizableTh>}
+                {isColumnVisible('units_pct_complete') && <ResizableTh width={columnWidths.units_pct_complete} onResizeStart={startColumnResize('units_pct_complete')} {...sortHeader('units_pct_complete')} title="Units % Complete — P6's own field, imported directly">Units % Comp</ResizableTh>}
                 {isColumnVisible('resources') && <ResizableTh width={columnWidths.resources} onResizeStart={startColumnResize('resources')} {...sortHeader('resources')}>Resources</ResizableTh>}
                 {isColumnVisible('element_count') && <ResizableTh width={columnWidths.element_count} onResizeStart={startColumnResize('element_count')} {...sortHeader('element_count')} title="How many 3D model elements are linked to this activity">3D Elements</ResizableTh>}
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
@@ -3787,6 +3792,11 @@ export function Scheduling() {
                   {isColumnVisible('duration_pct_complete') && (
                     <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">
                       {a.duration_pct_complete !== null ? `${Number(a.duration_pct_complete).toFixed(1)}%` : '—'}
+                    </td>
+                  )}
+                  {isColumnVisible('units_pct_complete') && (
+                    <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">
+                      {a.units_pct_complete !== null ? `${Number(a.units_pct_complete).toFixed(1)}%` : '—'}
                     </td>
                   )}
                   {isColumnVisible('resources') && (() => {

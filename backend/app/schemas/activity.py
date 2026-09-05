@@ -345,6 +345,13 @@ class ActivityResponse(ActivityBase):
     # app. Null for any hand-created (non-P6-imported) activity — there's
     # no equivalent Prosota concept to derive it from.
     duration_pct_complete: Decimal | None = None
+    # Units % Complete — a fourth, genuinely distinct P6 progress metric
+    # (2026-09-05, per Maro: "unit percent complete"), imported from P6's
+    # own <UnitsPercentComplete> — resource-effort-based (ActualUnits /
+    # AtCompletionUnits). Visibility/parity only, doesn't drive PV/EV in
+    # Prosota (see Activity.units_pct_complete's own docstring for why).
+    # 0-100. Null for any hand-created (non-P6-imported) activity.
+    units_pct_complete: Decimal | None = None
     # EVM — sourced from this activity's linked "schedule" Cost Element (Resources
     # module), the same figures Cost Plan already shows for that line, never a
     # second independently-derived set. Null until the activity has a resourced

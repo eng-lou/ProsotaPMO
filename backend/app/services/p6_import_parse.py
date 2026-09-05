@@ -160,6 +160,23 @@ class ParsedActivity:
     # real signal falls back to Prosota's own calendar-based computation
     # rather than being pinned at a fake 0%.
     duration_pct_complete: Decimal | None
+    # P6's own <Status> — Not Started/In Progress/Completed/Suspended,
+    # already mapped to Prosota's own status vocabulary (2026-09-05, per
+    # Maro: "very aligned with the % completes and status" — see
+    # _STATUS_BY_NAME's own header). Trusted directly rather than
+    # re-derived; None only for an unrecognised value, in which case import
+    # falls back to the existing pct_complete/actual_start heuristic.
+    status: str | None
+    # P6's own <UnitsPercentComplete> (2026-09-05, per Maro: "unit percent
+    # complete" — a third, genuinely distinct P6 progress metric alongside
+    # Physical and Duration, resource-effort-based: ActualUnits /
+    # AtCompletionUnits). Captured for visibility/parity even though it
+    # doesn't drive EV for this file (every activity's own
+    # PercentCompleteType is "Physical" — confirmed against the real file,
+    # 131/131) — a project where some activities use a different driving
+    # type would need this to actually drive EV for those rows, not built
+    # since no real file exercising that has been seen yet.
+    units_pct_complete: Decimal | None
 
 
 @dataclass
@@ -305,6 +322,19 @@ _CONSTRAINT_TYPE_BY_NAME = {
     "As Late As Possible": "alap", "Start On or After": "snet", "Start On or Before": "snlt",
     "Mandatory Start": "ms", "Mandatory Finish": "mf", "Finish On or Before": "fnlt", "Finish On or After": "fnet",
 }
+# P6's own <Status> (2026-09-05, per Maro: "i need to be very aligned with
+# the % completes and status etc" — confirmed against a real file: exactly
+# these 3 values appear, 131/131 activities; "Suspended" is P6's own
+# well-documented 4th status, not seen in this file but mapped for
+# completeness). Trusted directly at import instead of re-derived from
+# PercentComplete/ActualStartDate/ActualFinishDate — the entire "genuinely
+# completed but PercentComplete=0" milestone bug class (2026-09-04) existed
+# purely because Prosota was heuristically guessing a status P6 already
+# states outright.
+_STATUS_BY_NAME = {
+    "Not Started": "planned", "In Progress": "in_progress",
+    "Completed": "completed", "Suspended": "suspended",
+}
 
 
 def _parse_calendar(el: ET.Element, skipped: list[str]) -> ParsedCalendar:
@@ -413,6 +443,11 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
     if constraint_name and constraint_type is None:
         skipped.append(f"Activity '{_text(el, 'Name')}' has unsupported constraint \"{constraint_name}\" — imported with no constraint.")
 
+    status_name = _text(el, "Status")
+    status = _STATUS_BY_NAME.get(status_name) if status_name else None
+    if status_name and status is None:
+        skipped.append(f"Activity '{_text(el, 'Name')}' has unrecognised Status \"{status_name}\" — status derived from its other fields instead.")
+
     udf_values = [v for v in (_parse_udf_value(u) for u in el.findall(_tag("UDF"))) if v is not None]
 
     return ParsedActivity(
@@ -440,6 +475,8 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         commentary=_text(el, "Notes"), udf_values=udf_values,
         actuals=_actuals(el),
         duration_pct_complete=_decimal(el, "DurationPercentComplete"),
+        status=status,
+        units_pct_complete=_decimal(el, "UnitsPercentComplete"),
     )
 
 

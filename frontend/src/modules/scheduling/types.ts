@@ -141,6 +141,11 @@ export interface Activity {
   // calendar-based calculation), even though the two are closely related.
   // 0-100. Null for any hand-created (non-P6-imported) activity.
   duration_pct_complete: string | null
+  // Units % Complete — a fourth, genuinely distinct P6 progress metric
+  // (2026-09-05, per Maro: "unit percent complete"), imported from P6's own
+  // <UnitsPercentComplete> — resource-effort-based. Visibility/parity only,
+  // doesn't drive PV/EV. 0-100. Null for any hand-created activity.
+  units_pct_complete: string | null
   // EVM — sourced from this activity's linked "schedule" Cost Element (Resources
   // module); the same figures Cost Plan shows for that line. Null until the
   // activity has a resourced cost line. PV is prorated against this activity's
@@ -524,7 +529,7 @@ export type FilterFieldKey =
   | 'start' | 'finish' | 'actual_start' | 'actual_finish' | 'bl_start' | 'bl_finish' | 'constraint_date'
   | 'duration_hours' | 'duration_days' | 'remaining_duration_hours' | 'bl_duration_hours'
   | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'sub_total_float_hours' | 'sub_is_critical'
-  | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete'
+  | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete' | 'units_pct_complete'
   | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
 
 export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
@@ -630,6 +635,7 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'pct_complete', label: '% Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'schedule_pct_complete', label: 'Schedule % Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'duration_pct_complete', label: 'Duration % Complete', type: 'number', operators: NUMBER_OPERATORS },
+  { key: 'units_pct_complete', label: 'Units % Complete', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'bac', label: 'BAC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'ac', label: 'AC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'pv', label: 'PV', type: 'number', operators: NUMBER_OPERATORS },

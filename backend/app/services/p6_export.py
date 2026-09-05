@@ -563,7 +563,11 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             continue
         activity = activities_by_id[asg.activity_id]
         resource = resources_by_id[asg.resource_id]
-        cost = resource_costing.compute_assignment_budget(resource, activity, asg)
+        # Exact hours_per_day, not activity.duration_days' own rounded
+        # display value (2026-09-05, per Maro: "time is costed by the hour"
+        # — see compute_assignment_budget's own header).
+        export_hours_per_day = calendar_lookup.hours_per_day(calendar_lookup.resolve(activity))
+        cost = resource_costing.compute_assignment_budget(resource, activity, asg, export_hours_per_day)
         if resource.resource_type in ("labour", "equipment", "crew"):
             duration_hours = activity.duration_hours if activity.duration_hours is not None else Decimal(0)
             utilisation = asg.utilisation_pct if asg.utilisation_pct is not None else Decimal(100)

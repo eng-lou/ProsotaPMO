@@ -415,17 +415,17 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             # 2010 position, identical to actual_start/actual_finish below.
             start=pa.start, finish=pa.finish,
             actual_start=pa.actual_start, actual_finish=pa.actual_finish,
-            # status (2026-09-04, per Maro: "activities that are completed
-            # in P6 are showing as still planned in prosota") — pct_complete/
-            # actual_start/actual_finish were already carried through, but
-            # nothing ever derived the Activity.status column itself from
-            # them at import time, so every imported row sat at the model's
-            # own "planned" default regardless of what the file's real
-            # Status/PercentComplete/ActualStartDate said. Reuses the exact
-            # same derivation ActivityForm's own Status field and
-            # _recompute_hierarchy's WBS rollup already use — never a
-            # second, independently-guessed rule.
-            status=_derive_activity_status(pa.activity_type, pa.pct_complete, None, None, pa.actual_start),
+            # status — P6's own <Status> is trusted directly when recognised
+            # (2026-09-05, per Maro: "very aligned with the % completes and
+            # status" — see p6_import_parse.py's own _STATUS_BY_NAME), the
+            # same fact the whole "genuinely completed but PercentComplete=0"
+            # milestone bug class (2026-09-04) existed specifically because
+            # Prosota was heuristically re-deriving a status the file already
+            # states outright. _derive_activity_status stays the fallback for
+            # an unrecognised/missing value — the exact same derivation
+            # ActivityForm's own Status field and _recompute_hierarchy's WBS
+            # rollup already use, never a second, independently-guessed rule.
+            status=pa.status or _derive_activity_status(pa.activity_type, pa.pct_complete, None, None, pa.actual_start),
             constraint_type=pa.constraint_type, constraint_date=pa.constraint_date,
             calendar_id=calendar_real_id_by_object_id.get(pa.calendar_object_id) if pa.calendar_object_id else None,
             commentary=pa.commentary,
@@ -447,6 +447,11 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
                 pa.duration_pct_complete * 100 if pa.duration_pct_complete is not None else None
             ),
             duration_pct_complete_date=parsed.data_date if pa.duration_pct_complete is not None else None,
+            # Units % Complete (2026-09-05, per Maro: "unit percent
+            # complete") — same *100 scaling, visibility only (see
+            # Activity.units_pct_complete's own docstring for why it
+            # doesn't drive EV for this file).
+            units_pct_complete=pa.units_pct_complete * 100 if pa.units_pct_complete is not None else None,
         )
         activity_sort_counter += 1
         _apply_computed_fields(activity)

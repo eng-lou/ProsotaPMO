@@ -154,6 +154,19 @@ class Activity(Base, TimestampMixin):
     # same as before this existed.
     duration_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     duration_pct_complete_date: Mapped[date | None] = mapped_column(Date)
+    # Units % Complete — a fourth, genuinely distinct P6 progress metric
+    # (2026-09-05, per Maro: "unit percent complete" — real, resource-effort-
+    # based: ActualUnits / AtCompletionUnits), imported for visibility/parity
+    # alongside Duration % Complete above. Doesn't drive PV/EV in Prosota —
+    # every activity in the one real file this was built against has
+    # PercentCompleteType="Physical" (confirmed 131/131), meaning Units %
+    # Complete isn't the driving type for any of them in P6 either; a
+    # project where some activities genuinely use it as their driving type
+    # would need EV itself to consult this per-activity, not built since no
+    # real file exercising that has been seen yet. No _date companion column
+    # (unlike duration_pct_complete) since nothing computed from it needs
+    # the same self-expiring-override treatment.
+    units_pct_complete: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     # Renamed from total_float/free_float (Integer, whole working days) — Phase 10
     # makes float a genuinely fractional, hour-precision quantity (e.g. "4.5 hours of
     # float", not just whole days), so the rename makes the unit change impossible to

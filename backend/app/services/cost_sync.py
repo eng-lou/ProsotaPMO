@@ -29,6 +29,7 @@ from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.services.reference_codes import next_code, next_codes_batch
 from app.services.resource_costing import compute_assignment_budget, compute_assignment_rate_line_qty
+from app.services.scheduling_cpm import _build_calendar_lookup
 
 
 async def _discipline_for_activity(db: AsyncSession, activity: Activity) -> str | None:
@@ -137,8 +138,14 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
         select(Resource).where(Resource.id.in_({a.resource_id for a in assignments}))
     )
     resources_by_id = {r.id: r for r in resources_result.scalars().all()}
+    # Exact hours_per_day, not activity.duration_days' own rounded-to-2dp
+    # display value (2026-09-05, per Maro: "time is costed by the hour" —
+    # see compute_assignment_budget's own header for the real, quantified
+    # rounding cost this avoids).
+    lookup = await _build_calendar_lookup(db, activity.project_id)
+    hours_per_day = lookup.hours_per_day(lookup.resolve(activity))
     total_budget = sum(
-        (compute_assignment_budget(resources_by_id[a.resource_id], activity, a) for a in assignments),
+        (compute_assignment_budget(resources_by_id[a.resource_id], activity, a, hours_per_day) for a in assignments),
         Decimal(0),
     )
     description = f"{activity.code}: {activity.task_name}"
@@ -174,7 +181,7 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
     for a in assignments:
         resource = resources_by_id[a.resource_id]
         label = resource.name if not a.role else f"{resource.name} ({a.role})"
-        qty = compute_assignment_rate_line_qty(resource, activity, a)
+        qty = compute_assignment_rate_line_qty(resource, activity, a, hours_per_day)
         db.add(CostRateLine(
             cost_element_id=element.id, description=label, qty=qty, unit=resource.unit, rate=resource.rate,
         ))
@@ -255,6 +262,10 @@ async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids:
         discipline_by_activity_id = {v.record_id: v.value_text for v in discipline_values}
 
     live_period = await _get_or_create_live_period(db, project_id)
+    # Exact hours_per_day per activity's own calendar (2026-09-05, per Maro:
+    # "time is costed by the hour") — one lookup for the whole batch, not
+    # one query per activity.
+    calendar_lookup = await _build_calendar_lookup(db, project_id)
 
     to_create: list[uuid.UUID] = []
     updating_element_ids: list[uuid.UUID] = []
@@ -288,8 +299,12 @@ async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids:
         if element is not None and element.source == "manual":
             continue
 
+        hours_per_day = calendar_lookup.hours_per_day(calendar_lookup.resolve(activity))
         total_budget = sum(
-            (compute_assignment_budget(resources_by_id[a.resource_id], activity, a) for a in activity_assignments),
+            (
+                compute_assignment_budget(resources_by_id[a.resource_id], activity, a, hours_per_day)
+                for a in activity_assignments
+            ),
             Decimal(0),
         )
         description = f"{activity.code}: {activity.task_name}"
@@ -311,7 +326,7 @@ async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids:
         for a in activity_assignments:
             resource = resources_by_id[a.resource_id]
             label = resource.name if not a.role else f"{resource.name} ({a.role})"
-            qty = compute_assignment_rate_line_qty(resource, activity, a)
+            qty = compute_assignment_rate_line_qty(resource, activity, a, hours_per_day)
             db.add(CostRateLine(
                 cost_element_id=element.id, description=label, qty=qty, unit=resource.unit, rate=resource.rate,
             ))

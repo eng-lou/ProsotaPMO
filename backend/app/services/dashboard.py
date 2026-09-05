@@ -363,6 +363,13 @@ async def _resource_assignment_summaries(
     activities_by_id = {
         a.id: a for a in (await db.execute(select(Activity).where(Activity.id.in_(activity_ids)))).scalars().all()
     }
+    # Exact hours_per_day per activity's own calendar (2026-09-05, per Maro:
+    # "time is costed by the hour" — see compute_assignment_budget's own
+    # header) — one lookup per distinct project among these activities.
+    calendar_lookups = {
+        project_id: await _build_calendar_lookup(db, project_id)
+        for project_id in {a.project_id for a in activities_by_id.values()}
+    }
 
     udf_by_record = udf_by_record or {}
     summaries = []
@@ -371,10 +378,15 @@ async def _resource_assignment_summaries(
         if resource is None:
             continue
         activity = activities_by_id.get(a.activity_id)
+        hours_per_day = None
+        if activity is not None:
+            lookup = calendar_lookups.get(activity.project_id)
+            if lookup is not None:
+                hours_per_day = lookup.hours_per_day(lookup.resolve(activity))
         summaries.append(ResourceAssignmentSummary(
             id=a.id, resource_name=resource.name, resource_type=resource.resource_type,
             discipline=resource.discipline, company=resource.company, role=a.role,
-            budget=compute_assignment_budget(resource, activity, a),
+            budget=compute_assignment_budget(resource, activity, a, hours_per_day),
             activity_id=a.activity_id,
             activity_task_name=activity.task_name if activity is not None else "Unknown",
             # Keyed by the RESOURCE's own id, not the assignment's — UDFs
