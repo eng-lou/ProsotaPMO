@@ -1339,6 +1339,7 @@ export function Scheduling() {
   const {
     definitions: udfDefinitions, loading: udfDefinitionsLoading,
     create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
+    refetch: refetchUdfDefinitions,
   } = useUserDefinedFieldDefinitions(selectedProject?.id, 'activity')
   const [visibleUdfFieldIds, setVisibleUdfFieldIds] = useState<Set<string>>(loadVisibleUdfFields)
   const isUdfColumnVisible = (id: string) => visibleUdfFieldIds.has(id)
@@ -3323,6 +3324,18 @@ export function Scheduling() {
             // a bug in the numbers themselves (2026-09-04, per Maro: "the
             // evm fields are completely blank... something is very wrong").
             // Promoting here is what the button's own label always implied.
+            // UDF definitions (2026-09-05, per Maro: "i noticed the lack of
+            // those other udfs... i tried to look for the P6 activity ID.
+            // why is it missing") — import_pmxml creates these unconditionally
+            // at import time, not promotion time, but this hook only ever
+            // fetches once per project selection (useUserDefinedFieldDefinitions's
+            // own useEffect deps are [projectId, entityType]) — importing into
+            // an already-open, already-selected project left the Columns
+            // picker's own "Custom Fields" list permanently stale, even
+            // though every definition (P6 Activity ID included) was already
+            // sitting correctly in the database the whole time. Same
+            // "refetch after import" gap already fixed for variants/EVM.
+            await refetchUdfDefinitions()
             if (!(await confirmWithDontAsk(
               'scheduling.p6-import-promote',
               `Make "${v.name}" the master schedule? Risk/Cost/ICD linked to activities in the current master will be re-linked onto this import's matching activity codes — anything with no matching code will be unlinked and reported.`,
