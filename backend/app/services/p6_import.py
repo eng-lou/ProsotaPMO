@@ -636,56 +636,52 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     await _recompute_hierarchy(db, period.id)
     await scheduling_cpm.recompute_schedule(db, period.id)
 
-    # For an activity still genuinely in progress (real % complete, no
-    # ActualFinishDate yet), recompute_schedule's own preservation branch
-    # keeps its preserved .start but still recomputes .finish from
-    # duration+calendar, discarding this exact file's own reported
-    # <FinishDate>/<PlannedFinishDate> forecast (2026-09-04, per Maro: "some
-    # dates are not accurate see overal finish" — a real, direct import
-    # showed the wrong overall/root Finish because leaf in-progress
-    # activities' own recomputed finishes didn't match P6's). Prosota's own
-    # duration+calendar math has no way to bit-for-bit reproduce whatever
-    # P6's internal engine used to land on that number (same reasoning
-    # apply_progress_snapshot's own trusted-finish fix documents for the
-    # Excel-extract case) — so this trusts the PMXML's own value directly
-    # instead, the same way actual_finish already is for a truly completed
-    # one.
-    #
-    # Milestones get the same treatment regardless of pct_complete — a
-    # milestone has no duration of its own to recompute a finish FROM in the
-    # first place (0 duration), so its CPM position is entirely driven by
-    # predecessor chains, which is exactly the kind of network-wide P6-vs-
-    # Prosota CPM divergence this file can't fully reproduce either. A
-    # not-yet-reached milestone is very often the schedule's own overall
-    # "when does this finish" marker (confirmed: this file's own overall
-    # project Finish is driven by a single not-yet-reached Finish Milestone)
-    # — trusting the file's own stated date for it, same as any other
-    # imported fact, is more useful than an independently-recomputed one
-    # neither side can fully justify.
+    # Trust the file's own start/finish for EVERY activity, not just
+    # progressed/milestone ones (2026-09-05, per Maro: real dates compared
+    # line-by-line against P6's own report — a plain "Planned", 0%-complete,
+    # non-milestone task ("Final Inspections and Punchlist") was landing 2
+    # days earlier than P6's own network solution, even though its own
+    # duration matched exactly; the same "Prosota's own duration+calendar
+    # math has no way to bit-for-bit reproduce whatever P6's internal engine
+    # used" limitation already documented for the has_progress/milestone
+    # case turns out to apply to every activity, not a narrow subset of
+    # them). Every activity's own .start/.finish are already set to the
+    # file's own values at construction above — this loop exists purely
+    # because scheduling_cpm.recompute_schedule's own forward pass
+    # overwrites them for anything that doesn't hit its "already progressed"
+    # preservation branch, i.e. every plain not-yet-started, non-milestone
+    # task. Reapplying the file's own values here, after that recompute,
+    # is strictly more accurate than trusting Prosota's own from-scratch
+    # network solve — CPM still runs, and still drives float/criticality,
+    # just not the displayed start/finish for the activities it touches.
     #
     # Run before the second _recompute_hierarchy below so the WBS/root
     # rollup reflects the corrected leaf dates, not the discarded ones.
+    trusted_start_by_activity_id: dict[uuid.UUID, datetime] = {}
     trusted_finish_by_activity_id: dict[uuid.UUID, datetime] = {}
     for pa in parsed.activities:
-        if pa.finish is None or pa.actual_finish is not None:
-            continue
-        has_progress = pa.pct_complete is not None and pa.pct_complete > 0
-        if not has_progress and not is_milestone_type(pa.activity_type):
-            continue
         activity_id = activity_real_id_by_object_id.get(pa.object_id)
         if activity_id is None:
             continue
-        trusted_finish_by_activity_id[activity_id] = pa.finish
-    if trusted_finish_by_activity_id:
+        if pa.start is not None:
+            trusted_start_by_activity_id[activity_id] = pa.start
+        if pa.finish is not None:
+            trusted_finish_by_activity_id[activity_id] = pa.finish
+    if trusted_start_by_activity_id or trusted_finish_by_activity_id:
         # Batched (2026-09-04, per Maro: a real 148-activity import took over
         # a minute — this loop used to do one db.get(Activity, ...) per
         # qualifying row). One query for every activity this pass touches,
         # not one round trip each.
         to_correct = (await db.execute(
-            select(Activity).where(Activity.id.in_(trusted_finish_by_activity_id.keys()))
+            select(Activity).where(
+                Activity.id.in_(trusted_start_by_activity_id.keys() | trusted_finish_by_activity_id.keys())
+            )
         )).scalars().all()
         for activity in to_correct:
-            activity.finish = trusted_finish_by_activity_id[activity.id]
+            if activity.id in trusted_start_by_activity_id:
+                activity.start = trusted_start_by_activity_id[activity.id]
+            if activity.id in trusted_finish_by_activity_id:
+                activity.finish = trusted_finish_by_activity_id[activity.id]
     await db.commit()
 
     await _recompute_hierarchy(db, period.id)

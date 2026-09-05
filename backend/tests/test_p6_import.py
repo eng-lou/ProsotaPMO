@@ -457,6 +457,7 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
         b"</Activity>"
         b"<Activity><ObjectId>3</ObjectId><Id>A3</Id><Name>Not Started Yet</Name><Type>Task Dependent</Type>"
         b"<PlannedDuration>40</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2097-03-01T10:40:00</StartDate><FinishDate>2097-03-06T10:40:00</FinishDate>"
         b"</Activity>"
         b"<Activity><ObjectId>4</ObjectId><Id>A4</Id><Name>Overall Finish</Name><Type>Finish Milestone</Type>"
         b"<PlannedDuration>0</PlannedDuration><PercentComplete>0</PercentComplete>"
@@ -483,6 +484,18 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
 
     not_started = next(a for a in activities if a.task_name == "Not Started Yet")
     assert not_started.status == "planned"
+    # 2026-09-05, per Maro: real dates compared line-by-line against P6's
+    # own report found a plain, 0%-complete, non-milestone, no-predecessor
+    # task landing on Prosota's own from-scratch CPM position (which, with
+    # no predecessors at all, would schedule it at/near the project's data
+    # date) rather than P6's own stated dates — the same "Prosota's own
+    # duration+calendar math can't bit-for-bit reproduce P6's engine"
+    # limitation applies to every activity, not just progressed/milestone
+    # ones. The absurd 2097 dates are deliberate — this activity has no
+    # predecessors, so CPM would otherwise place it at/near the 2011 data
+    # date, nowhere near here.
+    assert not_started.start == datetime(2097, 3, 1, 10, 40)
+    assert not_started.finish == datetime(2097, 3, 6, 10, 40)
 
     milestone = next(a for a in activities if a.task_name == "Overall Finish")
     assert milestone.status == "planned"
