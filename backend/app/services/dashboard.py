@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
@@ -17,6 +17,7 @@ from app.models.icd_baseline import IcdBaseline, IcdBaselineItem
 from app.models.icd_item import IcdItem
 from app.models.period import Period
 from app.models.resource import Resource
+from app.models.record_link import RecordLink
 from app.models.resource_assignment import ResourceAssignment
 from app.models.risk import Risk
 from app.models.risk_baseline import RiskBaseline, RiskBaselineItem
@@ -53,6 +54,7 @@ from app.schemas.dashboard import (
     ProjectInfoSummary,
     PvEvAcTrendPoint,
     PvEvAcTrendResponse,
+    RelatedRecordsResponse,
     RiskComparison,
     RiskComparisonItem,
     RiskComparisonSummary,
@@ -1127,6 +1129,63 @@ async def get_baseline_comparison(
         risk=await _risk_comparison(db, baseline_set_id),
         cost=await _cost_comparison(db, baseline_set_id),
         icd=await _icd_comparison(db, baseline_set_id),
+    )
+
+
+async def get_related_records(db: AsyncSession, project_id: uuid.UUID, activity_ids: list[uuid.UUID]) -> RelatedRecordsResponse:
+    """Cross-widget "click to filter" (2026-09-06, per Maro — see
+    RelatedRecordsResponse's own header for the full design, including why
+    there's no resource_ids). Two resolution paths, unioned:
+
+    1. Real structural FK link — CostElement.linked_activity_id — the
+       same link cost_sync.py's own schedule-linked elements already
+       read, a plain IN-clause lookup (no traversal needed, it's direct).
+
+    2. RecordLink graph edges one hop out from the seed activities — the
+       same causal-link table Poe's own explain_causal_baseline
+       (app/ai/record_tools.py) walks, but a single batched query instead
+       of that function's own per-record BFS loop, since depth 1 doesn't
+       need iterative frontier expansion: every edge touching a seed
+       activity, in either direction, is already the complete depth-1
+       answer in one query.
+    """
+    if not activity_ids:
+        return RelatedRecordsResponse(activity_ids=[], cost_element_ids=[], risk_ids=[], icd_item_ids=[])
+
+    cost_element_ids: set[uuid.UUID] = set(
+        (await db.execute(
+            select(CostElement.id).where(CostElement.linked_activity_id.in_(activity_ids))
+        )).scalars().all()
+    )
+    risk_ids: set[uuid.UUID] = set()
+    icd_item_ids: set[uuid.UUID] = set()
+
+    links = (await db.execute(
+        select(RecordLink).where(or_(
+            and_(RecordLink.source_type == "activity", RecordLink.source_id.in_(activity_ids)),
+            and_(RecordLink.target_type == "activity", RecordLink.target_id.in_(activity_ids)),
+        ))
+    )).scalars().all()
+    for link in links:
+        for rtype, rid in ((link.source_type, link.source_id), (link.target_type, link.target_id)):
+            if rtype == "risk":
+                risk_ids.add(rid)
+            elif rtype == "cost_element":
+                cost_element_ids.add(rid)
+            elif rtype in ("issue", "change", "decision"):
+                icd_item_ids.add(rid)
+            # "activity" side (the seed itself, or another activity linked
+            # via a causal edge) deliberately isn't folded into
+            # activity_ids below — the seed IS the schedule-side scope by
+            # definition; a causally-linked *other* activity is a genuine
+            # product decision (transitively widen the schedule scope too,
+            # or not) left for a future pass, not assumed here.
+
+    return RelatedRecordsResponse(
+        activity_ids=list(activity_ids),
+        cost_element_ids=list(cost_element_ids),
+        risk_ids=list(risk_ids),
+        icd_item_ids=list(icd_item_ids),
     )
 
 

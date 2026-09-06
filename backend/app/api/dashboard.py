@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -12,6 +12,7 @@ from app.schemas.dashboard import (
     DashboardOverviewResponse,
     IcdOpenItemsTrendResponse,
     PvEvAcTrendResponse,
+    RelatedRecordsResponse,
     RiskEmvTrendResponse,
     SpiTrendResponse,
 )
@@ -40,6 +41,15 @@ async def get_baseline_comparison(
     db: AsyncSession = Depends(get_db),
 ) -> BaselineComparisonResponse:
     return await svc.get_baseline_comparison(db, baseline_set_id, schedule_wbs_node_activity_id, schedule_milestone_only)
+
+
+@router.get("/related-records", response_model=RelatedRecordsResponse)
+async def get_related_records(
+    project_id: uuid.UUID,
+    activity_ids: list[uuid.UUID] = Query(default_factory=list),
+    db: AsyncSession = Depends(get_db),
+) -> RelatedRecordsResponse:
+    return await svc.get_related_records(db, project_id, activity_ids)
 
 
 @router.get("/risk-emv-trend", response_model=RiskEmvTrendResponse)

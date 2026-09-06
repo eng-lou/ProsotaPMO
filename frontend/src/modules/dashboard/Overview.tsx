@@ -6,6 +6,7 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
 import type { Activity } from '@/modules/scheduling/types'
+import { fetchRelatedRecords, toggleCrossFilterKey, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
 import { DashboardGrid } from './DashboardGrid'
 import type { DashboardOverviewResponse } from './types'
 
@@ -59,6 +60,37 @@ export function Overview() {
       .finally(() => setLoading(false))
   }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId])
 
+  // Cross-widget "click to filter" (2026-09-06, per Maro — see
+  // lib/dashboardCrossFilter.ts's own header for the full design).
+  // crossFilterSeed holds only WHAT was clicked (key + the activity ids
+  // it resolves to); the actual related-records resolution is a real
+  // server round trip (RecordLink causal edges aren't something the
+  // client already has), fetched below whenever the seed changes.
+  const [crossFilterSeed, setCrossFilterSeed] = useState<{ key: string; activityIds: string[] } | null>(null)
+  const [crossFilter, setCrossFilter] = useState<CrossFilterScope | null>(null)
+  useEffect(() => {
+    if (!selectedProject || !crossFilterSeed) {
+      setCrossFilter(null)
+      return
+    }
+    let cancelled = false
+    fetchRelatedRecords(selectedProject.id, crossFilterSeed.activityIds).then(related => {
+      if (cancelled) return
+      setCrossFilter({
+        key: crossFilterSeed.key,
+        activityIds: new Set(related.activity_ids),
+        costElementIds: new Set(related.cost_element_ids),
+        riskIds: new Set(related.risk_ids),
+        icdItemIds: new Set(related.icd_item_ids),
+      })
+    })
+    return () => { cancelled = true }
+  }, [selectedProject?.id, crossFilterSeed])
+  const handleCrossFilterClick = (key: string, activityIds: string[]) => {
+    const nextKey = toggleCrossFilterKey(crossFilter, key)
+    setCrossFilterSeed(nextKey ? { key: nextKey, activityIds } : null)
+  }
+
   if (periodLoading || scheduleLoading || !data) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
@@ -98,13 +130,25 @@ export function Overview() {
               ✕ Whole schedule
             </button>
           )}
+          {crossFilterSeed && (
+            <button
+              onClick={() => setCrossFilterSeed(null)}
+              title="Clear the cross-filter and show everything again"
+              className="text-xs px-2 py-1 rounded-md bg-prosota-amber/20 text-prosota-ink dark:text-prosota-paper border border-prosota-amber/40 hover:bg-prosota-amber/30"
+            >
+              ✕ Cross-filter active
+            </button>
+          )}
         </div>
       </div>
 
       <div className={loading ? 'opacity-60 pointer-events-none transition-opacity' : 'transition-opacity'}>
         <DashboardGrid
           projectId={selectedProject?.id}
-          widgetProps={{ data, onNavigateToRisks: () => navigate('/risks'), projectId: selectedProject?.id }}
+          widgetProps={{
+            data, onNavigateToRisks: () => navigate('/risks'), projectId: selectedProject?.id,
+            crossFilter, onCrossFilterClick: handleCrossFilterClick,
+          }}
         />
       </div>
     </div>

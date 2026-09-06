@@ -566,3 +566,29 @@ class IcdOpenItemsTrendPoint(BaseModel):
 
 class IcdOpenItemsTrendResponse(BaseModel):
     points: list[IcdOpenItemsTrendPoint]
+
+
+class RelatedRecordsResponse(BaseModel):
+    """Cross-widget "click to filter" (2026-09-06, per Maro: click Roof
+    Slab in Critical Activities, every other widget on the layout narrows
+    to what's actually related to it, Power BI-style). Resolved two ways,
+    unioned: (1) real structural FK links every other feature in this app
+    already reads — CostElement.linked_activity_id; (2) RecordLink graph
+    edges (the same causal-link table Poe's own explain_causal_baseline
+    walks) one hop out from the seed activities — a Risk/Issue/Change/
+    Decision only ever shows up here if it's genuinely, explicitly linked
+    to one of the seed activities, never a guess. Depth 1 only (not
+    explain_causal_baseline's own default 3) — an interactive click should
+    surface what's directly connected, not a multi-hop transitive chain a
+    person didn't ask to see.
+
+    No resource_ids field, deliberately — every frontend widget that
+    reads resource_assignments already carries that summary's own real
+    activity_id directly (ResourceAssignmentSummary), so it filters
+    against activity_ids above instead, more precisely (an assignment ON
+    one of these activities, not every assignment of any resource that
+    happens to also touch one of them elsewhere)."""
+    activity_ids: list[uuid.UUID]
+    cost_element_ids: list[uuid.UUID]
+    risk_ids: list[uuid.UUID]
+    icd_item_ids: list[uuid.UUID]

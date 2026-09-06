@@ -8,6 +8,7 @@ import {
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
 import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
+import { matchesCrossFilter, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { getMilestoneTrend, type MilestoneTrendSeries } from './milestoneTrend'
@@ -75,9 +76,39 @@ export interface WidgetProps {
   // fourd_video_gallery fetch their own, unrelated 4D-module data.
   filterConditions?: DashboardFilterCondition[]
   filterMatchMode?: 'all' | 'any'
+
+  // Cross-widget "click to filter" (2026-09-06, per Maro — see
+  // lib/dashboardCrossFilter.ts's own header for the full design).
+  // crossFilter is the currently-active scope (or null/undefined when
+  // nothing's selected) — every widget below that reads one of the six
+  // per-record arrays applies matchesCrossFilter alongside its existing
+  // evaluateDashboardFilter call. onCrossFilterClick is how a widget acts
+  // as a *source*: pass a unique key identifying what was clicked (e.g.
+  // `activity:${id}`) and the activity id(s) it resolves to — Overview.tsx
+  // owns the actual toggle-on-same-key-again logic and the related-
+  // records fetch this triggers. Only present while a project is
+  // selected, same optionality as projectId itself.
+  crossFilter?: CrossFilterScope | null
+  onCrossFilterClick?: (key: string, activityIds: string[]) => void
 }
 
 const RISK_BAND_COLORS: Record<string, string> = { Low: '#16a34a', Medium: '#d97706', High: '#dc2626' }
+
+// Shared click-to-source helper for every activity-keyed row/bar
+// (2026-09-06 — see WidgetProps.onCrossFilterClick's own header). ids is
+// plural so a chart bucket representing several activities at once (e.g.
+// one Float Distribution bar) can seed the cross-filter with all of them,
+// not just a single row's own id — a single-activity table row just
+// passes a one-element array.
+function activityClick(ids: string[], crossFilter: CrossFilterScope | null | undefined, onCrossFilterClick: WidgetProps['onCrossFilterClick']) {
+  const key = `activity:${ids.join(',')}`
+  return {
+    onClick: onCrossFilterClick ? () => onCrossFilterClick(key, ids) : undefined,
+    selected: crossFilter?.key === key,
+  }
+}
+const CROSS_FILTER_ROW_CLASS = 'cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2'
+const CROSS_FILTER_SELECTED_CLASS = 'bg-prosota-amber/10'
 
 export function KpiStripWidget({ data }: WidgetProps) {
   const { kpis } = data
@@ -157,8 +188,11 @@ export function RiskOverviewWidget({ data }: WidgetProps) {
   )
 }
 
-export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const milestones = data.milestones.filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const milestones = data.milestones
+    .filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+    .filter(m => matchesCrossFilter(m.id, 'activity', crossFilter))
+  const selected = milestones.find(m => crossFilter?.key === `activity:${m.id}`)
   // pt-4 (2026-09-03, per Maro: "top buffer for the milestone timeline") —
   // MilestoneTrack's own topmost label sits at a fixed offset above its
   // internal axis, which is itself vertically centred within a container
@@ -170,7 +204,11 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
   // spacing logic.
   return (
     <div className="h-full overflow-auto pt-4">
-      <MilestoneTrack milestones={milestones} />
+      <MilestoneTrack
+        milestones={milestones}
+        onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, [id]) : undefined}
+        selectedId={selected?.id ?? null}
+      />
     </div>
   )
 }
@@ -203,7 +241,7 @@ function buildMilestoneTrendAxis(series: MilestoneTrendSeries[]): MilestoneTrend
   return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
-export function MilestoneTrendChartWidget({ projectId, filterConditions, filterMatchMode }: WidgetProps) {
+export function MilestoneTrendChartWidget({ projectId, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
   const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
 
@@ -224,7 +262,9 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
   // or {field:'task_name', operator:'contains', value:'Completion'} shows
   // a themed subset. Filtered before the axis is built so a narrowed view
   // never shows a baseline column that's now entirely empty.
-  const visibleSeries = series.filter(s => evaluateDashboardFilter(s, filterConditions, filterMatchMode))
+  const visibleSeries = series
+    .filter(s => evaluateDashboardFilter(s, filterConditions, filterMatchMode))
+    .filter(s => matchesCrossFilter(s.activity_id, 'activity', crossFilter))
   if (visibleSeries.length === 0) {
     return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones match this filter.</span>
   }
@@ -623,7 +663,7 @@ export function RiskExposureWidget({ data }: WidgetProps) {
   )
 }
 
-export function TopRisksWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode }: WidgetProps) {
+export function TopRisksWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // Filterable (2026-09-02) — recomputed from data.risks (the raw list)
   // rather than data.top_risks (a fixed, unfiltered server-side top-5) so
   // an optional risk_type narrowing can apply before picking the top 5;
@@ -635,6 +675,7 @@ export function TopRisksWidget({ data, onNavigateToRisks, filterConditions, filt
   // {code:'R-004'}, {area:'Site'}, or any combination.
   const topRisks = [...data.risks]
     .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+    .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
     .slice(0, 5)
   return (
@@ -683,17 +724,19 @@ const FLOAT_BUCKETS: [label: string, min: number, max: number][] = [
   ['>160', 161, Infinity],
 ]
 
-export function FloatDistributionWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function FloatDistributionWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const withFloat = data.schedule_activities
     .filter(a => a.total_float_hours !== null)
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
-  const chartData = FLOAT_BUCKETS.map(([label, min, max]) => ({
-    label,
-    count: withFloat.filter(a => {
+    .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+  const chartData = FLOAT_BUCKETS.map(([label, min, max]) => {
+    const ids = withFloat.filter(a => {
       const f = Number(a.total_float_hours)
       return f >= min && f <= max
-    }).length,
-  }))
+    }).map(a => a.id)
+    return { label, count: ids.length, ids }
+  })
+  const click = activityClick
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -701,23 +744,35 @@ export function FloatDistributionWidget({ data, filterConditions, filterMatchMod
         <XAxis dataKey="label" tick={{ fontSize: 12 }} label={{ value: 'Total float (hours)', position: 'insideBottom', offset: -5, fontSize: 11 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count" fill="#2563eb" />
+        <Bar
+          dataKey="count"
+          fill="#2563eb"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids, crossFilter, onCrossFilterClick).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => (
+            <Cell key={i} fill={click(bucket.ids, crossFilter, onCrossFilterClick).selected ? '#d97706' : '#2563eb'} />
+          ))}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function ActivitiesByCategoryWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function ActivitiesByCategoryWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByCategory = new Map<string, string[]>()
   for (const a of data.schedule_activities) {
     if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(a.id, 'activity', crossFilter)) continue
     const key = a.schedule_category ?? 'Unspecified'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByCategory.has(key)) idsByCategory.set(key, [])
+    idsByCategory.get(key)!.push(a.id)
   }
-  const chartData = [...counts.entries()]
-    .map(([category, count]) => ({ category, count }))
+  const chartData = [...idsByCategory.entries()]
+    .map(([category, ids]) => ({ category, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
+  const click = activityClick
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -725,13 +780,22 @@ export function ActivitiesByCategoryWidget({ data, filterConditions, filterMatch
         <XAxis type="number" tick={{ fontSize: 12 }} allowDecimals={false} />
         <YAxis type="category" dataKey="category" tick={{ fontSize: 11 }} width={90} />
         <Tooltip />
-        <Bar dataKey="count" fill="#0891b2" />
+        <Bar
+          dataKey="count"
+          fill="#0891b2"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids, crossFilter, onCrossFilterClick).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => (
+            <Cell key={i} fill={click(bucket.ids, crossFilter, onCrossFilterClick).selected ? '#d97706' : '#0891b2'} />
+          ))}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function BaselineVarianceTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function BaselineVarianceTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
   // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)) — applied before the top-10-by-variance
   // slice below, same "specific-entity filter guarantees inclusion
@@ -741,6 +805,7 @@ export function BaselineVarianceTableWidget({ data, filterConditions, filterMatc
   const ranked = data.schedule_activities
     .filter(a => a.variance_days !== null && a.variance_days !== 0)
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
     .sort((a, b) => Math.abs(b.variance_days!) - Math.abs(a.variance_days!))
     .slice(0, 10)
   return (
@@ -755,17 +820,24 @@ export function BaselineVarianceTableWidget({ data, filterConditions, filterMatc
         </tr>
       </thead>
       <tbody>
-        {ranked.map(a => (
-          <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
-            <td className="py-1.5 pr-2">{a.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.bl_finish)}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
-            <td className={`py-1.5 pr-2 font-medium ${a.variance_days! > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600'}`}>
-              {a.variance_days! > 0 ? `+${a.variance_days}` : a.variance_days}d
-            </td>
-          </tr>
-        ))}
+        {ranked.map(a => {
+          const click = activityClick([a.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={a.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
+              <td className="py-1.5 pr-2">{a.task_name}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.bl_finish)}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
+              <td className={`py-1.5 pr-2 font-medium ${a.variance_days! > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600'}`}>
+                {a.variance_days! > 0 ? `+${a.variance_days}` : a.variance_days}d
+              </td>
+            </tr>
+          )
+        })}
         {ranked.length === 0 && (
           <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No baseline variance yet.</td></tr>
         )}
@@ -774,10 +846,12 @@ export function BaselineVarianceTableWidget({ data, filterConditions, filterMatc
   )
 }
 
-export function MilestonesTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function MilestonesTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any MilestoneTimelineItem field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. a specific milestone by {id:'<real uuid>'}.
-  const milestones = data.milestones.filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+  const milestones = data.milestones
+    .filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+    .filter(m => matchesCrossFilter(m.id, 'activity', crossFilter))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -789,16 +863,23 @@ export function MilestonesTableWidget({ data, filterConditions, filterMatchMode 
         </tr>
       </thead>
       <tbody>
-        {milestones.map(m => (
-          <tr key={m.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2">{m.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.bl_finish)}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.finish)}</td>
-            <td className={`py-1.5 pr-2 font-medium ${m.variance_days !== null && m.variance_days > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>
-              {m.variance_days === null ? '—' : m.variance_days > 0 ? `+${m.variance_days}d` : `${m.variance_days}d`}
-            </td>
-          </tr>
-        ))}
+        {milestones.map(m => {
+          const click = activityClick([m.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={m.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2">{m.task_name}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.bl_finish)}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(m.finish)}</td>
+              <td className={`py-1.5 pr-2 font-medium ${m.variance_days !== null && m.variance_days > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-prosota-muted'}`}>
+                {m.variance_days === null ? '—' : m.variance_days > 0 ? `+${m.variance_days}d` : `${m.variance_days}d`}
+              </td>
+            </tr>
+          )
+        })}
         {milestones.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No milestones yet.</td></tr>
         )}
@@ -807,10 +888,13 @@ export function MilestonesTableWidget({ data, filterConditions, filterMatchMode 
   )
 }
 
-export function CriticalActivitiesTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function CriticalActivitiesTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
   // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)), on top of the existing is_critical filter.
-  const critical = data.schedule_activities.filter(a => a.is_critical === true).filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+  const critical = data.schedule_activities
+    .filter(a => a.is_critical === true)
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
   return (
     <table className="w-full text-xs">
       <thead>
@@ -822,14 +906,21 @@ export function CriticalActivitiesTableWidget({ data, filterConditions, filterMa
         </tr>
       </thead>
       <tbody>
-        {critical.map(a => (
-          <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
-            <td className="py-1.5 pr-2">{a.task_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
-            <td className="py-1.5 pr-2">{a.pct_complete !== null ? `${Number(a.pct_complete).toFixed(0)}%` : '—'}</td>
-          </tr>
-        ))}
+        {critical.map(a => {
+          const click = activityClick([a.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={a.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
+              <td className="py-1.5 pr-2">{a.task_name}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
+              <td className="py-1.5 pr-2">{a.pct_complete !== null ? `${Number(a.pct_complete).toFixed(0)}%` : '—'}</td>
+            </tr>
+          )
+        })}
         {critical.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No critical activities.</td></tr>
         )}
@@ -844,10 +935,11 @@ export function CriticalActivitiesTableWidget({ data, filterConditions, filterMa
 // docstring). Same "one fetch, many views" split as the Schedule widgets
 // above; none of these fetch anything of their own.
 
-export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.category ?? 'Uncategorised'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -868,11 +960,12 @@ export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode 
   )
 }
 
-export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.risk_owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -893,11 +986,14 @@ export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode }: 
   )
 }
 
-export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // emv_cost is signed (threats negative, opportunities positive — see
   // RiskExposureWidget's own note) — magnitude is what's worth comparing
   // here, the sign is already implied by which bar it is.
-  const open = data.risks.filter(r => r.status !== 'closed').filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+  const open = data.risks
+    .filter(r => r.status !== 'closed')
+    .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+    .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
   const threatExposure = open.filter(r => r.risk_type === 'threat').reduce((sum, r) => sum + Math.abs(Number(r.emv_cost ?? 0)), 0)
   const opportunityExposure = open.filter(r => r.risk_type === 'opportunity').reduce((sum, r) => sum + Number(r.emv_cost ?? 0), 0)
   const chartData = [
@@ -920,11 +1016,12 @@ export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMat
   )
 }
 
-export function ResponseStrategyBreakdownWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function ResponseStrategyBreakdownWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.response_strategy ?? 'Not set'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -942,7 +1039,7 @@ export function ResponseStrategyBreakdownWidget({ data, filterConditions, filter
   )
 }
 
-export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode }: WidgetProps) {
+export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // Filterable (2026-09-02) — risk_type/category narrowing on top of the
   // existing open-only filter, e.g. "Cost risks only" or "opportunities only".
   // Filterable on any RiskSummary field, on top of the existing open-only
@@ -950,6 +1047,7 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditi
   const open = data.risks
     .filter(r => r.status !== 'closed')
     .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+    .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
     .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
   return (
     <table className="w-full text-xs">
@@ -989,11 +1087,12 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditi
 // function's docstring) for exactly this purpose. Same "one fetch, many
 // views" split as the Schedule/Risk widgets above.
 
-export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const totals = new Map<string, number>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.element_group ?? 'Ungrouped'
     totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
   }
@@ -1014,11 +1113,12 @@ export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatch
   )
 }
 
-export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const totals = new Map<string, number>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.cost_owner ?? 'Unassigned'
     totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
   }
@@ -1039,8 +1139,11 @@ export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatch
   )
 }
 
-export function BudgetUtilisationWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const withBac = data.cost_elements.filter(el => el.bac !== null).filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
+export function BudgetUtilisationWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+  const withBac = data.cost_elements
+    .filter(el => el.bac !== null)
+    .filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
+    .filter(el => matchesCrossFilter(el.id, 'cost_element', crossFilter))
   const bacTotal = withBac.reduce((sum, el) => sum + Number(el.bac), 0)
   const acTotal = withBac.reduce((sum, el) => sum + Number(el.ac ?? 0), 0)
   const pct = bacTotal > 0 ? Math.round((acTotal / bacTotal) * 100) : 0
@@ -1061,11 +1164,12 @@ export function BudgetUtilisationWidget({ data, filterConditions, filterMatchMod
   )
 }
 
-export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const groups = new Map<string, { bac: number; eac: number }>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.element_group ?? 'Ungrouped'
     const entry = groups.get(key) ?? { bac: 0, eac: 0 }
     entry.bac += Number(el.bac)
@@ -1090,12 +1194,13 @@ export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode 
   )
 }
 
-export function CostElementsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function CostElementsTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // Filterable (2026-09-02) — narrow to one cost group, e.g. "Prelims only".
   // Filterable on any CostElementSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={element_group:'Prelims'} or {code:'C-012'}.
   const rows = data.cost_elements
     .filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
+    .filter(el => matchesCrossFilter(el.id, 'cost_element', crossFilter))
     .sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
   return (
     <table className="w-full text-xs">
@@ -1141,11 +1246,12 @@ function daysBetween(from: string, to: Date): number {
   return Math.floor((to.getTime() - new Date(from).getTime()) / 86_400_000)
 }
 
-export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'issue') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
     counts.set(i.status, (counts.get(i.status) ?? 0) + 1)
   }
   const chartData = [...counts.entries()].map(([status, count]) => ({ status, count }))
@@ -1162,11 +1268,12 @@ export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode }
   )
 }
 
-export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'issue' && i.status !== 'closed' && i.raised_date !== null)
     .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
+    .filter(i => matchesCrossFilter(i.id, 'icd_item', crossFilter))
     .map(i => ({ ...i, daysOpen: daysBetween(i.raised_date!, now) }))
     .sort((a, b) => b.daysOpen - a.daysOpen)
     .slice(0, 10)
@@ -1199,13 +1306,14 @@ export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMod
   )
 }
 
-export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // Filterable on any IcdItemSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={item_type:'issue'} or {code:'I-014'}.
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.status === 'closed') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
     const key = i.owner ?? 'Unassigned'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -1226,11 +1334,12 @@ export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode
   )
 }
 
-export function DecisionsPendingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function DecisionsPendingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'decision' && i.status !== 'closed')
     .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
+    .filter(i => matchesCrossFilter(i.id, 'icd_item', crossFilter))
     .sort((a, b) => {
       if (a.required_by === null) return 1
       if (b.required_by === null) return -1
@@ -1268,11 +1377,12 @@ export function DecisionsPendingTableWidget({ data, filterConditions, filterMatc
   )
 }
 
-export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const counts = new Map<string, number>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'change') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
     const key = i.ccb_decision ?? 'Pending'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
@@ -1306,8 +1416,10 @@ function sumBudgetBy(assignments: ResourceAssignmentSummary[], keyOf: (a: Resour
   return [...totals.entries()].map(([key, budget]) => ({ key, budget })).sort((a, b) => b.budget - a.budget)
 }
 
-export function ResourceBudgetByTypeWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+export function ResourceBudgetByTypeWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+  const filtered = data.resource_assignments
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
   const chartData = sumBudgetBy(filtered, a => a.resource_type)
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -1322,8 +1434,10 @@ export function ResourceBudgetByTypeWidget({ data, filterConditions, filterMatch
   )
 }
 
-export function ResourceBudgetByDisciplineWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+export function ResourceBudgetByDisciplineWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+  const filtered = data.resource_assignments
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
   const chartData = sumBudgetBy(filtered, a => a.discipline ?? 'Unspecified').slice(0, 10)
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -1338,8 +1452,10 @@ export function ResourceBudgetByDisciplineWidget({ data, filterConditions, filte
   )
 }
 
-export function ResourceBudgetByCompanyWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const filtered = data.resource_assignments.filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+export function ResourceBudgetByCompanyWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+  const filtered = data.resource_assignments
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
   const chartData = sumBudgetBy(filtered, a => a.company ?? 'Unassigned').slice(0, 10)
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -1354,7 +1470,7 @@ export function ResourceBudgetByCompanyWidget({ data, filterConditions, filterMa
   )
 }
 
-export function ResourceAssignmentsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function ResourceAssignmentsTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   // Filterable on any ResourceAssignmentSummary field (2026-09-02,
   // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)) — e.g. filter={resource_type:'labour'} or
   // {resource_name:'Concrete Finishing Crew'} (a real gap Poe hit live:
@@ -1362,6 +1478,7 @@ export function ResourceAssignmentsTableWidget({ data, filterConditions, filterM
   // to one named resource specifically).
   const rows = data.resource_assignments
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
     .sort((a, b) => Number(b.budget) - Number(a.budget))
   return (
     <table className="w-full text-xs">
@@ -1390,10 +1507,11 @@ export function ResourceAssignmentsTableWidget({ data, filterConditions, filterM
   )
 }
 
-export function TopResourcesByBudgetWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function TopResourcesByBudgetWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const byResource = new Map<string, { type: string; budget: number; activityCount: number }>()
   for (const a of data.resource_assignments) {
     if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(a.activity_id, 'activity', crossFilter)) continue
     const entry = byResource.get(a.resource_name) ?? { type: a.resource_type, budget: 0, activityCount: 0 }
     entry.budget += Number(a.budget)
     entry.activityCount += 1
@@ -1614,7 +1732,7 @@ export function EarnedValueSummaryTableWidget({ data }: WidgetProps) {
   )
 }
 
-export function NearCriticalWatchListWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function NearCriticalWatchListWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any ScheduleActivitySummary field (2026-09-02,
   // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)), applied before the top-10-by-float
   // slice — same "specific-entity filter guarantees inclusion" reasoning
@@ -1622,6 +1740,7 @@ export function NearCriticalWatchListWidget({ data, filterConditions, filterMatc
   const rows = data.schedule_activities
     .filter(a => a.total_float_hours !== null && Number(a.total_float_hours) > 0 && Number(a.total_float_hours) <= 80)
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
     .sort((a, b) => Number(a.total_float_hours) - Number(b.total_float_hours))
     .slice(0, 10)
   return (
@@ -1635,14 +1754,21 @@ export function NearCriticalWatchListWidget({ data, filterConditions, filterMatc
         </tr>
       </thead>
       <tbody>
-        {rows.map(a => (
-          <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
-            <td className="py-1.5 pr-2">{a.task_name}</td>
-            <td className="py-1.5 pr-2 font-medium text-amber-600">{Number(a.total_float_hours).toFixed(1)}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
-          </tr>
-        ))}
+        {rows.map(a => {
+          const click = activityClick([a.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={a.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.code}</td>
+              <td className="py-1.5 pr-2">{a.task_name}</td>
+              <td className="py-1.5 pr-2 font-medium text-amber-600">{Number(a.total_float_hours).toFixed(1)}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{formatDate(a.finish)}</td>
+            </tr>
+          )
+        })}
         {rows.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No near-critical activities.</td></tr>
         )}
@@ -1655,17 +1781,19 @@ const ACTIVITY_STATUS_COLORS: Record<string, string> = {
   'Not Started': '#9ca3af', 'In Progress': '#2563eb', 'Complete': '#16a34a', 'Suspended': '#d97706',
 }
 
-export function ActivityStatusWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
-  const counts = { 'Not Started': 0, 'In Progress': 0, 'Complete': 0, 'Suspended': 0 }
+export function ActivityStatusWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByStatus: Record<string, string[]> = { 'Not Started': [], 'In Progress': [], 'Complete': [], 'Suspended': [] }
   for (const a of data.schedule_activities) {
     if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
+    if (!matchesCrossFilter(a.id, 'activity', crossFilter)) continue
     const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
-    if (a.suspend_date !== null && a.resume_date === null) counts.Suspended++
-    else if (pct >= 100) counts.Complete++
-    else if (pct > 0) counts['In Progress']++
-    else counts['Not Started']++
+    if (a.suspend_date !== null && a.resume_date === null) idsByStatus.Suspended.push(a.id)
+    else if (pct >= 100) idsByStatus.Complete.push(a.id)
+    else if (pct > 0) idsByStatus['In Progress'].push(a.id)
+    else idsByStatus['Not Started'].push(a.id)
   }
-  const chartData = Object.entries(counts).map(([status, count]) => ({ status, count }))
+  const chartData = Object.entries(idsByStatus).map(([status, ids]) => ({ status, count: ids.length, ids }))
+  const click = activityClick
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1673,8 +1801,14 @@ export function ActivityStatusWidget({ data, filterConditions, filterMatchMode }
         <XAxis dataKey="status" tick={{ fontSize: 11 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count">
-          {chartData.map(d => <Cell key={d.status} fill={ACTIVITY_STATUS_COLORS[d.status]} />)}
+        <Bar
+          dataKey="count"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids, crossFilter, onCrossFilterClick).onClick?.() : undefined}
+        >
+          {chartData.map(d => (
+            <Cell key={d.status} fill={ACTIVITY_STATUS_COLORS[d.status]} stroke={click(d.ids, crossFilter, onCrossFilterClick).selected ? '#d97706' : undefined} strokeWidth={click(d.ids, crossFilter, onCrossFilterClick).selected ? 3 : 0} />
+          ))}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1811,7 +1945,7 @@ export function FourDVideoGalleryWidget({ projectId }: WidgetProps) {
 
 // --- Batch 8: more Tier-1 quick wins (2026-07-20) ---
 
-export function LookaheadPlannerWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function LookaheadPlannerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const [windowWeeks, setWindowWeeks] = useState<2 | 4 | 6>(4)
   const now = new Date()
   const cutoff = new Date(now.getTime() + windowWeeks * 7 * 86_400_000)
@@ -1820,6 +1954,7 @@ export function LookaheadPlannerWidget({ data, filterConditions, filterMatchMode
   const rows = data.lookahead_items
     .filter(i => i.start !== null && new Date(i.start) <= cutoff)
     .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
+    .filter(i => matchesCrossFilter(i.id, 'activity', crossFilter))
     .sort((a, b) => new Date(a.start!).getTime() - new Date(b.start!).getTime())
   const { lookahead_summary: s } = data
   return (
@@ -1876,9 +2011,10 @@ export function LookaheadPlannerWidget({ data, filterConditions, filterMatchMode
   )
 }
 
-export function MitigationActionsTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function MitigationActionsTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const rows = data.mitigation_actions
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.risk_id, 'risk', crossFilter))
     .sort((a, b) => {
     if (a.due_date === null) return 1
     if (b.due_date === null) return -1
@@ -1915,11 +2051,12 @@ export function MitigationActionsTableWidget({ data, filterConditions, filterMat
   )
 }
 
-export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode }: WidgetProps) {
+export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const now = new Date()
   const rows = data.risks
     .filter(r => r.status !== 'closed' && r.date_raised !== null)
     .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+    .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
     .map(r => ({ ...r, daysOpen: Math.floor((now.getTime() - new Date(r.date_raised!).getTime()) / 86_400_000) }))
     .sort((a, b) => b.daysOpen - a.daysOpen)
     .slice(0, 10)

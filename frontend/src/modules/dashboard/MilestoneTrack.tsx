@@ -22,6 +22,11 @@ function statusColor(m: MilestoneTimelineItem): string {
 
 interface MilestoneTrackProps {
   milestones: MilestoneTimelineItem[]
+  // Cross-widget "click to filter" source wiring (2026-09-06) — optional so
+  // every other MilestoneTrack caller (none currently pass these) keeps
+  // working unchanged.
+  onMilestoneClick?: (id: string) => void
+  selectedId?: string | null
 }
 
 const TICK_COUNT = 6
@@ -44,7 +49,7 @@ const BASE_MIN_HEIGHT = 190
 // points is better"), not just a bare line connecting two dots. Milestones
 // sit above the axis, positioned by real date; calendar ticks sit below it,
 // so the two never collide regardless of how few milestones there are.
-export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
+export function MilestoneTrack({ milestones, onMilestoneClick, selectedId }: MilestoneTrackProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Needed to convert each milestone's percentage position into real pixels
   // for the row-stacking collision check below — a fixed fallback (a typical
@@ -138,9 +143,14 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
           further row * ROW_STEP_PX so its dot+label sit clear of the
           cluster below it instead of overlapping into unreadable text. */}
       {rows.map(({ m, left, row }) => (
-        <div key={m.id} className="absolute top-1/2" style={{ left: `${left}%`, transform: 'translateX(-50%)' }}>
+        <div
+          key={m.id}
+          className={`absolute top-1/2 ${onMilestoneClick ? 'cursor-pointer' : ''}`}
+          style={{ left: `${left}%`, transform: 'translateX(-50%)' }}
+          onClick={onMilestoneClick ? () => onMilestoneClick(m.id) : undefined}
+        >
           <span
-            className="absolute left-1/2 -translate-x-1/2 block w-3 h-3 rounded-full ring-2 ring-white"
+            className={`absolute left-1/2 -translate-x-1/2 block w-3 h-3 rounded-full ring-2 ${selectedId === m.id ? 'ring-prosota-amber' : 'ring-white'}`}
             style={{ backgroundColor: statusColor(m), bottom: DOT_BOTTOM_PX + row * ROW_STEP_PX }}
             title={m.task_name}
           />
@@ -148,7 +158,7 @@ export function MilestoneTrack({ milestones }: MilestoneTrackProps) {
             className="absolute w-max max-w-[140px] text-center left-1/2 -translate-x-1/2 text-xs"
             style={{ bottom: LABEL_BOTTOM_PX + row * ROW_STEP_PX }}
           >
-            <div className="text-gray-700 dark:text-prosota-muted font-medium leading-tight">{m.task_name}</div>
+            <div className={`font-medium leading-tight ${selectedId === m.id ? 'text-prosota-amber' : 'text-gray-700 dark:text-prosota-muted'}`}>{m.task_name}</div>
             <div className="text-gray-400 dark:text-prosota-muted mt-0.5">{formatDate(m.finish)}</div>
           </div>
         </div>

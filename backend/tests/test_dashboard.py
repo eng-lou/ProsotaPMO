@@ -560,3 +560,66 @@ async def test_risk_overview_bands_match_heat_matrix_boundaries(
     # = -1 * 0.9 * 100000 = -90000.00.
     assert exposure["High"] == "-90000.00"
     assert exposure["Low"] == "0.00"
+
+
+async def _create_record_link(client: AsyncClient, source_type: str, source_id: str, target_type: str, target_id: str, link_type: str = "causes") -> dict:
+    resp = await client.post("/api/v1/record-links/", json={
+        "source_type": source_type, "source_id": source_id, "target_type": target_type, "target_id": target_id, "link_type": link_type,
+    })
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_related_records_direct_fk_links(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """2026-09-06, per Maro: click-to-cross-filter dashboards — a schedule-
+    linked Cost Element is directly, structurally related to the activity
+    it's attached to, no RecordLink needed at all. Resource Assignments
+    aren't part of this response at all — see RelatedRecordsResponse's own
+    header on why the frontend filters those by their own activity_id
+    field directly instead."""
+    activity = await _create_activity(client, project, live_schedule_period, "Roof Slab")
+    resource = await _create_resource(client, project, "Concrete Crew")
+    await _create_resource_assignment(client, resource, activity)
+
+    resp = await client.get("/api/v1/dashboard/related-records", params={
+        "project_id": str(project.id), "activity_ids": [activity["id"]],
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["activity_ids"] == [activity["id"]]
+    assert len(body["cost_element_ids"]) == 1  # cost_sync.py auto-creates one from the assignment
+    assert body["risk_ids"] == []
+    assert body["icd_item_ids"] == []
+
+
+async def test_related_records_via_record_link_causal_edges(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """A Risk/Issue explicitly linked to the activity via RecordLink (the
+    same causal-link table Poe's own explain_causal_baseline walks) shows
+    up; one that's never been linked to anything does not."""
+    activity = await _create_activity(client, project, live_schedule_period, "Roof Slab")
+    linked_risk = await _create_risk(client, project, live_period, "Weather delay")
+    unlinked_risk = await _create_risk(client, project, live_period, "Unrelated risk")
+    linked_issue = await _create_icd_item(client, project, live_period, "issue", "Access blocked")
+
+    await _create_record_link(client, "risk", linked_risk["id"], "activity", activity["id"])
+    await _create_record_link(client, "activity", activity["id"], "issue", linked_issue["id"])
+
+    resp = await client.get("/api/v1/dashboard/related-records", params={
+        "project_id": str(project.id), "activity_ids": [activity["id"]],
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["risk_ids"] == [linked_risk["id"]]
+    assert unlinked_risk["id"] not in body["risk_ids"]
+    assert body["icd_item_ids"] == [linked_issue["id"]]
+
+
+async def test_related_records_empty_for_no_activities(client: AsyncClient, project: Project):
+    resp = await client.get("/api/v1/dashboard/related-records", params={"project_id": str(project.id)})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"activity_ids": [], "cost_element_ids": [], "risk_ids": [], "icd_item_ids": []}
