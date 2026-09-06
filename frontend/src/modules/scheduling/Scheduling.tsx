@@ -14,6 +14,7 @@ import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
+import { stringifyUdfValue } from '@/modules/fourD/scheduleScope'
 import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
 import { buildResourceRecipe, type ResourceRecipeActivity } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
@@ -1203,6 +1204,47 @@ export function Scheduling() {
   // since its row-index math assumes WBS tree order) with a flat grouped
   // list, same shape as Cost Plan/Risk/ICD's own Group By. "No grouping"
   // restores today's exact WBS tree + Gantt view, untouched.
+  // Moved up from its original spot further below (2026-09-06, per Maro:
+  // "any udfs from an imported schedule is missed out" on Filters/
+  // Highlights) — highlightedActivityIds/visibleActivities' own filter
+  // evaluation below needs real UDF definitions available to resolve a
+  // "udf.<Name>" condition, and this hook only depends on selectedProject,
+  // so moving the call itself here is safe; every other UDF-column concern
+  // (visibleUdfFieldIds, groupOptions, etc.) stays declared in its
+  // original place further down, unchanged, just reading this same
+  // `udfDefinitions` from further up now.
+  const {
+    definitions: udfDefinitions, loading: udfDefinitionsLoading,
+    create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
+    refetch: refetchUdfDefinitions,
+  } = useUserDefinedFieldDefinitions(selectedProject?.id, 'activity')
+
+  // UDF values for whichever fields active Filters/Highlights actually
+  // reference (2026-09-06, per Maro: "any udfs from an imported schedule
+  // is missed out... same with highlight") — a condition's field is
+  // "udf.<Name>" (schedulingFilters.ts's own convention, matching
+  // dashboardFilters.ts's identical one), resolved to a real definition by
+  // name here so evaluateFilter below can read real values instead of
+  // silently matching nothing the way an unrecognized field always has.
+  // Deliberately its own separate, narrowly-scoped fetch — not widened
+  // into udfDefinitionsForValues below, which exists for grid *display*
+  // and is declared later than where this is first needed.
+  const referencedFilterUdfNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const f of [...customFilters, ...customHighlights]) {
+      for (const c of f.conditions) {
+        if (c.field.startsWith('udf.')) names.add(c.field.slice(4))
+      }
+    }
+    return names
+  }, [customFilters, customHighlights])
+  const filterUdfDefinitions = udfDefinitions.filter(d => referencedFilterUdfNames.has(d.name))
+  const { getValue: getFilterUdfValue } = useUserDefinedFieldValues(filterUdfDefinitions, activities.map(a => a.id))
+  const getUdfValueByName = useCallback((activityId: string, name: string): string | null => {
+    const def = filterUdfDefinitions.find(d => d.name === name)
+    return def ? stringifyUdfValue(getFilterUdfValue(def.id, activityId)) : null
+  }, [filterUdfDefinitions, getFilterUdfValue])
+
   const [groupBy, setGroupBy] = useState<GroupByField>('none')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const toggleGroupCollapsed = (key: string) => {
@@ -1325,10 +1367,10 @@ export function Scheduling() {
     const enabledCustomHighlights = customHighlights.filter(h => enabledHighlightIds.has(h.id))
     for (const a of activities) {
       if (highlightCritical && a.is_critical === true) { ids.add(a.id); continue }
-      if (enabledCustomHighlights.some(h => evaluateFilter(a, h))) ids.add(a.id)
+      if (enabledCustomHighlights.some(h => evaluateFilter(a, h, getUdfValueByName))) ids.add(a.id)
     }
     return ids
-  }, [activities, highlightCritical, customHighlights, enabledHighlightIds])
+  }, [activities, highlightCritical, customHighlights, enabledHighlightIds, getUdfValueByName])
 
   // Show/Hide Columns — persisted per-browser so a planner's chosen layout survives
   // a reload. Activity name + checkbox columns are always shown (not toggleable).
@@ -1368,11 +1410,10 @@ export function Scheduling() {
   // show/hide-and-persist shape as the built-in columns above, just for a
   // per-project, dynamic set of custom fields instead of a fixed union.
   // Values are fetched further below, once visibleActivities exists.
-  const {
-    definitions: udfDefinitions, loading: udfDefinitionsLoading,
-    create: createUdfDefinition, update: updateUdfDefinition, remove: removeUdfDefinition,
-    refetch: refetchUdfDefinitions,
-  } = useUserDefinedFieldDefinitions(selectedProject?.id, 'activity')
+  // (udfDefinitions/udfDefinitionsLoading/createUdfDefinition/
+  // updateUdfDefinition/removeUdfDefinition/refetchUdfDefinitions
+  // themselves are declared further up now, alongside groupBy — see that
+  // declaration's own header.)
   const [visibleUdfFieldIds, setVisibleUdfFieldIds] = useState<Set<string>>(loadVisibleUdfFields)
   const isUdfColumnVisible = (id: string) => visibleUdfFieldIds.has(id)
   const toggleUdfColumn = (id: string) => {
@@ -1741,7 +1782,7 @@ export function Scheduling() {
       // the backend quality module's DCMA thresholds (app/services/scheduling_quality.py).
       if (filterAtRisk) results.push(a.total_float_hours !== null && a.total_float_hours > 0 && a.total_float_hours <= 40)
       for (const { filter, mode } of enabledCustomFilters) {
-        const matched = evaluateFilter(a, filter)
+        const matched = evaluateFilter(a, filter, getUdfValueByName)
         results.push(mode === 'show' ? matched : !matched)
       }
       if (results.length === 0) return true
@@ -1750,7 +1791,7 @@ export function Scheduling() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     orderedActivities, searchQuery, filterCritical, filterDelayed, filterAtRisk, hideArchived, collapsedIds,
-    customFilters, customFilterModes, filterMatchMode,
+    customFilters, customFilterModes, filterMatchMode, getUdfValueByName,
   ])
 
   const { getValue: getUdfValue, setValue: setUdfValue } = useUserDefinedFieldValues(
@@ -3434,6 +3475,7 @@ export function Scheduling() {
         <div className="no-print">
           <SchedulingFiltersWidget
             filters={customFilters}
+            udfDefinitions={udfDefinitions}
             onCreate={createSchedulingFilter}
             onUpdate={updateSchedulingFilter}
             onDelete={removeSchedulingFilter}
@@ -3452,6 +3494,7 @@ export function Scheduling() {
         <div className="no-print">
           <SchedulingHighlightsWidget
             highlights={customHighlights}
+            udfDefinitions={udfDefinitions}
             onCreate={createSchedulingHighlight}
             onUpdate={updateSchedulingHighlight}
             onDelete={removeSchedulingHighlight}

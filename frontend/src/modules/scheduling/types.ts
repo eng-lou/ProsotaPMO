@@ -523,6 +523,15 @@ export interface ScheduleBaseline {
 // *separate* global "match All selected filters/Any selected filter" radio
 // (a UI preference, not stored here) then combines whichever filters — built-
 // in and custom — are currently enabled; see Scheduling.tsx's visibleActivities.
+// (string & {}) keeps literal autocomplete for the known built-ins while
+// still allowing an arbitrary "udf.<Name>" value through (2026-09-06, per
+// Maro: "any udfs from an imported schedule is missed out" — Filters/
+// Highlights had no way to reference a real UDF at all before now; see
+// lib/schedulingFilters.ts's own UDF_FIELD_PREFIX/evaluateCondition
+// header). Same relaxation lib/dashboardFilters.ts's own
+// DashboardFilterCondition.field already uses (plain `string` there,
+// since it spans several unrelated summary shapes with no fixed field set
+// to begin with).
 export type FilterFieldKey =
   | 'code' | 'wbs_path' | 'task_name' | 'activity_type' | 'constraint_type' | 'status'
   | 'is_critical' | 'is_archived'
@@ -531,6 +540,7 @@ export type FilterFieldKey =
   | 'variance_days' | 'total_float_hours' | 'free_float_hours' | 'sub_total_float_hours' | 'sub_is_critical'
   | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete' | 'units_pct_complete'
   | 'bac' | 'ac' | 'pv' | 'ev' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
+  | (string & {})
 
 export type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_true' | 'is_false' | 'contains' | 'starts_with'
 
@@ -647,6 +657,23 @@ export const FILTER_FIELD_DEFS: FilterFieldDef[] = [
   { key: 'eac', label: 'EAC', type: 'number', operators: NUMBER_OPERATORS },
   { key: 'etc', label: 'ETC', type: 'number', operators: NUMBER_OPERATORS },
 ]
+
+// FILTER_FIELD_DEFS plus one entry per real UDF definition (2026-09-06, per
+// Maro: "any udfs from an imported schedule is missed out" — Filters/
+// Highlights previously had no UDF awareness at all, unlike Group By,
+// which already lists UDFs this same way). Always text-typed, same
+// "generic across data_type" convention as lib/dashboardFilters.ts's own
+// identical udf.<Name> fields — see lib/schedulingFilters.ts's own
+// UDF_FIELD_PREFIX/evaluateCondition header for how a condition built from
+// one of these actually gets evaluated.
+export function filterFieldDefsWithUdf(udfDefinitions: { id: string; name: string }[]): FilterFieldDef[] {
+  return [
+    ...FILTER_FIELD_DEFS,
+    ...udfDefinitions.map((d): FilterFieldDef => ({
+      key: `udf.${d.name}`, label: `UDF: ${d.name}`, type: 'text', operators: TEXT_OPERATORS,
+    })),
+  ]
+}
 
 // User Defined Fields (2026-07-07, per Maro — P6's own UDF dialog:
 // docs/SCHEDULING_GAPS_PLAN.md Phase 9). "cost_element" matches the

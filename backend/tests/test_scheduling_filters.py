@@ -73,6 +73,30 @@ async def test_create_rejects_unknown_field(client: AsyncClient, project: Projec
     assert resp.status_code == 422
 
 
+async def test_create_accepts_udf_condition(client: AsyncClient, project: Project):
+    """2026-09-06, per Maro: "any udfs from an imported schedule is missed
+    out" — FilterFieldKey used to be a strict Literal allow-list with no
+    way to reference a real per-project UDF at all. "udf.<Name>" (the same
+    convention app/schemas/dashboard_layout.py's own, already-unrestricted
+    filter field already uses) is now accepted, while a genuinely bogus
+    field is still rejected (test above) — the validator only recognizes
+    two shapes: a known built-in, or "udf." with something after it."""
+    resp = await client.post("/api/v1/scheduling-filters/", json={
+        "project_id": str(project.id), "name": "By Discipline",
+        "conditions": [{"field": "udf.Discipline", "operator": "eq", "value": "HVAC"}],
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["conditions"][0]["field"] == "udf.Discipline"
+
+
+async def test_create_rejects_bare_udf_prefix_with_no_name(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/scheduling-filters/", json={
+        "project_id": str(project.id), "name": "Bad",
+        "conditions": [{"field": "udf.", "operator": "eq", "value": "x"}],
+    })
+    assert resp.status_code == 422
+
+
 async def test_update_filter(client: AsyncClient, project: Project):
     create_resp = await client.post("/api/v1/scheduling-filters/", json={
         "project_id": str(project.id), "name": "Draft", "match_mode": "all",

@@ -3,12 +3,17 @@ import { useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import {
-  FILTER_FIELD_DEFS, FILTER_OPERATOR_LABELS,
-  type FilterCondition, type FilterFieldKey, type FilterOperator, type SchedulingHighlight,
+  FILTER_OPERATOR_LABELS, filterFieldDefsWithUdf,
+  type FilterCondition, type FilterFieldDef, type FilterFieldKey, type FilterOperator, type SchedulingHighlight,
+  type UserDefinedFieldDefinition,
 } from './types'
 
 interface Props {
   highlights: SchedulingHighlight[]
+  // Same UDF field-picker addition as SchedulingFiltersWidget's own —
+  // 2026-09-06, per Maro: "any udfs from an imported schedule is missed
+  // out... same with highlight".
+  udfDefinitions: UserDefinedFieldDefinition[]
   onCreate: (name: string, matchMode: 'all' | 'any', conditions: FilterCondition[]) => Promise<void>
   onUpdate: (highlightId: string, name: string, matchMode: 'all' | 'any', conditions: FilterCondition[]) => Promise<void>
   onDelete: (highlightId: string) => Promise<void>
@@ -34,31 +39,32 @@ function apiErrorDetail(err: unknown): string | undefined {
   return axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
 }
 
-function defaultCondition(): FilterCondition {
-  const def = FILTER_FIELD_DEFS[0]
+function defaultCondition(fieldDefs: FilterFieldDef[]): FilterCondition {
+  const def = fieldDefs[0]
   return { field: def.key, operator: def.operators[0], value: def.type === 'enum' ? (def.options?.[0]?.value ?? '') : '' }
 }
 
 // Same per-condition row as SchedulingFiltersWidget's own — duplicated
 // rather than shared, same as each widget file in this module already
 // keeps its own small local helpers.
-function ConditionRow({ condition, onChange, onRemove }: {
+function ConditionRow({ condition, fieldDefs, onChange, onRemove }: {
   condition: FilterCondition
+  fieldDefs: FilterFieldDef[]
   onChange: (c: FilterCondition) => void
   onRemove: () => void
 }) {
-  const def = FILTER_FIELD_DEFS.find(d => d.key === condition.field) ?? FILTER_FIELD_DEFS[0]
+  const def = fieldDefs.find(d => d.key === condition.field) ?? fieldDefs[0]
   return (
     <div className="flex items-center gap-1.5">
       <select
         value={condition.field}
         onChange={e => {
-          const nextDef = FILTER_FIELD_DEFS.find(d => d.key === e.target.value as FilterFieldKey)!
+          const nextDef = fieldDefs.find(d => d.key === e.target.value as FilterFieldKey)!
           onChange({ field: nextDef.key, operator: nextDef.operators[0], value: nextDef.type === 'enum' ? (nextDef.options?.[0]?.value ?? '') : '' })
         }}
         className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line rounded px-1.5 py-1"
       >
-        {FILTER_FIELD_DEFS.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+        {fieldDefs.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
       </select>
       <select
         value={condition.operator}
@@ -115,14 +121,15 @@ function ConditionRow({ condition, onChange, onRemove }: {
 // share the one project-wide GanttStyle.highlight_color (set in the Layout
 // widget), not a colour per rule.
 export function SchedulingHighlightsWidget({
-  highlights, onCreate, onUpdate, onDelete, onClose,
+  highlights, udfDefinitions, onCreate, onUpdate, onDelete, onClose,
   highlightCritical, onHighlightCriticalChange, enabledHighlightIds, onToggleHighlight, onClearAll,
 }: Props) {
+  const fieldDefs = filterFieldDefsWithUdf(udfDefinitions)
   const [creating, setCreating] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [conditionMatchMode, setConditionMatchMode] = useState<'all' | 'any'>('all')
-  const [conditions, setConditions] = useState<FilterCondition[]>([defaultCondition()])
+  const [conditions, setConditions] = useState<FilterCondition[]>([defaultCondition(fieldDefs)])
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -132,7 +139,7 @@ export function SchedulingHighlightsWidget({
     setEditingId(null)
     setName('')
     setConditionMatchMode('all')
-    setConditions([defaultCondition()])
+    setConditions([defaultCondition(fieldDefs)])
     setError(null)
     setCreating(true)
   }
@@ -141,7 +148,7 @@ export function SchedulingHighlightsWidget({
     setEditingId(highlight.id)
     setName(highlight.name)
     setConditionMatchMode(highlight.match_mode)
-    setConditions(highlight.conditions.length > 0 ? highlight.conditions : [defaultCondition()])
+    setConditions(highlight.conditions.length > 0 ? highlight.conditions : [defaultCondition(fieldDefs)])
     setError(null)
     setCreating(true)
   }
@@ -282,14 +289,14 @@ export function SchedulingHighlightsWidget({
           <div className="space-y-1.5 mb-2">
             {conditions.map((c, i) => (
               <ConditionRow
-                key={i} condition={c}
+                key={i} condition={c} fieldDefs={fieldDefs}
                 onChange={next => setConditions(cs => cs.map((x, j) => j === i ? next : x))}
                 onRemove={() => setConditions(cs => cs.filter((_, j) => j !== i))}
               />
             ))}
           </div>
           <button
-            onClick={() => setConditions(cs => [...cs, defaultCondition()])}
+            onClick={() => setConditions(cs => [...cs, defaultCondition(fieldDefs)])}
             className="text-xs text-blue-600 dark:text-prosota-azure dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan dark:hover:text-prosota-cyan font-medium mb-3"
           >
             + Add condition

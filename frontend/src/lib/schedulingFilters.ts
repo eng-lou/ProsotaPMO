@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Activity, FilterCondition, FilterFieldKey, SchedulingFilter } from '@/modules/scheduling/types'
+import type { Activity, FilterCondition, FilterFieldKey, FilterOperator, SchedulingFilter } from '@/modules/scheduling/types'
 import { FILTER_FIELD_DEFS } from '@/modules/scheduling/types'
 import { api } from './api'
 
@@ -44,10 +44,42 @@ function getFieldValue(activity: Activity, field: FilterFieldKey): unknown {
   }
 }
 
+function compareText(strVal: string, value: string, operator: FilterOperator): boolean {
+  const a = strVal.toLowerCase()
+  const b = value.toLowerCase()
+  switch (operator) {
+    case 'eq': return a === b
+    case 'neq': return a !== b
+    case 'contains': return a.includes(b)
+    case 'starts_with': return a.startsWith(b)
+    default: return false
+  }
+}
+
+// "udf.<Name>" reads a real per-project UDF value instead of a same-named
+// built-in field — same convention dashboardFilters.ts's own
+// evaluateDashboardCondition already established (2026-09-06, per Maro:
+// "any udfs from an imported schedule is missed out" on Filters/
+// Highlights, which previously had no UDF awareness at all). Always
+// text-typed, same "generic across data_type" reasoning as the dashboard
+// version — UDF values are already stringified before reaching here (see
+// stringifyUdfValue, scheduleScope.ts). getUdf is optional so existing
+// callers that never reference a UDF condition (or haven't been updated
+// yet) keep working — a UDF condition simply evaluates false without it,
+// same as any other unrecognized field.
+export const UDF_FIELD_PREFIX = 'udf.'
+export type UdfValueGetter = (activityId: string, udfName: string) => string | null
+
 // Null-safe by design — a condition on a field that's null for this activity
 // (e.g. total_float_hours on a wbs_summary row, outside the CPM network)
 // evaluates false rather than throwing or silently coercing null to 0.
-export function evaluateCondition(activity: Activity, condition: FilterCondition): boolean {
+export function evaluateCondition(activity: Activity, condition: FilterCondition, getUdf?: UdfValueGetter): boolean {
+  if (condition.field.startsWith(UDF_FIELD_PREFIX)) {
+    const raw = getUdf?.(activity.id, condition.field.slice(UDF_FIELD_PREFIX.length))
+    if (raw === null || raw === undefined || raw === '') return false
+    return compareText(raw, condition.value, condition.operator)
+  }
+
   const def = FILTER_FIELD_DEFS.find(d => d.key === condition.field)
   if (!def) return false
   const raw = getFieldValue(activity, condition.field)
@@ -76,15 +108,7 @@ export function evaluateCondition(activity: Activity, condition: FilterCondition
     if (condition.field === 'wbs_path' && condition.operator === 'starts_with') {
       return strVal === condition.value || strVal.startsWith(`${condition.value}.`)
     }
-    const a = strVal.toLowerCase()
-    const b = condition.value.toLowerCase()
-    switch (condition.operator) {
-      case 'eq': return a === b
-      case 'neq': return a !== b
-      case 'contains': return a.includes(b)
-      case 'starts_with': return a.startsWith(b)
-      default: return false
-    }
+    return compareText(strVal, condition.value, condition.operator)
   }
 
   if (def.type === 'date') {
@@ -121,11 +145,11 @@ export function evaluateCondition(activity: Activity, condition: FilterCondition
 
 // An empty condition list matches everything — a filter with nothing added
 // to it yet shouldn't hide the whole project.
-export function evaluateFilter(activity: Activity, filter: SchedulingFilter): boolean {
+export function evaluateFilter(activity: Activity, filter: SchedulingFilter, getUdf?: UdfValueGetter): boolean {
   if (filter.conditions.length === 0) return true
   return filter.match_mode === 'all'
-    ? filter.conditions.every(c => evaluateCondition(activity, c))
-    : filter.conditions.some(c => evaluateCondition(activity, c))
+    ? filter.conditions.every(c => evaluateCondition(activity, c, getUdf))
+    : filter.conditions.some(c => evaluateCondition(activity, c, getUdf))
 }
 
 // Named, saved, per-project custom filters (2026-07-05, per Maro, modelled on
