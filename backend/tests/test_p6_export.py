@@ -228,14 +228,27 @@ async def test_project_writes_both_id_and_name(client: AsyncClient, project: Pro
     assert len(project_id_code) <= 20
 
 
-async def test_active_baseline_is_exported(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
-    """Real bug (2026-09-06, per Maro): a re-imported exported project's
-    own BL1 Start/Finish just mirrored the live dates in P6 — this export
-    never wrote a <BaselineProject> at all, so P6 had nothing to show as a
-    real baseline. Only the currently-ASSIGNED baseline is exported
-    (matching what Activity.bl_start/bl_finish already reflects
-    everywhere else in Prosota), not every named snapshot ever captured."""
-    task = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
+async def test_no_baseline_project_is_exported(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """A <BaselineProject> was added 2026-09-06 (per Maro: a re-imported
+    exported project's own BL1 Start/Finish just mirrored the live dates
+    in P6, since this export never wrote a real baseline) but every
+    attempt at it — a minimal version, an ObjectId-linked version, and a
+    version matching a real P6 baseline export's full field set — crashed
+    P6's own "Flat" re-import identically (NullReferenceException), with
+    zero change in behavior despite substantially different content. That
+    points at re-importing a baseline through this import path being
+    unsupported at all, not a fixable field-shape bug, so the feature was
+    reverted (per Maro: "revert the 3rd [complaint]... will try") rather
+    than keep guessing against a crash with no diagnostic detail and no
+    local P6 install to iterate against. Name/ObjectId-code split and
+    real AC/EV export (the other two complaints from the same session)
+    are unaffected and stay in. Revisit only with either a real P6
+    reference for a *re-imported* (not originally-exported) baseline
+    project, or a way to capture more than a bare NullReferenceException
+    from P6's own importer."""
+    await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
 
     baseline_resp = await client.post("/api/v1/schedule-baselines/", json={
         "schedule_period_id": str(live_schedule_period.id), "name": "Client Baseline", "baseline_date": "2026-01-01",
@@ -249,45 +262,9 @@ async def test_active_baseline_is_exported(client: AsyncClient, project: Project
     assert resp.status_code == 200, resp.text
     root = ET.fromstring(resp.text)
     ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
-
-    baseline_el = root.find("p6:BaselineProject", ns)
-    assert baseline_el is not None, "no <BaselineProject> in the export"
-    assert baseline_el.findtext("p6:Name", namespaces=ns) == "Client Baseline"
-    baseline_activity_els = baseline_el.findall("p6:Activity", ns)
-    assert len(baseline_activity_els) == 1
-    assert baseline_activity_els[0].findtext("p6:Id", namespaces=ns) == task["code"]
-
-    project_el = root.find("p6:Project", ns)
-    current_baseline_id = project_el.findtext("p6:CurrentBaselineProjectObjectId", namespaces=ns)
-    assert current_baseline_id == baseline_el.findtext("p6:ObjectId", namespaces=ns)
-
-    # Real bug (2026-09-06): the BaselineProject's own <Activity> carried no
-    # <ObjectId>, so P6's importer — which links a baseline activity back to
-    # its live counterpart by ObjectId, never by Id/code — threw a
-    # NullReferenceException on re-import. Must match the SAME live
-    # <Project><Activity><ObjectId> for this activity, and <ProjectObjectId>
-    # must match <Project>'s own <ObjectId>.
-    live_activity_el = next(
-        a for a in project_el.findall("p6:Activity", ns) if a.findtext("p6:Id", namespaces=ns) == task["code"]
-    )
-    assert baseline_activity_els[0].findtext("p6:ObjectId", namespaces=ns) == live_activity_el.findtext(
-        "p6:ObjectId", namespaces=ns
-    )
-    assert baseline_activity_els[0].findtext("p6:ProjectObjectId", namespaces=ns) == project_el.findtext(
-        "p6:ObjectId", namespaces=ns
-    )
-
-
-async def test_no_baseline_project_when_none_is_assigned(
-    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
-):
-    await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
-
-    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
-    assert resp.status_code == 200, resp.text
-    root = ET.fromstring(resp.text)
-    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
     assert root.find("p6:BaselineProject", ns) is None
+    project_el = root.find("p6:Project", ns)
+    assert project_el.find("p6:CurrentBaselineProjectObjectId", ns) is None
 
 
 async def test_actual_cost_and_units_are_exported_and_prorated(

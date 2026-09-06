@@ -418,8 +418,6 @@ def build_pmxml(data: P6ExportData) -> str:
     parts.append(_el("Id", _project_id_code(data.project_name)))
     parts.append(_el("Name", data.project_name[:100]))
     parts.append(f"<ObjectId>{data.project_id}</ObjectId>")
-    if data.baseline is not None:
-        parts.append(f"<CurrentBaselineProjectObjectId>{data.baseline.object_id}</CurrentBaselineProjectObjectId>")
     if data.plan_start is not None:
         parts.append(f"<PlannedStartDate>{_fmt_datetime(data.plan_start)}</PlannedStartDate>")
     default_calendar = next((c for c in data.calendars if c.is_default), None)
@@ -435,46 +433,7 @@ def build_pmxml(data: P6ExportData) -> str:
         parts.append(_relationship_xml(rel))
     parts.append("</Project>")
 
-    # <BaselineProject> is a full sibling of <Project>, not nested inside
-    # it — confirmed against a real two-baseline P6 export, and how
-    # p6_import_parse.py's own parser looks for it (root.findall, not
-    # scoped under <Project>). See P6Baseline's own header.
-    if data.baseline is not None:
-        parts.append(_baseline_project_xml(data.baseline, data.project_id))
-
     parts.append("</APIBusinessObjects>")
     return "\n".join(parts)
 
 
-def _baseline_project_xml(baseline, original_project_id: int) -> str:  # noqa: ANN001 — p6_export.P6Baseline
-    # ObjectId/ProjectObjectId (2026-09-06, per Maro: re-importing the export
-    # with its baseline included threw a NullReferenceException in P6's own
-    # importer) — PMXML links every entity by ObjectId, never by Id/code;
-    # P6's flat importer matches a BaselineProject<Activity> back to its live
-    # counterpart via ObjectId, so omitting it left P6 dereferencing a failed
-    # lookup. a.id is the SAME numeric id _activity_xml already assigned this
-    # activity in the live <Project> (both draw from the same task_ids
-    # _IdSequence, keyed by the same Prosota activity uuid), so the two
-    # elements resolve to one another. <Id> (the code) is kept too since it's
-    # harmless and matches the real reference file's own shape.
-    activities_xml = "".join(
-        f"<Activity>"
-        f"{_el('Id', a.activity_id)}"
-        f"<ObjectId>{a.id}</ObjectId>"
-        f"<ProjectObjectId>{original_project_id}</ProjectObjectId>"
-        f"{f'<StartDate>{_fmt_datetime(a.start)}</StartDate>' if a.start else '<StartDate xsi:nil=\"true\" />'}"
-        f"{f'<FinishDate>{_fmt_datetime(a.finish)}</FinishDate>' if a.finish else '<FinishDate xsi:nil=\"true\" />'}"
-        f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
-        f"</Activity>"
-        for a in baseline.activities
-    )
-    return (
-        f"<BaselineProject>"
-        f"<DataDate>{_fmt_datetime(baseline.data_date)}</DataDate>"
-        f"{_el('BaselineTypeName', baseline.name)}"
-        f"{_el('Name', baseline.name)}"
-        f"<ObjectId>{baseline.object_id}</ObjectId>"
-        f"<OriginalProjectObjectId>{original_project_id}</OriginalProjectObjectId>"
-        f"{activities_xml}"
-        f"</BaselineProject>"
-    )

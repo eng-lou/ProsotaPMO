@@ -16,7 +16,6 @@ from app.models.cost_element import CostElement
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
-from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
@@ -225,41 +224,6 @@ class P6Assignment:
 
 
 @dataclass
-class P6BaselineActivity:
-    # activity_id: the LIVE activity's own current code (2026-09-06) — not
-    # the baseline snapshot's own stale ScheduleBaselineActivity.code,
-    # which can be out of date if the activity's been renamed/renumbered
-    # since the baseline was captured. Matched against the SAME <Activity
-    # Id> this export's own _activity_xml already writes for the live
-    # schedule, so P6 can actually link the two back together.
-    activity_id: str
-    # The SAME numeric ObjectId the live activity gets in <Project><Activity>
-    # (both draw from the one task_ids _IdSequence, keyed by the activity's
-    # uuid) — PMXML links a BaselineProject activity back to its live
-    # counterpart by ObjectId, not by Id/code; omitting it crashed P6's own
-    # importer with a NullReferenceException on re-import (2026-09-06).
-    id: int
-    start: datetime | None
-    finish: datetime | None
-    duration_hours: Decimal
-
-
-@dataclass
-class P6Baseline:
-    """The project's own currently-assigned schedule baseline (2026-09-06,
-    per Maro: re-importing an exported project back into P6 showed BL1
-    Start/Finish just mirroring the live dates — this export never wrote a
-    <BaselineProject> at all before now). Only the one baseline Activity.
-    bl_start/bl_finish already reflects (is_active=True) is exported —
-    matching what every other Prosota feature already treats as "the"
-    baseline, not the full library of every named snapshot ever captured."""
-    object_id: int
-    name: str
-    data_date: datetime
-    activities: list[P6BaselineActivity] = field(default_factory=list)
-
-
-@dataclass
 class P6UdfType:
     id: int
     # PROJWBS | TASK | RSRC — which table this UDF applies to.
@@ -295,7 +259,6 @@ class P6ExportData:
     assignments: list[P6Assignment] = field(default_factory=list)
     udf_types: list[P6UdfType] = field(default_factory=list)
     udf_values: list[P6UdfValue] = field(default_factory=list)
-    baseline: P6Baseline | None = None
 
 
 def _resource_type(resource_type: str) -> str:
@@ -459,18 +422,6 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         )
         udf_values = list(udf_values_result.scalars().all())
 
-    active_baseline = (await db.execute(
-        select(ScheduleBaseline).where(
-            ScheduleBaseline.schedule_period_id == schedule_period_id, ScheduleBaseline.is_active.is_(True),
-        )
-    )).scalar_one_or_none()
-    baseline_activities: list[ScheduleBaselineActivity] = []
-    if active_baseline is not None:
-        baseline_activities_result = await db.execute(
-            select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == active_baseline.id)
-        )
-        baseline_activities = list(baseline_activities_result.scalars().all())
-
     # --- ID assignment (see _IdSequence's own header) ---
     calendar_ids = _IdSequence()
     wbs_ids = _IdSequence()
@@ -531,23 +482,6 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
     # synthetic root for a top-level non-summary activity.
     activities_by_id = {a.id: a for a in activities}
     nearest_wbs_id: dict[uuid.UUID, int] = {}
-
-    if active_baseline is not None:
-        out.baseline = P6Baseline(
-            object_id=999_000_001,  # never collides — every other sequence starts from 1
-            name=_sanitize_p6_text(active_baseline.name) or active_baseline.name,
-            data_date=datetime.combine(active_baseline.baseline_date, time(0, 0)),
-            activities=[
-                P6BaselineActivity(
-                    activity_id=activities_by_id[sba.activity_id].code,
-                    id=task_ids.id_for(sba.activity_id),
-                    start=sba.start, finish=sba.finish,
-                    duration_hours=sba.duration_hours if sba.duration_hours is not None else Decimal(0),
-                )
-                for sba in baseline_activities
-                if sba.activity_id in activities_by_id  # dropped/archived since the baseline was captured
-            ],
-        )
 
     def resolve_nearest_wbs(activity: Activity) -> int:
         if activity.id in nearest_wbs_id:
