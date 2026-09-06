@@ -235,29 +235,10 @@ class P6BaselineActivity:
     activity_id: str
     # The SAME numeric ObjectId the live activity gets in <Project><Activity>
     # (both draw from the one task_ids _IdSequence, keyed by the activity's
-    # uuid) — omitting it crashed P6's own importer with a
-    # NullReferenceException on re-import (2026-09-06), and it's still
-    # required even after that first fix (see the fields below).
+    # uuid) — PMXML links a BaselineProject activity back to its live
+    # counterpart by ObjectId, not by Id/code; omitting it crashed P6's own
+    # importer with a NullReferenceException on re-import (2026-09-06).
     id: int
-    # name/calendar_id/task_type/status_code: a real P6-generated baseline
-    # export always carries the SAME full field set on a <BaselineProject>
-    # <Activity> as a live <Project><Activity> does (GUID, CalendarObjectId,
-    # DurationType, Status, Type, WBSObjectId, PercentCompleteType, ...) —
-    # confirmed against a real reference file's own baseline export. A first
-    # fix that only added <ObjectId> still crashed identically on a second
-    # real re-import (2026-09-06), so this mirrors that live-activity field
-    # set rather than guessing at a narrower one again. Sourced from the
-    # LIVE activity's own current values (Prosota's ScheduleBaselineActivity
-    # snapshot only ever captured start/finish/duration_hours — there's no
-    # "status at baseline time" to draw on), which is fine: P6's own
-    # baseline-vs-current comparison is about the snapshotted dates/duration
-    # below, not these structural filler fields.
-    name: str
-    calendar_id: int
-    task_type: str
-    status_code: str
-    wbs_id: int
-    guid: str
     start: datetime | None
     finish: datetime | None
     duration_hours: Decimal
@@ -551,6 +532,23 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
     activities_by_id = {a.id: a for a in activities}
     nearest_wbs_id: dict[uuid.UUID, int] = {}
 
+    if active_baseline is not None:
+        out.baseline = P6Baseline(
+            object_id=999_000_001,  # never collides — every other sequence starts from 1
+            name=_sanitize_p6_text(active_baseline.name) or active_baseline.name,
+            data_date=datetime.combine(active_baseline.baseline_date, time(0, 0)),
+            activities=[
+                P6BaselineActivity(
+                    activity_id=activities_by_id[sba.activity_id].code,
+                    id=task_ids.id_for(sba.activity_id),
+                    start=sba.start, finish=sba.finish,
+                    duration_hours=sba.duration_hours if sba.duration_hours is not None else Decimal(0),
+                )
+                for sba in baseline_activities
+                if sba.activity_id in activities_by_id  # dropped/archived since the baseline was captured
+            ],
+        )
+
     def resolve_nearest_wbs(activity: Activity) -> int:
         if activity.id in nearest_wbs_id:
             return nearest_wbs_id[activity.id]
@@ -581,11 +579,6 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         ))
 
     # --- Activities (non-wbs_summary rows only) ---
-    # p6_activity_by_id: keyed by the SAME task_ids-assigned numeric id, so
-    # the baseline block below can pull a baseline activity's structural
-    # fields (calendar/task type/status/wbs/guid) straight off its live
-    # counterpart rather than re-deriving them a second time.
-    p6_activity_by_id: dict[int, P6Activity] = {}
     for a in activities:
         if a.activity_type == "wbs_summary":
             continue
@@ -593,7 +586,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         wbs_id = resolve_nearest_wbs(a)
         activity_name = _sanitize_p6_text(a.task_name) or a.task_name
         activity_name = _strip_redundant_wbs_prefix(activity_name, wbs_name_by_id.get(wbs_id, ""))
-        p6_activity = P6Activity(
+        out.activities.append(P6Activity(
             id=task_ids.id_for(a.id), guid=_p6_guid(), wbs_id=wbs_id,
             calendar_id=calendar_ids.id_for(calendar.id), code=a.code, name=activity_name,
             task_type=_task_type(a.activity_type), status_code=_status_code(a),
@@ -603,35 +596,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             total_float_hours=a.total_float_hours, free_float_hours=a.free_float_hours,
             constraint_type=_CONSTRAINT_TYPE_MAP.get(a.constraint_type or ""), constraint_date=a.constraint_date,
             commentary=_sanitize_p6_text(a.commentary),
-        )
-        out.activities.append(p6_activity)
-        p6_activity_by_id[p6_activity.id] = p6_activity
-
-    if active_baseline is not None:
-        baseline_activity_xmls: list[P6BaselineActivity] = []
-        for sba in baseline_activities:
-            # Dropped/archived since the baseline was captured, or a
-            # wbs_summary snapshot row — a real BaselineProject only carries
-            # genuine Task/Milestone rows as <Activity>; WBS-level snapshots
-            # belong in its own <WBS> elements, not built here.
-            if sba.activity_id not in activities_by_id:
-                continue
-            p6_activity = p6_activity_by_id.get(task_ids.id_for(sba.activity_id))
-            if p6_activity is None:
-                continue
-            baseline_activity_xmls.append(P6BaselineActivity(
-                activity_id=p6_activity.code, id=p6_activity.id, name=p6_activity.name,
-                calendar_id=p6_activity.calendar_id, task_type=p6_activity.task_type,
-                status_code=p6_activity.status_code, wbs_id=p6_activity.wbs_id, guid=_p6_guid(),
-                start=sba.start, finish=sba.finish,
-                duration_hours=sba.duration_hours if sba.duration_hours is not None else Decimal(0),
-            ))
-        out.baseline = P6Baseline(
-            object_id=999_000_001,  # never collides — every other sequence starts from 1
-            name=_sanitize_p6_text(active_baseline.name) or active_baseline.name,
-            data_date=datetime.combine(active_baseline.baseline_date, time(0, 0)),
-            activities=baseline_activity_xmls,
-        )
+        ))
 
     # --- Relationships ---
     for rel in relationships:

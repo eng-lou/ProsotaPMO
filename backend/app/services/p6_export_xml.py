@@ -447,45 +447,24 @@ def build_pmxml(data: P6ExportData) -> str:
 
 
 def _baseline_project_xml(baseline, original_project_id: int) -> str:  # noqa: ANN001 — p6_export.P6Baseline
-    # Full field set, mirroring _activity_xml's own live <Project><Activity>
-    # shape (2026-09-06) — a first fix only added <ObjectId>/<ProjectObjectId>
-    # (PMXML links every entity by ObjectId, never Id/code) but a real
-    # re-import still crashed identically. Checked against a real P6-exported
-    # <BaselineProject> reference file: every one of its <Activity> elements
-    # carries the SAME full structural field set a live one does (GUID,
-    # CalendarObjectId, DurationType, Status, Type, WBSObjectId,
-    # PercentCompleteType, ...), not just Id/ObjectId/dates. That same
-    # reference file also revealed <ProjectObjectId> here points at the
-    # BASELINE's own ObjectId, not the live project's — the opposite of the
-    # first fix's assumption, since a P6 baseline is a genuine copy of the
-    # project's own tables under a separate internal project id.
-    # start/finish/duration_hours are the one real baseline-time snapshot
-    # (ScheduleBaselineActivity); everything else (name/calendar/task
-    # type/status/wbs) is the LIVE activity's own current value — Prosota
-    # never snapshotted those at baseline time, and P6's own baseline-vs-
-    # current comparison is date/duration driven, not these structural
-    # fields.
+    # ObjectId/ProjectObjectId (2026-09-06, per Maro: re-importing the export
+    # with its baseline included threw a NullReferenceException in P6's own
+    # importer) — PMXML links every entity by ObjectId, never by Id/code;
+    # P6's flat importer matches a BaselineProject<Activity> back to its live
+    # counterpart via ObjectId, so omitting it left P6 dereferencing a failed
+    # lookup. a.id is the SAME numeric id _activity_xml already assigned this
+    # activity in the live <Project> (both draw from the same task_ids
+    # _IdSequence, keyed by the same Prosota activity uuid), so the two
+    # elements resolve to one another. <Id> (the code) is kept too since it's
+    # harmless and matches the real reference file's own shape.
     activities_xml = "".join(
         f"<Activity>"
-        f'<ActualFinishDate xsi:nil="true" />'
-        f'<ActualStartDate xsi:nil="true" />'
-        f"<CalendarObjectId>{a.calendar_id}</CalendarObjectId>"
-        f"<DurationType>Fixed Duration and Units/Time</DurationType>"
-        f"{f'<FinishDate>{_fmt_datetime(a.finish)}</FinishDate>' if a.finish else '<FinishDate xsi:nil=\"true\" />'}"
-        f"<GUID>{a.guid}</GUID>"
         f"{_el('Id', a.activity_id)}"
-        f"{_el('Name', a.name)}"
         f"<ObjectId>{a.id}</ObjectId>"
-        f"<PercentComplete>0</PercentComplete>"
-        f"<PercentCompleteType>Physical</PercentCompleteType>"
-        f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
-        f"{f'<PlannedFinishDate>{_fmt_datetime(a.finish)}</PlannedFinishDate>' if a.finish else '<PlannedFinishDate xsi:nil=\"true\" />'}"
-        f"{f'<PlannedStartDate>{_fmt_datetime(a.start)}</PlannedStartDate>' if a.start else '<PlannedStartDate xsi:nil=\"true\" />'}"
-        f"<ProjectObjectId>{baseline.object_id}</ProjectObjectId>"
-        f"<Status>{_STATUS_NAMES.get(a.status_code, 'Not Started')}</Status>"
+        f"<ProjectObjectId>{original_project_id}</ProjectObjectId>"
         f"{f'<StartDate>{_fmt_datetime(a.start)}</StartDate>' if a.start else '<StartDate xsi:nil=\"true\" />'}"
-        f"<Type>{_TASK_TYPE_NAMES.get(a.task_type, 'Task Dependent')}</Type>"
-        f"<WBSObjectId>{a.wbs_id}</WBSObjectId>"
+        f"{f'<FinishDate>{_fmt_datetime(a.finish)}</FinishDate>' if a.finish else '<FinishDate xsi:nil=\"true\" />'}"
+        f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
         f"</Activity>"
         for a in baseline.activities
     )
@@ -493,7 +472,6 @@ def _baseline_project_xml(baseline, original_project_id: int) -> str:  # noqa: A
         f"<BaselineProject>"
         f"<DataDate>{_fmt_datetime(baseline.data_date)}</DataDate>"
         f"{_el('BaselineTypeName', baseline.name)}"
-        f"<GUID>{_guid_braces()}</GUID>"
         f"{_el('Name', baseline.name)}"
         f"<ObjectId>{baseline.object_id}</ObjectId>"
         f"<OriginalProjectObjectId>{original_project_id}</OriginalProjectObjectId>"
