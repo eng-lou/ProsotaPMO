@@ -39,6 +39,23 @@ _P6_ACTIVITY_ID_UDF_NAME = "P6 Activity ID"
 _P6_ACTUAL_COST_UDF_NAME = "P6 Actual Cost"
 
 
+def _collapse_repeated_messages(messages: list[str]) -> list[str]:
+    """Several `skipped` messages below are generic (no per-occurrence
+    detail like a name) and a genuinely messy real P6 export can repeat the
+    exact same one dozens of times (e.g. a whole batch of byte-identical
+    duplicate resource assignments) — showing that as N identical lines in
+    the import summary is pure noise, not N distinct things to review.
+    Collapses consecutive-or-not repeats into one line with a "(x N)"
+    count, preserving each distinct message's first-seen order."""
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for m in messages:
+        if m not in counts:
+            order.append(m)
+        counts[m] = counts.get(m, 0) + 1
+    return [m if counts[m] == 1 else f"{m} (x{counts[m]})" for m in order]
+
+
 @dataclass
 class P6ImportSummary:
     schedule_variant_id: uuid.UUID
@@ -725,7 +742,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         calendar_count=len(calendar_real_id_by_object_id), resource_count=len(resource_real_id_by_object_id),
         activity_count=1 + len(wbs_real_id_by_object_id) + len(activity_real_id_by_object_id),
         relationship_count=relationship_count, assignment_count=assignment_count, udf_value_count=udf_value_count,
-        baseline_count=baseline_count, skipped=skipped,
+        baseline_count=baseline_count, skipped=_collapse_repeated_messages(skipped),
     )
 
 

@@ -27,7 +27,7 @@ from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefine
 from app.services import schedule_variant as schedule_variant_svc
 from app.services.activity import _attach_evm_fields
 from app.services.activity import list_activities as _list_activities_with_evm
-from app.services.p6_import import import_pmxml
+from app.services.p6_import import _collapse_repeated_messages, import_pmxml
 from app.services.p6_import_parse import parse_pmxml
 from app.services.resource_costing import compute_assignment_budget
 from tests.test_p6_export import _seed_schedule
@@ -900,6 +900,26 @@ async def test_imported_assignment_utilisation_reproduces_the_files_own_bac_exac
     ).quantize(Decimal("0.01"))
     assert old_rounded_budget == Decimal("88196.98")  # what Numeric(5,2) used to produce
     assert budget != old_rounded_budget
+
+
+def test_collapse_repeated_messages_counts_without_hiding_distinct_ones():
+    """A genuinely messy real P6 export can repeat the exact same generic
+    skipped-item message dozens of times (a real one hit 73 — see
+    test_duplicate_resource_assignment_same_units_is_deduplicated_not_
+    double_counted above) — showing 73 identical lines in the import
+    summary is noise, not 73 distinct things worth a user's attention."""
+    messages = [
+        "Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept).",
+        "Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept).",
+        'Activity "Foo" references a WBS that doesn\'t exist in this file — imported under the project root.',
+        "Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept).",
+        'Activity "Bar" references a WBS that doesn\'t exist in this file — imported under the project root.',
+    ]
+    assert _collapse_repeated_messages(messages) == [
+        "Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept). (x3)",
+        'Activity "Foo" references a WBS that doesn\'t exist in this file — imported under the project root.',
+        'Activity "Bar" references a WBS that doesn\'t exist in this file — imported under the project root.',
+    ]
 
 
 async def test_multi_assignment_activity_bac_matches_p6_exactly(db: AsyncSession, project: Project):
