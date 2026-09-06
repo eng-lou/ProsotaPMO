@@ -5428,3 +5428,29 @@ Register page) — turning that same click into a cross-filter click
 instead would have quietly broken an existing feature to add a new one,
 so those two were left exactly as they were, and a different table
 (Risk Ageing) got the new click behavior instead.
+
+## 2026-09-06 — The P6 baseline fix gave up, and rightly so
+
+After the second, much more thorough baseline-export fix (logged above)
+still crashed a real re-import identically, Maro made a crucial point
+that reframed the whole debugging session: it had genuinely worked
+before this session's baseline work — no baseline in the export, but a
+clean import — and every attempt at adding one broke the import
+completely, not just partially.
+
+That's the moment three failed attempts stopped being "try a fourth
+guess" and started being "the wrong thing to keep guessing at." Three
+meaningfully different versions of the same XML block (bare, ID-linked,
+and a full field-for-field match against a real reference export) had
+all failed with the exact same error, which is actually informative in
+its own right: if changing the content three different ways changes
+nothing about the outcome, the content probably isn't the problem — the
+whole idea of bundling a baseline into this particular kind of re-import
+file might just not be something P6 supports, a structural limit rather
+than a bug to fix. Recognizing "I've run out of independent hypotheses
+to test" and saying so plainly, instead of quietly trying a fourth
+variation, was the right call — reverted the baseline part back out,
+kept the other two genuine fixes (the ones that actually did work) in
+place, so the import works again while the baseline question waits for
+either a real P6 install to test against directly, or a more detailed
+error than a bare "something was null" from Primavera's own importer.
