@@ -61,6 +61,56 @@ async def _discipline_for_activity(db: AsyncSession, activity: Activity) -> str 
     return value
 
 
+async def _top_level_wbs_branch_names(
+    db: AsyncSession, project_id: uuid.UUID, activity_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str | None]:
+    """element_group's own fallback when there's no real "Discipline" UDF
+    value (2026-09-06, per Maro: a P6-imported or hand-typed schedule —
+    never IFC-generated, so _discipline_for_activity always returns None
+    for it — showed its whole Cost Plan lumped into one useless
+    "(ungrouped)" bucket in the Cost Summary panel). Every schedule has a
+    real WBS breakdown though (Interior Finishes, Roof, etc.), even
+    without a Discipline UDF, so that's what this groups by instead.
+
+    Uses wbs_role (P|W|T|M — see _activity_role's own header), not raw
+    parent-chain depth: depth alone can't tell "one level below a real
+    project-root P" (want that node) apart from "IS itself a standalone
+    root with no wrapper above it" (want that node too, not something
+    above it) — both can be the same depth-1 shape and need the same
+    answer for a genuinely different structural reason. Climbing from the
+    activity toward the root, the OUTERMOST 'W' found (closest to the
+    root — a schedule can nest WBS several levels deep, and this wants the
+    top branch, not an intermediate one) wins; if the chain has no 'W' at
+    all (a flat schedule with tasks directly under one root, or the
+    activity itself resourced directly with nothing above it), the
+    outermost 'P' is used instead — for a lone standalone WBS branch with
+    no enclosing project wrapper, that P *is* the meaningful branch name,
+    not a generic "whole project" label. Batched over the whole project's
+    parent_id chain in one query rather than walking each activity's
+    ancestors with its own round trip."""
+    rows = (await db.execute(
+        select(Activity.id, Activity.parent_id, Activity.task_name, Activity.wbs_role)
+        .where(Activity.project_id == project_id)
+    )).all()
+    parent_by_id = {r.id: r.parent_id for r in rows}
+    name_by_id = {r.id: r.task_name for r in rows}
+    role_by_id = {r.id: r.wbs_role for r in rows}
+
+    def top_level_branch_id(activity_id: uuid.UUID) -> uuid.UUID | None:
+        node: uuid.UUID | None = activity_id
+        result: uuid.UUID | None = None
+        while node is not None:
+            role = role_by_id.get(node)
+            if role == "W":
+                result = node  # overwritten on every W found — the outermost one wins
+            elif role == "P" and result is None:
+                result = node  # only a fallback if no W was ever found on the way up
+            node = parent_by_id.get(node)
+        return result
+
+    return {aid: name_by_id.get(top_level_branch_id(aid)) for aid in activity_ids}
+
+
 async def _get_linked_element(db: AsyncSession, activity_id: uuid.UUID) -> CostElement | None:
     result = await db.execute(select(CostElement).where(CostElement.linked_activity_id == activity_id))
     return result.scalar_one_or_none()
@@ -159,6 +209,8 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
     ).quantize(_MONEY)
     description = f"{activity.code}: {activity.task_name}"
     discipline = await _discipline_for_activity(db, activity)
+    if discipline is None:
+        discipline = (await _top_level_wbs_branch_names(db, activity.project_id, {activity.id}))[activity.id]
 
     if element is None:
         code = await next_code(db, CostElement, "CST", activity.project_id)
@@ -269,6 +321,15 @@ async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids:
             )
         )).scalars().all()
         discipline_by_activity_id = {v.record_id: v.value_text for v in discipline_values}
+    # Same top-level-WBS-branch fallback the single-activity version uses,
+    # batched here — only for activities with no real Discipline value, not
+    # the whole project's worth of activities every single time.
+    needs_fallback = {aid for aid in activity_ids if not discipline_by_activity_id.get(aid)}
+    if needs_fallback:
+        fallback_by_activity_id = await _top_level_wbs_branch_names(db, project_id, needs_fallback)
+        for aid, name in fallback_by_activity_id.items():
+            if name is not None:
+                discipline_by_activity_id[aid] = name
 
     live_period = await _get_or_create_live_period(db, project_id)
     # Exact hours_per_day per activity's own calendar (2026-09-05, per Maro:

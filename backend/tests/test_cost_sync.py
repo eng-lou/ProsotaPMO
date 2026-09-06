@@ -73,8 +73,11 @@ async def test_linked_element_element_group_null_without_discipline_udf(
     client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
 ):
     # A hand-created activity was never IFC-generated, so it has no
-    # Discipline UDF value at all — element_group should stay null, not
-    # guess at something.
+    # Discipline UDF value at all — and here it also has no WBS parent
+    # (2026-09-06 fallback's own condition: no real WBS branch to group
+    # by either), so element_group should stay null, not guess at
+    # something. See the tests below for the same activity WITH a WBS
+    # parent, where the fallback does kick in.
     activity = await _create_activity(client, project, live_schedule_period, "Hand-Added Task", duration_hours=8)
     resource = await _create_resource(client, project, rate="45")
     await client.post("/api/v1/resource-assignments/", json={
@@ -83,6 +86,88 @@ async def test_linked_element_element_group_null_without_discipline_udf(
 
     element = await _linked_element(client, project, live_period)
     assert element["element_group"] is None
+
+
+async def test_linked_element_element_group_falls_back_to_top_level_wbs_branch(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
+):
+    """No Discipline UDF (never IFC-generated), but there IS a real WBS
+    breakdown — element_group should fall back to the activity's own
+    top-level WBS branch name rather than a useless "(ungrouped)" bucket
+    (2026-09-06, per Maro's own real Cost Summary screenshot: the whole
+    Cost Plan for a real P6 import was lumped into one "(ungrouped)" line).
+    root (P, no parent) -> branch (W, "Interior Finishes") -> leaf (T) —
+    the leaf's element_group should be "Interior Finishes", not the root's
+    own name and not null."""
+    root = await _create_activity(client, project, live_schedule_period, "Programme", activity_type="wbs_summary")
+    branch = await _create_activity(
+        client, project, live_schedule_period, "Interior Finishes",
+        activity_type="wbs_summary", parent_id=root["id"],
+    )
+    leaf = await _create_activity(
+        client, project, live_schedule_period, "Piling", duration_hours=8, parent_id=branch["id"],
+    )
+    resource = await _create_resource(client, project, rate="45")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": leaf["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+
+    element = await _linked_element(client, project, live_period)
+    assert element["element_group"] == "Interior Finishes"
+
+
+async def test_linked_element_element_group_falls_back_to_outer_branch_not_a_nested_sub_branch(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
+):
+    """Same as above but one level deeper — root (P) -> branch (W,
+    "Interior Finishes") -> sub-branch (W, "Floor 1") -> leaf (T). The
+    fallback must use the OUTER branch ("Interior Finishes"), not the more
+    specific nested one ("Floor 1") — a coarse, discipline-like grouping,
+    matching what Discipline UDF values normally look like, not an overly
+    granular per-floor breakdown."""
+    root = await _create_activity(client, project, live_schedule_period, "Programme", activity_type="wbs_summary")
+    branch = await _create_activity(
+        client, project, live_schedule_period, "Interior Finishes",
+        activity_type="wbs_summary", parent_id=root["id"],
+    )
+    sub_branch = await _create_activity(
+        client, project, live_schedule_period, "Floor 1",
+        activity_type="wbs_summary", parent_id=branch["id"],
+    )
+    leaf = await _create_activity(
+        client, project, live_schedule_period, "Piling", duration_hours=8, parent_id=sub_branch["id"],
+    )
+    resource = await _create_resource(client, project, rate="45")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": leaf["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+
+    element = await _linked_element(client, project, live_period)
+    assert element["element_group"] == "Interior Finishes"
+
+
+async def test_linked_element_element_group_falls_back_to_standalone_branch_with_no_wrapper(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod,
+):
+    """A schedule with no enclosing project-root wrapper at all — "Interior
+    Finishes" itself has no parent (so it's role P, not W, per
+    _activity_role: any parentless wbs_summary is P). The fallback must
+    still use its own name, not chase something above it that doesn't
+    exist, and not null. This is the exact P6-import shape when there's
+    only ever one real top-level branch (see p6_import.py's own "single
+    synthetic project-root P" fix, which normally prevents this — this
+    covers a hand-typed schedule where it can still happen)."""
+    branch = await _create_activity(client, project, live_schedule_period, "Interior Finishes", activity_type="wbs_summary")
+    leaf = await _create_activity(
+        client, project, live_schedule_period, "Piling", duration_hours=8, parent_id=branch["id"],
+    )
+    resource = await _create_resource(client, project, rate="45")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": leaf["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+
+    element = await _linked_element(client, project, live_period)
+    assert element["element_group"] == "Interior Finishes"
 
 
 async def test_pct_complete_syncs_from_activity_to_linked_element(

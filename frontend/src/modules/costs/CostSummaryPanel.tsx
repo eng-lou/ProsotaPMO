@@ -20,6 +20,11 @@ function effectiveForecast(el: CostElement): number {
   return raw !== null ? Number(raw) : 0
 }
 
+function effectiveActuals(el: CostElement): number {
+  const raw = el.element_type === 'percentage' ? el.computed_actuals : el.actuals
+  return raw !== null ? Number(raw) : 0
+}
+
 // Pure client-side aggregation over the already-loaded elements list — same
 // complexity as Risk/ICD's KPI strips, no new endpoints. £/m² and £/Space only
 // render when the project has GFA/space count set (both optional).
@@ -47,6 +52,22 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
     .map(el => ({ el, variance: Number(el.variance) }))
     .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance))
     .slice(0, 5)
+
+  // Cost Performance (CPI) — rolled up from summed AC/EV, never averaged
+  // per-element cpi values directly (same rule as SPI above and
+  // rollup_evm_from_totals's own backend docstring: a $100 line at CPI 0.5
+  // next to a $1M line at CPI 1.0 rolls up to ~1.0, the real cost-driver,
+  // not a misleading (0.5+1.0)/2). ev is reconstructed as cv+ac rather
+  // than read from el.ev directly, since that field is schedule-side-only
+  // (null for a manual fixed/percentage element with no linked activity)
+  // — cv (=ev-ac) is populated for every element with real progress,
+  // schedule-linked or not, so it already carries the same ev cv itself
+  // was computed from server-side.
+  const costEvmElements = elements.filter(el => el.cv !== null)
+  const totalAc = costEvmElements.reduce((sum, el) => sum + effectiveActuals(el), 0)
+  const totalEvCost = costEvmElements.reduce((sum, el) => sum + (Number(el.cv) + effectiveActuals(el)), 0)
+  const projectCpi = totalAc !== 0 ? totalEvCost / totalAc : null
+  const projectCv = totalEvCost - totalAc
 
   const gfa = gfaM2 !== null ? Number(gfaM2) : null
 
@@ -110,6 +131,31 @@ export function CostSummaryPanel({ elements, gfaM2, spaceCount }: CostSummaryPan
           <span>{formatCurrency(forecastVariance)}{forecastVariancePct !== null ? ` (${forecastVariance >= 0 ? '+' : ''}${forecastVariancePct.toFixed(1)}%)` : ''}</span>
         </div>
       </div>
+
+      {costEvmElements.length > 0 && (
+        <>
+          <div
+            className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2 pt-2 border-t border-gray-100 dark:border-prosota-line"
+            title="Only elements with real progress (% Complete and Actuals entered) contribute."
+          >
+            Cost Performance (CPI)
+          </div>
+          <div className={`rounded-md p-2.5 text-xs mb-3 ${projectCpi !== null && projectCpi < 1 ? 'bg-orange-50 border border-orange-200 dark:bg-orange-500/10 dark:border-orange-500/30' : 'bg-green-50 border border-green-200 dark:bg-green-500/10 dark:border-green-500/30'}`}>
+            <div className="flex justify-between mb-1">
+              <span>Earned Value (EV)</span>
+              <span className="font-medium">{formatCurrency(totalEvCost)}</span>
+            </div>
+            <div className="flex justify-between mb-1">
+              <span>Actual Cost (AC)</span>
+              <span className="font-medium">{formatCurrency(totalAc)}</span>
+            </div>
+            <div className="flex justify-between pt-1 border-t border-gray-200 dark:border-prosota-line font-semibold">
+              <span>CPI {projectCpi !== null && (projectCpi >= 1 ? '(under budget)' : '(over budget)')}</span>
+              <span>{projectCpi !== null ? projectCpi.toFixed(2) : '—'} ({projectCv >= 0 ? '+' : ''}{formatCurrency(projectCv)})</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {scheduleLinked.length > 0 && (
         <>
