@@ -261,6 +261,22 @@ async def test_active_baseline_is_exported(client: AsyncClient, project: Project
     current_baseline_id = project_el.findtext("p6:CurrentBaselineProjectObjectId", namespaces=ns)
     assert current_baseline_id == baseline_el.findtext("p6:ObjectId", namespaces=ns)
 
+    # Real bug (2026-09-06): the BaselineProject's own <Activity> carried no
+    # <ObjectId>, so P6's importer — which links a baseline activity back to
+    # its live counterpart by ObjectId, never by Id/code — threw a
+    # NullReferenceException on re-import. Must match the SAME live
+    # <Project><Activity><ObjectId> for this activity, and <ProjectObjectId>
+    # must match <Project>'s own <ObjectId>.
+    live_activity_el = next(
+        a for a in project_el.findall("p6:Activity", ns) if a.findtext("p6:Id", namespaces=ns) == task["code"]
+    )
+    assert baseline_activity_els[0].findtext("p6:ObjectId", namespaces=ns) == live_activity_el.findtext(
+        "p6:ObjectId", namespaces=ns
+    )
+    assert baseline_activity_els[0].findtext("p6:ProjectObjectId", namespaces=ns) == project_el.findtext(
+        "p6:ObjectId", namespaces=ns
+    )
+
 
 async def test_no_baseline_project_when_none_is_assigned(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod

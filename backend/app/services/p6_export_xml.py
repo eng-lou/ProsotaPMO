@@ -447,9 +447,21 @@ def build_pmxml(data: P6ExportData) -> str:
 
 
 def _baseline_project_xml(baseline, original_project_id: int) -> str:  # noqa: ANN001 — p6_export.P6Baseline
+    # ObjectId/ProjectObjectId (2026-09-06, per Maro: re-importing the export
+    # with its baseline included threw a NullReferenceException in P6's own
+    # importer) — PMXML links every entity by ObjectId, never by Id/code;
+    # P6's flat importer matches a BaselineProject<Activity> back to its live
+    # counterpart via ObjectId, so omitting it left P6 dereferencing a failed
+    # lookup. a.id is the SAME numeric id _activity_xml already assigned this
+    # activity in the live <Project> (both draw from the same task_ids
+    # _IdSequence, keyed by the same Prosota activity uuid), so the two
+    # elements resolve to one another. <Id> (the code) is kept too since it's
+    # harmless and matches the real reference file's own shape.
     activities_xml = "".join(
         f"<Activity>"
         f"{_el('Id', a.activity_id)}"
+        f"<ObjectId>{a.id}</ObjectId>"
+        f"<ProjectObjectId>{original_project_id}</ProjectObjectId>"
         f"{f'<StartDate>{_fmt_datetime(a.start)}</StartDate>' if a.start else '<StartDate xsi:nil=\"true\" />'}"
         f"{f'<FinishDate>{_fmt_datetime(a.finish)}</FinishDate>' if a.finish else '<FinishDate xsi:nil=\"true\" />'}"
         f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"

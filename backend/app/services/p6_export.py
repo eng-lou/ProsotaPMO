@@ -233,6 +233,12 @@ class P6BaselineActivity:
     # Id> this export's own _activity_xml already writes for the live
     # schedule, so P6 can actually link the two back together.
     activity_id: str
+    # The SAME numeric ObjectId the live activity gets in <Project><Activity>
+    # (both draw from the one task_ids _IdSequence, keyed by the activity's
+    # uuid) — PMXML links a BaselineProject activity back to its live
+    # counterpart by ObjectId, not by Id/code; omitting it crashed P6's own
+    # importer with a NullReferenceException on re-import (2026-09-06).
+    id: int
     start: datetime | None
     finish: datetime | None
     duration_hours: Decimal
@@ -534,6 +540,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             activities=[
                 P6BaselineActivity(
                     activity_id=activities_by_id[sba.activity_id].code,
+                    id=task_ids.id_for(sba.activity_id),
                     start=sba.start, finish=sba.finish,
                     duration_hours=sba.duration_hours if sba.duration_hours is not None else Decimal(0),
                 )
