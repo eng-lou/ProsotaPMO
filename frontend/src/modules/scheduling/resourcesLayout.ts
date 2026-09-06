@@ -88,6 +88,15 @@ export const PRINT_PERIOD_COL_WIDTH = 60
 // numbers, comfortable for 5 digits plus the leading £ symbol in Cost view.
 export const RESOURCE_CHART_Y_AXIS_WIDTH = 56
 
+// This pair now governs the xlsx Export ▾ dropdown ONLY (2026-09-06, per
+// Maro — reversing the 2026-07-15 consolidation noted where these are read
+// in Scheduling.tsx: "give the option to export any of the three tables"
+// and Page Setup's own equivalent controlling Print independently are two
+// genuinely separate settings again, not one shared checkbox set). Kept
+// this function/type/key's own names as-is despite the "print" wording —
+// renaming would touch every one of this file's many existing callers for
+// no behavioural benefit; loadResourcesPageSetupTables below is the new,
+// Print-specific counterpart.
 const PRINT_TABLES_STORAGE_KEY = 'prosota_resources_print_tables'
 export function loadResourcesPrintTables(): Set<ResourcesPrintTable> {
   try {
@@ -99,4 +108,22 @@ export function loadResourcesPrintTables(): Set<ResourcesPrintTable> {
 }
 export function saveResourcesPrintTables(tables: Set<ResourcesPrintTable>) {
   localStorage.setItem(PRINT_TABLES_STORAGE_KEY, JSON.stringify([...tables]))
+}
+
+// Page Setup's own independent copy of the same which-tables choice,
+// governing Print only — a distinct localStorage key so editing this one
+// never touches the Export ▾ dropdown's own selection above, and vice
+// versa (2026-09-06, per Maro: "when you add the page setup one the xlsx
+// should only affect the xlsx").
+const PAGE_SETUP_TABLES_STORAGE_KEY = 'prosota_resources_page_setup_tables'
+export function loadResourcesPageSetupTables(): Set<ResourcesPrintTable> {
+  try {
+    const raw = localStorage.getItem(PAGE_SETUP_TABLES_STORAGE_KEY)
+    return raw ? new Set(JSON.parse(raw) as ResourcesPrintTable[]) : new Set(ALL_RESOURCES_PRINT_TABLES)
+  } catch {
+    return new Set(ALL_RESOURCES_PRINT_TABLES)
+  }
+}
+export function saveResourcesPageSetupTables(tables: Set<ResourcesPrintTable>) {
+  localStorage.setItem(PAGE_SETUP_TABLES_STORAGE_KEY, JSON.stringify([...tables]))
 }

@@ -42,8 +42,9 @@ import { ResourcesPrintView } from './ResourcesPrintView'
 import type { PrintResourceGroup } from './ResourceTrackingPrintView'
 import {
   ALL_RESOURCES_PRINT_TABLES, DEFAULT_RESOURCES_LAYOUT, DEFAULT_RESOURCES_PRINT_FONTS, loadResourcesLayout,
-  loadResourcesPrintFonts, loadResourcesPrintTables, RESOURCES_PRINT_TABLE_LABELS, saveResourcesLayout,
-  saveResourcesPrintFonts, saveResourcesPrintTables, type ResourcesLayoutPrefs, type ResourcesPrintTable,
+  loadResourcesPageSetupTables, loadResourcesPrintFonts, loadResourcesPrintTables, RESOURCES_PRINT_TABLE_LABELS,
+  saveResourcesLayout, saveResourcesPageSetupTables, saveResourcesPrintFonts, saveResourcesPrintTables,
+  type ResourcesLayoutPrefs, type ResourcesPrintTable,
 } from './resourcesLayout'
 import { RescheduleWidget } from './RescheduleWidget'
 import { SchedulingPrintView } from './SchedulingPrintView'
@@ -794,6 +795,19 @@ export function Scheduling() {
       return next
     })
   }
+  // Page Setup's own independent copy (2026-09-06, per Maro) — editing
+  // this affects Print only, never the Export ▾ dropdown's own selection
+  // above, and vice versa. See resourcesLayout.ts's own header on why.
+  const [resourcesPageSetupTables, setResourcesPageSetupTablesState] = useState<Set<ResourcesPrintTable>>(loadResourcesPageSetupTables)
+  const toggleResourcesPageSetupTable = (table: ResourcesPrintTable) => {
+    setResourcesPageSetupTablesState(prev => {
+      const next = new Set(prev)
+      if (next.has(table)) next.delete(table)
+      else next.add(table)
+      saveResourcesPageSetupTables(next)
+      return next
+    })
+  }
   const [resourcesPageSetupOpen, setResourcesPageSetupOpen] = useState(false)
   const [resourcesPrintTrigger, setResourcesPrintTrigger] = useState(0)
   // Export's own dropdown (2026-07-15, per Maro: "its stupid ui/ux to hide
@@ -867,9 +881,20 @@ export function Scheduling() {
   // selectedActivityIds; the on-screen widget (which reads resourcesTabData
   // directly, not this) intentionally keeps showing everything while you're
   // still working, only print narrows down to the current selection.
+  // Collapsed resources (2026-09-06, per Maro: "if i collapse some and
+  // expand some or expand all etc, it should be reflected like that in
+  // the print/xlsx") keep their own header/rollup row — bucketHours below
+  // is computed from the real scoped rows regardless, so a collapsed
+  // resource's total still reflects its true summed hours — but their
+  // individual activity child rows are omitted, matching exactly what's
+  // hidden on screen. A resource with genuinely no scoped rows (none of
+  // its assignments match the current activity selection) is still
+  // dropped entirely, same as before — collapse only ever hides rows that
+  // do exist, it never manufactures a reason to hide a resource outright.
   const resourcesPrintGroups: PrintResourceGroup[] = useMemo(() => printScopedTrackedResources.map(resource => {
     const allRows = resourcesTabData.assignmentsByResource.get(resource.id) ?? []
-    const rows = selectedActivityIds.size > 0 ? allRows.filter(row => selectedActivityIds.has(row.activity.id)) : allRows
+    const scopedRows = selectedActivityIds.size > 0 ? allRows.filter(row => selectedActivityIds.has(row.activity.id)) : allRows
+    const hasScopedRows = scopedRows.length > 0
     const spread = resourcesTabData.spreadByResource.get(resource.id)
     const { hoursByAssignmentDate } = indexSpread(spread)
     // Print/export mirror whatever unit is currently selected on screen
@@ -889,11 +914,17 @@ export function Scheduling() {
     // just to pluck out a single bucket's value, for every bucket, an
     // O(buckets^2 x rows x days) blowup. Same "compute once, reuse" fix as
     // computeUsageProfileBars' own 2026-07-17 header in useResourcesTabData.ts.
-    const rowsWithHours = rows.map(row => ({ row, bucketHours: bucketHoursFor(row.assignment.id) }))
-    const rollup = resourcesTabData.buckets.map((_, i) => rowsWithHours.reduce((sum, { bucketHours }) => sum + bucketHours[i], 0))
+    // Rollup always sums scopedRows (every real row), not the possibly-
+    // collapsed-to-empty `rows` below — a collapsed resource's own header
+    // total must still reflect its true summed hours, exactly as it does
+    // on screen, even though its child rows are omitted from the table.
+    const scopedRowsWithHours = scopedRows.map(row => ({ row, bucketHours: bucketHoursFor(row.assignment.id) }))
+    const rollup = resourcesTabData.buckets.map((_, i) => scopedRowsWithHours.reduce((sum, { bucketHours }) => sum + bucketHours[i], 0))
+    const rowsWithHours = collapsedResourceIds.has(resource.id) ? [] : scopedRowsWithHours
     return {
       resourceName: resource.name,
       bucketHours: rollup,
+      hasScopedRows,
       rows: rowsWithHours.map(({ row, bucketHours }) => ({
         code: row.activity.code, name: row.activity.task_name,
         start: row.activity.start ? formatDateTime(row.activity.start, false) : null,
@@ -901,7 +932,8 @@ export function Scheduling() {
         bucketHours,
       })),
     }
-  }).filter(group => group.rows.length > 0), [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit])
+  }).filter(group => group.hasScopedRows).map(({ hasScopedRows: _drop, ...group }) => group),
+  [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit, collapsedResourceIds])
 
   const resourcesProfileBars = useMemo(
     () => computeUsageProfileBars(
@@ -917,7 +949,7 @@ export function Scheduling() {
     // hand exceljs an empty tables Set and either throw or hand back a
     // corrupt .xlsx with no visible error at all.
     if (resourcesPrintTables.size === 0) {
-      window.alert('Check at least one table in Page Setup before exporting.')
+      window.alert('Check at least one table in the Export ▾ menu before exporting.')
       return
     }
     // Dynamic import (2026-09-03 perf pass, per Maro: "switching between
@@ -2701,9 +2733,13 @@ export function Scheduling() {
               </div>
               <button
                 onClick={() => setResourcesPageSetupOpen(o => !o)}
-                title="Shared logo/header/footer, print font, and which table(s) to include when printing/exporting"
-                className={`text-xs px-2 py-1 rounded border ${resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'}`}
-              >Page Setup</button>
+                title="Shared logo/header/footer, print font, and which table(s) to include when printing"
+                className={`text-xs px-2 py-1 rounded border ${
+                  resourcesPageSetupOpen ? 'bg-gray-900 text-white border-gray-900'
+                  : resourcesPageSetupTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/20'
+                  : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
+                }`}
+              >Page Setup{resourcesPageSetupTables.size !== ALL_RESOURCES_PRINT_TABLES.length ? ` (${resourcesPageSetupTables.size}/${ALL_RESOURCES_PRINT_TABLES.length})` : ''}</button>
               <div className="relative">
                 <button
                   onClick={() => setResourcesExportOpen(o => !o)}
@@ -2718,7 +2754,7 @@ export function Scheduling() {
                 </button>
                 {resourcesExportOpen && (
                   <div className="absolute right-0 top-full mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded shadow-lg p-3 z-30 text-xs w-64 space-y-2">
-                    <div className="text-[10px] text-gray-400 dark:text-prosota-muted">Which tables to include in the downloaded .xlsx (also used by Print).</div>
+                    <div className="text-[10px] text-gray-400 dark:text-prosota-muted">Which tables to include in the downloaded .xlsx — see Page Setup for Print's own selection.</div>
                     <div className="flex flex-col gap-1.5">
                       {ALL_RESOURCES_PRINT_TABLES.map(table => (
                         <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
@@ -2773,18 +2809,24 @@ export function Scheduling() {
                       ? `Scoped to ${selectedActivityIds.size} checked activit${selectedActivityIds.size === 1 ? 'y' : 'ies'} (and its resource${printScopedResources.length === 1 ? '' : 's'}).`
                       : `Scoped to ${selectedResourceIds.size} checked resource${selectedResourceIds.size === 1 ? '' : 's'}.`}
                 </div>
-                {/* Which tables to include lives in the Export ▾ dropdown
-                    above now, not here (2026-07-15, per Maro: "that was
-                    meant for print not export") — Page Setup stays about
-                    genuinely print-specific things (letterhead, print
-                    font); Print reads the exact same shared selection, just
-                    summarized read-only here instead of a second editable
-                    copy of the same checkboxes. */}
-                <div className="text-[11px] text-gray-500 dark:text-prosota-muted mb-3">
-                  Tables: {ALL_RESOURCES_PRINT_TABLES.filter(t => resourcesPrintTables.has(t)).map(t => RESOURCES_PRINT_TABLE_LABELS[t]).join(', ') || 'none checked'}
-                  {' '}— change via the <span className="font-medium text-gray-600 dark:text-prosota-muted">Export ▾</span> button above.
+                {/* Page Setup's own independent which-tables selection,
+                    governing Print only (2026-09-06, per Maro — reversing
+                    the 2026-07-15 consolidation this comment used to
+                    describe: the Export ▾ dropdown above has its own
+                    separate copy now, xlsx-only). See resourcesLayout.ts's
+                    own header. */}
+                <div className="mb-3">
+                  <div className="text-[11px] font-medium text-gray-600 dark:text-prosota-muted mb-1.5">Tables to print</div>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    {ALL_RESOURCES_PRINT_TABLES.map(table => (
+                      <label key={table} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted">
+                        <input type="checkbox" checked={resourcesPageSetupTables.has(table)} onChange={() => toggleResourcesPageSetupTable(table)} />
+                        {RESOURCES_PRINT_TABLE_LABELS[table]}
+                      </label>
+                    ))}
+                  </div>
                 </div>
-                {resourcesPrintTables.has('profile') && (
+                {resourcesPageSetupTables.has('profile') && (
                   <div className="flex items-center gap-3 flex-wrap mb-3 text-[11px] text-gray-500 dark:text-prosota-muted">
                     <span className="text-gray-400 dark:text-prosota-muted">Usage Profile legend:</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
@@ -4134,7 +4176,7 @@ export function Scheduling() {
         SchedulingPrintView/SchedulingQualityPrintView already do. */}
     {activeTab === 'resources' && (
       <ResourcesPrintView
-        tables={resourcesPrintTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
+        tables={resourcesPageSetupTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
         trackedResources={printScopedTrackedResources} assignmentsByResource={resourcesTabData.assignmentsByResource}
         buckets={resourcesTabData.buckets} spreadByResource={resourcesTabData.spreadByResource} selectedActivityIds={selectedActivityIds}
