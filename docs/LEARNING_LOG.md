@@ -5381,3 +5381,50 @@ risk), rather than guessing or matching on loose text. Anything with no
 real link simply doesn't show while the filter's active, which is honest
 about what "connected" means rather than pretending everything's related
 to everything.
+
+## 2026-09-07 — The P6 baseline fix needed a second, bigger attempt
+
+The first fix to the baseline-import crash (logged above) turned out not
+to be enough — a real re-import into P6 threw the exact same error again,
+byte-for-byte the same crash message. That's a useful lesson on its own:
+when a fix is based on an educated guess rather than a confirmed cause,
+"it made sense" isn't the same as "it worked," and the only real proof is
+the actual re-import succeeding.
+
+Digging further with an actual real P6-exported baseline file as a
+reference (rather than reasoning from first principles a second time)
+turned up two concrete gaps. First, a P6 baseline is really a full copy
+of the project's own data living under its own separate internal ID in
+P6's database — so a value inside the baseline that points back to "which
+project owns this row" needs to point at the BASELINE's own ID, not the
+live project's, which is the opposite of what the first fix assumed.
+Second, a real baseline row always carries the exact same full set of
+structural fields (calendar, task type, status, and about a dozen more) a
+live activity row does — Prosota's export had been writing only a
+handful of the "obviously important" ones (dates, duration), which is
+exactly the trap of guessing at a reduced field set instead of matching a
+real, working example field-for-field.
+
+## 2026-09-07 — Dashboard click-to-filter, widened past the first two examples
+
+Maro's original ask for Power BI-style dashboard clicking used two
+examples (a Critical Activities row, a Float Distribution bar), so the
+first build only made schedule/milestone widgets clickable — after
+testing, Maro pointed out most of the dashboard still wasn't clickable
+and asked for risk, cost, and resource rows to work the same way.
+
+The backend piece (get_related_records) had been built activity-only:
+given a clicked activity, find whatever's really connected to it. Making
+a risk or cost line clickable too meant the same lookup needed to run in
+reverse — given a clicked risk, find whatever's connected to IT. Since
+the same two connection types already existed both ways (a direct
+database link, and the general-purpose causal-link table other features
+already used), this turned out to be one shared function taking "what
+kind of thing was clicked" as an extra input, not two separate systems.
+
+One deliberate exception: the existing Top Risks and Risk Register
+widgets already do something when you click a row (jump to the full Risk
+Register page) — turning that same click into a cross-filter click
+instead would have quietly broken an existing feature to add a new one,
+so those two were left exactly as they were, and a different table
+(Risk Ageing) got the new click behavior instead.
