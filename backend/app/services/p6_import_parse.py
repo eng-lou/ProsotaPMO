@@ -186,16 +186,29 @@ class ParsedActivity:
     # at all — confirmed against <RemainingDuration> directly). None (not a
     # recompute) when the file has no such field.
     remaining_duration_hours: Decimal | None
-    # P6's real "Schedule % Complete" report column (2026-09-05, per Maro —
-    # same real comparison: Prosota showed 92.8%, P6 showed 92.35%, driving
-    # a real PV mismatch). Confirmed this is NOT the same number as
-    # <DurationPercentComplete> above (92.85% in that same file) — it's
-    # ActualDuration / AtCompletionDuration (624 / 675.4667h = 92.38%,
-    # matching P6's 92.35% far more closely than DurationPercentComplete's
-    # own 92.85% ever did). duration_pct_complete above stays exactly what
-    # it was — P6's own distinct "Duration % Complete" concept — this is a
-    # separate number for the separate "Schedule % Complete" one that
-    # actually drives PV. None when AtCompletionDuration is missing/zero.
+    # P6's real "Schedule % Complete" report column (2026-09-05/06, per Maro
+    # — two separate real comparisons). First attempt used ActualDuration /
+    # AtCompletionDuration (matched one real activity — 92.38% vs P6's
+    # 92.35% — closely), but a SECOND real activity ("Third Floor Masonry
+    # Structure": Actual=64h, AtCompletion=96h) proved that formula
+    # genuinely wrong in general: it gives 66.67%, but P6's own report
+    # showed 75% for that exact activity, a real 8-point miss that was the
+    # actual source of a whole project's PV/SV being wrong (Maro: "why are
+    # you consistently failing to get the right schedule % complete field
+    # from P6"). The real mechanism, confirmed against BOTH activities: 1 -
+    # (Finish - RemainingEarlyStartDate) / (Finish - Start), using plain
+    # calendar-time deltas — RemainingEarlyStartDate is P6's own marker for
+    # "where the not-yet-done remainder of this activity begins," so the
+    # fraction of the whole Start-to-Finish span that's already behind that
+    # marker IS Schedule % Complete by definition (74.8% vs P6's 75% on the
+    # Masonry activity; 93.1% vs P6's 92.35% on the first one — both within
+    # 1 point, unlike the 8-point Duration-ratio miss). duration_pct_complete
+    # above stays exactly what it was — P6's own distinct "Duration %
+    # Complete" concept — this is a separate number for the separate
+    # "Schedule % Complete" one that actually drives PV. None when
+    # RemainingEarlyStartDate/Start/Finish aren't all present, or the
+    # activity hasn't started (ActualDuration <= 0 — see p6_import.py's own
+    # gating for why PV must NOT be forced to 0% there either).
     schedule_pct_complete_override: Decimal | None
 
 
@@ -470,33 +483,40 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
 
     udf_values = [v for v in (_parse_udf_value(u) for u in el.findall(_tag("UDF"))) if v is not None]
 
-    actual_duration_hours = _decimal(el, "ActualDuration")
-    at_completion_duration_hours = _decimal(el, "AtCompletionDuration")
-    # Only overrides for an activity with real progress (ActualDuration > 0)
-    # — 2026-09-06, per Maro, tracing a real ~£4,745 PV shortfall on a real
-    # project total: a not-yet-started activity always has ActualDuration=0,
-    # which forced this override to a flat 0% and therefore PV=0 — but PV
-    # is a *planned-schedule* figure (Rita Mulcahy Ch.9: "the value of work
-    # PLANNED to be done"), not an actual-progress one. An activity that's
-    # overdue against its own original plan but hasn't started yet still
-    # has real Planned Value (it should have earned some by now); only its
-    # Earned Value is genuinely 0. Leaving this None for a not-started
-    # activity correctly falls through to elapsed_duration_fraction's own
-    # calendar-based proration against the PLANNED start/finish, exactly
-    # the semantics PV needs.
-    schedule_pct_complete_override = (
-        (actual_duration_hours / at_completion_duration_hours * 100)
-        if actual_duration_hours is not None and actual_duration_hours > 0 and at_completion_duration_hours
-        else None
-    )
+    start = _datetime(el, "StartDate") or _datetime(el, "PlannedStartDate")
+    finish = _datetime(el, "FinishDate") or _datetime(el, "PlannedFinishDate")
+    remaining_early_start = _datetime(el, "RemainingEarlyStartDate")
+    # 1 - (Finish - RemainingEarlyStartDate) / (Finish - Start), plain
+    # calendar-time deltas — 2026-09-06, per Maro, tracing a real ~£4,745
+    # PV shortfall to its actual root cause after the FIRST attempt
+    # (ActualDuration / AtCompletionDuration, 2026-09-05) turned out wrong:
+    # that formula matched one real activity (92.38% vs P6's 92.35%) but
+    # missed a second one badly (66.67% vs P6's real 75% for "Third Floor
+    # Masonry Structure," Actual=64h/AtCompletion=96h — an 8-point miss that
+    # was the actual source of a whole project's PV/SV being wrong). P6's
+    # own RemainingEarlyStartDate marks where the not-yet-done remainder of
+    # an activity begins, so the fraction of its whole Start-to-Finish span
+    # that's already behind that marker IS Schedule % Complete by
+    # definition — confirmed against BOTH real activities, both within 1
+    # point (74.8%/93.1% vs P6's 75%/92.35%), unlike the first formula's
+    # 8-point miss. A not-started activity's RemainingEarlyStartDate equals
+    # its own Start (nothing consumed yet, so "remaining" is the whole
+    # span), correctly giving 0% with no separate gating needed — PV must
+    # never be forced to 0% just because ActualDuration is 0 (Rita Mulcahy
+    # Ch.9: PV is what work was PLANNED to be done, not actual progress).
+    schedule_pct_complete_override = None
+    if start is not None and finish is not None and remaining_early_start is not None and finish != start:
+        total_span = (finish - start).total_seconds()
+        remaining_span = (finish - remaining_early_start).total_seconds()
+        fraction = Decimal(1) - Decimal(str(remaining_span)) / Decimal(str(total_span))
+        schedule_pct_complete_override = max(Decimal(0), min(Decimal(100), fraction * 100))
 
     return ParsedActivity(
         object_id=_text(el, "ObjectId") or "", wbs_object_id=_text(el, "WBSObjectId"),
         calendar_object_id=_text(el, "CalendarObjectId"),
         code=_text(el, "Id") or "", name=_text(el, "Name") or "Imported Activity",
         activity_type=activity_type, duration_hours=_decimal(el, "PlannedDuration") or Decimal(0),
-        start=_datetime(el, "StartDate") or _datetime(el, "PlannedStartDate"),
-        finish=_datetime(el, "FinishDate") or _datetime(el, "PlannedFinishDate"),
+        start=start, finish=finish,
         actual_start=_datetime(el, "ActualStartDate"), actual_finish=_datetime(el, "ActualFinishDate"),
         # P6's own <PercentComplete> is a 0-1 fraction (confirmed against a
         # real file: values like 0.2/0.82/0.9/0.92 alongside plain 0/1),
