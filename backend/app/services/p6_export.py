@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
+from app.models.cost_element import CostElement
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
@@ -206,6 +208,49 @@ class P6Assignment:
     qty: Decimal
     cost_per_qty: Decimal
     cost: Decimal
+    # Real progress, not the hardcoded 0 this export used to always write
+    # (2026-09-06, per Maro: re-importing an exported project back into
+    # P6 showed Earned Value and Actual Cost "missing completely" — P6
+    # computes both from a resource assignment's own Actual fields, never
+    # populated at all before this). Prosota tracks actual cost per
+    # ACTIVITY (CostElement.actuals), not per individual resource
+    # assignment the way P6 natively does, so a multi-resource activity's
+    # one real actuals figure is prorated across its assignments by each
+    # one's own share of the activity's total planned cost — see
+    # gather_p6_export_data's own comment where this is computed.
+    actual_cost: Decimal
+    actual_units: Decimal
+    actual_start: datetime | None
+    actual_finish: datetime | None
+
+
+@dataclass
+class P6BaselineActivity:
+    # activity_id: the LIVE activity's own current code (2026-09-06) — not
+    # the baseline snapshot's own stale ScheduleBaselineActivity.code,
+    # which can be out of date if the activity's been renamed/renumbered
+    # since the baseline was captured. Matched against the SAME <Activity
+    # Id> this export's own _activity_xml already writes for the live
+    # schedule, so P6 can actually link the two back together.
+    activity_id: str
+    start: datetime | None
+    finish: datetime | None
+    duration_hours: Decimal
+
+
+@dataclass
+class P6Baseline:
+    """The project's own currently-assigned schedule baseline (2026-09-06,
+    per Maro: re-importing an exported project back into P6 showed BL1
+    Start/Finish just mirroring the live dates — this export never wrote a
+    <BaselineProject> at all before now). Only the one baseline Activity.
+    bl_start/bl_finish already reflects (is_active=True) is exported —
+    matching what every other Prosota feature already treats as "the"
+    baseline, not the full library of every named snapshot ever captured."""
+    object_id: int
+    name: str
+    data_date: datetime
+    activities: list[P6BaselineActivity] = field(default_factory=list)
 
 
 @dataclass
@@ -244,6 +289,7 @@ class P6ExportData:
     assignments: list[P6Assignment] = field(default_factory=list)
     udf_types: list[P6UdfType] = field(default_factory=list)
     udf_values: list[P6UdfValue] = field(default_factory=list)
+    baseline: P6Baseline | None = None
 
 
 def _resource_type(resource_type: str) -> str:
@@ -355,6 +401,22 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         )
         assignments = list(assignments_result.scalars().all())
 
+    # Real actual cost per activity, for prorating across its resource
+    # assignments below (2026-09-06) — a schedule-linked CostElement's own
+    # element_type is always "fixed" (cost_sync.py always creates it that
+    # way), so .actuals is already the fully-resolved figure, no percentage/
+    # computed_actuals cascade to run first.
+    actuals_by_activity_id: dict[uuid.UUID, Decimal] = {}
+    if activities:
+        actuals_result = await db.execute(
+            select(CostElement.linked_activity_id, CostElement.actuals).where(
+                CostElement.linked_activity_id.in_([a.id for a in activities]),
+                CostElement.source == "schedule",
+                CostElement.actuals.is_not(None),
+            )
+        )
+        actuals_by_activity_id = {row.linked_activity_id: row.actuals for row in actuals_result.all()}
+
     # Every calendar in the project, not just ones actually referenced —
     # simpler than filtering, and _CalendarLookup.resolve already needs the
     # full set to fall back to the project default correctly.
@@ -390,6 +452,18 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             )
         )
         udf_values = list(udf_values_result.scalars().all())
+
+    active_baseline = (await db.execute(
+        select(ScheduleBaseline).where(
+            ScheduleBaseline.schedule_period_id == schedule_period_id, ScheduleBaseline.is_active.is_(True),
+        )
+    )).scalar_one_or_none()
+    baseline_activities: list[ScheduleBaselineActivity] = []
+    if active_baseline is not None:
+        baseline_activities_result = await db.execute(
+            select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == active_baseline.id)
+        )
+        baseline_activities = list(baseline_activities_result.scalars().all())
 
     # --- ID assignment (see _IdSequence's own header) ---
     calendar_ids = _IdSequence()
@@ -451,6 +525,22 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
     # synthetic root for a top-level non-summary activity.
     activities_by_id = {a.id: a for a in activities}
     nearest_wbs_id: dict[uuid.UUID, int] = {}
+
+    if active_baseline is not None:
+        out.baseline = P6Baseline(
+            object_id=999_000_001,  # never collides — every other sequence starts from 1
+            name=_sanitize_p6_text(active_baseline.name) or active_baseline.name,
+            data_date=datetime.combine(active_baseline.baseline_date, time(0, 0)),
+            activities=[
+                P6BaselineActivity(
+                    activity_id=activities_by_id[sba.activity_id].code,
+                    start=sba.start, finish=sba.finish,
+                    duration_hours=sba.duration_hours if sba.duration_hours is not None else Decimal(0),
+                )
+                for sba in baseline_activities
+                if sba.activity_id in activities_by_id  # dropped/archived since the baseline was captured
+            ],
+        )
 
     def resolve_nearest_wbs(activity: Activity) -> int:
         if activity.id in nearest_wbs_id:
@@ -558,9 +648,17 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             notes=_sanitize_p6_text("; ".join(notes_parts)) or None,
         ))
 
-    for asg in assignments:
-        if asg.activity_id not in activities_by_id or asg.resource_id not in resources_by_id:
-            continue
+    # Pass 1: each assignment's own planned cost/qty, and each ACTIVITY's
+    # total planned cost across all its assignments (the denominator the
+    # proration below needs) — computed first since an activity's total
+    # isn't known until every one of its assignments has been costed.
+    valid_assignments = [
+        asg for asg in assignments
+        if asg.activity_id in activities_by_id and asg.resource_id in resources_by_id
+    ]
+    costed: dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]] = {}  # assignment id -> (cost, qty, cost_per_qty)
+    planned_total_by_activity_id: dict[uuid.UUID, Decimal] = {}
+    for asg in valid_assignments:
         activity = activities_by_id[asg.activity_id]
         resource = resources_by_id[asg.resource_id]
         # Exact hours_per_day, not activity.duration_days' own rounded
@@ -577,9 +675,34 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         # resource_costing._labour_days's own header.
         qty = resource_costing.compute_assignment_rate_line_qty(resource, activity, asg, export_hours_per_day)
         cost_per_qty = (cost / qty) if qty else cost
+        costed[asg.id] = (cost, qty, cost_per_qty)
+        planned_total_by_activity_id[asg.activity_id] = planned_total_by_activity_id.get(asg.activity_id, Decimal(0)) + cost
+
+    # Pass 2: prorate each activity's one real actuals figure across its
+    # assignments by their own share of that activity's total planned cost
+    # — the closest honest approximation available, since Prosota tracks
+    # actual cost per ACTIVITY, not per individual resource assignment the
+    # way P6 natively does (see P6Assignment.actual_cost's own header).
+    for asg in valid_assignments:
+        activity = activities_by_id[asg.activity_id]
+        cost, qty, cost_per_qty = costed[asg.id]
+        activity_actuals = actuals_by_activity_id.get(asg.activity_id)
+        activity_planned_total = planned_total_by_activity_id.get(asg.activity_id) or Decimal(0)
+        if activity_actuals is not None and activity_planned_total != 0:
+            actual_cost = activity_actuals * (cost / activity_planned_total)
+        else:
+            actual_cost = Decimal(0)
+        actual_units = (actual_cost / cost_per_qty) if cost_per_qty else Decimal(0)
+        # Only stamp Actual dates once there's real actual cost — an
+        # assignment with none hasn't actually started yet, regardless of
+        # what the activity's own (possibly forecast) start/finish say.
+        has_actuals = activity_actuals is not None and activity_actuals != 0
         out.assignments.append(P6Assignment(
             id=assignment_ids.id_for(asg.id), task_id=task_ids.id_for(asg.activity_id),
             rsrc_id=rsrc_ids.id_for(asg.resource_id), qty=qty, cost_per_qty=cost_per_qty, cost=cost,
+            actual_cost=actual_cost, actual_units=actual_units,
+            actual_start=activity.actual_start if has_actuals else None,
+            actual_finish=activity.actual_finish if has_actuals else None,
         ))
 
     # --- UDFs ---

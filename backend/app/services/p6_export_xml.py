@@ -47,6 +47,21 @@ def _el(tag: str, value: str | None) -> str:
     return f"<{tag}>{escape(value)}</{tag}>"
 
 
+def _project_id_code(name: str) -> str:
+    """A short Project ID code, derived from the real project name rather
+    than reusing it verbatim (2026-09-06, per Maro: re-importing an
+    exported project back into P6 showed the real name sitting in the
+    Project ID column and "(New WBS)" — P6's own placeholder — in the
+    Project Name column instead, since this export never wrote a <Name>
+    element for <Project> at all, only <Id>). Unlike Resource/Activity
+    codes, a single export only ever has ONE <Project>, so a name-derived
+    code can never collide with anything else in the same file — no need
+    for the opaque RES-0001-style sequential code those use instead."""
+    code = "".join(ch for ch in name.upper() if ch.isalnum() or ch in (" ", "-", "_")).strip()
+    code = "-".join(code.split())[:20]
+    return code or "PROJECT"
+
+
 def _guid_braces() -> str:
     return "{" + str(uuid.uuid4()).upper() + "}"
 
@@ -278,20 +293,29 @@ def _resource_assignment_xml(asg, activity_by_id: dict, resource_by_id: dict) ->
     wbs_id = activity.wbs_id if activity is not None else None
     resource = resource_by_id.get(asg.rsrc_id)
     resource_type_name = _RESOURCE_TYPE_NAMES.get(resource.rsrc_type, "Labor") if resource is not None else "Labor"
+    # Real progress, not always-zero (2026-09-06, per Maro: re-importing an
+    # exported project back into P6 showed EV/AC "missing completely") —
+    # see P6Assignment.actual_cost's own header for where these come from.
+    # Remaining is derived (AtCompletion - Actual), P6's own convention,
+    # rather than always the full planned amount regardless of progress.
+    remaining_cost = asg.cost - asg.actual_cost
+    remaining_units = asg.qty - asg.actual_units
+    actual_start_xml = f'<ActualStartDate>{_fmt_datetime(asg.actual_start)}</ActualStartDate>' if asg.actual_start else '<ActualStartDate xsi:nil="true" />'
+    actual_finish_xml = f'<ActualFinishDate>{_fmt_datetime(asg.actual_finish)}</ActualFinishDate>' if asg.actual_finish else '<ActualFinishDate xsi:nil="true" />'
     return (
         f"<ResourceAssignment>"
         f"<ActivityObjectId>{asg.task_id}</ActivityObjectId>"
-        f"<ActualCost>0</ActualCost>"
+        f"<ActualCost>{_fmt_dec(asg.actual_cost, 2)}</ActualCost>"
         f'<ActualCurve xsi:nil="true" />'
-        f'<ActualFinishDate xsi:nil="true" />'
+        f"{actual_finish_xml}"
         f"<ActualOvertimeCost>0</ActualOvertimeCost>"
         f"<ActualOvertimeUnits>0</ActualOvertimeUnits>"
-        f"<ActualRegularCost>0</ActualRegularCost>"
-        f"<ActualRegularUnits>0</ActualRegularUnits>"
-        f'<ActualStartDate xsi:nil="true" />'
+        f"<ActualRegularCost>{_fmt_dec(asg.actual_cost, 2)}</ActualRegularCost>"
+        f"<ActualRegularUnits>{_fmt_dec(asg.actual_units, 2)}</ActualRegularUnits>"
+        f"{actual_start_xml}"
         f"<ActualThisPeriodCost>0</ActualThisPeriodCost>"
         f"<ActualThisPeriodUnits>0</ActualThisPeriodUnits>"
-        f"<ActualUnits>0</ActualUnits>"
+        f"<ActualUnits>{_fmt_dec(asg.actual_units, 2)}</ActualUnits>"
         f"<AtCompletionCost>{_fmt_dec(asg.cost, 2)}</AtCompletionCost>"
         f"<AtCompletionUnits>{_fmt_dec(asg.qty, 2)}</AtCompletionUnits>"
         f'<CostAccountObjectId xsi:nil="true" />'
@@ -314,13 +338,13 @@ def _resource_assignment_xml(asg, activity_by_id: dict, resource_by_id: dict) ->
         f"<ProjectObjectId>1</ProjectObjectId>"
         f"<RateSource>Resource</RateSource>"
         f"<RateType>Price / Unit</RateType>"
-        f"<RemainingCost>{_fmt_dec(asg.cost, 2)}</RemainingCost>"
+        f"<RemainingCost>{_fmt_dec(remaining_cost, 2)}</RemainingCost>"
         f'<RemainingCurve xsi:nil="true" />'
-        f"<RemainingDuration>{_fmt_dec(asg.qty, 2)}</RemainingDuration>"
+        f"<RemainingDuration>{_fmt_dec(remaining_units, 2)}</RemainingDuration>"
         f"{f'<RemainingFinishDate>{_fmt_datetime(finish)}</RemainingFinishDate>' if finish else '<RemainingFinishDate xsi:nil=\"true\" />'}"
         f"<RemainingLag>0</RemainingLag>"
         f"{f'<RemainingStartDate>{_fmt_datetime(start)}</RemainingStartDate>' if start else '<RemainingStartDate xsi:nil=\"true\" />'}"
-        f"<RemainingUnits>{_fmt_dec(asg.qty, 2)}</RemainingUnits>"
+        f"<RemainingUnits>{_fmt_dec(remaining_units, 2)}</RemainingUnits>"
         f"<RemainingUnitsPerTime>1</RemainingUnitsPerTime>"
         f'<ResourceCurveObjectId xsi:nil="true" />'
         f"<ResourceObjectId>{asg.rsrc_id}</ResourceObjectId>"
@@ -391,8 +415,11 @@ def build_pmxml(data: P6ExportData) -> str:
     parts.append("<Project>")
     parts.append(f"<DataDate>{_fmt_datetime(data.data_date)}</DataDate>")
     parts.append(f"<GUID>{data.project_guid}</GUID>")
-    parts.append(_el("Id", data.project_name[:100]))
+    parts.append(_el("Id", _project_id_code(data.project_name)))
+    parts.append(_el("Name", data.project_name[:100]))
     parts.append(f"<ObjectId>{data.project_id}</ObjectId>")
+    if data.baseline is not None:
+        parts.append(f"<CurrentBaselineProjectObjectId>{data.baseline.object_id}</CurrentBaselineProjectObjectId>")
     if data.plan_start is not None:
         parts.append(f"<PlannedStartDate>{_fmt_datetime(data.plan_start)}</PlannedStartDate>")
     default_calendar = next((c for c in data.calendars if c.is_default), None)
@@ -408,5 +435,34 @@ def build_pmxml(data: P6ExportData) -> str:
         parts.append(_relationship_xml(rel))
     parts.append("</Project>")
 
+    # <BaselineProject> is a full sibling of <Project>, not nested inside
+    # it — confirmed against a real two-baseline P6 export, and how
+    # p6_import_parse.py's own parser looks for it (root.findall, not
+    # scoped under <Project>). See P6Baseline's own header.
+    if data.baseline is not None:
+        parts.append(_baseline_project_xml(data.baseline, data.project_id))
+
     parts.append("</APIBusinessObjects>")
     return "\n".join(parts)
+
+
+def _baseline_project_xml(baseline, original_project_id: int) -> str:  # noqa: ANN001 — p6_export.P6Baseline
+    activities_xml = "".join(
+        f"<Activity>"
+        f"{_el('Id', a.activity_id)}"
+        f"{f'<StartDate>{_fmt_datetime(a.start)}</StartDate>' if a.start else '<StartDate xsi:nil=\"true\" />'}"
+        f"{f'<FinishDate>{_fmt_datetime(a.finish)}</FinishDate>' if a.finish else '<FinishDate xsi:nil=\"true\" />'}"
+        f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
+        f"</Activity>"
+        for a in baseline.activities
+    )
+    return (
+        f"<BaselineProject>"
+        f"<DataDate>{_fmt_datetime(baseline.data_date)}</DataDate>"
+        f"{_el('BaselineTypeName', baseline.name)}"
+        f"{_el('Name', baseline.name)}"
+        f"<ObjectId>{baseline.object_id}</ObjectId>"
+        f"<OriginalProjectObjectId>{original_project_id}</OriginalProjectObjectId>"
+        f"{activities_xml}"
+        f"</BaselineProject>"
+    )

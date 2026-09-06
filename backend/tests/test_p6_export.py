@@ -205,6 +205,134 @@ async def test_activity_names_are_p6_clean(client: AsyncClient, project: Project
     assert not any(n and n.startswith("Elevator Pit") for n in activity_names), "redundant parent-WBS prefix survived"
 
 
+async def test_project_writes_both_id_and_name(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    """Real bug (2026-09-06, per Maro re-importing an exported project back
+    into P6): <Project> only ever wrote <Id> (the full project name,
+    verbatim) and never a <Name> at all — P6 showed the real name sitting
+    in its "Project ID" column and its own "(New WBS)" placeholder in the
+    "Project Name" column instead. <Id> is now a short code derived from
+    the name (never the name verbatim — Project IDs are conventionally
+    short); <Name> carries the real, full name."""
+    await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = root.find("p6:Project", ns)
+
+    assert project_el.findtext("p6:Name", namespaces=ns) == project.name
+    project_id_code = project_el.findtext("p6:Id", namespaces=ns)
+    assert project_id_code
+    assert project_id_code != project.name
+    assert len(project_id_code) <= 20
+
+
+async def test_active_baseline_is_exported(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    """Real bug (2026-09-06, per Maro): a re-imported exported project's
+    own BL1 Start/Finish just mirrored the live dates in P6 — this export
+    never wrote a <BaselineProject> at all, so P6 had nothing to show as a
+    real baseline. Only the currently-ASSIGNED baseline is exported
+    (matching what Activity.bl_start/bl_finish already reflects
+    everywhere else in Prosota), not every named snapshot ever captured."""
+    task = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
+
+    baseline_resp = await client.post("/api/v1/schedule-baselines/", json={
+        "schedule_period_id": str(live_schedule_period.id), "name": "Client Baseline", "baseline_date": "2026-01-01",
+    })
+    assert baseline_resp.status_code == 201, baseline_resp.text
+    baseline_id = baseline_resp.json()["id"]
+    assign_resp = await client.post(f"/api/v1/schedule-baselines/{baseline_id}/assign")
+    assert assign_resp.status_code == 200, assign_resp.text
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+
+    baseline_el = root.find("p6:BaselineProject", ns)
+    assert baseline_el is not None, "no <BaselineProject> in the export"
+    assert baseline_el.findtext("p6:Name", namespaces=ns) == "Client Baseline"
+    baseline_activity_els = baseline_el.findall("p6:Activity", ns)
+    assert len(baseline_activity_els) == 1
+    assert baseline_activity_els[0].findtext("p6:Id", namespaces=ns) == task["code"]
+
+    project_el = root.find("p6:Project", ns)
+    current_baseline_id = project_el.findtext("p6:CurrentBaselineProjectObjectId", namespaces=ns)
+    assert current_baseline_id == baseline_el.findtext("p6:ObjectId", namespaces=ns)
+
+
+async def test_no_baseline_project_when_none_is_assigned(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    assert root.find("p6:BaselineProject", ns) is None
+
+
+async def test_actual_cost_and_units_are_exported_and_prorated(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """Real bug (2026-09-06, per Maro): ActualCost/ActualUnits were always
+    hardcoded to 0 on every exported <ResourceAssignment>, so a re-import
+    into P6 showed Earned Value and Actual Cost "missing completely" —
+    "progress is missing entirely." Prosota tracks one real actuals figure
+    per ACTIVITY (CostElement.actuals), not per individual resource
+    assignment the way P6 natively does — an activity with two assignments
+    at a 3:1 planned-cost ratio should see its one real actuals figure
+    split the same 3:1 way, not evenly or arbitrarily."""
+    task = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
+    resource_a = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "Labourer", "unit": "day", "rate": "300",
+    })
+    resource_b = await client.post("/api/v1/resources/", json={
+        "project_id": str(project.id), "resource_type": "labour", "name": "Foreman", "unit": "day", "rate": "100",
+    })
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": task["id"], "resource_id": resource_a.json()["id"], "utilisation_pct": "100",
+    })
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": task["id"], "resource_id": resource_b.json()["id"], "utilisation_pct": "100",
+    })
+    # BAC = (300 + 100) * 1 day = 400 — 300/400 = 75% to Labourer, 25% to Foreman.
+    elements = (await client.get("/api/v1/cost-elements/", params={
+        "project_id": str(project.id), "period_id": (await client.get(
+            "/api/v1/periods/", params={"project_id": str(project.id)}
+        )).json()[0]["id"],
+    })).json()
+    element = next(e for e in elements if e["source"] == "schedule")
+    patch_resp = await client.patch(f"/api/v1/cost-elements/{element['id']}", json={"actuals": "200"})
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = root.find("p6:Project", ns)
+
+    rsrc_id_by_name = {
+        el.findtext("p6:Name", namespaces=ns): el.findtext("p6:ObjectId", namespaces=ns)
+        for el in root.findall("p6:Resource", ns)
+    }
+    assignment_els = project_el.findall("p6:ResourceAssignment", ns)
+    assert len(assignment_els) == 2
+    actual_cost_by_rsrc_id = {
+        el.findtext("p6:ResourceObjectId", namespaces=ns): float(el.findtext("p6:ActualCost", namespaces=ns))
+        for el in assignment_els
+    }
+    total_actual = sum(actual_cost_by_rsrc_id.values())
+    assert abs(total_actual - 200.0) < 0.01, actual_cost_by_rsrc_id  # the exact real figure, not lost to rounding
+
+    labourer_actual = actual_cost_by_rsrc_id[rsrc_id_by_name["Labourer"]]
+    foreman_actual = actual_cost_by_rsrc_id[rsrc_id_by_name["Foreman"]]
+    assert abs(labourer_actual - 150.0) < 0.01  # 75% of 200
+    assert abs(foreman_actual - 50.0) < 0.01    # 25% of 200
+
+
 async def test_p6_export_404s_for_unknown_schedule_period(client: AsyncClient):
     resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(uuid.uuid4())})
     assert resp.status_code == 404
