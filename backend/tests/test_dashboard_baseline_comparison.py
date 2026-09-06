@@ -190,6 +190,66 @@ async def test_schedule_spi_uses_baseline_vs_current_schedule_linked_cost_data(
     assert resp2["schedule"]["summary"]["current_spi"] != current_spi_first
 
 
+async def test_schedule_comparison_wbs_slicer_scopes_to_the_chosen_branch(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """2026-09-06, per Maro: "i want the wbs slicer here as well" — same
+    _subtree_ids scoping the general WBS slicer already uses on Overview,
+    so Baseline Comparison's Schedule tab can narrow down to one branch
+    the same way. Both an already-snapshotted activity and one added
+    since capture (the "no baseline value yet" case) must respect it."""
+    branch_a = await _create_activity(client, project, live_schedule_period, "Branch A", activity_type="wbs_summary")
+    branch_b = await _create_activity(client, project, live_schedule_period, "Branch B", activity_type="wbs_summary")
+    task_a = await _create_activity(client, project, live_schedule_period, "Task A", parent_id=branch_a["id"])
+    task_b = await _create_activity(client, project, live_schedule_period, "Task B", parent_id=branch_b["id"])
+
+    baseline_set = await _capture_all(client, project, live_period, live_schedule_period)
+    new_task_a = await _create_activity(client, project, live_schedule_period, "New Task A", parent_id=branch_a["id"])
+    new_task_b = await _create_activity(client, project, live_schedule_period, "New Task B", parent_id=branch_b["id"])
+
+    resp = await client.get("/api/v1/dashboard/baseline-comparison", params={
+        "baseline_set_id": baseline_set["id"], "schedule_wbs_node_activity_id": branch_a["id"],
+    })
+    assert resp.status_code == 200, resp.text
+    ids = {i["activity_id"] for i in resp.json()["schedule"]["items"]}
+    # branch_a itself is included too — create_baseline snapshots every
+    # activity, WBS summaries included, and it's its own subtree's root.
+    assert ids == {branch_a["id"], task_a["id"], new_task_a["id"]}
+    assert branch_b["id"] not in ids and task_b["id"] not in ids and new_task_b["id"] not in ids
+
+
+async def test_schedule_comparison_wbs_slicer_404s_for_unknown_node(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    baseline_set = await _capture_all(client, project, live_period, live_schedule_period)
+    resp = await client.get("/api/v1/dashboard/baseline-comparison", params={
+        "baseline_set_id": baseline_set["id"], "schedule_wbs_node_activity_id": "00000000-0000-0000-0000-000000000000",
+    })
+    assert resp.status_code == 404
+
+
+async def test_schedule_comparison_milestone_only_toggle(
+    client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """2026-09-06, per Maro: "a milestone only toggle to avoid seeing all
+    activities" — a schedule with dozens of tasks alongside a handful of
+    real milestones should be narrowable down to just the milestones."""
+    task = await _create_activity(client, project, live_schedule_period, "A Task")
+    milestone = await _create_activity(client, project, live_schedule_period, "A Milestone", activity_type="start_milestone")
+
+    baseline_set = await _capture_all(client, project, live_period, live_schedule_period)
+    new_task = await _create_activity(client, project, live_schedule_period, "New Task")
+    new_milestone = await _create_activity(client, project, live_schedule_period, "New Milestone", activity_type="finish_milestone")
+
+    resp = await client.get("/api/v1/dashboard/baseline-comparison", params={
+        "baseline_set_id": baseline_set["id"], "schedule_milestone_only": True,
+    })
+    assert resp.status_code == 200, resp.text
+    ids = {i["activity_id"] for i in resp.json()["schedule"]["items"]}
+    assert ids == {milestone["id"], new_milestone["id"]}
+    assert task["id"] not in ids and new_task["id"] not in ids
+
+
 async def test_module_missing_from_the_set_returns_null_not_an_error(
     client: AsyncClient, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
 ):

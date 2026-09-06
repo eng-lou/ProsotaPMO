@@ -4,6 +4,8 @@ import { useBaselineSets } from '@/lib/baselineSets'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
+import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
+import type { Activity } from '@/modules/scheduling/types'
 import { formatCurrency, formatDate } from './Overview'
 import type { BaselineComparisonResponse } from './types'
 
@@ -83,6 +85,22 @@ export function BaselineComparison() {
   const [captureDate, setCaptureDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [capturing, setCapturing] = useState(false)
 
+  // Schedule tab's own WBS slicer + milestone-only toggle (2026-09-06, per
+  // Maro: "i want the wbs slicer here as well, also a milestone only
+  // toggle") — same _subtree_ids scoping Overview's own general WBS
+  // slicer already uses server-side (app/services/dashboard.py:_schedule_
+  // comparison), fetched once here purely to populate the picker, same as
+  // Overview.tsx's own wbsNodes.
+  const [scheduleWbsNodes, setScheduleWbsNodes] = useState<Activity[]>([])
+  useEffect(() => {
+    if (!selectedProject || !schedulePeriod) return
+    api.get<Activity[]>('/api/v1/activities/', {
+      params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id },
+    }).then(({ data }) => setScheduleWbsNodes(data.filter(a => a.activity_type === 'wbs_summary')))
+  }, [selectedProject?.id, schedulePeriod?.id])
+  const [scheduleWbsNodeId, setScheduleWbsNodeId] = useState<string>('')
+  const [scheduleMilestoneOnly, setScheduleMilestoneOnly] = useState(false)
+
   // "Link Existing" (2026-09-03, per Maro: "i set a schedule baseline and
   // assigned it but its not shown here") — Capture All Now always snapshots
   // fresh, brand-new baselines for all 4 modules at once; it has no way to
@@ -144,10 +162,16 @@ export function BaselineComparison() {
       return
     }
     setLoading(true)
-    api.get<BaselineComparisonResponse>('/api/v1/dashboard/baseline-comparison', { params: { baseline_set_id: selectedSetId } })
+    api.get<BaselineComparisonResponse>('/api/v1/dashboard/baseline-comparison', {
+      params: {
+        baseline_set_id: selectedSetId,
+        schedule_wbs_node_activity_id: scheduleWbsNodeId || undefined,
+        schedule_milestone_only: scheduleMilestoneOnly || undefined,
+      },
+    })
       .then(({ data }) => setData(data))
       .finally(() => setLoading(false))
-  }, [selectedSetId])
+  }, [selectedSetId, scheduleWbsNodeId, scheduleMilestoneOnly])
 
   const handleCapture = async () => {
     if (!period || !schedulePeriod || !captureName.trim()) return
@@ -302,7 +326,12 @@ export function BaselineComparison() {
           </div>
 
           {subTab === 'Overview' && <OverviewSubTab data={data} />}
-          {subTab === 'Schedule' && <ScheduleSubTab data={data} />}
+          {subTab === 'Schedule' && (
+            <ScheduleSubTab
+              data={data} wbsNodes={scheduleWbsNodes} wbsNodeId={scheduleWbsNodeId} onWbsNodeIdChange={setScheduleWbsNodeId}
+              milestoneOnly={scheduleMilestoneOnly} onMilestoneOnlyChange={setScheduleMilestoneOnly}
+            />
+          )}
           {subTab === 'Risk' && <RiskSubTab data={data} />}
           {subTab === 'Cost' && <CostSubTab data={data} />}
           {subTab === 'ICD' && <IcdSubTab data={data} />}
@@ -360,13 +389,43 @@ function OverviewSubTab({ data }: { data: BaselineComparisonResponse }) {
   )
 }
 
-function ScheduleSubTab({ data }: { data: BaselineComparisonResponse }) {
-  if (!data.schedule) return <EmptyModule label="Schedule" />
+function ScheduleSubTab({
+  data, wbsNodes, wbsNodeId, onWbsNodeIdChange, milestoneOnly, onMilestoneOnlyChange,
+}: {
+  data: BaselineComparisonResponse
+  wbsNodes: Activity[]
+  wbsNodeId: string
+  onWbsNodeIdChange: (id: string) => void
+  milestoneOnly: boolean
+  onMilestoneOnlyChange: (value: boolean) => void
+}) {
+  // The WBS picker/milestone toggle render regardless of whether this
+  // baseline set has a schedule module linked — a scope choice made here
+  // should stick even if the user switches to a set that does have one,
+  // same reasoning as Overview.tsx's own always-visible slicer.
+  const controls = (
+    <div className="flex items-center gap-3 text-xs mb-3">
+      <div className="w-56">
+        <ActivityPicker activities={wbsNodes} value={wbsNodeId} onChange={onWbsNodeIdChange} placeholder="Whole schedule" />
+      </div>
+      {wbsNodeId && (
+        <button onClick={() => onWbsNodeIdChange('')} className="text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper">
+          ✕ Whole schedule
+        </button>
+      )}
+      <label className="flex items-center gap-1.5 text-gray-600 dark:text-prosota-muted cursor-pointer">
+        <input type="checkbox" checked={milestoneOnly} onChange={e => onMilestoneOnlyChange(e.target.checked)} />
+        Milestones only
+      </label>
+    </div>
+  )
+  if (!data.schedule) return <>{controls}<EmptyModule label="Schedule" /></>
   const changed = data.schedule.items.filter(i =>
     (i.variance_days !== null && i.variance_days !== 0) || i.baseline_finish === null || i.current_finish === null
   )
   return (
     <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4">
+      {controls}
       <div className="text-xs text-gray-500 dark:text-prosota-muted mb-3">
         {data.schedule.summary.slipped_count} of {data.schedule.summary.total} activities slipped since "{data.schedule.baseline_name}" —
         average slip {data.schedule.summary.avg_slip_days ?? '—'} days. SPI: {formatDelta(data.schedule.summary.baseline_spi, data.schedule.summary.current_spi)}

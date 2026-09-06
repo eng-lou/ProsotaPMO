@@ -25,6 +25,7 @@ from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActiv
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
+from app.schemas.activity import is_milestone_type
 from app.schemas.dashboard import (
     BaselineComparisonResponse,
     ClashByTest,
@@ -798,13 +799,31 @@ async def _baseline_schedule_spi(
     return rollup_evm_from_totals(None, None, pv_total, ev_total)["spi"]
 
 
-async def _schedule_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> ScheduleComparison | None:
+async def _schedule_comparison(
+    db: AsyncSession, baseline_set_id: uuid.UUID,
+    wbs_node_activity_id: uuid.UUID | None = None, milestone_only: bool = False,
+) -> ScheduleComparison | None:
     baseline = (await db.execute(
         select(ScheduleBaseline).where(ScheduleBaseline.baseline_set_id == baseline_set_id)
         .order_by(ScheduleBaseline.created_at.desc())
     )).scalars().first()
     if baseline is None:
         return None
+
+    # WBS-node scope + milestone-only toggle (2026-09-06, per Maro: "i want
+    # the wbs slicer here as well, also a milestone only toggle to avoid
+    # seeing all activities") — same _subtree_ids scoping get_overview's
+    # own WBS slicer already uses, so this behaves identically. A snapshot
+    # whose activity has since been deleted has no live position to check
+    # either filter against, so it's excluded whenever either is active —
+    # matches "can't place it in that branch" / "can't confirm it's a
+    # milestone" rather than guessing.
+    scope_ids: set[uuid.UUID] | None = None
+    if wbs_node_activity_id is not None:
+        node = await db.get(Activity, wbs_node_activity_id)
+        if node is None or node.schedule_period_id != baseline.schedule_period_id:
+            raise HTTPException(status_code=404, detail="WBS node not found in this schedule.")
+        scope_ids = await _subtree_ids(db, baseline.schedule_period_id, wbs_node_activity_id)
 
     snapshots = (await db.execute(
         select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == baseline.id)
@@ -818,6 +837,10 @@ async def _schedule_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> 
     slip_days: list[int] = []
     for snap in snapshots:
         activity = activities.get(snap.activity_id)
+        if scope_ids is not None and (activity is None or activity.id not in scope_ids):
+            continue
+        if milestone_only and (activity is None or not is_milestone_type(activity.activity_type)):
+            continue
         current_finish = activity.finish if activity else None
         variance_days = (
             (current_finish - snap.finish).days if current_finish is not None and snap.finish is not None else None
@@ -842,6 +865,10 @@ async def _schedule_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> 
         )
     )).scalars().all()
     for activity in added_activities:
+        if scope_ids is not None and activity.id not in scope_ids:
+            continue
+        if milestone_only and not is_milestone_type(activity.activity_type):
+            continue
         items.append(ScheduleComparisonItem(
             activity_id=activity.id, code=activity.code, task_name=activity.task_name,
             baseline_finish=None, current_finish=activity.finish, variance_days=None,
@@ -1085,7 +1112,10 @@ async def _icd_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> IcdCo
     )
 
 
-async def get_baseline_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> BaselineComparisonResponse:
+async def get_baseline_comparison(
+    db: AsyncSession, baseline_set_id: uuid.UUID,
+    schedule_wbs_node_activity_id: uuid.UUID | None = None, schedule_milestone_only: bool = False,
+) -> BaselineComparisonResponse:
     baseline_set = await db.get(BaselineSet, baseline_set_id)
     if baseline_set is None:
         raise HTTPException(status_code=404, detail="Baseline set not found")
@@ -1093,7 +1123,7 @@ async def get_baseline_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) 
     return BaselineComparisonResponse(
         baseline_set_name=baseline_set.name,
         baseline_set_date=baseline_set.baseline_date,
-        schedule=await _schedule_comparison(db, baseline_set_id),
+        schedule=await _schedule_comparison(db, baseline_set_id, schedule_wbs_node_activity_id, schedule_milestone_only),
         risk=await _risk_comparison(db, baseline_set_id),
         cost=await _cost_comparison(db, baseline_set_id),
         icd=await _icd_comparison(db, baseline_set_id),

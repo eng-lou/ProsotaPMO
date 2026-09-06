@@ -35,9 +35,11 @@ async def get_overview(
 @router.get("/baseline-comparison", response_model=BaselineComparisonResponse)
 async def get_baseline_comparison(
     baseline_set_id: uuid.UUID,
+    schedule_wbs_node_activity_id: uuid.UUID | None = None,
+    schedule_milestone_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ) -> BaselineComparisonResponse:
-    return await svc.get_baseline_comparison(db, baseline_set_id)
+    return await svc.get_baseline_comparison(db, baseline_set_id, schedule_wbs_node_activity_id, schedule_milestone_only)
 
 
 @router.get("/risk-emv-trend", response_model=RiskEmvTrendResponse)
