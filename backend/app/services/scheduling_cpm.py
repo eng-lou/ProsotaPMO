@@ -87,20 +87,28 @@ def _count_working_days(lookup: "_CalendarLookup", calendar: Calendar, d1: date,
 def elapsed_duration_fraction(
     lookup: "_CalendarLookup", calendar: Calendar,
     start: datetime | None, finish: datetime | None, data_date: datetime,
-    override: Decimal | None = None, override_date: date | None = None,
 ) -> Decimal | None:
-    """What fraction (0-1) of an activity's own start-finish span has elapsed
-    as of the data date — "Schedule % Complete" (renamed from "Duration %
-    Complete" 2026-09-03, per Maro: that name read as a comment on the
-    activity's own duration, not the time-elapsed-vs-data-date calculation
-    it actually is — see app/schemas/activity.py's own schedule_pct_complete
-    field for the full story), distinct from the manually-assessed Physical
-    % Complete (Activity.pct_complete) that drives Earned Value. This is the
-    exact input Planned Value prorates against (see
+    """What fraction (0-1) of a [start, finish] span has elapsed as of the
+    data date — "Schedule % Complete" (renamed from "Duration % Complete"
+    2026-09-03, per Maro: that name read as a comment on the activity's own
+    duration, not the time-elapsed-vs-data-date calculation it actually is
+    — see app/schemas/activity.py's own schedule_pct_complete field for the
+    full story), distinct from the manually-assessed Physical % Complete
+    (Activity.pct_complete) that drives Earned Value. This is the exact
+    input Planned Value prorates against (see
     app/services/cost_element.py:_schedule_evm) — extracted here so both PV
     and the "Schedule % Complete" figure shown directly on the activity (a
-    transparency aid, per Maro) can never drift apart. None if the activity
-    isn't scheduled yet (no live start/finish).
+    transparency aid, per Maro) can never drift apart. None if there's no
+    span to measure (no start/finish at all).
+
+    start/finish should be the activity's BASELINE dates when one has been
+    captured, live/current dates otherwise (2026-09-06, per Maro — every
+    caller already resolves this; see app/services/activity.py:
+    _attach_evm_fields and app/services/cost_element.py:_linked_activity_dates
+    for the real comparison that settled it: checked against a genuine
+    P6-exported EVM table for four real in-progress activities at once, live
+    dates matched none of them, baseline dates matched three exactly and the
+    fourth within a point).
 
     Working-day proration (2026-09-04, per Maro — real, exact P6
     interoperability: "it needs to be the exact match or Prosota loses
@@ -112,46 +120,8 @@ def elapsed_duration_fraction(
     time and P6 doesn't). Both counts are whole working DAYS via the
     activity's own resolved calendar, not hour-precision.
 
-    override/override_date (2026-09-04, per Maro — continuing the same P6
-    comparison: "maybe it has something to do with time and not just date",
-    then "duration % complete is different from schedule % complete... in
-    P6" — Activity.duration_pct_complete, a real, distinct, P6-sourced
-    field in its own right, not a private implementation detail of this
-    function) take over when override_date exactly equals data_date's own
-    date — self-expiring by design, deliberately, rather than a stored
-    value that just sits there and goes stale the instant the schedule
-    moves on (Reschedule, a later progress snapshot, anything): the moment
-    the live data date differs from override_date even by a day, this falls
-    straight through to the normal calendar computation below, with no
-    separate invalidation code needed anywhere else. override is on
-    Activity.duration_pct_complete's own 0-100 scale (matching every other
-    percent-complete field in this app — pct_complete, schedule_pct_complete
-    — so it's directly usable/displayable with no separate conversion
-    anywhere else); divided by 100 here since every caller/return of this
-    function itself works in a 0-1 fraction.
-
-    The activity whose exact ratio this working-day formula was originally
-    verified against happened to have identical start/finish clock times
-    (10:40/10:40), which made whole-day counting exact for it by
-    construction — but P6's own raw <DurationPercentComplete> for four
-    *other* real activities in the same file diverges meaningfully from
-    this formula (by ~1-3 percentage points each), because that field
-    reflects P6's own RemainingDuration/AtCompletionDuration — its
-    resource-loaded internal duration engine, not something recoverable
-    from calendar dates alone (same "P6's internal engine can't be
-    bit-for-bit reproduced" limitation p6_import.py's own trusted-finish
-    correction already works around for .finish). Populated at P6 import
-    time from that same field, pinned to that file's own DataDate (see
-    Activity.duration_pct_complete's own docstring) — None for every
-    hand-created Prosota activity, which still computes this the same way
-    as before.
-
     Whole-datetime edge cases (start==finish, data_date outside the span)
-    are still resolved before ever counting a single day, same as before —
-    only the genuinely-in-between case now counts working days instead of
-    seconds."""
-    if override is not None and override_date is not None and override_date == data_date.date():
-        return override / Decimal(100)
+    are still resolved before ever counting a single day."""
     if start is None or finish is None:
         return None
     if finish <= start:

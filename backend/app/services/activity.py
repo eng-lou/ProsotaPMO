@@ -50,12 +50,21 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
     matching the resource-assignment N+1 fix in
     app/services/resource_assignment.py.
 
-    PV is prorated against the activity's own live start/finish (not
-    bl_start/bl_finish) — per Maro's confirmed correction (P6 domain expertise):
-    "Set Baseline" drives schedule variance (Fin. Var (d)), not Planned Value.
-    PV asks "how far along its own current duration should this activity be by
-    the data date," independent of whether a baseline has ever been captured —
-    see app/services/cost_element.py:_schedule_evm. The data date itself is
+    PV is prorated against the activity's own BASELINE start/finish when one
+    has been captured, live start/finish otherwise (2026-09-06, per Maro,
+    reverting an earlier "confirmed correction" after real evidence proved
+    it wrong: checked against a genuine P6-exported EVM table for four real
+    in-progress activities at once, live-date proration matched none of
+    them, while baseline-date proration — the exact same working-day-count
+    formula below, just fed bl_start/bl_finish instead — matched three
+    exactly and the fourth within a point. PMBOK's own definition backs
+    this too: PV is "the value of work PLANNED to be done," a baseline
+    concept by definition, not a live-schedule one — Fin. Var (d) tracking
+    schedule variance was never in tension with PV also needing the
+    baseline; both do). Falls back to live start/finish for an activity
+    with no captured baseline (a hand-created Prosota activity, or one
+    genuinely never baselined) — same "leave it blank/best-available rather
+    than fake a number" pattern as everywhere else. The data date itself is
     each activity's schedule period's own data_date_for_period (moved by
     Reschedule), not the real wall-clock date — otherwise rescheduling the
     data date wouldn't move PV at all."""
@@ -92,10 +101,9 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
         calendar = lookup.resolve(a)
-        fraction = elapsed_duration_fraction(
-            lookup, calendar, a.start, a.finish, data_date,
-            a.schedule_pct_complete_override, a.duration_pct_complete_date,
-        )
+        pv_start = a.bl_start if a.bl_start is not None and a.bl_finish is not None else a.start
+        pv_finish = a.bl_finish if a.bl_start is not None and a.bl_finish is not None else a.finish
+        fraction = elapsed_duration_fraction(lookup, calendar, pv_start, pv_finish, data_date)
         # "Schedule % Complete" (this field itself was internally called
         # duration_pct_complete before a 2026-09-03 rename, per Maro:
         # "rename Duration % to Schedule %" — unrelated to, and not to be
@@ -103,14 +111,10 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         # added 2026-09-04 above; that one is P6's own distinct Duration %
         # Complete concept, imported verbatim, not Prosota's own calendar
         # calculation this field represents) — how far along its own
-        # current schedule this activity should be, distinct from the
+        # BASELINE schedule this activity should be, distinct from the
         # manually-assessed pct_complete (Physical % Complete) that drives
         # EV. The direct transparency aid Maro asked for: exactly the input
-        # PV below is prorated from (P6's own real Schedule % Complete —
-        # schedule_pct_complete_override, ActualDuration/AtCompletionDuration
-        # — when valid for today, else this calendar-based calculation; see
-        # that field's own docstring for why it's a different number from
-        # duration_pct_complete, which stays display-only).
+        # PV below is prorated from.
         a.schedule_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
 
         element = elements_by_activity.get(a.id)
@@ -118,10 +122,7 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             for field in _EVM_FIELDS:
                 setattr(a, field, None)
             continue
-        evm = compute_schedule_linked_evm(
-            element, a.start, a.finish, data_date, lookup, calendar,
-            a.schedule_pct_complete_override, a.duration_pct_complete_date,
-        )
+        evm = compute_schedule_linked_evm(element, pv_start, pv_finish, data_date, lookup, calendar)
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
 

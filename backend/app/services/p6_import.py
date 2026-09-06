@@ -435,27 +435,12 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             # match Prosota's own 0-100 convention every other
             # percent-complete field already uses (pct_complete above,
             # schedule_pct_complete), same as <PercentComplete>'s own *100
-            # a few lines up. Display-only, kept for parity — see
-            # schedule_pct_complete_override below for the field that
-            # actually drives PV (a real P6 comparison found this is NOT
-            # the same number — see Activity.duration_pct_complete's own
-            # docstring).
+            # a few lines up. Display-only — PV is driven by this
+            # activity's own bl_start/bl_finish instead (see
+            # Activity.duration_pct_complete's own docstring).
             duration_pct_complete=(
                 pa.duration_pct_complete * 100 if pa.duration_pct_complete is not None else None
             ),
-            duration_pct_complete_date=(
-                parsed.data_date
-                if pa.duration_pct_complete is not None or pa.schedule_pct_complete_override is not None
-                else None
-            ),
-            # P6's real "Schedule % Complete" report column — computed at
-            # parse time from RemainingEarlyStartDate (2026-09-06, per Maro
-            # — see Activity.schedule_pct_complete_override's own docstring
-            # for the full derivation and why this is a different number
-            # from duration_pct_complete above). Already 0-100 scale from
-            # p6_import_parse.py, sharing duration_pct_complete_date's own
-            # self-expiring freshness gate.
-            schedule_pct_complete_override=pa.schedule_pct_complete_override,
             # Units % Complete (2026-09-05, per Maro: "unit percent
             # complete") — same *100 scaling, visibility only (see
             # Activity.units_pct_complete's own docstring for why it

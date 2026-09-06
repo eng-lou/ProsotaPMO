@@ -81,47 +81,6 @@ async def test_elapsed_duration_fraction_is_working_days_not_calendar_time(db: A
     assert fraction == Decimal(14) / Decimal(18)
 
 
-async def test_elapsed_duration_fraction_prefers_override_only_while_still_valid(
-    db: AsyncSession, project: Project,
-):
-    """Activity.duration_pct_complete (2026-09-04, per Maro: "maybe it has
-    something to do with time and not just date", then the real domain
-    correction that it's P6's own distinct Duration % Complete, not a
-    private override of this function) is self-expiring by design: it only
-    ever takes over when its own captured date exactly equals the live data
-    date being asked about, so a value imported for one P6 snapshot can
-    never silently keep driving PV after the schedule moves on. Uses dates
-    where the calendar-based answer (7/9, per the test above) and the
-    override (0.85, an arbitrary P6-reported figure that plain calendar
-    counting would never produce) are obviously distinguishable, so a bug
-    that ignored the override — or one that kept using it past its date —
-    would fail this test's assertions in opposite, unmistakable directions."""
-    lookup = await _build_calendar_lookup(db, project.id)
-    calendar = lookup.resolve_calendar_id(None)
-
-    start = datetime(2011, 4, 12, 10, 40)
-    finish = datetime(2011, 5, 5, 10, 40)
-    data_date = datetime(2011, 5, 1, 0, 0)
-    # 0-100 scale, matching Activity.duration_pct_complete's own stored
-    # convention (every other percent-complete field in the app) — the
-    # function itself divides by 100 to get back to its own 0-1 return
-    # convention.
-    override = Decimal("85")
-    override_date = date(2011, 5, 1)
-
-    # Live data date matches the override's own captured date -> trusted directly.
-    fraction = elapsed_duration_fraction(lookup, calendar, start, finish, data_date, override, override_date)
-    assert fraction == Decimal("0.85")
-
-    # Schedule has since moved on a single day (Reschedule, a later progress
-    # snapshot, anything) -> the stale override no longer applies at all,
-    # falls straight back to the real calendar computation.
-    later_data_date = datetime(2011, 5, 2, 0, 0)
-    fraction = elapsed_duration_fraction(lookup, calendar, start, finish, later_data_date, override, override_date)
-    assert fraction != Decimal("0.85")
-    assert fraction == Decimal(15) / Decimal(18)
-
-
 async def _get(client: AsyncClient, activity_id: str) -> dict:
     resp = await client.get(f"/api/v1/activities/{activity_id}")
     assert resp.status_code == 200

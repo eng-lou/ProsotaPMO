@@ -508,127 +508,119 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
     assert milestone.finish == datetime(2011, 8, 15, 10, 40)
 
 
-async def test_schedule_pct_complete_uses_remaining_early_start_not_duration_pct(
-    db: AsyncSession, project: Project,
-):
-    """Real PV/Remaining-Duration mismatch (2026-09-05/06, per Maro — two
-    rounds of comparison against real P6 data). Prosota's own
-    remaining_duration_hours/schedule-%-driving-PV both used naive,
-    Physical-%-based formulas instead of P6's own real, resource-loaded
-    figures already sitting in the file:
+_MON_FRI_CALENDAR_XML = (
+    b"<Calendar><ObjectId>1</ObjectId><Name>Standard</Name><HoursPerDay>8</HoursPerDay>"
+    b"<StandardWorkWeek>"
+    b"<StandardWorkHours><DayOfWeek>Sunday</DayOfWeek></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Monday</DayOfWeek>"
+    b"<WorkTime><Start>08:00:00</Start><Finish>16:59:00</Finish></WorkTime></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Tuesday</DayOfWeek>"
+    b"<WorkTime><Start>08:00:00</Start><Finish>16:59:00</Finish></WorkTime></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Wednesday</DayOfWeek>"
+    b"<WorkTime><Start>08:00:00</Start><Finish>16:59:00</Finish></WorkTime></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Thursday</DayOfWeek>"
+    b"<WorkTime><Start>08:00:00</Start><Finish>16:59:00</Finish></WorkTime></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Friday</DayOfWeek>"
+    b"<WorkTime><Start>08:00:00</Start><Finish>16:59:00</Finish></WorkTime></StandardWorkHours>"
+    b"<StandardWorkHours><DayOfWeek>Saturday</DayOfWeek></StandardWorkHours>"
+    b"</StandardWorkWeek></Calendar>"
+)
 
-    1. <DurationPercentComplete> (92.85% here) was being used as PV's own
-       override, but it's genuinely a DIFFERENT ratio from what P6 itself
-       reports as "Schedule % Complete" (92.35% for this exact activity).
-       A first attempt used ActualDuration / AtCompletionDuration (92.38%,
-       close here), but a SECOND real activity ("Third Floor Masonry
-       Structure") proved that formula wrong in general — 66.67% vs P6's
-       real 75%, an 8-point miss. The real mechanism, confirmed against
-       both: 1 - (Finish - RemainingEarlyStartDate) / (Finish - Start),
-       plain calendar-time deltas (93.11% here, 74.8% on the Masonry
-       activity — both within 1 point of P6's own figures).
-    2. remaining_duration_hours was duration_hours x (1 - pct_complete/100)
-       — P6's own <RemainingDuration> (51.4667h ≈ 6.4d, matching P6's "6")
-       is a real, independently-tracked figure, not a naive Physical-%
-       recompute."""
+
+async def test_schedule_pct_complete_uses_baseline_dates_not_live_dates(db: AsyncSession, project: Project):
+    """Real PV mismatch, third and final root cause (2026-09-06, per Maro,
+    after two earlier per-activity-ratio guesses — ActualDuration/
+    AtCompletionDuration, then RemainingEarlyStartDate — each matched
+    exactly one real activity and were proven wrong on others once checked
+    against a genuine P6-exported EVM table for four real activities at
+    once: "check online too"). The actual, documented P6 mechanism
+    (tensix.com, planacademy.com): Schedule % Complete is a *baseline*
+    concept — (DataDate - BaselineStart) / (BaselineFinish - BaselineStart)
+    — not a live-schedule one. Confirmed exact for 3 of 4 real activities,
+    the 4th within a point, once fed into the EXISTING working-day-count
+    elapsed_duration_fraction using Activity.bl_start/bl_finish (already
+    imported from this file's own embedded baseline) instead of the
+    activity's own live, current start/finish. This activity's live dates
+    would give a very different (wrong) answer than its baseline dates —
+    proving which one actually gets used."""
     xml = (
-        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
-        b"<Project><Id>Schedule Pct Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
-        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Fab &amp; Delivery</Name><Type>Task Dependent</Type>"
-        b"<PlannedDuration>720</PlannedDuration><PercentComplete>0.82</PercentComplete>"
-        b"<ActualDuration>624</ActualDuration><AtCompletionDuration>675.466666666666</AtCompletionDuration>"
-        b"<RemainingDuration>51.4666666666667</RemainingDuration>"
-        b"<RemainingEarlyStartDate>2011-05-02T08:00:00</RemainingEarlyStartDate>"
-        b"<DurationPercentComplete>0.928518518518519</DurationPercentComplete>"
-        b"<StartDate>2011-01-12T08:00:00</StartDate><FinishDate>2011-05-10T11:28:00</FinishDate>"
-        b"<ActualStartDate>2011-01-12T08:00:00</ActualStartDate>"
-        b"</Activity>"
-        b"</Project></APIBusinessObjects>"
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects" '
+        b'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        + _MON_FRI_CALENDAR_XML
+        + b"<Project><ObjectId>1</ObjectId><Id>BL Pct Test</Id><DataDate>2011-05-01T08:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>A1</Id><Name>Slipped Activity</Name><Type>Task Dependent</Type>"
+        b"<CalendarObjectId>1</CalendarObjectId>"
+        b"<PlannedDuration>96</PlannedDuration><PercentComplete>0.5</PercentComplete>"
+        # Live dates: entirely in the future relative to the data date — a
+        # pure live-date calc would give 0%.
+        b"<StartDate>2011-06-01T08:00:00</StartDate><FinishDate>2011-06-15T17:00:00</FinishDate>"
+        b"</Activity></Project>"
+        b"<BaselineProject><ObjectId>2</ObjectId><OriginalProjectObjectId>1</OriginalProjectObjectId>"
+        b"<BaselineTypeName>Approved Baseline</BaselineTypeName><DataDate>2011-04-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>900</ObjectId><Id>A1</Id><Name>Slipped Activity</Name>"
+        b"<PlannedDuration>96</PlannedDuration>"
+        # Baseline: 12 working days, data date lands exactly 9 working days
+        # in (19-22 Apr = 4, 25-29 Apr = 5) -> 9/12 = 75%.
+        b"<StartDate>2011-04-19T08:00:00</StartDate><FinishDate>2011-05-04T17:00:00</FinishDate></Activity>"
+        b"</BaselineProject>"
+        b"</APIBusinessObjects>"
     )
     parsed = parse_pmxml(xml)
-    await import_pmxml(db, project.id, parsed)
+    summary = await import_pmxml(db, project.id, parsed)
 
     activity = (await db.execute(
-        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Fab & Delivery")
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Slipped Activity")
     )).scalar_one()
+    assert activity.bl_start == datetime(2011, 4, 19, 8, 0)
+    assert activity.bl_finish == datetime(2011, 5, 4, 17, 0)
 
-    # Duration % Complete stays exactly what the file said — its own real,
-    # distinct P6 concept, unaffected by this fix.
-    assert activity.duration_pct_complete == Decimal("92.85185185")
-    # The NEW field that actually drives PV — a different, correct ratio,
-    # derived from RemainingEarlyStartDate (93.11%, matching P6's own
-    # 92.35% far more closely than the old flat calendar fallback would).
-    assert abs(activity.schedule_pct_complete_override - Decimal("93.11")) < Decimal("0.01")
-    # Remaining Duration now trusted from the file directly (≈6.43 days),
-    # not the old naive 720h x (1 - 82%) = 129.6h ≈ 16.2 days.
-    assert abs(activity.remaining_duration_hours - Decimal("51.47")) < Decimal("0.01")
+    activities = await _list_activities_with_evm(db, project.id, summary.schedule_period_id)
+    slipped = next(a for a in activities if a.task_name == "Slipped Activity")
+    # Exact match to the baseline-date calculation (75%) — not 0%, which is
+    # what the activity's own live (future) dates would give.
+    assert abs(slipped.schedule_pct_complete - Decimal("75.00")) < Decimal("0.01")
 
 
 async def test_schedule_pct_complete_matches_p6_for_third_floor_masonry(db: AsyncSession, project: Project):
-    """The exact real bug that proved ActualDuration/AtCompletionDuration
-    wrong (2026-09-06, per Maro: "see this third floor masonry activity for
-    example its showing as 66.7%... p6 showing 75%... where did you get the
-    66.7% from if it was never in P6"). Real numbers from "Third Floor
-    Masonry Structure": ActualDuration=64h, AtCompletionDuration=96h (gives
-    66.67% — wrong), but Start=2011-04-20T07:00, Finish=2011-05-06T08:00,
-    RemainingEarlyStartDate=2011-05-02T07:00 gives 74.8%, matching P6's own
-    75% (and £2,520 PV on a £3,360 BAC) within a point — the actual, real
-    mechanism, not a coincidence."""
+    """The exact real activity that finally settled this (2026-09-06, per
+    Maro: "see this third floor masonry activity for example its showing
+    as 66.7%... p6 showing 75%," then, after a second guess also failed on
+    three other real activities checked against a genuine P6-exported EVM
+    table: "check online too" — the search confirmed Schedule % Complete
+    is baseline-date-based, official P6 documentation, not a guess).
+    Prosota's own already-imported bl_start/bl_finish for this exact real
+    activity are 2011-04-19T08:00 / 2011-05-04T17:00 — reproduced here via
+    an embedded baseline — and (2011-05-01 - bl_start)/(bl_finish -
+    bl_start) in working days is exactly 9/12 = 75%, matching P6's own
+    report to the decimal."""
     xml = (
-        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
-        b"<Project><Id>Masonry Pct Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
-        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Third Floor Masonry Structure</Name><Type>Task Dependent</Type>"
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects" '
+        b'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        + _MON_FRI_CALENDAR_XML
+        + b"<Project><ObjectId>1</ObjectId><Id>Masonry Pct Test</Id><DataDate>2011-05-01T08:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>A1</Id><Name>Third Floor Masonry Structure</Name><Type>Task Dependent</Type>"
+        b"<CalendarObjectId>1</CalendarObjectId>"
         b"<PlannedDuration>97</PlannedDuration><PercentComplete>0.7</PercentComplete>"
         b"<ActualDuration>64</ActualDuration><AtCompletionDuration>96</AtCompletionDuration>"
-        b"<RemainingEarlyStartDate>2011-05-02T07:00:00</RemainingEarlyStartDate>"
         b"<StartDate>2011-04-20T07:00:00</StartDate><FinishDate>2011-05-06T08:00:00</FinishDate>"
         b"<ActualStartDate>2011-04-20T07:00:00</ActualStartDate>"
-        b"</Activity>"
-        b"</Project></APIBusinessObjects>"
+        b"</Activity></Project>"
+        b"<BaselineProject><ObjectId>2</ObjectId><OriginalProjectObjectId>1</OriginalProjectObjectId>"
+        b"<BaselineTypeName>Approved Baseline</BaselineTypeName><DataDate>2011-04-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>900</ObjectId><Id>A1</Id><Name>Third Floor Masonry Structure</Name>"
+        b"<PlannedDuration>96</PlannedDuration>"
+        b"<StartDate>2011-04-19T08:00:00</StartDate><FinishDate>2011-05-04T17:00:00</FinishDate></Activity>"
+        b"</BaselineProject>"
+        b"</APIBusinessObjects>"
     )
     parsed = parse_pmxml(xml)
-    await import_pmxml(db, project.id, parsed)
+    summary = await import_pmxml(db, project.id, parsed)
 
-    activity = (await db.execute(
-        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Third Floor Masonry Structure")
-    )).scalar_one()
-    # Not 66.67% (the wrong Actual/AtCompletion ratio) — within a point of
+    activities = await _list_activities_with_evm(db, project.id, summary.schedule_period_id)
+    masonry = next(a for a in activities if a.task_name == "Third Floor Masonry Structure")
+    # Not 66.67% (the disproven Actual/AtCompletion ratio) — exact match to
     # P6's own real 75%.
-    assert abs(activity.schedule_pct_complete_override - Decimal("74.81")) < Decimal("0.01")
-    assert activity.schedule_pct_complete_override < Decimal("75")
-    assert activity.schedule_pct_complete_override > Decimal("70")
-
-
-async def test_not_started_activity_gets_no_schedule_pct_override(db: AsyncSession, project: Project):
-    """Real ~£4,745 PV shortfall on a real 132-activity project total
-    (2026-09-06, per Maro: "so if schedule % complete is wrong, PV will
-    also be wrong"). A not-yet-started activity always has
-    ActualDuration=0, which the *previous* version of this override forced
-    into schedule_pct_complete_override=0% unconditionally — but PV is a
-    planned-schedule figure (Rita Mulcahy Ch.9: "the value of work PLANNED
-    to be done"), not an actual-progress one. An activity that's overdue
-    against its own original plan but hasn't started yet still has real
-    Planned Value; only its Earned Value is genuinely 0. The override must
-    stay None for a not-started activity so PV falls through to
-    elapsed_duration_fraction's own calendar proration against the
-    *planned* start/finish instead of being wrongly zeroed."""
-    xml = (
-        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
-        b"<Project><Id>Not Started Override Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
-        b"<Activity><ObjectId>1</ObjectId><Id>A1</Id><Name>Overdue Not Started</Name><Type>Task Dependent</Type>"
-        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0</PercentComplete>"
-        b"<ActualDuration>0</ActualDuration><AtCompletionDuration>80</AtCompletionDuration>"
-        b"<StartDate>2011-04-01T08:00:00</StartDate><FinishDate>2011-04-11T17:00:00</FinishDate>"
-        b"</Activity>"
-        b"</Project></APIBusinessObjects>"
-    )
-    parsed = parse_pmxml(xml)
-    await import_pmxml(db, project.id, parsed)
-
-    activity = (await db.execute(
-        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Overdue Not Started")
-    )).scalar_one()
-    assert activity.schedule_pct_complete_override is None
+    assert abs(masonry.schedule_pct_complete - Decimal("75.00")) < Decimal("0.01")
 
 
 async def test_wbs_summary_schedule_pct_complete_derived_from_pv_over_bac(db: AsyncSession, project: Project):
