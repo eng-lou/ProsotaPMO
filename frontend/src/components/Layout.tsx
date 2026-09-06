@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AiMessage } from '@/lib/aiAssistant'
+import { clearPersistedConversation, getPersistedConversation } from '@/lib/aiAssistant'
 import { AiFourDBridgeProvider } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { NAV, Sidebar } from './Sidebar'
@@ -48,11 +49,34 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // (2026-08-31, per Maro: "when i hit close and reopen poe, the history
   // is completely gone") — PoePanel only mounts while poeOpen is true, so
   // any state it held locally was destroyed by the unmount on Close, not
-  // just on an actual page refresh (the only loss the plan's own v1
-  // deviation note ever intended). Living here instead means it now
-  // survives Close/reopen and even route navigation (Layout stays mounted
-  // across every page), and is only ever lost on a genuine refresh.
+  // just on an actual page refresh. Living here means it survives Close/
+  // reopen and route navigation without a round trip; the effect below
+  // additionally loads the server-persisted copy (2026-09-06), so it now
+  // survives a genuine page refresh too.
   const [poeMessages, setPoeMessages] = useState<AiMessage[]>([])
+  // Loads the project's persisted conversation (2026-09-06, per Maro: "the
+  // chat history needs to persist" — ai/chat.py now saves it server-side
+  // after every turn, this is the read side). Re-runs on project switch
+  // too — as a side effect this also fixes a real pre-existing bug where
+  // switching projects with Poe open kept showing the PREVIOUS project's
+  // in-memory messages, since poeMessages was never actually scoped to
+  // whichever project was selected.
+  useEffect(() => {
+    if (!selectedProject) {
+      setPoeMessages([])
+      return
+    }
+    let cancelled = false
+    getPersistedConversation(selectedProject.id)
+      .then(messages => { if (!cancelled) setPoeMessages(messages) })
+      .catch(() => { if (!cancelled) setPoeMessages([]) })
+    return () => { cancelled = true }
+  }, [selectedProject?.id])
+  const clearPoeConversation = async () => {
+    if (!selectedProject) return
+    await clearPersistedConversation(selectedProject.id)
+    setPoeMessages([])
+  }
   return (
     // AiFourDBridgeProvider wraps both <main> (where FourD.tsx registers its
     // own tool handlers when mounted, see aiFourDBridge.tsx's own header on
@@ -85,6 +109,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               onClose={() => setPoeOpen(false)}
               messages={poeMessages}
               onMessagesChange={setPoeMessages}
+              onClearConversation={clearPoeConversation}
             />
           </Suspense>
         )}

@@ -10,11 +10,11 @@ class AiChatRequest(BaseModel):
     schedule_period_id: uuid.UUID | None = None
     period_id: uuid.UUID | None = None
     # Raw Anthropic Messages API content blocks, not a custom shape — the
-    # frontend holds and resends the full conversation each call (2026-08-31
-    # v1 deviation: no persisted conversation history, see the approved
-    # plan's own header on this), so round-tripping the SDK's own block
-    # shape verbatim avoids a lossy custom translation layer in both
-    # directions.
+    # frontend holds and resends the full conversation each call, and this
+    # endpoint persists the updated list verbatim after every turn
+    # (app/services/poe_conversation.py, added 2026-09-06) so it survives
+    # a reload — round-tripping the SDK's own block shape avoids a lossy
+    # custom translation layer anywhere in that path.
     messages: list[dict]
     # Tool names the frontend can currently execute — e.g. the viewport
     # tools only while the 4D module is mounted (see AiFourDBridgeContext

@@ -70,6 +70,7 @@ from app.models.app_settings import AppSettings
 from app.models.site_capture import SiteCapture
 from app.models.progress_variance_test import ProgressVarianceTest
 from app.models.progress_variance_result import ProgressVarianceResult
+from app.models.poe_conversation import PoeConversation
 
 __all__ = [
     "Base",
@@ -152,4 +153,5 @@ __all__ = [
     "SiteCapture",
     "ProgressVarianceTest",
     "ProgressVarianceResult",
+    "PoeConversation",
 ]

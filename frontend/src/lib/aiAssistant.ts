@@ -51,6 +51,19 @@ export async function sendChatTurn(payload: AiChatRequest): Promise<AiChatRespon
   return res.data
 }
 
+// Loaded once when Poe's panel first mounts for a project (2026-09-06, per
+// Maro: "the chat history needs to persist") — ai/chat itself persists the
+// updated list after every turn, this is just the read side for picking a
+// conversation back up on reload.
+export async function getPersistedConversation(projectId: string): Promise<AiMessage[]> {
+  const res = await api.get<{ messages: AiMessage[] }>(`/api/v1/poe-conversations/${projectId}`)
+  return res.data.messages
+}
+
+export async function clearPersistedConversation(projectId: string): Promise<void> {
+  await api.delete(`/api/v1/poe-conversations/${projectId}`)
+}
+
 export interface AttachmentPresign {
   storage_key: string
   upload_url: string

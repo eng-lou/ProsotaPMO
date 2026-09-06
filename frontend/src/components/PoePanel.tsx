@@ -5,6 +5,7 @@ import { ATTACHMENT_NAME_FIELD, prepareAttachment } from '@/lib/aiAttachments'
 import { api } from '@/lib/api'
 import { sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssistant'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
+import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { WIDGET_REGISTRY } from '@/modules/dashboard/widgets'
@@ -379,12 +380,13 @@ const POE_CAPABILITIES_TITLE = `What Poe can help with:\n${POE_CAPABILITY_LINES.
 // old click-outside-to-close backdrop, no longer true for a
 // non-blocking floating widget you can leave open while working elsewhere.
 export function PoePanel({
-  projectId, onClose, messages, onMessagesChange,
+  projectId, onClose, messages, onMessagesChange, onClearConversation,
 }: {
   projectId: string
   onClose: () => void
   messages: AiMessage[]
   onMessagesChange: (messages: AiMessage[]) => void
+  onClearConversation: () => void
 }) {
   // Resolved lazily, only once this panel actually mounts (2026-08-31) —
   // both hooks already no-op without a projectId, but calling them
@@ -440,6 +442,14 @@ export function PoePanel({
   const [clashTestApproved, setClashTestApproved] = useState(true)
   const [resolvingProposal, setResolvingProposal] = useState(false)
   const pendingProposal = findPendingProposal(messages)
+  // Now that the conversation actually persists across a reload
+  // (2026-09-06), there needs to be an explicit way to start fresh —
+  // previously a reload did this for free, which was the only reason
+  // there'd never been a button for it.
+  const handleClearConversation = async () => {
+    if (!(await confirmWithDontAsk('poe.clear-conversation', 'Clear this conversation? This cannot be undone.'))) return
+    await onClearConversation()
+  }
   // 4D client tools (2026-09-01) — see aiFourDBridge.tsx's own header. Only
   // present (a non-null ref) at all because Layout.tsx wraps this panel in
   // the same AiFourDBridgeProvider FourD.tsx registers into; the ref's own
@@ -903,6 +913,16 @@ export function PoePanel({
           >
             {minimized ? '▢' : '–'}
           </button>
+          {!minimized && messages.length > 0 && (
+            <button
+              onClick={handleClearConversation}
+              aria-label="Clear conversation"
+              title="Clear conversation"
+              className="text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper rounded px-1.5 py-1 text-sm leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-prosota-amber"
+            >
+              🗑
+            </button>
+          )}
           {!minimized && (
             <button
               onClick={() => setExpanded(x => !x)}
