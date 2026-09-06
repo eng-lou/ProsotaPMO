@@ -5293,3 +5293,28 @@ budget still remaining is estimated from how much working time it has
 left (imported straight from P6), and anything without that real figure
 (a manually-entered cost line, say) falls back to the simpler "remaining
 at plan rate" estimate rather than showing nothing at all.
+
+A fresh look at the same real project's own Budget At Completion (not
+just its Earned Value figures) turned up one more genuine penny-level
+gap — a WBS branch reading £614,678.48 in Prosota against P6's own
+£614,678.54. Traced to activities with several different trades/resources
+assigned at once (one had 11): summing each resource's own cost after
+rounding it to the penny, instead of summing the exact figures and
+rounding only the final total, is a classic accounting mistake — eleven
+tiny roundings in the same direction add up to a real, if small, drift.
+Fixed by rounding once, at the total.
+
+A second, subtler gap survived even that fix, on two activities out of
+132: Prosota derives each resource's "how much of this activity's
+duration it works" as a percentage, stored to 6 decimal places, then
+multiplies that percentage back out by the activity's duration to get a
+cost — and multiplying a rounded percentage back out doesn't always
+perfectly undo the division that produced it, however many decimal
+places you keep. The properly durable fix, rather than just adding more
+decimal places: for anything imported from a real P6 file, store the
+file's own exact "planned hours" for that resource directly, and cost it
+from that real number straight away, skipping the percentage step
+(and its inherent precision loss) entirely. Editing that resource's own
+percentage by hand afterwards reverts it to behaving like any other
+Prosota-authored assignment, so a deliberate edit is never silently
+overridden by the original import.

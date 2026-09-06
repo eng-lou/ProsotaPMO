@@ -21,6 +21,7 @@ class ResourceAssignment(Base, TimestampMixin):
       labour/equipment: utilisation_pct (0-100) — how much of the resource's day is
         spent on this activity; budget = activity.duration_days x utilisation_pct/100
         x resource.rate. Cost follows the schedule automatically as duration changes.
+        planned_hours, when set, overrides this entirely (see its own docstring).
       material: quantity — the original Qty x Rate build-up (e.g. 267 piles).
       subcontractor: neither — budget is always resource.rate flat (a lump sum
         doesn't scale with duration or utilisation).
@@ -54,3 +55,20 @@ class ResourceAssignment(Base, TimestampMixin):
     # Same "don't round an intermediate that feeds real money" lesson as
     # resource_costing.py's own _exact_duration_days, just a different field.
     utilisation_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    # A P6-imported labour/equipment/crew assignment's own real PlannedUnits
+    # (hours) — set only by a PMXML import (app/services/p6_import.py),
+    # never by hand. When set, resource_costing.py's own compute_assignment_
+    # budget_raw uses planned_hours/hours_per_day x rate directly instead of
+    # duration_days x utilisation_pct/100 x rate — mathematically the exact
+    # same formula (utilisation_pct is itself derived as planned_hours /
+    # duration_hours x 100 at import time, so duration_hours cancels out
+    # algebraically), but computed directly rather than round-tripping
+    # through utilisation_pct's own necessarily-finite stored precision,
+    # which broke that cancellation and leaked a real (if tiny) BAC error —
+    # confirmed 2026-09-06 against a real P6 export where it flipped the
+    # final penny of rounding on 2 of 132 real activities. Cleared back to
+    # None the moment a user edits this assignment's utilisation_pct by
+    # hand (app/services/resource_assignment.py) — the same "an explicit
+    # edit unlinks it from the import" rule used everywhere else a P6-
+    # sourced figure can be hand-overridden.
+    planned_hours: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

@@ -28,8 +28,10 @@ from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.services.reference_codes import next_code, next_codes_batch
-from app.services.resource_costing import compute_assignment_budget, compute_assignment_rate_line_qty
+from app.services.resource_costing import compute_assignment_budget_raw, compute_assignment_rate_line_qty
 from app.services.scheduling_cpm import _build_calendar_lookup
+
+_MONEY = Decimal("0.01")
 
 
 async def _discipline_for_activity(db: AsyncSession, activity: Activity) -> str | None:
@@ -144,10 +146,17 @@ async def sync_cost_element_from_resources(db: AsyncSession, activity_id: uuid.U
     # rounding cost this avoids).
     lookup = await _build_calendar_lookup(db, activity.project_id)
     hours_per_day = lookup.hours_per_day(lookup.resolve(activity))
+    # Full-precision per assignment, rounded once at the total — never sum
+    # already-rounded lines (see compute_assignment_budget_raw's own
+    # header: verified against a real 11-assignment P6 activity where
+    # rounding each line first drifts a whole penny off P6's own BAC).
     total_budget = sum(
-        (compute_assignment_budget(resources_by_id[a.resource_id], activity, a, hours_per_day) for a in assignments),
+        (
+            compute_assignment_budget_raw(resources_by_id[a.resource_id], activity, a, hours_per_day)
+            for a in assignments
+        ),
         Decimal(0),
-    )
+    ).quantize(_MONEY)
     description = f"{activity.code}: {activity.task_name}"
     discipline = await _discipline_for_activity(db, activity)
 
@@ -300,13 +309,15 @@ async def sync_cost_elements_from_resources_bulk(db: AsyncSession, activity_ids:
             continue
 
         hours_per_day = calendar_lookup.hours_per_day(calendar_lookup.resolve(activity))
+        # Full-precision per assignment, rounded once at the total — see
+        # compute_assignment_budget_raw's own header.
         total_budget = sum(
             (
-                compute_assignment_budget(resources_by_id[a.resource_id], activity, a, hours_per_day)
+                compute_assignment_budget_raw(resources_by_id[a.resource_id], activity, a, hours_per_day)
                 for a in activity_assignments
             ),
             Decimal(0),
-        )
+        ).quantize(_MONEY)
         description = f"{activity.code}: {activity.task_name}"
         discipline = discipline_by_activity_id.get(activity_id)
 

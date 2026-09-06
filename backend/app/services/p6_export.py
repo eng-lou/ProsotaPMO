@@ -568,14 +568,14 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         # — see compute_assignment_budget's own header).
         export_hours_per_day = calendar_lookup.hours_per_day(calendar_lookup.resolve(activity))
         cost = resource_costing.compute_assignment_budget(resource, activity, asg, export_hours_per_day)
-        if resource.resource_type in ("labour", "equipment", "crew"):
-            duration_hours = activity.duration_hours if activity.duration_hours is not None else Decimal(0)
-            utilisation = asg.utilisation_pct if asg.utilisation_pct is not None else Decimal(100)
-            qty = (duration_hours * utilisation / Decimal(100))
-        elif resource.resource_type == "material":
-            qty = asg.quantity if asg.quantity is not None else Decimal(0)
-        else:
-            qty = Decimal(1)  # subcontractor/cost — a flat lump sum, "1 x rate"
+        # Same shared formula Prosota's own budget reads from (never a
+        # second, hand-rolled copy) — for a labour/equipment/crew
+        # assignment this is duration_hours-in-days x utilisation_pct/100,
+        # UNLESS asg.planned_hours is set (a P6-imported exact hours
+        # figure this assignment hasn't been hand-edited since), in which
+        # case it's planned_hours/hours_per_day instead — see
+        # resource_costing._labour_days's own header.
+        qty = resource_costing.compute_assignment_rate_line_qty(resource, activity, asg, export_hours_per_day)
         cost_per_qty = (cost / qty) if qty else cost
         out.assignments.append(P6Assignment(
             id=assignment_ids.id_for(asg.id), task_id=task_ids.id_for(asg.activity_id),

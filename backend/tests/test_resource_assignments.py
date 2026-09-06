@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from httpx import AsyncClient
 
 from app.models.schedule_period import SchedulePeriod
@@ -165,6 +167,45 @@ async def test_update_utilisation_recomputes_budget(client: AsyncClient, project
     resp = await client.patch(f"/api/v1/resource-assignments/{assignment_id}", json={"utilisation_pct": "50"})
     assert resp.status_code == 200
     assert float(resp.json()["budget"]) == 225.0  # 10 days * 50% * 45
+
+
+async def test_planned_hours_drives_budget_until_utilisation_is_hand_edited(
+    client: AsyncClient, db, project: Project, live_schedule_period: SchedulePeriod
+):
+    """planned_hours (only ever set by a P6 import, never by the API — see
+    ResourceAssignment's own docstring) drives budget instead of duration x
+    utilisation_pct/100 when present, mathematically exact rather than
+    round-tripping through utilisation_pct's own finite stored precision
+    (2026-09-06, confirmed against a real P6 export). Editing utilisation_pct
+    by hand must clear it — otherwise the edit would silently do nothing,
+    since planned_hours would keep driving the real budget underneath the
+    newly-typed percentage."""
+    import uuid as uuid_mod
+    from app.models.resource_assignment import ResourceAssignment
+
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days at 8h/day
+    resource = await _create_resource(client, project, rate="45")
+    create = await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })
+    assignment_id = create.json()["id"]
+    assert float(create.json()["budget"]) == 450.0  # 10 days * 100% * 45
+
+    # Simulate what a PMXML import does (planned_hours is never API-settable).
+    db_assignment = await db.get(ResourceAssignment, uuid_mod.UUID(assignment_id))
+    db_assignment.planned_hours = Decimal("60")  # 7.5 days' worth of hours, not a clean multiple of duration_hours
+    await db.commit()
+
+    resp = await client.get("/api/v1/resource-assignments/", params={"activity_id": activity["id"]})
+    listed = next(a for a in resp.json() if a["id"] == assignment_id)
+    assert float(listed["budget"]) == 337.50  # 60/8 days * 45, NOT duration/utilisation-derived
+
+    # Hand-editing utilisation_pct must unlink it from planned_hours.
+    resp = await client.patch(f"/api/v1/resource-assignments/{assignment_id}", json={"utilisation_pct": "50"})
+    assert resp.status_code == 200
+    assert float(resp.json()["budget"]) == 225.0  # back to 10 days * 50% * 45 — planned_hours no longer applies
+    await db.refresh(db_assignment)
+    assert db_assignment.planned_hours is None
 
 
 async def test_delete_assignment(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):

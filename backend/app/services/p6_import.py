@@ -546,7 +546,18 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             duration_hours = pa.duration_hours if pa is not None and pa.duration_hours else Decimal(0)
             utilisation = (asg.planned_units / duration_hours * Decimal(100)) if duration_hours else Decimal(100)
             utilisation = min(Decimal(100), max(Decimal("0.01"), utilisation))
-            db.add(ResourceAssignment(id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id, utilisation_pct=utilisation))
+            # planned_hours (P6's own exact PlannedUnits, unclamped) is what
+            # actually drives budget (resource_costing.py:_labour_days) —
+            # utilisation_pct above is kept only for display/edit in the UI.
+            # Deriving THAT from planned_units/duration_hours and using it
+            # to drive real money is exactly what leaked a penny of BAC
+            # error on a real P6 import once duration_hours got multiplied
+            # back in (2026-09-06) — planned_hours sidesteps it entirely by
+            # never rounding the intermediate percentage at all.
+            db.add(ResourceAssignment(
+                id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id,
+                utilisation_pct=utilisation, planned_hours=asg.planned_units,
+            ))
         assignment_count += 1
 
     # --- UDF values ---

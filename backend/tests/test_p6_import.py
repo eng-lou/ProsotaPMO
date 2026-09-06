@@ -902,6 +902,78 @@ async def test_imported_assignment_utilisation_reproduces_the_files_own_bac_exac
     assert budget != old_rounded_budget
 
 
+async def test_multi_assignment_activity_bac_matches_p6_exactly(db: AsyncSession, project: Project):
+    """Real production BAC mismatch (2026-09-06, per Maro, comparing a
+    Prosota BAC to a real P6 report on "Unit Finishes Building North -
+    Floor 1," which has 11 real resource assignments): even with the
+    Numeric(9,6) utilisation_pct fix above, an activity with SEVERAL
+    resource assignments could still land a penny off P6's own BAC two
+    ways at once — (1) cost_sync.py used to round each assignment's own
+    cost to the penny before summing them (fixed: sums full precision,
+    rounds once), and (2) duration_days x utilisation_pct/100 x rate only
+    reproduces PlannedUnits/hours_per_day x rate when utilisation_pct's
+    own finite stored precision doesn't truncate it — which it can,
+    however many decimal places it has (fixed: ResourceAssignment.
+    planned_hours stores the file's own exact PlannedUnits directly, and
+    resource_costing.py uses it instead of round-tripping through
+    utilisation_pct at all). This fixture's 6 assignments were found by
+    search specifically because summing each one's own (old-style)
+    rounded cost gives £23,032.37, one penny short of the true, exact
+    £23,032.39 an unmodified sum of Units x hourly-rate gives —
+    reproducing the exact real mismatch class on a small, fully worked-out
+    example. PricePerUnit is P6's own HOURLY rate (p6_import.py converts
+    it to Prosota's day-rate by x hours_per_day at import time — same
+    convention the EC2080 test above already relies on)."""
+    assignments = [
+        (Decimal("34.075954"), Decimal("30")),
+        (Decimal("197.611097"), Decimal("22")),
+        (Decimal("269.225127"), Decimal("22")),
+        (Decimal("54.454710"), Decimal("75")),
+        (Decimal("45.252353"), Decimal("27")),
+        (Decimal("292.445140"), Decimal("22")),
+    ]
+    resource_xml = b"".join(
+        b"<Resource><ObjectId>%d</ObjectId><Name>R%d</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<ResourceRate><ResourceObjectId>%d</ResourceObjectId><PricePerUnit>%s</PricePerUnit></ResourceRate>"
+        % (i, i, i, str(rate).encode())
+        for i, (_, rate) in enumerate(assignments)
+    )
+    assignment_xml = b"".join(
+        b"<ResourceAssignment><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>%d</ResourceObjectId>"
+        b"<PlannedUnits>%s</PlannedUnits></ResourceAssignment>" % (i, str(pu).encode())
+        for i, (pu, _) in enumerate(assignments)
+    )
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        + resource_xml
+        + b"<Project><ObjectId>1</ObjectId><Id>Multi-Assignment BAC Test</Id><DataDate>2012-06-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>EC9001</Id><Name>Multi Trade Fitout</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>1826.2</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2012-06-28T08:00:00</StartDate><FinishDate>2013-03-14T09:12:00</FinishDate>"
+        b"</Activity>"
+        + assignment_xml
+        + b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+    await schedule_variant_svc.promote_variant(db, summary.schedule_variant_id)  # CostElements are only synced on promotion
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Multi Trade Fitout")
+    )).scalar_one()
+    element = (await db.execute(
+        select(CostElement).where(CostElement.linked_activity_id == activity.id)
+    )).scalar_one()
+
+    assert element.budget == Decimal("23032.39")  # the true, exact figure — not the old £23,032.37
+
+    db_assignments = (await db.execute(
+        select(ResourceAssignment).where(ResourceAssignment.activity_id == activity.id)
+    )).scalars().all()
+    stored_planned_hours = {a.planned_hours for a in db_assignments}
+    assert stored_planned_hours == {pu for pu, _ in assignments}
+
+
 async def test_imported_default_calendar_overrides_a_preexisting_project_default(db: AsyncSession, project: Project):
     """The exact real production scenario found 2026-09-04: the project
     already had Prosota's own lazy-seeded "Standard Calendar" (is_project_

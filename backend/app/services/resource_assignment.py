@@ -142,8 +142,17 @@ async def update_assignment(
     activity = await _get_activity(db, assignment.activity_id)
     await _require_live_schedule_period(db, activity.schedule_period_id)
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_dump(exclude_unset=True)
+    for field, value in fields.items():
         setattr(assignment, field, value)
+    if "utilisation_pct" in fields:
+        # A hand edit unlinks this assignment from P6's own exact imported
+        # hours (planned_hours) — same "an explicit edit overrides the
+        # import" rule used everywhere else a P6-sourced figure can be
+        # hand-overridden. Without this, the edit would silently appear to
+        # do nothing, since planned_hours would still be driving the real
+        # budget underneath the newly-typed percentage.
+        assignment.planned_hours = None
     await db.commit()
     await db.refresh(assignment)
     await cost_sync.sync_cost_element_from_resources(db, activity.id)

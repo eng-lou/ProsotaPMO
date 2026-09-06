@@ -13,7 +13,7 @@ from app.models.resource_assignment import ResourceAssignment
 from app.models.risk import Risk
 from app.services.cost_element import rollup_evm_from_totals
 from app.services.dashboard import _live_schedule_spi, _resolve_bac_ac
-from app.services.resource_costing import compute_assignment_budget
+from app.services.resource_costing import compute_assignment_budget_raw
 
 
 async def get_project_snapshot(
@@ -133,7 +133,10 @@ async def get_project_snapshot(
                 "assignment_count": 0, "total_committed_cost": Decimal(0),
             })
             entry["assignment_count"] += 1
-            entry["total_committed_cost"] += compute_assignment_budget(resource, activity, assignment)
+            # Raw (unrounded) per assignment, rounded once at this resource's
+            # own total — see compute_assignment_budget_raw's own header on
+            # why summing already-rounded lines drifts off the real total.
+            entry["total_committed_cost"] += compute_assignment_budget_raw(resource, activity, assignment)
         top_committed = sorted(resource_totals.values(), key=lambda r: r["total_committed_cost"], reverse=True)[:10]
         snapshot["resources"] = {
             "resource_count": len(resource_totals),
@@ -141,7 +144,8 @@ async def get_project_snapshot(
             "top_committed": [
                 {
                     "name": r["name"], "resource_type": r["resource_type"],
-                    "assignment_count": r["assignment_count"], "total_committed_cost": float(r["total_committed_cost"]),
+                    "assignment_count": r["assignment_count"],
+                    "total_committed_cost": float(r["total_committed_cost"].quantize(Decimal("0.01"))),
                 }
                 for r in top_committed
             ],
