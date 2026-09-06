@@ -5340,3 +5340,44 @@ stuff (the 3D viewer, Excel export, chart library) was left exactly as
 is — those only load when someone actually opens the screen that needs
 them, and folding them into a shared chunk would make everyone download
 them unconditionally instead, which would be a step backwards.
+
+## 2026-09-06 — P6 baseline re-import crash, and Power BI-style dashboard filtering
+
+A real regression turned up the moment the newly-added baseline export
+got its first real-world test: re-importing an exported project back
+into P6, with its baseline included, failed outright with a P6-side
+"Object reference not set to an instance of an object" error — the
+generic .NET crash for "code tried to use something that turned out to
+be empty." The exported file looked fine at a glance (a well-formed
+`<BaselineProject>` block with all 132 activities, correct dates), which
+made it a genuine debugging puzzle rather than an obvious typo.
+
+The actual cause: P6's own XML format links every single record to every
+other record by a plain numeric ID (called an ObjectId) — never by the
+human-readable code a person actually sees, like "EC2430." Every other
+part of this export already followed that rule, but the newly-added
+baseline block only wrote each activity's readable code, not its
+ObjectId. When P6 tried to match a baseline activity back to its real,
+live counterpart to attach the baseline data to it, that lookup came back
+empty, and P6's own code then tried to use that empty result — crashing.
+The fix was to also write each baseline activity's ObjectId, reusing the
+exact same number already assigned to that activity elsewhere in the
+same file, so the two sides genuinely point at each other. A lesson
+worth keeping: when a format is ID-based throughout, a human-readable
+name is never a safe substitute for the real ID, even where using the
+name looks like it should work.
+
+Separately, built out Maro's ask for the dashboards to behave "like
+Power BI" — click something in one widget (an activity row, a chart bar,
+a risk) and every other widget on the page narrows down to what's
+actually connected to it, click it again to go back to showing
+everything. The honest version of "connected to it" already existed in
+the app: a general-purpose linking table (RecordLink) that other features
+already used to draw real cause-and-effect arrows between activities,
+risks, costs, and issues/changes/decisions — so clicking a widget now
+asks the backend "what's really linked to this," and only shows genuine
+links (a real cost line tied to that activity, a real causal arrow to a
+risk), rather than guessing or matching on loose text. Anything with no
+real link simply doesn't show while the filter's active, which is honest
+about what "connected" means rather than pretending everything's related
+to everything.
