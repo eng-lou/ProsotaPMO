@@ -9,19 +9,19 @@ import { api } from './api'
 // transient, interactively-set scope shared by every widget on the page
 // at once, reset by clicking the same source again.
 //
-// Source side is deliberately activity-only for this first pass, per
-// Maro's own two named examples (a Critical Activities row, a Float
-// Distribution bar) — every widget clickable as a *source* resolves to a
-// set of activity ids. Target side is broader: any widget reading
-// risks/cost_elements/icd_items/resource_assignments/schedule_activities/
-// milestones narrows down to whatever's actually related to those seed
-// activities (backend/app/services/dashboard.py:get_related_records) —
-// a real, structural CostElement.linked_activity_id link, or a genuine
-// RecordLink causal edge, never a guess. A Risk/Issue/Change/Decision
-// with no such link simply has nothing to show while a cross-filter is
-// active (per Maro: "if the causal links are connected then show, if
-// not just blank") — it's excluded, not greyed out separately, since an
-// empty widget already communicates that.
+// Source side started activity-only (Critical Activities rows, Float
+// Distribution bars), then widened 2026-09-07 (per Maro: "most of the
+// dashboards are not clickable... I'd like [risk/cost/resource rows]
+// clickable as sources too") to any of the four kinds — a Risk row, a
+// Cost Element row, an ICD row can all seed a cross-filter now, not just
+// an activity. Whichever kind seeds it, every widget on the page narrows
+// down to what's actually related (backend/app/services/dashboard.py:
+// get_related_records) — a real, structural CostElement.linked_activity_id
+// link, or a genuine RecordLink causal edge, never a guess. A record with
+// no such link simply has nothing to show while a cross-filter is active
+// (per Maro: "if the causal links are connected then show, if not just
+// blank") — it's excluded, not greyed out separately, since an empty
+// widget already communicates that.
 export interface CrossFilterScope {
   // Identifies *what* is currently selected (e.g. "activity:<id>" for a
   // single row, "float_bucket:<label>" for a chart bucket) so a second
@@ -41,19 +41,21 @@ export interface RelatedRecordsResponse {
   icd_item_ids: string[]
 }
 
-export async function fetchRelatedRecords(projectId: string, activityIds: string[]): Promise<RelatedRecordsResponse> {
+export type CrossFilterEntityKind = 'activity' | 'cost_element' | 'risk' | 'icd_item'
+
+export async function fetchRelatedRecords(
+  projectId: string, seedType: CrossFilterEntityKind, seedIds: string[],
+): Promise<RelatedRecordsResponse> {
   // Built as a real query string, not axios's own params/paramsSerializer
   // (whose array-serialization default doesn't match what FastAPI's
-  // `activity_ids: list[uuid.UUID] = Query(...)` expects — repeated
-  // `activity_ids=a&activity_ids=b`, no brackets/indices) — unambiguous
-  // either way, and avoids depending on an axios version detail.
-  const search = new URLSearchParams({ project_id: projectId })
-  for (const id of activityIds) search.append('activity_ids', id)
+  // `seed_ids: list[uuid.UUID] = Query(...)` expects — repeated
+  // `seed_ids=a&seed_ids=b`, no brackets/indices) — unambiguous either
+  // way, and avoids depending on an axios version detail.
+  const search = new URLSearchParams({ project_id: projectId, seed_type: seedType })
+  for (const id of seedIds) search.append('seed_ids', id)
   const { data } = await api.get<RelatedRecordsResponse>(`/api/v1/dashboard/related-records?${search.toString()}`)
   return data
 }
-
-export type CrossFilterEntityKind = 'activity' | 'cost_element' | 'risk' | 'icd_item'
 
 // Every widget's own filter predicate — true when no cross-filter is
 // active at all (matches evaluateDashboardFilter's own "no conditions ->

@@ -584,7 +584,7 @@ async def test_related_records_direct_fk_links(
     await _create_resource_assignment(client, resource, activity)
 
     resp = await client.get("/api/v1/dashboard/related-records", params={
-        "project_id": str(project.id), "activity_ids": [activity["id"]],
+        "project_id": str(project.id), "seed_type": "activity", "seed_ids": [activity["id"]],
     })
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -592,6 +592,19 @@ async def test_related_records_direct_fk_links(
     assert len(body["cost_element_ids"]) == 1  # cost_sync.py auto-creates one from the assignment
     assert body["risk_ids"] == []
     assert body["icd_item_ids"] == []
+
+    # The reverse direction (2026-09-07 generalization, per Maro: "most of
+    # the dashboards are not clickable" — risk/cost/ICD rows should be
+    # clickable sources too): seeding from that same auto-created cost
+    # element resolves back to its linked activity via the direct FK.
+    cost_element_id = body["cost_element_ids"][0]
+    reverse_resp = await client.get("/api/v1/dashboard/related-records", params={
+        "project_id": str(project.id), "seed_type": "cost_element", "seed_ids": [cost_element_id],
+    })
+    assert reverse_resp.status_code == 200, reverse_resp.text
+    reverse_body = reverse_resp.json()
+    assert reverse_body["activity_ids"] == [activity["id"]]
+    assert reverse_body["cost_element_ids"] == [cost_element_id]
 
 
 async def test_related_records_via_record_link_causal_edges(
@@ -609,13 +622,25 @@ async def test_related_records_via_record_link_causal_edges(
     await _create_record_link(client, "activity", activity["id"], "issue", linked_issue["id"])
 
     resp = await client.get("/api/v1/dashboard/related-records", params={
-        "project_id": str(project.id), "activity_ids": [activity["id"]],
+        "project_id": str(project.id), "seed_type": "activity", "seed_ids": [activity["id"]],
     })
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["risk_ids"] == [linked_risk["id"]]
     assert unlinked_risk["id"] not in body["risk_ids"]
     assert body["icd_item_ids"] == [linked_issue["id"]]
+
+    # Reverse direction: seeding from the linked risk resolves back to the
+    # activity via the same RecordLink edge, without folding in the issue
+    # (only reachable from the activity side, not the risk side).
+    reverse_resp = await client.get("/api/v1/dashboard/related-records", params={
+        "project_id": str(project.id), "seed_type": "risk", "seed_ids": [linked_risk["id"]],
+    })
+    assert reverse_resp.status_code == 200, reverse_resp.text
+    reverse_body = reverse_resp.json()
+    assert reverse_body["risk_ids"] == [linked_risk["id"]]
+    assert reverse_body["activity_ids"] == [activity["id"]]
+    assert reverse_body["icd_item_ids"] == []
 
 
 async def test_related_records_empty_for_no_activities(client: AsyncClient, project: Project):

@@ -46,10 +46,14 @@ async def get_baseline_comparison(
 @router.get("/related-records", response_model=RelatedRecordsResponse)
 async def get_related_records(
     project_id: uuid.UUID,
-    activity_ids: list[uuid.UUID] = Query(default_factory=list),
+    # seed_type defaults to "activity" for backward compatibility with any
+    # already-cached frontend build that still calls this without it
+    # (2026-09-07 generalization — see get_related_records's own header).
+    seed_type: str = "activity",
+    seed_ids: list[uuid.UUID] = Query(default_factory=list),
     db: AsyncSession = Depends(get_db),
 ) -> RelatedRecordsResponse:
-    return await svc.get_related_records(db, project_id, activity_ids)
+    return await svc.get_related_records(db, project_id, seed_type, seed_ids)
 
 
 @router.get("/risk-emv-trend", response_model=RiskEmvTrendResponse)

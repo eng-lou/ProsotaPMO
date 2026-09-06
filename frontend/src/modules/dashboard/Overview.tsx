@@ -6,7 +6,7 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
 import type { Activity } from '@/modules/scheduling/types'
-import { fetchRelatedRecords, toggleCrossFilterKey, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
+import { fetchRelatedRecords, toggleCrossFilterKey, type CrossFilterEntityKind, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
 import { DashboardGrid } from './DashboardGrid'
 import type { DashboardOverviewResponse } from './types'
 
@@ -62,11 +62,12 @@ export function Overview() {
 
   // Cross-widget "click to filter" (2026-09-06, per Maro — see
   // lib/dashboardCrossFilter.ts's own header for the full design).
-  // crossFilterSeed holds only WHAT was clicked (key + the activity ids
-  // it resolves to); the actual related-records resolution is a real
-  // server round trip (RecordLink causal edges aren't something the
-  // client already has), fetched below whenever the seed changes.
-  const [crossFilterSeed, setCrossFilterSeed] = useState<{ key: string; activityIds: string[] } | null>(null)
+  // crossFilterSeed holds only WHAT was clicked (key + kind + the ids it
+  // resolves to); the actual related-records resolution is a real server
+  // round trip (RecordLink causal edges aren't something the client
+  // already has), fetched below whenever the seed changes. Widened
+  // 2026-09-07 from activity-only to any of the four kinds.
+  const [crossFilterSeed, setCrossFilterSeed] = useState<{ key: string; seedType: CrossFilterEntityKind; seedIds: string[] } | null>(null)
   const [crossFilter, setCrossFilter] = useState<CrossFilterScope | null>(null)
   useEffect(() => {
     if (!selectedProject || !crossFilterSeed) {
@@ -74,7 +75,7 @@ export function Overview() {
       return
     }
     let cancelled = false
-    fetchRelatedRecords(selectedProject.id, crossFilterSeed.activityIds).then(related => {
+    fetchRelatedRecords(selectedProject.id, crossFilterSeed.seedType, crossFilterSeed.seedIds).then(related => {
       if (cancelled) return
       setCrossFilter({
         key: crossFilterSeed.key,
@@ -86,9 +87,9 @@ export function Overview() {
     })
     return () => { cancelled = true }
   }, [selectedProject?.id, crossFilterSeed])
-  const handleCrossFilterClick = (key: string, activityIds: string[]) => {
+  const handleCrossFilterClick = (key: string, seedType: CrossFilterEntityKind, seedIds: string[]) => {
     const nextKey = toggleCrossFilterKey(crossFilter, key)
-    setCrossFilterSeed(nextKey ? { key: nextKey, activityIds } : null)
+    setCrossFilterSeed(nextKey ? { key: nextKey, seedType, seedIds } : null)
   }
 
   if (periodLoading || scheduleLoading || !data) {

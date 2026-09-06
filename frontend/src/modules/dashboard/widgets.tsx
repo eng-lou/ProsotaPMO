@@ -8,7 +8,7 @@ import {
 import { listCameraViews, type CameraView } from '../fourD/cameraViews'
 import { downloadFourDVideo, listFourDVideos, type FourDVideo } from '../fourD/fourDVideos'
 import { evaluateDashboardFilter, type DashboardFilterCondition } from '@/lib/dashboardFilters'
-import { matchesCrossFilter, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
+import { matchesCrossFilter, type CrossFilterEntityKind, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { getMilestoneTrend, type MilestoneTrendSeries } from './milestoneTrend'
@@ -84,28 +84,38 @@ export interface WidgetProps {
   // per-record arrays applies matchesCrossFilter alongside its existing
   // evaluateDashboardFilter call. onCrossFilterClick is how a widget acts
   // as a *source*: pass a unique key identifying what was clicked (e.g.
-  // `activity:${id}`) and the activity id(s) it resolves to — Overview.tsx
-  // owns the actual toggle-on-same-key-again logic and the related-
-  // records fetch this triggers. Only present while a project is
-  // selected, same optionality as projectId itself.
+  // `activity:${id}`), which kind of record it is, and the id(s) it
+  // resolves to — Overview.tsx owns the actual toggle-on-same-key-again
+  // logic and the related-records fetch this triggers. Widened 2026-09-07
+  // from activity-only to any of the four kinds (per Maro: "most of the
+  // dashboards are not clickable... risk/cost/resource rows [should be]
+  // clickable as sources too"). Only present while a project is selected,
+  // same optionality as projectId itself.
   crossFilter?: CrossFilterScope | null
-  onCrossFilterClick?: (key: string, activityIds: string[]) => void
+  onCrossFilterClick?: (key: string, seedType: CrossFilterEntityKind, seedIds: string[]) => void
 }
 
 const RISK_BAND_COLORS: Record<string, string> = { Low: '#16a34a', Medium: '#d97706', High: '#dc2626' }
 
-// Shared click-to-source helper for every activity-keyed row/bar
-// (2026-09-06 — see WidgetProps.onCrossFilterClick's own header). ids is
-// plural so a chart bucket representing several activities at once (e.g.
-// one Float Distribution bar) can seed the cross-filter with all of them,
-// not just a single row's own id — a single-activity table row just
-// passes a one-element array.
-function activityClick(ids: string[], crossFilter: CrossFilterScope | null | undefined, onCrossFilterClick: WidgetProps['onCrossFilterClick']) {
-  const key = `activity:${ids.join(',')}`
+// Shared click-to-source helper for every record-keyed row/bar (2026-09-06,
+// widened 2026-09-07 to any CrossFilterEntityKind — see
+// WidgetProps.onCrossFilterClick's own header). ids is plural so a chart
+// bucket representing several records at once (e.g. one Float Distribution
+// bar) can seed the cross-filter with all of them, not just a single row's
+// own id — a single-row table just passes a one-element array.
+function recordClick(
+  kind: CrossFilterEntityKind, ids: string[],
+  crossFilter: CrossFilterScope | null | undefined, onCrossFilterClick: WidgetProps['onCrossFilterClick'],
+) {
+  const key = `${kind}:${ids.join(',')}`
   return {
-    onClick: onCrossFilterClick ? () => onCrossFilterClick(key, ids) : undefined,
+    onClick: onCrossFilterClick ? () => onCrossFilterClick(key, kind, ids) : undefined,
     selected: crossFilter?.key === key,
   }
+}
+
+function activityClick(ids: string[], crossFilter: CrossFilterScope | null | undefined, onCrossFilterClick: WidgetProps['onCrossFilterClick']) {
+  return recordClick('activity', ids, crossFilter, onCrossFilterClick)
 }
 const CROSS_FILTER_ROW_CLASS = 'cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2'
 const CROSS_FILTER_SELECTED_CLASS = 'bg-prosota-amber/10'
@@ -206,7 +216,7 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
     <div className="h-full overflow-auto pt-4">
       <MilestoneTrack
         milestones={milestones}
-        onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, [id]) : undefined}
+        onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, 'activity', [id]) : undefined}
         selectedId={selected?.id ?? null}
       />
     </div>
@@ -935,18 +945,20 @@ export function CriticalActivitiesTableWidget({ data, filterConditions, filterMa
 // docstring). Same "one fetch, many views" split as the Schedule widgets
 // above; none of these fetch anything of their own.
 
-export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByCategory = new Map<string, string[]>()
   for (const r of data.risks) {
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.category ?? 'Uncategorised'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByCategory.has(key)) idsByCategory.set(key, [])
+    idsByCategory.get(key)!.push(r.id)
   }
-  const chartData = [...counts.entries()]
-    .map(([category, count]) => ({ category, count }))
+  const chartData = [...idsByCategory.entries()]
+    .map(([category, ids]) => ({ category, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
+  const click = (ids: string[]) => recordClick('risk', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -954,25 +966,34 @@ export function RisksByCategoryWidget({ data, filterConditions, filterMatchMode,
         <XAxis dataKey="category" tick={{ fontSize: 11 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count" fill="#7c3aed" />
+        <Bar
+          dataKey="count"
+          fill="#7c3aed"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#7c3aed'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByOwner = new Map<string, string[]>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.risk_owner ?? 'Unassigned'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByOwner.has(key)) idsByOwner.set(key, [])
+    idsByOwner.get(key)!.push(r.id)
   }
-  const chartData = [...counts.entries()]
-    .map(([owner, count]) => ({ owner, count }))
+  const chartData = [...idsByOwner.entries()]
+    .map(([owner, ids]) => ({ owner, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
+  const click = (ids: string[]) => recordClick('risk', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -980,13 +1001,20 @@ export function RisksByOwnerWidget({ data, filterConditions, filterMatchMode, cr
         <XAxis type="number" tick={{ fontSize: 12 }} allowDecimals={false} />
         <YAxis type="category" dataKey="owner" tick={{ fontSize: 11 }} width={90} />
         <Tooltip />
-        <Bar dataKey="count" fill="#d97706" />
+        <Bar
+          dataKey="count"
+          fill="#d97706"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#7c3aed' : '#d97706'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // emv_cost is signed (threats negative, opportunities positive — see
   // RiskExposureWidget's own note) — magnitude is what's worth comparing
   // here, the sign is already implied by which bar it is.
@@ -994,12 +1022,13 @@ export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMat
     .filter(r => r.status !== 'closed')
     .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
     .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
-  const threatExposure = open.filter(r => r.risk_type === 'threat').reduce((sum, r) => sum + Math.abs(Number(r.emv_cost ?? 0)), 0)
-  const opportunityExposure = open.filter(r => r.risk_type === 'opportunity').reduce((sum, r) => sum + Number(r.emv_cost ?? 0), 0)
+  const threats = open.filter(r => r.risk_type === 'threat')
+  const opportunities = open.filter(r => r.risk_type === 'opportunity')
   const chartData = [
-    { type: 'Threats', exposure: threatExposure, count: open.filter(r => r.risk_type === 'threat').length },
-    { type: 'Opportunities', exposure: opportunityExposure, count: open.filter(r => r.risk_type === 'opportunity').length },
+    { type: 'Threats', exposure: threats.reduce((sum, r) => sum + Math.abs(Number(r.emv_cost ?? 0)), 0), count: threats.length, ids: threats.map(r => r.id) },
+    { type: 'Opportunities', exposure: opportunities.reduce((sum, r) => sum + Number(r.emv_cost ?? 0), 0), count: opportunities.length, ids: opportunities.map(r => r.id) },
   ]
+  const click = (ids: string[]) => recordClick('risk', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1007,25 +1036,32 @@ export function ThreatsVsOpportunitiesWidget({ data, filterConditions, filterMat
         <XAxis dataKey="type" tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `£${(v / 1000).toFixed(0)}k`} />
         <Tooltip formatter={(v: number, _n, item) => `${formatCurrency(v)} (${item.payload.count} risks)`} />
-        <Bar dataKey="exposure">
-          <Cell fill="#dc2626" />
-          <Cell fill="#16a34a" />
+        <Bar
+          dataKey="exposure"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => (
+            <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : i === 0 ? '#dc2626' : '#16a34a'} />
+          ))}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function ResponseStrategyBreakdownWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function ResponseStrategyBreakdownWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByStrategy = new Map<string, string[]>()
   for (const r of data.risks) {
     if (r.status === 'closed') continue
     if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
     const key = r.response_strategy ?? 'Not set'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByStrategy.has(key)) idsByStrategy.set(key, [])
+    idsByStrategy.get(key)!.push(r.id)
   }
-  const chartData = [...counts.entries()].map(([strategy, count]) => ({ strategy, count })).sort((a, b) => b.count - a.count)
+  const chartData = [...idsByStrategy.entries()].map(([strategy, ids]) => ({ strategy, count: ids.length, ids })).sort((a, b) => b.count - a.count)
+  const click = (ids: string[]) => recordClick('risk', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1033,7 +1069,14 @@ export function ResponseStrategyBreakdownWidget({ data, filterConditions, filter
         <XAxis dataKey="strategy" tick={{ fontSize: 11 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count" fill="#0891b2" />
+        <Bar
+          dataKey="count"
+          fill="#0891b2"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#0891b2'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
@@ -1087,19 +1130,23 @@ export function RiskRegisterTableWidget({ data, onNavigateToRisks, filterConditi
 // function's docstring) for exactly this purpose. Same "one fetch, many
 // views" split as the Schedule/Risk widgets above.
 
-export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const totals = new Map<string, number>()
+export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const totalsByGroup = new Map<string, { bac: number; ids: string[] }>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.element_group ?? 'Ungrouped'
-    totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
+    const entry = totalsByGroup.get(key) ?? { bac: 0, ids: [] }
+    entry.bac += Number(el.bac)
+    entry.ids.push(el.id)
+    totalsByGroup.set(key, entry)
   }
-  const chartData = [...totals.entries()]
-    .map(([group, bac]) => ({ group, bac }))
+  const chartData = [...totalsByGroup.entries()]
+    .map(([group, v]) => ({ group, bac: v.bac, ids: v.ids }))
     .sort((a, b) => b.bac - a.bac)
     .slice(0, 10)
+  const click = (ids: string[]) => recordClick('cost_element', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -1107,25 +1154,36 @@ export function CostBreakdownByGroupWidget({ data, filterConditions, filterMatch
         <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={v => `£${(v / 1000).toFixed(0)}k`} />
         <YAxis type="category" dataKey="group" tick={{ fontSize: 11 }} width={100} />
         <Tooltip formatter={(v: number) => formatCurrency(v)} />
-        <Bar dataKey="bac" fill="#2563eb" />
+        <Bar
+          dataKey="bac"
+          fill="#2563eb"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#2563eb'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const totals = new Map<string, number>()
+export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const totalsByOwner = new Map<string, { bac: number; ids: string[] }>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.cost_owner ?? 'Unassigned'
-    totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
+    const entry = totalsByOwner.get(key) ?? { bac: 0, ids: [] }
+    entry.bac += Number(el.bac)
+    entry.ids.push(el.id)
+    totalsByOwner.set(key, entry)
   }
-  const chartData = [...totals.entries()]
-    .map(([owner, bac]) => ({ owner, bac }))
+  const chartData = [...totalsByOwner.entries()]
+    .map(([owner, v]) => ({ owner, bac: v.bac, ids: v.ids }))
     .sort((a, b) => b.bac - a.bac)
     .slice(0, 10)
+  const click = (ids: string[]) => recordClick('cost_element', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -1133,7 +1191,14 @@ export function CostBreakdownByOwnerWidget({ data, filterConditions, filterMatch
         <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={v => `£${(v / 1000).toFixed(0)}k`} />
         <YAxis type="category" dataKey="owner" tick={{ fontSize: 11 }} width={90} />
         <Tooltip formatter={(v: number) => formatCurrency(v)} />
-        <Bar dataKey="bac" fill="#d97706" />
+        <Bar
+          dataKey="bac"
+          fill="#d97706"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#2563eb' : '#d97706'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
@@ -1164,22 +1229,24 @@ export function BudgetUtilisationWidget({ data, filterConditions, filterMatchMod
   )
 }
 
-export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const groups = new Map<string, { bac: number; eac: number }>()
+export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const groups = new Map<string, { bac: number; eac: number; ids: string[] }>()
   for (const el of data.cost_elements) {
     if (el.bac === null) continue
     if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
     const key = el.element_group ?? 'Ungrouped'
-    const entry = groups.get(key) ?? { bac: 0, eac: 0 }
+    const entry = groups.get(key) ?? { bac: 0, eac: 0, ids: [] }
     entry.bac += Number(el.bac)
     entry.eac += Number(el.eac ?? el.bac)
+    entry.ids.push(el.id)
     groups.set(key, entry)
   }
   const chartData = [...groups.entries()]
     .map(([group, v]) => ({ group, ...v }))
     .sort((a, b) => b.bac - a.bac)
     .slice(0, 8)
+  const click = (ids: string[]) => recordClick('cost_element', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1187,14 +1254,26 @@ export function BacVsEacByGroupWidget({ data, filterConditions, filterMatchMode,
         <XAxis dataKey="group" tick={{ fontSize: 11 }} />
         <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `£${(v / 1000).toFixed(0)}k`} />
         <Tooltip formatter={(v: number) => formatCurrency(v)} />
-        <Bar dataKey="bac" name="Budget" fill="#94a3b8" />
-        <Bar dataKey="eac" name="Forecast (EAC)" fill="#dc2626" />
+        <Bar
+          dataKey="bac" name="Budget" fill="#94a3b8"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#94a3b8'} />)}
+        </Bar>
+        <Bar
+          dataKey="eac" name="Forecast (EAC)" fill="#dc2626"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#dc2626'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function CostElementsTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function CostElementsTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable (2026-09-02) — narrow to one cost group, e.g. "Prelims only".
   // Filterable on any CostElementSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={element_group:'Prelims'} or {code:'C-012'}.
@@ -1215,18 +1294,25 @@ export function CostElementsTableWidget({ data, filterConditions, filterMatchMod
         </tr>
       </thead>
       <tbody>
-        {rows.map(el => (
-          <tr key={el.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{el.code}</td>
-            <td className="py-1.5 pr-2">{el.description}</td>
-            <td className="py-1.5 pr-2">{el.bac !== null ? formatCurrency(el.bac) : '—'}</td>
-            <td className="py-1.5 pr-2">{el.ac !== null ? formatCurrency(el.ac) : '—'}</td>
-            <td className={`py-1.5 pr-2 ${el.cpi !== null && Number(el.cpi) < 1 ? 'text-orange-600' : ''}`}>
-              {el.cpi !== null ? Number(el.cpi).toFixed(2) : '—'}
-            </td>
-            <td className="py-1.5 pr-2">{el.eac !== null ? formatCurrency(el.eac) : '—'}</td>
-          </tr>
-        ))}
+        {rows.map(el => {
+          const click = recordClick('cost_element', [el.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={el.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{el.code}</td>
+              <td className="py-1.5 pr-2">{el.description}</td>
+              <td className="py-1.5 pr-2">{el.bac !== null ? formatCurrency(el.bac) : '—'}</td>
+              <td className="py-1.5 pr-2">{el.ac !== null ? formatCurrency(el.ac) : '—'}</td>
+              <td className={`py-1.5 pr-2 ${el.cpi !== null && Number(el.cpi) < 1 ? 'text-orange-600' : ''}`}>
+                {el.cpi !== null ? Number(el.cpi).toFixed(2) : '—'}
+              </td>
+              <td className="py-1.5 pr-2">{el.eac !== null ? formatCurrency(el.eac) : '—'}</td>
+            </tr>
+          )
+        })}
         {rows.length === 0 && (
           <tr><td colSpan={6} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No cost elements yet.</td></tr>
         )}
@@ -1246,15 +1332,17 @@ function daysBetween(from: string, to: Date): number {
   return Math.floor((to.getTime() - new Date(from).getTime()) / 86_400_000)
 }
 
-export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByStatus = new Map<string, string[]>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'issue') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
-    counts.set(i.status, (counts.get(i.status) ?? 0) + 1)
+    if (!idsByStatus.has(i.status)) idsByStatus.set(i.status, [])
+    idsByStatus.get(i.status)!.push(i.id)
   }
-  const chartData = [...counts.entries()].map(([status, count]) => ({ status, count }))
+  const chartData = [...idsByStatus.entries()].map(([status, ids]) => ({ status, count: ids.length, ids }))
+  const click = (ids: string[]) => recordClick('icd_item', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1262,13 +1350,20 @@ export function IssuesByStatusWidget({ data, filterConditions, filterMatchMode, 
         <XAxis dataKey="status" tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count" fill="#dc2626" />
+        <Bar
+          dataKey="count"
+          fill="#dc2626"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#dc2626'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'issue' && i.status !== 'closed' && i.raised_date !== null)
@@ -1289,15 +1384,22 @@ export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMod
         </tr>
       </thead>
       <tbody>
-        {rows.map(i => (
-          <tr key={i.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
-            <td className="py-1.5 pr-2">{i.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.owner ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.severity ?? '—'}</td>
-            <td className={`py-1.5 pr-2 font-medium ${i.daysOpen > 30 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{i.daysOpen}</td>
-          </tr>
-        ))}
+        {rows.map(i => {
+          const click = recordClick('icd_item', [i.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={i.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
+              <td className="py-1.5 pr-2">{i.title}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.owner ?? '—'}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.severity ?? '—'}</td>
+              <td className={`py-1.5 pr-2 font-medium ${i.daysOpen > 30 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{i.daysOpen}</td>
+            </tr>
+          )
+        })}
         {rows.length === 0 && (
           <tr><td colSpan={5} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No open issues.</td></tr>
         )}
@@ -1306,21 +1408,23 @@ export function IssuesAgeingTableWidget({ data, filterConditions, filterMatchMod
   )
 }
 
-export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any IcdItemSummary field (2026-09-02, evaluateDashboardFilter's
   // own header) — e.g. filter={item_type:'issue'} or {code:'I-014'}.
-  const counts = new Map<string, number>()
+  const idsByOwner = new Map<string, string[]>()
   for (const i of data.icd_items) {
     if (i.status === 'closed') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
     const key = i.owner ?? 'Unassigned'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByOwner.has(key)) idsByOwner.set(key, [])
+    idsByOwner.get(key)!.push(i.id)
   }
-  const chartData = [...counts.entries()]
-    .map(([owner, count]) => ({ owner, count }))
+  const chartData = [...idsByOwner.entries()]
+    .map(([owner, ids]) => ({ owner, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
+  const click = (ids: string[]) => recordClick('icd_item', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} layout="vertical" margin={{ left: 16 }}>
@@ -1328,13 +1432,20 @@ export function OpenItemsByOwnerWidget({ data, filterConditions, filterMatchMode
         <XAxis type="number" tick={{ fontSize: 12 }} allowDecimals={false} />
         <YAxis type="category" dataKey="owner" tick={{ fontSize: 11 }} width={90} />
         <Tooltip />
-        <Bar dataKey="count" fill="#0891b2" />
+        <Bar
+          dataKey="count"
+          fill="#0891b2"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#0891b2'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-export function DecisionsPendingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function DecisionsPendingTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const now = new Date()
   const rows = data.icd_items
     .filter(i => i.item_type === 'decision' && i.status !== 'closed')
@@ -1358,8 +1469,13 @@ export function DecisionsPendingTableWidget({ data, filterConditions, filterMatc
       <tbody>
         {rows.map(i => {
           const overdue = i.required_by !== null && new Date(i.required_by) < now
+          const click = recordClick('icd_item', [i.id], crossFilter, onCrossFilterClick)
           return (
-            <tr key={i.id} className="border-b border-gray-50">
+            <tr
+              key={i.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
               <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.code}</td>
               <td className="py-1.5 pr-2">{i.title}</td>
               <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{i.decision_maker ?? '—'}</td>
@@ -1377,16 +1493,18 @@ export function DecisionsPendingTableWidget({ data, filterConditions, filterMatc
   )
 }
 
-export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
-  const counts = new Map<string, number>()
+export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const idsByDecision = new Map<string, string[]>()
   for (const i of data.icd_items) {
     if (i.item_type !== 'change') continue
     if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
     if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
     const key = i.ccb_decision ?? 'Pending'
-    counts.set(key, (counts.get(key) ?? 0) + 1)
+    if (!idsByDecision.has(key)) idsByDecision.set(key, [])
+    idsByDecision.get(key)!.push(i.id)
   }
-  const chartData = [...counts.entries()].map(([decision, count]) => ({ decision, count }))
+  const chartData = [...idsByDecision.entries()].map(([decision, ids]) => ({ decision, count: ids.length, ids }))
+  const click = (ids: string[]) => recordClick('icd_item', ids, crossFilter, onCrossFilterClick)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData}>
@@ -1394,7 +1512,14 @@ export function ChangesByCcbDecisionWidget({ data, filterConditions, filterMatch
         <XAxis dataKey="decision" tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
         <Tooltip />
-        <Bar dataKey="count" fill="#7c3aed" />
+        <Bar
+          dataKey="count"
+          fill="#7c3aed"
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { ids: string[] }) => click(entry.ids).onClick?.() : undefined}
+        >
+          {chartData.map((bucket, i) => <Cell key={i} fill={click(bucket.ids).selected ? '#d97706' : '#7c3aed'} />)}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
@@ -1470,7 +1595,7 @@ export function ResourceBudgetByCompanyWidget({ data, filterConditions, filterMa
   )
 }
 
-export function ResourceAssignmentsTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function ResourceAssignmentsTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   // Filterable on any ResourceAssignmentSummary field (2026-09-02,
   // evaluateDashboardFilter's own header (lib/dashboardFilters.ts)) — e.g. filter={resource_type:'labour'} or
   // {resource_name:'Concrete Finishing Crew'} (a real gap Poe hit live:
@@ -1491,14 +1616,25 @@ export function ResourceAssignmentsTableWidget({ data, filterConditions, filterM
         </tr>
       </thead>
       <tbody>
-        {rows.map(a => (
-          <tr key={a.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2">{a.resource_name}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.role ?? '—'}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.activity_task_name}</td>
-            <td className="py-1.5 pr-2">{formatCurrency(a.budget)}</td>
-          </tr>
-        ))}
+        {rows.map(a => {
+          // Seeds the ACTIVITY it's assigned to, not the assignment itself
+          // (2026-09-07) — an assignment isn't one of the four cross-filter
+          // kinds, but "narrow everything to this row's activity" is the
+          // natural click here, same as any other activity-keyed source.
+          const click = recordClick('activity', [a.activity_id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={a.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2">{a.resource_name}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.role ?? '—'}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{a.activity_task_name}</td>
+              <td className="py-1.5 pr-2">{formatCurrency(a.budget)}</td>
+            </tr>
+          )
+        })}
         {rows.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No resource assignments yet.</td></tr>
         )}
@@ -2051,7 +2187,7 @@ export function MitigationActionsTableWidget({ data, filterConditions, filterMat
   )
 }
 
-export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
+export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const now = new Date()
   const rows = data.risks
     .filter(r => r.status !== 'closed' && r.date_raised !== null)
@@ -2071,14 +2207,21 @@ export function RiskAgeingTableWidget({ data, filterConditions, filterMatchMode,
         </tr>
       </thead>
       <tbody>
-        {rows.map(r => (
-          <tr key={r.id} className="border-b border-gray-50">
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
-            <td className="py-1.5 pr-2">{r.title}</td>
-            <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.risk_owner ?? '—'}</td>
-            <td className={`py-1.5 pr-2 font-medium ${r.daysOpen > 90 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{r.daysOpen}</td>
-          </tr>
-        ))}
+        {rows.map(r => {
+          const click = recordClick('risk', [r.id], crossFilter, onCrossFilterClick)
+          return (
+            <tr
+              key={r.id}
+              onClick={click.onClick}
+              className={`border-b border-gray-50 dark:border-prosota-line ${click.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${click.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+            >
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.code}</td>
+              <td className="py-1.5 pr-2">{r.title}</td>
+              <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{r.risk_owner ?? '—'}</td>
+              <td className={`py-1.5 pr-2 font-medium ${r.daysOpen > 90 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-prosota-muted'}`}>{r.daysOpen}</td>
+            </tr>
+          )
+        })}
         {rows.length === 0 && (
           <tr><td colSpan={4} className="py-3 text-center text-gray-400 dark:text-prosota-muted">No open risks with a raised date.</td></tr>
         )}

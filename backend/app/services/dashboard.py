@@ -1132,54 +1132,93 @@ async def get_baseline_comparison(
     )
 
 
-async def get_related_records(db: AsyncSession, project_id: uuid.UUID, activity_ids: list[uuid.UUID]) -> RelatedRecordsResponse:
+
+# RecordLink's own source_type/target_type vocabulary splits an ICD item into
+# its three underlying discriminator values (per IcdItem.item_type) rather
+# than a single "icd_item" — the API/frontend's own unified kind, so any
+# RecordLink query touching an icd_item seed or result needs this mapping
+# both ways.
+_ICD_LINK_TYPES = {"issue", "change", "decision"}
+
+
+async def get_related_records(
+    db: AsyncSession, project_id: uuid.UUID, seed_type: str, seed_ids: list[uuid.UUID],
+) -> RelatedRecordsResponse:
     """Cross-widget "click to filter" (2026-09-06, per Maro — see
     RelatedRecordsResponse's own header for the full design, including why
-    there's no resource_ids). Two resolution paths, unioned:
+    there's no resource_ids). seed_type/seed_ids generalizes the original
+    activity-only source (2026-09-07, per Maro: "most of the dashboards
+    are not clickable" — wanted risk/cost/ICD rows clickable as sources
+    too, not just activities) — any of the four kinds can now seed the
+    lookup, resolved via the same two paths, unioned:
 
     1. Real structural FK link — CostElement.linked_activity_id — the
        same link cost_sync.py's own schedule-linked elements already
        read, a plain IN-clause lookup (no traversal needed, it's direct).
+       Checked from whichever side is the seed.
 
-    2. RecordLink graph edges one hop out from the seed activities — the
+    2. RecordLink graph edges one hop out from the seed records — the
        same causal-link table Poe's own explain_causal_baseline
        (app/ai/record_tools.py) walks, but a single batched query instead
        of that function's own per-record BFS loop, since depth 1 doesn't
        need iterative frontier expansion: every edge touching a seed
-       activity, in either direction, is already the complete depth-1
+       record, in either direction, is already the complete depth-1
        answer in one query.
+
+    The seed's own ids are always included in their own bucket in the
+    result (e.g. a risk seed's risk_ids includes the clicked risk itself)
+    so the widget that was clicked doesn't lose its own selected row while
+    everything else narrows — matching the original activity-seed
+    behavior, generalized to every seed kind.
     """
-    if not activity_ids:
+    if not seed_ids:
         return RelatedRecordsResponse(activity_ids=[], cost_element_ids=[], risk_ids=[], icd_item_ids=[])
 
-    cost_element_ids: set[uuid.UUID] = set(
-        (await db.execute(
-            select(CostElement.id).where(CostElement.linked_activity_id.in_(activity_ids))
-        )).scalars().all()
-    )
-    risk_ids: set[uuid.UUID] = set()
-    icd_item_ids: set[uuid.UUID] = set()
+    activity_ids: set[uuid.UUID] = set(seed_ids) if seed_type == "activity" else set()
+    cost_element_ids: set[uuid.UUID] = set(seed_ids) if seed_type == "cost_element" else set()
+    risk_ids: set[uuid.UUID] = set(seed_ids) if seed_type == "risk" else set()
+    icd_item_ids: set[uuid.UUID] = set(seed_ids) if seed_type == "icd_item" else set()
 
+    if seed_type == "activity":
+        cost_element_ids |= set(
+            (await db.execute(
+                select(CostElement.id).where(CostElement.linked_activity_id.in_(seed_ids))
+            )).scalars().all()
+        )
+    elif seed_type == "cost_element":
+        activity_ids |= set(
+            (await db.execute(
+                select(CostElement.linked_activity_id).where(
+                    CostElement.id.in_(seed_ids), CostElement.linked_activity_id.is_not(None),
+                )
+            )).scalars().all()
+        )
+
+    link_types = _ICD_LINK_TYPES if seed_type == "icd_item" else {seed_type}
     links = (await db.execute(
         select(RecordLink).where(or_(
-            and_(RecordLink.source_type == "activity", RecordLink.source_id.in_(activity_ids)),
-            and_(RecordLink.target_type == "activity", RecordLink.target_id.in_(activity_ids)),
+            and_(RecordLink.source_type.in_(link_types), RecordLink.source_id.in_(seed_ids)),
+            and_(RecordLink.target_type.in_(link_types), RecordLink.target_id.in_(seed_ids)),
         ))
     )).scalars().all()
     for link in links:
         for rtype, rid in ((link.source_type, link.source_id), (link.target_type, link.target_id)):
-            if rtype == "risk":
+            # An activity-seeded query deliberately excludes the "activity"
+            # side of a matched link (a causally-linked *other* activity is
+            # a genuine product decision — transitively widen the schedule
+            # scope too, or not — left for a future pass, not assumed
+            # here); a risk/cost_element/icd_item seed has no such
+            # ambiguity, since finding the activities it's linked to is
+            # the entire point of that lookup.
+            if rtype == "activity":
+                if seed_type != "activity":
+                    activity_ids.add(rid)
+            elif rtype == "risk":
                 risk_ids.add(rid)
             elif rtype == "cost_element":
                 cost_element_ids.add(rid)
-            elif rtype in ("issue", "change", "decision"):
+            elif rtype in _ICD_LINK_TYPES:
                 icd_item_ids.add(rid)
-            # "activity" side (the seed itself, or another activity linked
-            # via a causal edge) deliberately isn't folded into
-            # activity_ids below — the seed IS the schedule-side scope by
-            # definition; a causally-linked *other* activity is a genuine
-            # product decision (transitively widen the schedule scope too,
-            # or not) left for a future pass, not assumed here.
 
     return RelatedRecordsResponse(
         activity_ids=list(activity_ids),
