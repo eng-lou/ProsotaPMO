@@ -58,18 +58,24 @@ async def _link(client: AsyncClient, pred: dict, succ: dict, **overrides) -> dic
     return resp.json()
 
 
-async def test_elapsed_duration_fraction_is_working_days_not_calendar_time(db: AsyncSession, project: Project):
-    """Confirmed against a real P6 export (2026-09-04, per Maro — exact P6
-    interoperability: "it needs to be the exact match or Prosota loses
-    complete credibility"). A real in-progress activity's own PV/BAC ratio
-    in P6's own report was exactly 14/18 = 7/9 = 0.77778 — 14 working days
-    elapsed (12-Apr-2011 to the 1-May-2011 data date) of 18 working days
-    total (12-Apr to the activity's own 5-May forecast finish). The
-    previous version of this formula instead divided straight calendar
+async def test_elapsed_duration_fraction_is_working_hours_not_calendar_time(db: AsyncSession, project: Project):
+    """Working-TIME proration (calendar-aware, via lookup.working_hours_
+    between), not calendar-time proration and not whole-day counting either
+    — the previous version of this formula divided straight calendar
     seconds elapsed over calendar seconds total (18.556/23 calendar days =
-    0.80672 for these exact same three datetimes) — wrong by design, not
-    by a rounding artifact, since P6 simply never counts weekends as
-    elapsed schedule progress."""
+    0.80672 for these same three datetimes) — wrong by design since P6
+    never counts weekends as elapsed schedule progress. An intermediate
+    version (2026-09-04) counted whole working DAYS instead, which matched
+    one real P6 export exactly but was proven wrong on 2026-09-06, checked
+    against a real P6-exported EVM table for four real activities at once:
+    a baseline Start/Finish landing mid-day (09:36/11:12, not a clean
+    calendar-day boundary) only matched to within a point under day
+    counting, because day-level granularity can't represent a partial
+    boundary day — hour precision reproduced all four exactly, to the
+    decimal (see app/services/activity.py:_attach_evm_fields's own header
+    for the full comparison). This test's own dates (10:40 start/finish, a
+    genuine non-day-boundary time) exercise exactly that same partial-day
+    case."""
     lookup = await _build_calendar_lookup(db, project.id)
     calendar = lookup.resolve_calendar_id(None)  # the project's lazily-seeded Mon-Fri default
 
@@ -78,7 +84,10 @@ async def test_elapsed_duration_fraction_is_working_days_not_calendar_time(db: A
     data_date = datetime(2011, 5, 1, 0, 0)
 
     fraction = elapsed_duration_fraction(lookup, calendar, start, finish, data_date)
-    assert fraction == Decimal(14) / Decimal(18)
+    elapsed_hours = lookup.working_hours_between(calendar, start, data_date)
+    total_hours = lookup.working_hours_between(calendar, start, finish)
+    assert fraction == elapsed_hours / total_hours
+    assert abs(fraction - Decimal("0.80390")) < Decimal("0.0001")
 
 
 async def _get(client: AsyncClient, activity_id: str) -> dict:

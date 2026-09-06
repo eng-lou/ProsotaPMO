@@ -216,11 +216,10 @@ async def test_deleting_activity_removes_linked_cost_element(
 
 
 async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, db, project: Project, live_period: Period, live_schedule_period: SchedulePeriod):
-    """PV is prorated against the activity's own live start/finish, not a
-    captured baseline — available as soon as the activity is scheduled, per
-    Maro's confirmed P6 domain correction (Session 16): "Set Baseline" drives
-    schedule variance, not Planned Value."""
-    from datetime import date, datetime
+    """PV is prorated against the activity's own live start/finish when no
+    baseline is captured — available as soon as the activity is scheduled
+    (this activity has no baseline, so it can't fall back to one)."""
+    from datetime import date, datetime, time
     import uuid as uuid_mod
 
     from app.models.activity import Activity
@@ -247,10 +246,16 @@ async def test_schedule_linked_element_computes_pv_ev_spi(client: AsyncClient, d
     # date (normally "today" when start_date is null — see
     # scheduling_cpm.data_date_for_period) need pinning, or PV would still
     # be prorated against the real wall-clock date instead of this window.
+    # Finish and the data date are both pinned to a day END (17:00), not
+    # day start (2026-09-06, hour-precision proration — see
+    # elapsed_duration_fraction's own header): a finish at day START counts
+    # as zero elapsed hours on that day, making the true span only 19
+    # working days, not the intended 20 — same for the data date's own day.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     db_activity.start = datetime(2024, 1, 1, 8, 0)
-    db_activity.finish = datetime(2024, 1, 26, 8, 0)
+    db_activity.finish = datetime(2024, 1, 26, 17, 0)
     live_period.start_date = date(2024, 1, 12)
+    live_period.start_time = time(17, 0)
     await db.commit()
     await db.refresh(db_activity)
 

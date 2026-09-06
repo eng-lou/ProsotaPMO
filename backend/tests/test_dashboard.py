@@ -168,6 +168,41 @@ async def test_eac_forecast_comparison_formulas(
     # EAC3 (SPI x CPI composite) needs a real schedule_spi — none of these
     # elements are schedule-linked, so it must stay null, never a fake number.
     assert kpis["eac_composite"] is None
+    # EAC4 (bottom-up remaining cost): neither element is schedule-linked, so
+    # neither has a real P6 RemainingDuration re-estimate to draw on — falls
+    # back to the same "remaining at plan rate" figure as EAC2, per-element.
+    assert kpis["eac_bottom_up"] == "99000.00"
+
+
+async def test_eac_bottom_up_uses_activitys_own_remaining_duration(
+    client: AsyncClient, db: AsyncSession, project: Project, live_period: Period, live_schedule_period: SchedulePeriod
+):
+    """The 4th, non-ratio P6 technique — "ETC = remaining cost for
+    activity" — must come from the activity's own Activity.remaining_
+    duration_hours (a real P6 RemainingDuration import, or set directly
+    here to isolate this from CPM/P6-import specifics), not be silently
+    just another view of BAC/EV/CPI/SPI. duration_hours=80 (10 days),
+    remaining_duration_hours forced to 24 (3 days) — a fraction (0.3) that
+    deliberately does NOT match pct_complete (60%, giving 0.4 remaining
+    under "plan rate") or CPI/SPI, so a bug that quietly fell back to one
+    of those formulas would be caught by a different expected number."""
+    activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)
+    resource = await _create_resource(client, project, "Piling gang", resource_type="labour", unit="day", rate="1000.00")
+    await client.post("/api/v1/resource-assignments/", json={
+        "activity_id": activity["id"], "resource_id": resource["id"], "utilisation_pct": "100",
+    })  # BAC = 10 days * 100% * 1000 = 10000
+
+    resp = await client.get("/api/v1/cost-elements/", params={"project_id": str(project.id), "period_id": str(live_period.id)})
+    element = next(e for e in resp.json() if e["source"] == "schedule")
+    assert float(element["budget"]) == 10000.0
+
+    await client.patch(f"/api/v1/cost-elements/{element['id']}", json={"pct_complete": 60, "actuals": "5000"})
+    await _set_computed_fields(db, activity["id"], remaining_duration_hours=Decimal("24"))
+
+    resp = await client.get("/api/v1/dashboard/overview", params=_overview_params(project, live_period, live_schedule_period))
+    kpis = resp.json()["kpis"]
+    assert kpis["eac_remaining_at_plan"] == "9000.00"    # AC(5000) + (BAC-EV)(10000-6000=4000) — the OTHER formula
+    assert kpis["eac_bottom_up"] == "8000.00"            # AC(5000) + BAC(10000) x 24/80 remaining (3000)
 
 
 async def test_dcma_quality_summary_reflects_live_activity_count(

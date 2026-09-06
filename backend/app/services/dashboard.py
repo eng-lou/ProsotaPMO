@@ -142,6 +142,7 @@ async def _kpis(
     # misrepresents which line actually drives the portfolio's real performance).
     bac_total = ac_total = ev_cost_total = Decimal(0)
     has_cost_evm = False
+    per_element_bac_ev: list[tuple[uuid.UUID | None, Decimal, Decimal | None]] = []
     for el in elements:
         bac, ac = _resolve_bac_ac(el)
         if bac is None:
@@ -150,21 +151,73 @@ async def _kpis(
         bac_total += bac
         if ac is not None:
             ac_total += ac
-        if el.pct_complete is not None:
-            ev_cost_total += bac * Decimal(el.pct_complete) / Decimal(100)
+        ev_el = bac * Decimal(el.pct_complete) / Decimal(100) if el.pct_complete is not None else None
+        if ev_el is not None:
+            ev_cost_total += ev_el
+        per_element_bac_ev.append((el.linked_activity_id, bac, ev_el))
     cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total) if has_cost_evm else {}
 
     # Two more PMBOK EAC formulas (Batch 6) alongside cost_rollup["eac"]
     # (BAC/CPI) above — "remaining work at the original plan rate" and the
     # SPI x CPI composite, the same three classic methods
-    # WIDGET_LIBRARY_PLAN.md §E.1's EAC Forecast Comparison gap calls for.
-    # Both need real EV/AC (has_cost_evm) and, for the composite, a real
-    # schedule_spi — left None rather than a misleading number otherwise.
+    # WIDGET_LIBRARY_PLAN.md §E.1's EAC Forecast Comparison gap calls for —
+    # matching 3 of the 4 named "PF" techniques in P6's own Admin
+    # Preferences > Earned Value > "Technique for computing ETC" screen
+    # (PF=1, PF=1/CPI, PF=1/(CPI*SPI)). A user-chosen custom PF is
+    # deliberately not modelled — an interactive what-if input, not a
+    # derived figure a read-only dashboard tile can show.
     eac_remaining_at_plan = (ac_total + (bac_total - ev_cost_total)).quantize(_MONEY) if has_cost_evm else None
     cpi = cost_rollup.get("cpi")
     eac_composite = None
     if has_cost_evm and schedule_spi is not None and cpi is not None and schedule_spi != 0 and cpi != 0:
-        eac_composite = (ac_total + (bac_total - ev_cost_total) / (schedule_spi * cpi)).quantize(_MONEY)
+        # Full-precision CPI/SPI here, not the already-4dp-rounded `cpi`/
+        # `schedule_spi` display values above — dividing by their product
+        # would compound two premature roundings into eac_composite, the
+        # same class of error just fixed in cost_element._cost_side_evm
+        # (verified 2026-09-06 against Juniper's real EAC/ETC export).
+        pv_total_sched = sum((el.pv for el in elements if el.pv is not None), Decimal(0))
+        ev_total_sched = sum((el.ev for el in elements if el.ev is not None), Decimal(0))
+        if pv_total_sched != 0 and ac_total != 0:
+            cpi_spi_raw = (ev_cost_total / ac_total) * (ev_total_sched / pv_total_sched)
+            eac_composite = (ac_total + (bac_total - ev_cost_total) / cpi_spi_raw).quantize(_MONEY)
+
+    # The 4th named P6 technique — "ETC = remaining cost for activity" — a
+    # genuine bottom-up re-estimate, not a ratio of BAC/EV/AC/CPI/SPI at
+    # all, so it needs its own real, independent input: each schedule-
+    # linked element's own Activity.remaining_duration_hours (imported
+    # verbatim from P6's own <RemainingDuration>, itself P6's own
+    # resource-loaded remaining-work re-estimate — never a Prosota-derived
+    # figure), scaled against that activity's own baseline-preferred total
+    # duration (same "baseline wins when captured" rule as PV/schedule_pct_
+    # complete — see _attach_evm_fields's own header) to convert hours
+    # remaining into cost remaining, on the assumption the activity's own
+    # cost accrues evenly across its duration (true for labour/equipment,
+    # Prosota's own resource-costing rule — see ResourceAssignment's own
+    # docstring). A manual (non-schedule-linked) element, or a schedule-
+    # linked one P6 never reported a RemainingDuration for, has no
+    # independent re-estimate available at all — falls back to "remaining
+    # at plan rate" (BAC-EV) for just that element, the same best-available
+    # substitute PF=1 already uses, rather than leaving the whole portfolio
+    # figure null over one element with no bottom-up data.
+    remaining_total = Decimal(0)
+    if per_element_bac_ev:
+        linked_ids = {aid for aid, _, _ in per_element_bac_ev if aid is not None}
+        remaining_by_activity: dict[uuid.UUID, tuple[Decimal | None, Decimal | None]] = {}
+        if linked_ids:
+            rows = (await db.execute(
+                select(Activity.id, Activity.remaining_duration_hours, Activity.duration_hours, Activity.bl_duration_hours)
+                .where(Activity.id.in_(linked_ids))
+            )).all()
+            remaining_by_activity = {
+                row.id: (row.remaining_duration_hours, row.bl_duration_hours or row.duration_hours) for row in rows
+            }
+        for aid, bac_i, ev_i in per_element_bac_ev:
+            remaining_hours, total_hours = remaining_by_activity.get(aid, (None, None))
+            if remaining_hours is not None and total_hours:
+                remaining_total += bac_i * (remaining_hours / total_hours)
+            else:
+                remaining_total += bac_i - (ev_i if ev_i is not None else Decimal(0))
+    eac_bottom_up = (ac_total + remaining_total).quantize(_MONEY) if has_cost_evm else None
 
     return DashboardKpis(
         plan_start=plan_start,
@@ -178,6 +231,7 @@ async def _kpis(
         cpi=cpi,
         eac_remaining_at_plan=eac_remaining_at_plan,
         eac_composite=eac_composite,
+        eac_bottom_up=eac_bottom_up,
     ), elements
 
 

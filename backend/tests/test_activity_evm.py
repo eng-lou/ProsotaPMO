@@ -58,8 +58,10 @@ async def test_activity_evm_mirrors_linked_cost_element(
     """Scheduling's EVM columns must show exactly what Cost Plan shows for the
     same resourced activity — same numbers, same source of truth, never a second
     independently-derived set (see app/services/activity.py:_attach_evm_fields).
-    PV is prorated against the activity's own live start/finish, not a captured
-    baseline (Maro's confirmed P6 correction, Session 16)."""
+    PV is prorated against the activity's own live start/finish when no
+    baseline has been captured (this activity has none) — a captured
+    baseline wins instead, per the real P6 ground-truth comparison in
+    app/services/activity.py:_attach_evm_fields's own header (2026-09-06)."""
     activity = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=80)  # 10 days
     resource = await _create_resource(client, project, rate="1000")
     await client.post("/api/v1/resource-assignments/", json={
@@ -85,25 +87,27 @@ async def test_activity_evm_mirrors_linked_cost_element(
     element = await _linked_element(client, project, live_period)
     assert element["pct_complete"] == 60
 
-    # Deterministic 50% elapsed fraction: PV is now working-day-prorated, not
-    # calendar-time (2026-09-04, per Maro — exact P6 interoperability, see
-    # elapsed_duration_fraction's own header), so both the activity's own
-    # span and the data date are pinned to fixed dates instead of "today"
-    # ± N days — a calendar-day-relative span's own working-day ratio
-    # depends on which weekday "today" happens to be, which would make this
-    # test flaky. _count_working_days counts BOTH endpoints inclusive, so
-    # 2024-01-01 (Monday) to 2024-01-26 (Friday, 4 full Mon-Fri weeks later)
-    # is exactly 20 working days; 2024-01-12 (also a Friday, 2 weeks in) is
-    # exactly 10 — verified directly against a standalone count, not by
-    # hand, before picking these (a Monday-to-Monday span double-counts one
-    # extra boundary day and isn't a clean multiple of 5). Set directly
-    # (bypassing the CPM engine) after the pct_complete update above so
-    # nothing recomputes them again afterwards.
+    # Deterministic 50% elapsed fraction: PV is now working-HOUR-prorated,
+    # not calendar-time and not whole-day counting either (2026-09-06, see
+    # elapsed_duration_fraction's own header) — a span's start/finish must
+    # each land exactly on a working-day boundary (day start / day end) or
+    # the boundary day itself only partially counts. Start is pinned to a
+    # day START (08:00) and finish to a day END (17:00) so every one of the
+    # 20 Mon-Fri working days from 2024-01-01 through 2024-01-26 is fully
+    # spanned; the data date is likewise pinned to a day END (2024-01-12
+    # 17:00, the close of the 10th of those 20 working days), via
+    # SchedulePeriod/Period's own start_time column (data_date_time_for_
+    # period combines start_date with start_time, falling back to the
+    # calendar's day-start only when start_time is null) — giving an exact
+    # 10/20 = 50% regardless of which weekday "today" happens to be. Set
+    # directly (bypassing the CPM engine) after the pct_complete update
+    # above so nothing recomputes them again afterwards.
     db_activity = await db.get(Activity, uuid_mod.UUID(activity["id"]))
     db_activity.start = datetime(2024, 1, 1, 8, 0)
-    db_activity.finish = datetime(2024, 1, 26, 8, 0)
+    db_activity.finish = datetime(2024, 1, 26, 17, 0)
     db_schedule_period = await db.get(SchedulePeriod, uuid_mod.UUID(activity["schedule_period_id"]))
     db_schedule_period.start_date = date(2024, 1, 12)
+    db_schedule_period.start_time = time(17, 0)
     # Cost Plan's own PV read (cost_element["pv"] below) uses Cost/Risk/ICD's
     # own separate Period.start_date, not SchedulePeriod's (two genuinely
     # independent data-date anchors — see scheduling_cpm.py:data_date_
@@ -111,6 +115,7 @@ async def test_activity_evm_mirrors_linked_cost_element(
     # this test is meant to cross-check would read different data dates.
     db_live_period = await db.get(Period, live_period.id)
     db_live_period.start_date = date(2024, 1, 12)
+    db_live_period.start_time = time(17, 0)
     await db.commit()
     # Same session as the test client (see conftest.py) — without this refresh, the
     # identity-mapped Activity's other attributes (e.g. updated_at) stay expired

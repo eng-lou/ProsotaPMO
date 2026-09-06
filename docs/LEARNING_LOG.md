@@ -5228,3 +5228,68 @@ rebuilds the dashboard grid, discarding anything changed that wasn't
 explicitly saved yet. Fixed so only the very first load shows that full
 loading screen; a WBS pick now just dims the dashboard briefly with a
 small "Refreshing…" label while it stays fully intact underneath.
+
+## 2026-09-05/06 — Getting Schedule % Complete, PV, and EAC to match P6 exactly, to the decimal
+
+Reported bug: an imported P6 schedule's Earned Value figures didn't match
+the same project's own numbers inside P6 itself — "Third Floor Masonry
+Structure" showed 66.7% Schedule % Complete in Prosota vs 75% in P6, which
+threw off Planned Value and everything downstream of it. Two earlier
+attempts at a fix (one based on Actual/At-Completion duration, one based
+on P6's RemainingEarlyStartDate) each happened to match a single example
+activity and were then proven wrong the moment they were checked against
+several real activities at once from a genuine P6-exported report — a
+trap worth naming: never trust a formula that's only been checked against
+one example. Both were fully removed rather than left behind as unused
+code.
+
+The real mechanism, found by working the maths backwards from a real P6
+screenshot: Schedule % Complete is how far the data date sits between an
+activity's own BASELINE Start and Finish dates (not its live/current
+dates — a live-dates version had been in place since an earlier, since-
+reversed correction) — exactly PMBOK's own definition of Planned Value as
+"the value of work planned," a baseline concept by nature. Prosota already
+imported and stored these baseline dates correctly from P6's own embedded
+baseline section; the fix was to actually use them for this calculation.
+That alone closed a real project's total Planned Value gap from about
+£4,745 to about £106 (97.8%) against P6's own reported total.
+
+The remaining £106 turned out to be a subtler issue: the formula counted
+whole working DAYS between the baseline dates and the data date, which is
+exact when an activity's baseline times land on a clean day boundary
+(like 08:00 or 17:00) but introduces up to a full percentage point of
+error when they don't — one real activity's baseline ran from 09:36 to
+11:12, times P6 itself clearly doesn't round off. Switched the formula to
+count actual working HOURS instead of whole days (Prosota already had a
+calendar-aware hour-counting helper built for a different feature, reused
+here rather than writing a second one). Checked against four real P6
+activities at once, including that same 09:36/11:12 one, every single
+figure now matches P6's own report exactly, and the same real project's
+total Planned Value now matches P6's own total to the penny (£461,639.09
+both sides) — enough to write a standing rule: Schedule % Complete must
+match P6 to the decimal, not just "close," full stop.
+
+While rechecking every EVM figure line-by-line against that same real P6
+report (not just Planned Value), a second, smaller bug turned up in
+Estimate At Completion: it was computed as Budget ÷ (a Cost Performance
+Index already rounded to 4 decimal places for display), which compounds a
+tiny rounding error into a real few-pence-to-nearly-£1 difference on
+activities whose CPI doesn't divide evenly. Fixed by computing it directly
+from Budget × Actual ÷ Earned Value instead (mathematically the exact
+same formula, just without rounding the middle step) — now matches P6's
+own EAC/ETC columns exactly too. The dashboard's own "EAC Forecast
+Comparison" widget (which deliberately shows three different named ways
+of forecasting EAC side by side, matching three of the four techniques in
+P6's own Admin Preferences screen) had the identical rounding bug in its
+"both cost and schedule are off" composite formula, fixed the same way.
+
+That same P6 Preferences screen was a useful nudge to notice a real gap:
+its fourth technique, "remaining cost for the activity," isn't one of
+Prosota's three ratio-based formulas at all — it's a genuine bottom-up
+re-estimate, sourced from each activity's own real P6 "Remaining
+Duration" figure rather than derived from performance ratios. Added it as
+a fourth comparison figure: each schedule-linked cost line's own share of
+budget still remaining is estimated from how much working time it has
+left (imported straight from P6), and anything without that real figure
+(a manually-entered cost line, say) falls back to the simpler "remaining
+at plan rate" estimate rather than showing nothing at all.

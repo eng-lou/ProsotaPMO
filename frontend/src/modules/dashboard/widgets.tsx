@@ -1558,6 +1558,7 @@ export function EacForecastComparisonWidget({ data }: WidgetProps) {
     ['EAC = BAC / CPI', kpis.eac, 'Past CPI continues'],
     ['EAC = AC + (BAC-EV)', kpis.eac_remaining_at_plan, 'Remaining work at plan rate'],
     ['EAC = AC + (BAC-EV)/(SPI×CPI)', kpis.eac_composite, 'Composite SPI x CPI'],
+    ['EAC = AC + remaining cost for activity', kpis.eac_bottom_up, 'Bottom-up, from P6 remaining duration'],
   ]
   return (
     <table className="w-full text-xs">

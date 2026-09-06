@@ -252,7 +252,18 @@ def _cost_side_evm(
     into two copies."""
     cv = (ev - ac).quantize(_MONEY) if ev is not None and ac is not None else None
     cpi = (ev / ac).quantize(_RATIO) if ev is not None and ac is not None and ac != 0 else None
-    eac = (bac / cpi).quantize(_MONEY) if bac is not None and cpi is not None and cpi != 0 else None
+    # EAC = BAC / CPI, but computed as BAC * AC / EV directly rather than
+    # dividing by the already-rounded `cpi` above — P6's own EAC/ETC report
+    # figures only match to the penny (verified 2026-09-06 against Juniper's
+    # real EVM export) when the full-precision ratio is used; routing
+    # through the display-rounded CPI first compounded up to a real ~£1
+    # error on some activities (e.g. "Fab & Delivery": 30948.33 vs P6's
+    # 30947.37).
+    eac = (
+        (bac * ac / ev).quantize(_MONEY)
+        if bac is not None and ac is not None and ac != 0 and ev is not None and ev != 0
+        else None
+    )
     etc = (eac - ac).quantize(_MONEY) if eac is not None and ac is not None else None
     return cv, cpi, eac, etc
 

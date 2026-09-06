@@ -18,14 +18,20 @@ class DashboardKpis(BaseModel):
     bac: Decimal | None
     eac: Decimal | None
     cpi: Decimal | None
-    # Two more PMBOK EAC formulas alongside the classic BAC/CPI already above
-    # (Batch 6, 2026-07-20, per the EAC Forecast Comparison gap flagged in
-    # WIDGET_LIBRARY_PLAN.md §E.1) — "AC + remaining at plan rate" and the
-    # SPI x CPI composite. A fourth, manual "AC + custom ETC" method from the
-    # same reference is deliberately not modelled here — it's an interactive
-    # what-if input, not a derived figure a read-only dashboard tile can show.
+    # Three more PMBOK EAC formulas alongside the classic BAC/CPI already
+    # above (Batch 6, 2026-07-20, per the EAC Forecast Comparison gap
+    # flagged in WIDGET_LIBRARY_PLAN.md §E.1, plus eac_bottom_up added
+    # 2026-09-06) — "AC + remaining at plan rate," the SPI x CPI composite,
+    # and "AC + a genuine bottom-up remaining-cost re-estimate" — the same
+    # 3 named "PF" techniques (PF=1, PF=1/CPI, PF=1/(CPI*SPI)) plus
+    # P6's own distinct 4th, non-ratio "ETC = remaining cost for activity"
+    # option (see app/services/dashboard.py:_kpis's own header for exactly
+    # what that's sourced from). A 5th, manual "AC + custom ETC/PF" method
+    # is deliberately not modelled — an interactive what-if input, not a
+    # derived figure a read-only dashboard tile can show.
     eac_remaining_at_plan: Decimal | None
     eac_composite: Decimal | None
+    eac_bottom_up: Decimal | None
 
 
 class DcmaQualitySummary(BaseModel):

@@ -64,26 +64,6 @@ async def default_day_start_times(db: AsyncSession, project_ids: set[uuid.UUID])
     return {row.project_id: row.day_start_time for row in result.all()}
 
 
-def _count_working_days(lookup: "_CalendarLookup", calendar: Calendar, d1: date, d2: date) -> int:
-    """Inclusive count of the calendar's own working days in [d1, d2] — the
-    unit elapsed_duration_fraction below prorates against. Bounded the same
-    way every other day-by-day walk in this file is (_MAX_DAY_STEPS) —
-    unreachable in practice (a real activity's own start-finish span is
-    never anywhere near 10 years), just a hard backstop against a
-    pathological input looping forever."""
-    if d2 < d1:
-        return 0
-    count = 0
-    d = d1
-    for _ in range(_MAX_DAY_STEPS):
-        if d > d2:
-            break
-        if lookup.is_working_day(calendar, d):
-            count += 1
-        d += timedelta(days=1)
-    return count
-
-
 def elapsed_duration_fraction(
     lookup: "_CalendarLookup", calendar: Calendar,
     start: datetime | None, finish: datetime | None, data_date: datetime,
@@ -110,18 +90,22 @@ def elapsed_duration_fraction(
     dates matched none of them, baseline dates matched three exactly and the
     fourth within a point).
 
-    Working-day proration (2026-09-04, per Maro — real, exact P6
-    interoperability: "it needs to be the exact match or Prosota loses
-    complete credibility"), not calendar-time proration — confirmed against
-    a real P6 export's own reported PV to 5 decimal places (14 working days
-    elapsed of 18 working days total = 0.77778 exactly, matching P6's own
-    ratio; the previous calendar-second-based version gave 0.80672 for the
-    identical start/finish/data-date, since it counted weekends as elapsed
-    time and P6 doesn't). Both counts are whole working DAYS via the
-    activity's own resolved calendar, not hour-precision.
+    Working-TIME proration via lookup.working_hours_between — hour
+    precision, not whole-day counting (2026-09-06, per Maro: "schedule %
+    complete needs to be exactly aligned... to the decimal" — the 4th
+    activity above, "Roadway Pavers," only matched to within a point with
+    whole-day counting because its own baseline Start/Finish fall mid-day
+    (09:36/11:12, not clean calendar-day boundaries) — day-counting silently
+    rounds a partial boundary day to either a whole day or none. Hour
+    precision reproduces all four exactly, to the decimal (2026-09-04's own
+    original day-counting design was itself a correction of an even earlier,
+    non-calendar-aware hour attempt that wrongly counted weekend time —
+    lookup.working_hours_between doesn't have that bug, it already correctly
+    excludes non-working hours/days the same way CPM's own total_float_hours
+    does).
 
     Whole-datetime edge cases (start==finish, data_date outside the span)
-    are still resolved before ever counting a single day."""
+    are still resolved before ever measuring a single hour."""
     if start is None or finish is None:
         return None
     if finish <= start:
@@ -130,11 +114,11 @@ def elapsed_duration_fraction(
         return Decimal(0)
     if data_date >= finish:
         return Decimal(1)
-    total_days = _count_working_days(lookup, calendar, start.date(), finish.date())
-    if total_days <= 0:
+    total_hours = lookup.working_hours_between(calendar, start, finish)
+    if total_hours <= 0:
         return Decimal(0)
-    elapsed_days = _count_working_days(lookup, calendar, start.date(), data_date.date())
-    return Decimal(elapsed_days) / Decimal(total_days)
+    elapsed_hours = lookup.working_hours_between(calendar, start, data_date)
+    return elapsed_hours / total_hours
 
 
 def _exclude_suspend_window(

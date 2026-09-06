@@ -10,6 +10,7 @@ export interface DashboardKpis {
   cpi: string | null
   eac_remaining_at_plan: string | null
   eac_composite: string | null
+  eac_bottom_up: string | null
 }
 
 export interface DcmaQualitySummary {
