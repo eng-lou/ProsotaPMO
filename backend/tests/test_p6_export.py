@@ -265,17 +265,30 @@ async def test_active_baseline_is_exported(client: AsyncClient, project: Project
     # <ObjectId>, so P6's importer — which links a baseline activity back to
     # its live counterpart by ObjectId, never by Id/code — threw a
     # NullReferenceException on re-import. Must match the SAME live
-    # <Project><Activity><ObjectId> for this activity, and <ProjectObjectId>
-    # must match <Project>'s own <ObjectId>.
+    # <Project><Activity><ObjectId> for this activity.
     live_activity_el = next(
         a for a in project_el.findall("p6:Activity", ns) if a.findtext("p6:Id", namespaces=ns) == task["code"]
     )
     assert baseline_activity_els[0].findtext("p6:ObjectId", namespaces=ns) == live_activity_el.findtext(
         "p6:ObjectId", namespaces=ns
     )
-    assert baseline_activity_els[0].findtext("p6:ProjectObjectId", namespaces=ns) == project_el.findtext(
+
+    # Second real bug (2026-09-06): that first fix still crashed identically
+    # on a real re-import — checked against a real P6-exported baseline
+    # reference file, a <BaselineProject><Activity>'s <ProjectObjectId>
+    # points at the BASELINE's own <ObjectId> (a P6 baseline is a genuine
+    # copy of the project's tables under its own internal project id), not
+    # the live project's, and it needs the same full structural field set
+    # (GUID/CalendarObjectId/DurationType/Status/Type/WBSObjectId/
+    # PercentCompleteType) a live <Project><Activity> carries, not just
+    # Id/ObjectId/dates.
+    assert baseline_activity_els[0].findtext("p6:ProjectObjectId", namespaces=ns) == baseline_el.findtext(
         "p6:ObjectId", namespaces=ns
     )
+    for field in ("GUID", "CalendarObjectId", "DurationType", "Status", "Type", "WBSObjectId", "PercentCompleteType"):
+        value = baseline_activity_els[0].findtext(f"p6:{field}", namespaces=ns)
+        assert value, f"<BaselineProject><Activity> missing required field <{field}>"
+    assert baseline_el.findtext("p6:GUID", namespaces=ns), "<BaselineProject> itself missing <GUID>"
 
 
 async def test_no_baseline_project_when_none_is_assigned(
