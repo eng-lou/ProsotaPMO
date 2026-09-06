@@ -5318,3 +5318,25 @@ from that real number straight away, skipping the percentage step
 percentage by hand afterwards reverts it to behaving like any other
 Prosota-authored assignment, so a deliberate edit is never silently
 overridden by the original import.
+
+Separately, Maro asked whether a wall of 73 identical "duplicate resource
+assignment skipped" warnings was really necessary to show after an
+import — it wasn't. Messy real P6 exports can repeat the exact same
+generic warning dozens of times over; the import summary now collapses
+repeats into one line with a "(x73)" count instead of listing each one.
+
+## 2026-09-06 — A first pass at frontend loading speed
+
+Quick, well-established fix rather than a broad rewrite: the React
+ecosystem itself (React, the router, the data-fetching library, sign-in)
+was bundled into the very same chunk as the app's own code, so returning
+visitors' browsers had to re-download all of it on every single deploy,
+even ones that only changed a button's colour. Split it into its own
+"vendor" chunk, which only changes when those specific libraries
+themselves get upgraded — the app's own code chunk (the part that
+changes on every deploy) shrank from about 250KB to about 97KB
+compressed as a side effect of separating them. The already-lazy heavy
+stuff (the 3D viewer, Excel export, chart library) was left exactly as
+is — those only load when someone actually opens the screen that needs
+them, and folding them into a shared chunk would make everyone download
+them unconditionally instead, which would be a step backwards.
