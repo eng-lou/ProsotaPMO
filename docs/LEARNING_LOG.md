@@ -5454,3 +5454,19 @@ kept the other two genuine fixes (the ones that actually did work) in
 place, so the import works again while the baseline question waits for
 either a real P6 install to test against directly, or a more detailed
 error than a bare "something was null" from Primavera's own importer.
+
+## 2026-09-07 — Import works again, but Earned Value stayed at zero
+
+With the baseline problem set aside, Maro re-tested and confirmed the
+project name and Actual Cost were both now correct — but Earned Value
+was still showing as zero, and asked directly: "did you set the physical
+percent completes for the calculation?" That question named the exact
+gap. P6 tracks percent-complete three different ways depending on which
+one an activity is configured to use (physical progress, duration
+progress, or units of work done), each its own separate field in the
+file — and Earned Value is calculated from whichever one matches the
+activity's own setting, not from a single generic "percent complete"
+value. Prosota's export was declaring every activity as using the
+"Physical" method, but never actually writing that method's own field —
+so P6 had nothing to read for it and fell back to zero, even though the
+generic percent-complete figure right next to it was correct all along.
