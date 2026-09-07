@@ -170,7 +170,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
-  const [exporting, setExporting] = useState(false)
+  const [exportingWidget, setExportingWidget] = useState(false)
   // Which widget's filter popover is open (2026-09-02, per Maro: "you need
   // to be able to expose the parameters driving the dashboards so users
   // may edit" — see DashboardWidgetFilterEditor.tsx's own header). At most
@@ -344,31 +344,6 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2 text-sm relative no-print">
-        <button
-          className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40"
-          disabled={exporting}
-          onClick={async () => {
-            // Lazy-loaded at click time (2026-09-07, per Maro: "each
-            // dashboard needs to be able to be exported to xlsx and
-            // printed") — keeps exceljs out of the main dashboard bundle,
-            // same convention as Scheduling's own handleResourcesExport.
-            setExporting(true)
-            try {
-              const { downloadDashboardExcel } = await import('./exportDashboardExcel')
-              await downloadDashboardExcel(widgets, widgetProps, 'Dashboard')
-            } finally {
-              setExporting(false)
-            }
-          }}
-        >
-          {exporting ? 'Exporting…' : '⇩ Export xlsx'}
-        </button>
-        <button
-          className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
-          onClick={() => window.print()}
-        >
-          🖨 Print
-        </button>
         <div className="relative">
           <button
             className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
@@ -438,7 +413,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
         </div>
       </div>
 
-      <div ref={containerRef} className="relative dashboard-grid-container" style={{ height: containerHeight }}>
+      <div ref={containerRef} className="relative no-print" style={{ height: containerHeight }}>
         {widgets.length === 0 && (
           <div className="text-xs text-gray-400 dark:text-prosota-muted py-4">No widgets on the board — use "+ Add Widget" above.</div>
         )}
@@ -448,7 +423,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
           return (
             <div
               key={w.id}
-              className={`dashboard-widget-tile absolute bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden ${isDragging ? 'shadow-lg z-10' : ''}`}
+              className={`absolute bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden ${isDragging ? 'shadow-lg z-10' : ''}`}
               style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, transition: isDragging ? 'none' : 'left 120ms, top 120ms' }}
             >
               <div
@@ -514,11 +489,11 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
 
       {expandedWidget && (
         <div
-          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-8"
+          className="dashboard-widget-modal-overlay fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-8"
           onClick={() => setExpandedWidgetId(null)}
         >
           <div
-            className={`relative w-full bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden shadow-2xl ${
+            className={`dashboard-widget-modal-box relative w-full bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden shadow-2xl ${
               // Landscape expand (2026-09-07, per Maro: "give it to me in
               // landscape not portrait") — Milestone Timeline is an
               // inherently wide, short strip; the generic tall modal left
@@ -532,11 +507,42 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
           >
             <div className="relative flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0">
               <span className="text-sm font-bold text-gray-700 dark:text-prosota-muted">{WIDGET_REGISTRY[expandedWidget.widget_type]?.label ?? expandedWidget.widget_type}</span>
+              {/* Per-widget export/print (2026-09-07, per Maro: "i meant
+                  print/xlsx export per widget not layout" — replaces the
+                  earlier whole-dashboard "Export xlsx"/"Print" toolbar
+                  buttons entirely). The Expand modal already isolates one
+                  widget on screen, so it's the natural place for both —
+                  no separate per-tile buttons needed on every grid tile's
+                  own cramped header. */}
+              <button
+                className="no-print ml-auto text-xs px-1.5 py-0.5 rounded text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper disabled:opacity-40"
+                disabled={exportingWidget}
+                onClick={async () => {
+                  setExportingWidget(true)
+                  try {
+                    const { downloadWidgetExcel } = await import('./exportDashboardExcel')
+                    const label = WIDGET_REGISTRY[expandedWidget.widget_type]?.label ?? expandedWidget.widget_type
+                    await downloadWidgetExcel(expandedWidget.widget_type, label, {
+                      ...widgetProps, filterConditions: expandedWidget.filter, filterMatchMode: expandedWidget.filter_match_mode,
+                    })
+                  } finally {
+                    setExportingWidget(false)
+                  }
+                }}
+              >
+                {exportingWidget ? 'Exporting…' : '⇩ Export xlsx'}
+              </button>
+              <button
+                className="no-print text-xs px-1.5 py-0.5 rounded text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
+                onClick={() => window.print()}
+              >
+                🖨 Print
+              </button>
               {FILTERABLE_WIDGET_TYPES.has(expandedWidget.widget_type) && (
                 <button
                   onClick={() => setFilterEditorFor(filterEditorFor === expandedWidget.id ? null : expandedWidget.id)}
                   title="Filter this widget"
-                  className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                  className={`no-print text-xs px-1.5 py-0.5 rounded ${
                     expandedWidget.filter && expandedWidget.filter.length > 0
                       ? 'text-prosota-accent font-bold'
                       : 'text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
@@ -548,7 +554,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
               <button
                 onClick={() => setExpandedWidgetId(null)}
                 title="Close"
-                className={FILTERABLE_WIDGET_TYPES.has(expandedWidget.widget_type) ? 'text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400' : 'ml-auto text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400'}
+                className="no-print text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400"
               >
                 ✕
               </button>
@@ -561,7 +567,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                 />
               )}
             </div>
-            <div className={`flex-1 min-h-0 overflow-auto p-4 ${expandedWidget.widget_type === 'milestone_timeline' ? 'flex flex-col justify-center' : ''}`}>
+            <div className={`dashboard-widget-modal-content flex-1 min-h-0 overflow-auto p-4 ${expandedWidget.widget_type === 'milestone_timeline' ? 'flex flex-col justify-center' : ''}`}>
               {WIDGET_REGISTRY[expandedWidget.widget_type]
                 ? <MemoWidget renderFn={WIDGET_REGISTRY[expandedWidget.widget_type].render} widgetProps={widgetProps} filterConditions={expandedWidget.filter} filterMatchMode={expandedWidget.filter_match_mode} />
                 : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}

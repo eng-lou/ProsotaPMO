@@ -203,15 +203,11 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
     .filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
     .filter(m => matchesCrossFilter(m.id, 'activity', crossFilter))
   const selected = milestones.find(m => crossFilter?.key === `activity:${m.id}`)
-  // Optional data-date line (2026-09-07, per Maro: "add an optional data
-  // date line... allow me to set the date") — pre-filled with the
-  // project's own real Data Date (same field ProjectInfoWidget already
-  // shows) so it's useful without any setup, but a plain local override —
-  // clearing the input removes the line entirely, matching "optional."
-  // .slice(0, 10): project_info.data_date is a full ISO datetime string
-  // ("2026-09-01T00:00:00"); <input type="date"> requires exactly
-  // YYYY-MM-DD or it silently refuses to show the pre-filled value.
-  const [dataDate, setDataDate] = useState((data.project_info.data_date ?? '').slice(0, 10))
+  // Data-date line (2026-09-07, per Maro: first "allow me to set the
+  // date," then "scrap the data date picker use the data date from the
+  // working schedule" — no manual input at all; always the schedule's own
+  // real Data Date, the same field ProjectInfoWidget already shows).
+  const dataDate = data.project_info.data_date
   // pt-4 (2026-09-03, per Maro: "top buffer for the milestone timeline") —
   // MilestoneTrack's own topmost label sits at a fixed offset above its
   // internal axis, which is itself vertically centred within a container
@@ -222,25 +218,12 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
   // down by a fixed amount without touching its internal dot/label/axis
   // spacing logic.
   return (
-    <div className="h-full overflow-auto pt-4 flex flex-col">
-      <div className="flex items-center justify-end gap-1.5 px-1 pb-2 text-xs text-gray-400 dark:text-prosota-muted shrink-0">
-        <label htmlFor="milestone-data-date">Data Date</label>
-        <input
-          id="milestone-data-date"
-          type="date"
-          value={dataDate}
-          onChange={e => setDataDate(e.target.value)}
-          className="border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 bg-white dark:bg-prosota-panel text-gray-700 dark:text-prosota-paper"
-        />
-        {dataDate && (
-          <button onClick={() => setDataDate('')} title="Remove the data-date line" className="hover:text-red-600 dark:hover:text-red-400">✕</button>
-        )}
-      </div>
+    <div className="h-full overflow-auto pt-4">
       <MilestoneTrack
         milestones={milestones}
         onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, 'activity', [id]) : undefined}
         selectedId={selected?.id ?? null}
-        dataDate={dataDate || null}
+        dataDate={dataDate}
       />
     </div>
   )
