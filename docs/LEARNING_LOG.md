@@ -5653,3 +5653,27 @@ outside the area that actually got drawn, while its dot (sitting a
 little closer to the middle) still made it in. Letting the widget size
 itself to its own real content instead of forcing a fixed stretch fixed
 both symptoms from the one underlying cause.
+
+## 2026-09-07 — Two modules, two honest answers to "how averaged?"
+
+Maro spotted something that looked like a real discrepancy: the same
+project's overall percent complete read differently in the Cost module
+versus the Scheduling module, even though both were supposedly showing
+"percent complete" for the same thing. Worth taking seriously rather than
+dismissing, since a mismatched headline number like that is exactly the
+kind of thing that erodes trust in every other figure on the page.
+
+Digging in, both numbers turned out to be individually correct — the gap
+was in how each module chooses to average many smaller percentages up
+into one overall figure, and the two modules had quietly picked
+different, equally defensible answers to that question. Cost weighted
+each line by how much money it represented (a bigger line moves the
+average more). Scheduling weighted each line by how long it takes (a
+longer activity moves the average more). Feed the same ten numbers
+through both approaches and you get two different, both-legitimate
+answers whenever the "expensive" activities and the "long" activities
+aren't the same ones — exactly what was happening here. Maro's call,
+once shown the comparison side by side: the Cost module should use the
+same duration-based weighting Scheduling already uses, so the two
+screens tell the same story about the same project rather than two
+quietly different ones.
