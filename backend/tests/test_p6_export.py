@@ -212,7 +212,13 @@ async def test_project_writes_both_id_and_name(client: AsyncClient, project: Pro
     in its "Project ID" column and its own "(New WBS)" placeholder in the
     "Project Name" column instead. <Id> is now a short code derived from
     the name (never the name verbatim — Project IDs are conventionally
-    short); <Name> carries the real, full name."""
+    short); <Name> carries the real, full name.
+
+    The code is an acronym of the name's own initials plus "0001"
+    (2026-09-07, per Maro: "the project id could be an abbreviation of
+    the project name... if three words, first letter of three words then
+    0001 so JNH0001 for example") — the `project` fixture's own
+    "Test Project" becomes "TP0001"."""
     await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
 
     resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
@@ -222,10 +228,43 @@ async def test_project_writes_both_id_and_name(client: AsyncClient, project: Pro
     project_el = root.find("p6:Project", ns)
 
     assert project_el.findtext("p6:Name", namespaces=ns) == project.name
-    project_id_code = project_el.findtext("p6:Id", namespaces=ns)
-    assert project_id_code
-    assert project_id_code != project.name
-    assert len(project_id_code) <= 20
+    assert project_el.findtext("p6:Id", namespaces=ns) == "TP0001"
+
+
+async def test_single_top_level_wbs_becomes_the_root_directly(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """Real bug (2026-09-07, per Maro, looking at the imported hierarchy in
+    P6): a synthetic WBS root was always created named after the Prosota
+    PROJECT's own name ("Test Project" here), with the schedule's own
+    single top-level wbs_summary ("Juniper Nursing Home" in Maro's real
+    project) nested one level under it as a redundant second header saying
+    almost the same thing — "too many headers"/"redundant hierarchies".
+    When there's exactly one top-level wbs_summary (Prosota's own "P"-role
+    project root, the same one Scheduling & Resourcing shows as its own
+    top row), it becomes the WBS root directly instead — no extra
+    synthetic wrapper, no second "Project Title" level."""
+    top = await _create_activity(client, project, live_schedule_period, "Juniper Nursing Home", activity_type="wbs_summary")
+    building = await _create_activity(
+        client, project, live_schedule_period, "Building 1", activity_type="wbs_summary", parent_id=top["id"],
+    )
+    await _create_activity(client, project, live_schedule_period, "Pour Concrete", parent_id=building["id"])
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = root.find("p6:Project", ns)
+
+    wbs_els = project_el.findall("p6:WBS", ns)
+    assert len(wbs_els) == 2, "only Juniper Nursing Home + Building 1 — no extra synthetic root"
+    wbs_names = {el.findtext("p6:Name", namespaces=ns) for el in wbs_els}
+    assert wbs_names == {"Juniper Nursing Home", "Building 1"}
+    assert project.name not in wbs_names, "the synthetic project-name root must be gone"
+
+    root_els = [el for el in wbs_els if el.find("p6:ParentObjectId", ns).text is None]
+    assert len(root_els) == 1
+    assert root_els[0].findtext("p6:Name", namespaces=ns) == "Juniper Nursing Home"
 
 
 async def test_no_baseline_project_is_exported(

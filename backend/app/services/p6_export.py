@@ -457,30 +457,50 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         ))
 
     # --- WBS structure ---
-    # Always one synthetic project-root WBS node named after the project
-    # (proj_node_flag=Y in XER terms) rather than conditionally reusing a
-    # single top-level wbs_summary activity as the root — simpler and always
-    # valid even when a hand-built schedule has several top-level siblings
-    # with no single common root (Generate Schedule's own output always has
-    # exactly one root today, but nothing enforces that for a manually-built
-    # schedule).
-    root_wbs_id = wbs_ids.id_for("__project_root__")
-    out.wbs_nodes.append(P6Wbs(
-        id=root_wbs_id, guid=_p6_guid(), code=out.project_name[:20] or "PROJ", name=out.project_name,
-        parent_id=None, seq_num=0, is_project_node=True, commentary=None,
-    ))
+    activities_by_id = {a.id: a for a in activities}
+
+    # Reuse the schedule's own single top-level wbs_summary activity
+    # (Prosota's own "P"-role project root, the one Scheduling & Resourcing
+    # already shows as the top row) as P6's WBS root directly, rather than
+    # always wrapping it in an extra synthetic node (2026-09-07, per Maro:
+    # P6 showed "Juniper" — a synthetic root named after the Prosota
+    # PROJECT's own name — then AGAIN "Juniper Nursing Home" underneath it
+    # as a second, separate WBS level saying almost the same thing: "too
+    # many headers"/"redundant hierarchies"). A synthetic root is still
+    # needed as a fallback for a hand-built schedule with several top-level
+    # siblings and no single common root (Generate Schedule's own output
+    # always has exactly one today, but nothing enforces that).
+    top_level_wbs_summaries = [
+        a for a in activities
+        if a.activity_type == "wbs_summary" and (a.parent_id is None or a.parent_id not in activities_by_id)
+    ]
+    project_root_activity = top_level_wbs_summaries[0] if len(top_level_wbs_summaries) == 1 else None
+    if project_root_activity is not None:
+        root_wbs_id = wbs_ids.id_for(project_root_activity.id)
+        root_name = _sanitize_p6_text(project_root_activity.task_name) or project_root_activity.task_name
+        out.wbs_nodes.append(P6Wbs(
+            id=root_wbs_id, guid=_p6_guid(), code=project_root_activity.code, name=root_name,
+            parent_id=None, seq_num=project_root_activity.sort_order or 0, is_project_node=True,
+            commentary=_sanitize_p6_text(project_root_activity.commentary),
+        ))
+    else:
+        root_wbs_id = wbs_ids.id_for("__project_root__")
+        root_name = out.project_name
+        out.wbs_nodes.append(P6Wbs(
+            id=root_wbs_id, guid=_p6_guid(), code=out.project_name[:20] or "PROJ", name=root_name,
+            parent_id=None, seq_num=0, is_project_node=True, commentary=None,
+        ))
     # Every WBS node's own (already-sanitized) name, keyed by its p6 id —
     # used below purely to strip a redundant repeat of a storey's own name
     # off the front of its child activities' names (see
     # _strip_redundant_wbs_prefix's own header); not needed for anything
     # else PROJWBS/<WBS> itself writes.
-    wbs_name_by_id: dict[int, str] = {root_wbs_id: out.project_name}
+    wbs_name_by_id: dict[int, str] = {root_wbs_id: root_name}
 
     # nearest_wbs_id[a.id] = the p6 wbs id a TASK row (or a nested WBS row's
     # own parent) should reference — its own p6 wbs id if it's itself a
     # wbs_summary, else its nearest wbs_summary ancestor's, else the
     # synthetic root for a top-level non-summary activity.
-    activities_by_id = {a.id: a for a in activities}
     nearest_wbs_id: dict[uuid.UUID, int] = {}
 
     def resolve_nearest_wbs(activity: Activity) -> int:
@@ -498,6 +518,8 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
     for a in activities:
         if a.activity_type != "wbs_summary":
             continue
+        if a is project_root_activity:
+            continue  # already written as the WBS root itself, above
         parent_wbs_id = (
             resolve_nearest_wbs(activities_by_id[a.parent_id])
             if a.parent_id is not None and a.parent_id in activities_by_id

@@ -53,13 +53,17 @@ def _project_id_code(name: str) -> str:
     exported project back into P6 showed the real name sitting in the
     Project ID column and "(New WBS)" — P6's own placeholder — in the
     Project Name column instead, since this export never wrote a <Name>
-    element for <Project> at all, only <Id>). Unlike Resource/Activity
-    codes, a single export only ever has ONE <Project>, so a name-derived
-    code can never collide with anything else in the same file — no need
-    for the opaque RES-0001-style sequential code those use instead."""
-    code = "".join(ch for ch in name.upper() if ch.isalnum() or ch in (" ", "-", "_")).strip()
-    code = "-".join(code.split())[:20]
-    return code or "PROJECT"
+    element for <Project> at all, only <Id>). An acronym of the name's own
+    initials plus "0001" (2026-09-07, per Maro: "the project id could be
+    an abbreviation of the project name... JNH0001" for "Juniper Nursing
+    Home") — matches the same ACRONYM+sequence convention P6 itself
+    defaults to for a manually-created Project ID, rather than the
+    previous full-words-hyphenated code (which just produced an
+    awkwardly truncated "JUNIPER-NURSING-HOME" for the very same name).
+    "0001" is a literal suffix, not a real running sequence — a single
+    export only ever has ONE <Project>, so there's nothing to count."""
+    initials = "".join(word[0].upper() for word in name.split() if word[0].isalnum())
+    return f"{initials or 'P'}0001"
 
 
 def _guid_braces() -> str:
