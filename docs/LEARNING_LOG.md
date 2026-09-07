@@ -5602,3 +5602,18 @@ been changed. The honest, useful move there was to notice that
 mismatch immediately (checking real project state rather than trusting
 the agent's own summary) and simply do the work directly instead of
 trying the same delegation again.
+
+## 2026-09-07 — A second EVM ratio, rolled up the same careful way
+
+A quick follow-up to the CPI rollup fix: Maro asked for SPI (Schedule
+Performance Index — are we ahead of or behind where the schedule says we
+should be, as opposed to CPI's "are we over or under budget") added
+alongside it, rolled up the same way. The one thing worth getting right
+here: SPI and CPI are built from genuinely different pairs of numbers
+(one compares earned value against what was actually spent, the other
+compares it against what should have happened by now on the calendar),
+and only some cost lines even have a real schedule position to compare
+against — a line with no link to the schedule has nothing meaningful to
+roll into an SPI figure at all, so those lines are correctly left out of
+the SPI sum entirely rather than diluting it with a comparison that
+doesn't really apply to them.
