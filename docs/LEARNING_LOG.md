@@ -5470,3 +5470,25 @@ value. Prosota's export was declaring every activity as using the
 "Physical" method, but never actually writing that method's own field —
 so P6 had nothing to read for it and fell back to zero, even though the
 generic percent-complete figure right next to it was correct all along.
+
+## 2026-09-07 — One too many folders in the P6 hierarchy
+
+With the import fully working, Maro noticed a cosmetic-but-real problem
+looking at the actual hierarchy inside P6: it showed "Juniper" then
+"Juniper" again then "Juniper Nursing Home" as three separate nested
+folders before reaching any real building content — redundant headers
+saying almost the same thing. The cause: the export always manufactured
+an extra top-level folder named after the Prosota project itself, then
+put the schedule's own real top-level folder underneath THAT — even
+though the schedule already had its own single, natural top folder that
+could have been the real root all along. Fixed by reusing that single
+existing top folder as the export's own root directly, only falling back
+to the extra manufactured folder in the rarer case where a schedule has
+several disconnected top-level branches with no natural single root to
+reuse.
+
+Same conversation, a smaller follow-up: Maro asked for the Project ID
+P6 shows to be a short abbreviation made from the project name's own
+initials (e.g. "Juniper Nursing Home" becoming "JNH0001") rather than
+the long hyphenated version being used before, matching the convention
+P6 itself defaults to.
