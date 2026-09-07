@@ -5635,3 +5635,21 @@ data date" control added to the Milestone Timeline earlier that same
 day was scrapped entirely — Maro wanted it to just always reflect
 whatever date the working schedule itself is already set to, with
 nothing to configure by hand.
+
+## 2026-09-07 — Two bugs, one root cause
+
+The "centered" fix from earlier turned out not to work, and Maro also
+spotted a stray milestone dot sitting alone with no name or date next to
+it. Both traced back to the exact same mistake: the widget had been
+told to always stretch itself to fill 100% of its own container's
+height — which sounds harmless, but it actively defeats "center me
+inside a taller box," since a child that's forced to BE exactly as tall
+as its container can never end up looking centered inside it; it just
+becomes the container. That same oversized, artificially-stretched box
+also explains the orphan dot — the surrounding space had been sized
+around the stretched box rather than around what the timeline actually
+needed to display, so the topmost row's own text label landed just
+outside the area that actually got drawn, while its dot (sitting a
+little closer to the middle) still made it in. Letting the widget size
+itself to its own real content instead of forcing a fixed stretch fixed
+both symptoms from the one underlying cause.
