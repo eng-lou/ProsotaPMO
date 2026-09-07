@@ -128,4 +128,31 @@ html.dark .print-only {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
+
+  /* Dashboard grid print support (2026-09-07, per Maro: "each dashboard
+     needs to be able to be exported to xlsx and printed" — scoped to
+     "the whole grid as one printable page/pages," a visual snapshot of the
+     current layout). DashboardGrid.tsx's own on-screen layout is a
+     free-form absolute-positioned pixel grid (see its own pixelRect) —
+     print-hostile, since fixed pixel positions don't paginate. Rather than
+     try to preserve the exact on-screen drag/resize position on paper (a
+     screen-only concept a printed page has no equivalent for), every tile
+     collapses to a normal static block and stacks top to bottom in
+     whatever order it appears in the DOM instead — simpler, and every
+     widget still appears, readably, just not in its exact on-screen spot.
+     A fixed height (not `auto`) is kept deliberately: several widgets
+     render a recharts <ResponsiveContainer>, which needs a real ancestor
+     height to size against — `height: auto` would collapse those to 0px
+     and print a blank chart. */
+  .dashboard-grid-container {
+    height: auto !important;
+  }
+  .dashboard-widget-tile {
+    position: static !important;
+    width: 100% !important;
+    height: 380px !important;
+    margin-bottom: 16px;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+  }
 }

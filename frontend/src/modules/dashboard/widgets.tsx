@@ -2345,6 +2345,465 @@ export const FILTERABLE_WIDGET_TYPES = new Set([
   'lookahead_planner', 'mitigation_actions_table', 'clash_detail_table', 'milestone_trend_chart',
 ])
 
+// Export-to-xlsx row extraction (2026-09-07, per Maro: "each dashboard
+// needs to be able to be exported to xlsx and printed" — one worksheet per
+// widget). This necessarily MIRRORS each widget component's own filter/
+// aggregation logic above rather than sharing it directly — the live
+// widgets mix data-prep with JSX in one function body, and extracting a
+// shared helper out of all ~45 of them was out of scope for this pass. If
+// a widget's own filter chain changes above, its mirror here needs the
+// same change, or the exported sheet will drift from what's on screen.
+// Respects filterConditions/filterMatchMode/crossFilter exactly the same
+// way the live widget does, so the sheet reflects what's actually visible
+// right now, not a superset. Returns null for a widget with no meaningful
+// tabular shape (a gallery of images/video) or whose real data lives behind
+// its own async fetch a plain export function can't trigger without a
+// hook (the *_trend chart widgets) — deliberately skipped rather than
+// exported empty or wrong.
+export function getWidgetRows(widgetType: string, props: WidgetProps): { headers: string[]; rows: (string | number)[][] } | null {
+  const { data, filterConditions, filterMatchMode, crossFilter } = props
+  if (!data) return null
+  const fmtCurrency = (v: string | number | null) => v === null ? '' : formatCurrency(v)
+  const fmtDate = (v: string | null) => v === null ? '' : formatDate(v)
+
+  switch (widgetType) {
+    case 'kpi_strip': {
+      const { kpis } = data
+      return {
+        headers: ['Metric', 'Value'],
+        rows: [
+          ['Planned Finish', fmtDate(kpis.planned_finish)],
+          ['Open Issues', kpis.open_issues],
+          ['Open Changes', kpis.open_changes],
+          ['Schedule SPI', kpis.schedule_spi !== null ? Number(kpis.schedule_spi).toFixed(2) : ''],
+          ['BAC', fmtCurrency(kpis.bac)],
+          ['EAC', fmtCurrency(kpis.eac)],
+          ['Cost CPI', kpis.cpi !== null ? Number(kpis.cpi).toFixed(2) : ''],
+        ],
+      }
+    }
+    case 'schedule_performance': {
+      const b = data.schedule_buckets
+      return { headers: ['Status', 'Count'], rows: [['On-Time', b.on_time], ['At Risk', b.at_risk], ['Delayed', b.delayed]] }
+    }
+    case 'risk_overview': {
+      const r = data.risk_overview
+      return { headers: ['Band', 'Count'], rows: [['High', r.high], ['Medium', r.medium], ['Low', r.low], ['Open', r.open], ['Closed', r.closed]] }
+    }
+    case 'risk_exposure':
+      return { headers: ['Band', 'EMV Cost'], rows: data.risk_exposure.map(b => [b.band, fmtCurrency(b.emv_cost)]) }
+    case 'top_risks': {
+      const rows = [...data.risks]
+        .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+        .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
+        .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
+        .slice(0, 5)
+      return {
+        headers: ['Code', 'Title', 'Status', 'Rating', 'EMV Cost', 'EMV Days'],
+        rows: rows.map(r => [r.code, r.title, r.status, r.rating !== null ? Number(r.rating).toFixed(2) : '', fmtCurrency(r.emv_cost), r.emv_schedule_days !== null ? Number(r.emv_schedule_days).toFixed(1) : '']),
+      }
+    }
+    case 'risk_register_table': {
+      const rows = data.risks
+        .filter(r => r.status !== 'closed')
+        .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+        .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
+        .sort((a, b) => Number(b.rating ?? -1) - Number(a.rating ?? -1))
+      return {
+        headers: ['Code', 'Title', 'Category', 'Owner', 'Rating', 'EMV Cost'],
+        rows: rows.map(r => [r.code, r.title, r.category ?? '', r.risk_owner ?? '', r.rating !== null ? Number(r.rating).toFixed(2) : '', fmtCurrency(r.emv_cost)]),
+      }
+    }
+    case 'risk_ageing_table': {
+      const now = new Date()
+      const rows = data.risks
+        .filter(r => r.status !== 'closed' && r.date_raised !== null)
+        .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+        .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
+        .map(r => ({ ...r, daysOpen: Math.floor((now.getTime() - new Date(r.date_raised!).getTime()) / 86_400_000) }))
+        .sort((a, b) => b.daysOpen - a.daysOpen)
+      return { headers: ['Code', 'Title', 'Owner', 'Days Open'], rows: rows.map(r => [r.code, r.title, r.risk_owner ?? '', r.daysOpen]) }
+    }
+    case 'risks_by_category': {
+      const counts = new Map<string, number>()
+      for (const r of data.risks) {
+        if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
+        const key = r.category ?? 'Uncategorised'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Category', 'Count'], rows: [...counts.entries()].sort(([, a], [, b]) => b - a) }
+    }
+    case 'risks_by_owner': {
+      const counts = new Map<string, number>()
+      for (const r of data.risks) {
+        if (r.status === 'closed') continue
+        if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
+        const key = r.risk_owner ?? 'Unassigned'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Owner', 'Count'], rows: [...counts.entries()].sort(([, a], [, b]) => b - a) }
+    }
+    case 'threats_vs_opportunities': {
+      const open = data.risks
+        .filter(r => r.status !== 'closed')
+        .filter(r => evaluateDashboardFilter(r, filterConditions, filterMatchMode))
+        .filter(r => matchesCrossFilter(r.id, 'risk', crossFilter))
+      const threats = open.filter(r => r.risk_type === 'threat')
+      const opportunities = open.filter(r => r.risk_type === 'opportunity')
+      return {
+        headers: ['Type', 'Exposure', 'Count'],
+        rows: [
+          ['Threats', fmtCurrency(threats.reduce((s, r) => s + Math.abs(Number(r.emv_cost ?? 0)), 0)), threats.length],
+          ['Opportunities', fmtCurrency(opportunities.reduce((s, r) => s + Number(r.emv_cost ?? 0), 0)), opportunities.length],
+        ],
+      }
+    }
+    case 'response_strategy_breakdown': {
+      const counts = new Map<string, number>()
+      for (const r of data.risks) {
+        if (r.status === 'closed') continue
+        if (!evaluateDashboardFilter(r, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(r.id, 'risk', crossFilter)) continue
+        const key = r.response_strategy ?? 'Not set'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Strategy', 'Count'], rows: [...counts.entries()].sort(([, a], [, b]) => b - a) }
+    }
+    case 'mitigation_actions_table': {
+      const rows = data.mitigation_actions
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.risk_id, 'risk', crossFilter))
+      return { headers: ['Code', 'Action', 'Owner', 'Due Date', 'Status', '% Complete'], rows: rows.map(a => [a.code, a.description, a.owner ?? '', fmtDate(a.due_date), a.status, `${a.pct_complete}%`]) }
+    }
+    case 'cost_breakdown_by_group': {
+      const totals = new Map<string, number>()
+      for (const el of data.cost_elements) {
+        if (el.bac === null) continue
+        if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
+        const key = el.element_group ?? 'Ungrouped'
+        totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
+      }
+      return { headers: ['Group', 'BAC'], rows: [...totals.entries()].sort(([, a], [, b]) => b - a).map(([g, v]) => [g, fmtCurrency(v)]) }
+    }
+    case 'cost_breakdown_by_owner': {
+      const totals = new Map<string, number>()
+      for (const el of data.cost_elements) {
+        if (el.bac === null) continue
+        if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
+        const key = el.cost_owner ?? 'Unassigned'
+        totals.set(key, (totals.get(key) ?? 0) + Number(el.bac))
+      }
+      return { headers: ['Owner', 'BAC'], rows: [...totals.entries()].sort(([, a], [, b]) => b - a).map(([o, v]) => [o, fmtCurrency(v)]) }
+    }
+    case 'budget_utilisation': {
+      const withBac = data.cost_elements
+        .filter(el => el.bac !== null)
+        .filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
+        .filter(el => matchesCrossFilter(el.id, 'cost_element', crossFilter))
+      const bacTotal = withBac.reduce((s, el) => s + Number(el.bac), 0)
+      const acTotal = withBac.reduce((s, el) => s + Number(el.ac ?? 0), 0)
+      return { headers: ['Metric', 'Value'], rows: [['Budget (BAC)', fmtCurrency(bacTotal)], ['Actuals (AC)', fmtCurrency(acTotal)], ['% Spent', bacTotal > 0 ? `${Math.round((acTotal / bacTotal) * 100)}%` : '']] }
+    }
+    case 'bac_vs_eac_by_group': {
+      const groups = new Map<string, { bac: number; eac: number }>()
+      for (const el of data.cost_elements) {
+        if (el.bac === null) continue
+        if (!evaluateDashboardFilter(el, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(el.id, 'cost_element', crossFilter)) continue
+        const key = el.element_group ?? 'Ungrouped'
+        const entry = groups.get(key) ?? { bac: 0, eac: 0 }
+        entry.bac += Number(el.bac)
+        entry.eac += Number(el.eac ?? el.bac)
+        groups.set(key, entry)
+      }
+      return { headers: ['Group', 'Budget', 'Forecast (EAC)'], rows: [...groups.entries()].sort(([, a], [, b]) => b.bac - a.bac).map(([g, v]) => [g, fmtCurrency(v.bac), fmtCurrency(v.eac)]) }
+    }
+    case 'cost_elements_table': {
+      const rows = data.cost_elements
+        .filter(el => evaluateDashboardFilter(el, filterConditions, filterMatchMode))
+        .filter(el => matchesCrossFilter(el.id, 'cost_element', crossFilter))
+        .sort((a, b) => Number(b.bac ?? 0) - Number(a.bac ?? 0))
+      return { headers: ['Code', 'Description', 'Budget', 'Actuals', 'CPI', 'EAC'], rows: rows.map(el => [el.code, el.description, fmtCurrency(el.bac), fmtCurrency(el.ac), el.cpi !== null ? Number(el.cpi).toFixed(3) : '', fmtCurrency(el.eac)]) }
+    }
+    case 'issues_by_status': {
+      const counts = new Map<string, number>()
+      for (const i of data.icd_items) {
+        if (i.item_type !== 'issue') continue
+        if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
+        counts.set(i.status, (counts.get(i.status) ?? 0) + 1)
+      }
+      return { headers: ['Status', 'Count'], rows: [...counts.entries()] }
+    }
+    case 'issues_ageing_table': {
+      const now = new Date()
+      const rows = data.icd_items
+        .filter(i => i.item_type === 'issue' && i.status !== 'closed' && i.raised_date !== null)
+        .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
+        .filter(i => matchesCrossFilter(i.id, 'icd_item', crossFilter))
+        .map(i => ({ ...i, daysOpen: daysBetween(i.raised_date!, now) }))
+        .sort((a, b) => b.daysOpen - a.daysOpen)
+      return { headers: ['Code', 'Issue', 'Owner', 'Severity', 'Days Open'], rows: rows.map(i => [i.code, i.title, i.owner ?? '', i.severity ?? '', i.daysOpen]) }
+    }
+    case 'open_items_by_owner': {
+      const counts = new Map<string, number>()
+      for (const i of data.icd_items) {
+        if (i.status === 'closed') continue
+        if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
+        const key = i.owner ?? 'Unassigned'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Owner', 'Count'], rows: [...counts.entries()].sort(([, a], [, b]) => b - a) }
+    }
+    case 'decisions_pending_table': {
+      const now = new Date()
+      const rows = data.icd_items
+        .filter(i => i.item_type === 'decision' && i.status !== 'closed')
+        .filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode))
+        .filter(i => matchesCrossFilter(i.id, 'icd_item', crossFilter))
+        .sort((a, b) => {
+          if (a.required_by === null) return 1
+          if (b.required_by === null) return -1
+          return new Date(a.required_by).getTime() - new Date(b.required_by).getTime()
+        })
+      return {
+        headers: ['Code', 'Decision', 'Decision Maker', 'Required By', 'Overdue'],
+        rows: rows.map(i => [i.code, i.title, i.decision_maker ?? '', fmtDate(i.required_by), i.required_by !== null && new Date(i.required_by) < now ? 'Yes' : 'No']),
+      }
+    }
+    case 'changes_by_ccb_decision': {
+      const counts = new Map<string, number>()
+      for (const i of data.icd_items) {
+        if (i.item_type !== 'change') continue
+        if (!evaluateDashboardFilter(i, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(i.id, 'icd_item', crossFilter)) continue
+        const key = i.ccb_decision ?? 'Pending'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Decision', 'Count'], rows: [...counts.entries()] }
+    }
+    case 'resource_budget_by_type': {
+      const rows = data.resource_assignments
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
+      const totals = new Map<string, number>()
+      for (const a of rows) totals.set(a.resource_type, (totals.get(a.resource_type) ?? 0) + Number(a.budget))
+      return { headers: ['Type', 'Budget'], rows: [...totals.entries()].sort(([, a], [, b]) => b - a).map(([t, v]) => [t, fmtCurrency(v)]) }
+    }
+    case 'resource_budget_by_discipline': {
+      const rows = data.resource_assignments
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
+      const totals = new Map<string, number>()
+      for (const a of rows) { const key = a.discipline ?? 'Unspecified'; totals.set(key, (totals.get(key) ?? 0) + Number(a.budget)) }
+      return { headers: ['Discipline', 'Budget'], rows: [...totals.entries()].sort(([, a], [, b]) => b - a).map(([d, v]) => [d, fmtCurrency(v)]) }
+    }
+    case 'resource_budget_by_company': {
+      const rows = data.resource_assignments
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
+      const totals = new Map<string, number>()
+      for (const a of rows) { const key = a.company ?? 'Unassigned'; totals.set(key, (totals.get(key) ?? 0) + Number(a.budget)) }
+      return { headers: ['Company', 'Budget'], rows: [...totals.entries()].sort(([, a], [, b]) => b - a).map(([c, v]) => [c, fmtCurrency(v)]) }
+    }
+    case 'resource_assignments_table': {
+      const rows = data.resource_assignments
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
+        .sort((a, b) => Number(b.budget) - Number(a.budget))
+      return { headers: ['Resource', 'Role', 'Activity', 'Budget'], rows: rows.map(a => [a.resource_name, a.role ?? '', a.activity_task_name, fmtCurrency(a.budget)]) }
+    }
+    case 'top_resources_by_budget': {
+      const filtered = data.resource_assignments
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.activity_id, 'activity', crossFilter))
+      const byResource = new Map<string, { type: string; budget: number; count: number }>()
+      for (const a of filtered) {
+        const entry = byResource.get(a.resource_name) ?? { type: a.resource_type, budget: 0, count: 0 }
+        entry.budget += Number(a.budget)
+        entry.count += 1
+        byResource.set(a.resource_name, entry)
+      }
+      return {
+        headers: ['Resource', 'Type', 'Activities', 'Total Budget'],
+        rows: [...byResource.entries()].sort(([, a], [, b]) => b.budget - a.budget).map(([name, v]) => [name, v.type, v.count, fmtCurrency(v.budget)]),
+      }
+    }
+    case 'float_distribution': {
+      const withFloat = data.schedule_activities
+        .filter(a => a.total_float_hours !== null)
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+      return {
+        headers: ['Float Bucket (hours)', 'Count'],
+        rows: FLOAT_BUCKETS.map(([label, min, max]) => [label, withFloat.filter(a => { const f = Number(a.total_float_hours); return f >= min && f <= max }).length]),
+      }
+    }
+    case 'activities_by_category': {
+      const counts = new Map<string, number>()
+      for (const a of data.schedule_activities) {
+        if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(a.id, 'activity', crossFilter)) continue
+        const key = a.schedule_category ?? 'Unspecified'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      return { headers: ['Category', 'Count'], rows: [...counts.entries()].sort(([, a], [, b]) => b - a) }
+    }
+    case 'baseline_variance_table': {
+      const rows = data.schedule_activities
+        .filter(a => a.variance_days !== null && a.variance_days !== 0)
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+        .sort((a, b) => Math.abs(b.variance_days!) - Math.abs(a.variance_days!))
+      return { headers: ['Code', 'Activity', 'Baseline Finish', 'Current Finish', 'Variance (days)'], rows: rows.map(a => [a.code, a.task_name, fmtDate(a.bl_finish), fmtDate(a.finish), a.variance_days!]) }
+    }
+    case 'critical_activities_table': {
+      const rows = data.schedule_activities
+        .filter(a => a.is_critical === true)
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+      return { headers: ['Code', 'Activity', 'Finish', '% Complete'], rows: rows.map(a => [a.code, a.task_name, fmtDate(a.finish), a.pct_complete !== null ? `${Number(a.pct_complete).toFixed(0)}%` : '']) }
+    }
+    case 'near_critical_watch_list': {
+      const rows = data.schedule_activities
+        .filter(a => a.total_float_hours !== null && Number(a.total_float_hours) > 0 && Number(a.total_float_hours) <= 80)
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+        .sort((a, b) => Number(a.total_float_hours) - Number(b.total_float_hours))
+      return { headers: ['Code', 'Activity', 'Total Float (h)', 'Finish'], rows: rows.map(a => [a.code, a.task_name, Number(a.total_float_hours).toFixed(1), fmtDate(a.finish)]) }
+    }
+    case 'activity_status': {
+      const counts: Record<string, number> = { 'Not Started': 0, 'In Progress': 0, 'Complete': 0, 'Suspended': 0 }
+      for (const a of data.schedule_activities) {
+        if (!evaluateDashboardFilter(a, filterConditions, filterMatchMode)) continue
+        if (!matchesCrossFilter(a.id, 'activity', crossFilter)) continue
+        const pct = a.pct_complete !== null ? Number(a.pct_complete) : 0
+        if (a.suspend_date !== null && a.resume_date === null) counts.Suspended++
+        else if (pct >= 100) counts.Complete++
+        else if (pct > 0) counts['In Progress']++
+        else counts['Not Started']++
+      }
+      return { headers: ['Status', 'Count'], rows: Object.entries(counts) }
+    }
+    case 'milestones_table': {
+      const rows = data.milestones
+        .filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+        .filter(m => matchesCrossFilter(m.id, 'activity', crossFilter))
+      return { headers: ['Milestone', 'Baseline Finish', 'Current Finish', 'Variance (days)'], rows: rows.map(m => [m.task_name, fmtDate(m.bl_finish), fmtDate(m.finish), m.variance_days ?? '']) }
+    }
+    case 'milestone_timeline': {
+      const rows = data.milestones
+        .filter(m => evaluateDashboardFilter(m, filterConditions, filterMatchMode))
+        .filter(m => matchesCrossFilter(m.id, 'activity', crossFilter))
+      return { headers: ['Milestone', 'Finish', 'Critical', 'Variance (days)'], rows: rows.map(m => [m.task_name, fmtDate(m.finish), m.is_critical ? 'Yes' : 'No', m.variance_days ?? '']) }
+    }
+    case 'lookahead_planner': {
+      const rows = data.lookahead_items.filter(i => evaluateDashboardFilter(i, filterConditions, filterMatchMode)).filter(i => matchesCrossFilter(i.id, 'activity', crossFilter))
+      return {
+        headers: ['Code', 'Activity', 'Start', '% Complete', 'Status'],
+        rows: rows.map(i => [
+          i.code, i.task_name, fmtDate(i.start), i.pct_complete !== null ? `${Number(i.pct_complete).toFixed(0)}%` : '',
+          i.has_incomplete_predecessor ? 'Predecessor incomplete' : i.is_critical ? 'Critical' : 'Ready',
+        ]),
+      }
+    }
+    case 'clash_summary':
+      return {
+        headers: ['Test', 'Type', 'Total', 'New', 'Reviewed', 'Approved'],
+        rows: data.clash_summary.by_test.map(t => [t.test_name, t.test_type, t.total, t.new_count, t.reviewed_count, t.approved_count]),
+      }
+    case 'clash_detail_table': {
+      const rows = data.clash_pairs.filter(p => evaluateDashboardFilter(p, filterConditions, filterMatchMode))
+      return { headers: ['Test', 'Element A', 'Element B', 'Distance (mm)', 'Status'], rows: rows.map(p => [p.test_name, p.element_a_label, p.element_b_label, p.distance_mm ?? '', p.status]) }
+    }
+    case 'dcma_score': {
+      const q = data.dcma_quality
+      return { headers: ['Metric', 'Value'], rows: [['Passing', q.passing_count], ['Total Checks', q.total_checks], ['Failing', q.failing_count], ['Warning', q.warning_count], ['Logic Score', q.logic_score !== null ? `${q.logic_score.toFixed(0)}%` : '']] }
+    }
+    case 'eac_forecast_comparison': {
+      const { kpis } = data
+      return {
+        headers: ['Method', 'EAC', 'Assumption'],
+        rows: [
+          ['EAC = BAC / CPI', fmtCurrency(kpis.eac), 'Past CPI continues'],
+          ['EAC = AC + (BAC-EV)', fmtCurrency(kpis.eac_remaining_at_plan), 'Remaining work at plan rate'],
+          ['EAC = AC + (BAC-EV)/(SPIxCPI)', fmtCurrency(kpis.eac_composite), 'Composite SPI x CPI'],
+          ['EAC = AC + remaining cost for activity', fmtCurrency(kpis.eac_bottom_up), 'Bottom-up, from P6 remaining duration'],
+        ],
+      }
+    }
+    case 'earned_value_summary_table': {
+      const { kpis } = data
+      const spi = kpis.schedule_spi !== null ? Number(kpis.schedule_spi) : null
+      const cpi = kpis.cpi !== null ? Number(kpis.cpi) : null
+      return {
+        headers: ['Metric', 'Value'],
+        rows: [
+          ['BAC (Budget)', fmtCurrency(kpis.bac)],
+          ['SPI', spi !== null ? spi.toFixed(2) : ''],
+          ['CPI', cpi !== null ? cpi.toFixed(2) : ''],
+          ['EAC (Forecast)', fmtCurrency(kpis.eac)],
+        ],
+      }
+    }
+    case 'project_info': {
+      const { kpis, project_info } = data
+      return {
+        headers: ['Metric', 'Value'],
+        rows: [
+          ['Plan Start', fmtDate(kpis.plan_start)],
+          ['Planned Finish', fmtDate(kpis.planned_finish)],
+          ['Data Date', fmtDate(project_info.data_date)],
+          ['Total Activities', project_info.total_activities],
+          ['Relationships', project_info.total_relationships],
+          ['Resources', project_info.total_resources],
+          ['Baseline', project_info.has_baseline ? 'Yes' : 'No'],
+        ],
+      }
+    }
+    case 'project_narrative': {
+      const { kpis, dcma_quality, risk_overview, clash_summary } = data
+      const bullets: string[] = []
+      if (kpis.schedule_spi !== null) {
+        const spi = Number(kpis.schedule_spi)
+        bullets.push(`Schedule is ${spi >= 1 ? 'on track or ahead' : 'behind plan'} (SPI ${spi.toFixed(2)}).`)
+      } else bullets.push('Schedule performance index not yet available — no schedule-linked cost data.')
+      if (kpis.cpi !== null) {
+        const cpi = Number(kpis.cpi)
+        bullets.push(`Cost performance is ${cpi >= 1 ? 'healthy' : 'behind plan'} (CPI ${cpi.toFixed(2)}).`)
+      }
+      if (kpis.planned_finish_status === 'delayed') bullets.push('Planned finish has slipped past its baseline.')
+      bullets.push(`DCMA quality score: ${dcma_quality.passing_count}/${dcma_quality.total_checks} checks passing${dcma_quality.logic_score !== null ? ` (logic score ${dcma_quality.logic_score.toFixed(0)}%)` : ''}.`)
+      if (risk_overview.high > 0) bullets.push(`${risk_overview.high} high-severity risk${risk_overview.high === 1 ? '' : 's'} open — prioritise mitigation.`)
+      else bullets.push('No high-severity risks currently open.')
+      if (clash_summary.total_clashes > 0) bullets.push(`${clash_summary.new_count} of ${clash_summary.total_clashes} clashes still unreviewed.`)
+      return { headers: ['Summary'], rows: bullets.map(b => [b]) }
+    }
+    // No meaningful tabular shape (a gallery of images/video, no rows to
+    // export) or the real data lives behind its own async fetch a plain,
+    // synchronous export function can't trigger without a React hook
+    // (useActiveScheduleVariant, etc.) — deliberately skipped rather than
+    // exported empty or silently wrong.
+    case 'camera_view_gallery':
+    case 'fourd_video_gallery':
+    case 'milestone_trend_chart':
+    case 'risk_emv_trend':
+    case 'cost_cpi_trend':
+    case 'cost_eac_trend':
+    case 'spi_trend':
+    case 'icd_open_items_trend':
+    case 'pv_ev_ac_trend':
+      return null
+    default:
+      return null
+  }
+}
+
 export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   kpi_strip: { label: 'KPI Strip', category: 'Overview', defaultSize: { w: 12, h: 2 }, render: props => <KpiStripWidget {...props} /> },
   schedule_performance: { label: 'Schedule Performance', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <SchedulePerformanceWidget {...props} /> },
