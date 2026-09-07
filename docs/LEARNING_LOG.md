@@ -5492,3 +5492,20 @@ P6 shows to be a short abbreviation made from the project name's own
 initials (e.g. "Juniper Nursing Home" becoming "JNH0001") rather than
 the long hyphenated version being used before, matching the convention
 P6 itself defaults to.
+
+## 2026-09-07 — Remembering a project's own real P6 identity
+
+A neat follow-up idea from Maro: for a project that was originally
+imported FROM P6 in the first place, re-exporting it back out
+shouldn't invent a brand new ID — it should reuse the exact ID that
+project already has in P6, so a re-import updates the SAME project
+there instead of quietly creating a second, disconnected copy of it.
+
+Prosota already had a working pattern for exactly this kind of problem
+— P6's own Activity ID has no matching column in Prosota's own data
+model, so it's stashed as an invisible custom field on that activity
+the moment it's imported, ready to be read back out again later. The
+same trick now applies one level up: on import, if the file came with
+a real P6 Project ID, it gets stashed the same way on the project's own
+top-level row; on export, if that stashed value is there, it's reused
+exactly as-is instead of generating a fresh one.
