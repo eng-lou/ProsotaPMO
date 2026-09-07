@@ -5509,3 +5509,26 @@ same trick now applies one level up: on import, if the file came with
 a real P6 Project ID, it gets stashed the same way on the project's own
 top-level row; on export, if that stashed value is there, it's reused
 exactly as-is instead of generating a fresh one.
+
+## 2026-09-07 — One more redundant layer, one level down
+
+The earlier fix for the "too many headers" WBS problem removed the
+extra manufactured top folder, but Maro's next real P6 screenshot showed
+the exact same kind of redundancy had just moved one level down:
+"Building 1," "Garage 1," and the rest were still showing up nested
+UNDER "Juniper Nursing Home" as its own folder, when P6 already displays
+the project's own name as the container above the entire folder
+structure — so nesting a folder with almost the same name directly
+underneath it just repeats the same idea twice again, one level lower
+than before.
+
+The fix follows the same principle as before, just applied one level
+deeper: a folder that sits directly beneath the project's own top-level
+folder now becomes a sibling of it instead of a child — flat, side by
+side — while anything nested more than one level down keeps nesting
+completely normally. The one thing that still needs the project's own
+top-level folder to exist as a real destination is any activity with no
+folder of its own at all (a project-wide milestone, say) — that still
+needs somewhere real to attach to, so removing folders never means
+removing that one anchor point entirely, only flattening the one
+specific case that was reading as redundant.
