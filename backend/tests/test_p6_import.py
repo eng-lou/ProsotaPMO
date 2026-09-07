@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, time
 from decimal import Decimal
 
@@ -27,6 +28,8 @@ from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefine
 from app.services import schedule_variant as schedule_variant_svc
 from app.services.activity import _attach_evm_fields
 from app.services.activity import list_activities as _list_activities_with_evm
+from app.services.p6_export import gather_p6_export_data
+from app.services.p6_export_xml import build_pmxml
 from app.services.p6_import import _collapse_repeated_messages, import_pmxml
 from app.services.p6_import_parse import parse_pmxml
 from app.services.resource_costing import compute_assignment_budget
@@ -101,25 +104,31 @@ async def test_round_trip_export_then_import(
 
     summary = await _import_xml(client, target_project, xml_bytes)
 
-    # p6_export.py always writes one synthetic project-root WBS node named
-    # after the source project ("Test Project", the `project` fixture's own
-    # name) above whatever WBS the schedule itself has. On the way back in,
-    # p6_import.py now *also* synthesizes its own project-root Activity (a P
-    # role, from the real <Project> — 2026-09-03, per Maro: a real P6 file's
-    # top-level WBS branches were wrongly landing as their own separate P
-    # rows instead of nesting under one true project root) — so the exported
-    # "Test Project" WBS node lands one level down, demoted to a W under
-    # that new P. Round trip is that new P root + the old "Test Project" W +
-    # "Structure" + 2 tasks = 5, not 4.
-    assert summary["activity_count"] == 5
+    # _seed_schedule builds exactly one top-level wbs_summary ("Structure"),
+    # so p6_export.py's own single-top-level-node reuse (2026-09-07, per
+    # Maro: a synthetic root named after the Prosota PROJECT's own name,
+    # nested one level above the schedule's real top WBS, was "too many
+    # headers"/"redundant hierarchies") writes "Structure" itself as the
+    # WBS root — no extra "Test Project" WBS node at all. On the way back
+    # in, p6_import.py still *always* synthesizes its own project-root
+    # Activity (a P role, from the real <Project> — 2026-09-03, per Maro: a
+    # real P6 file's top-level WBS branches were wrongly landing as their
+    # own separate P rows instead of nesting under one true project root),
+    # so "Structure" lands directly under that new P, one level shallower
+    # than before this session's WBS-root fix. Round trip is that new P
+    # root + "Structure" + 2 tasks = 4.
+    assert summary["activity_count"] == 4
     assert summary["relationship_count"] == 1
     assert summary["resource_count"] == 1
     assert summary["assignment_count"] == 1
     assert summary["calendar_count"] == 1
     # 1 real custom UDF value + 1 "P6 Activity ID" UDF value per real
     # <Activity> element (2, the two tasks — WBS/summary rows have no P6
-    # Activity Id of their own to capture).
-    assert summary["udf_value_count"] == 3
+    # Activity Id of their own to capture) + 1 "P6 Project ID" UDF value on
+    # the new root (2026-09-07 — the export's own freshly-derived acronym,
+    # "TP0001" for "Test Project", captured back on import same as a real
+    # P6 file's own Id would be).
+    assert summary["udf_value_count"] == 4
     assert summary["skipped"] == []
 
     variant_id = uuid.UUID(summary["schedule_variant_id"])
@@ -131,17 +140,13 @@ async def test_round_trip_export_then_import(
     activities = (await db.execute(
         select(Activity).where(Activity.schedule_variant_id == variant_id)
     )).scalars().all()
-    assert len(activities) == 5
+    assert len(activities) == 4
 
     root = next(a for a in activities if a.parent_id is None)
     assert root.task_name == "Test Project"
     assert root.wbs_role == "P"
 
-    export_root_wbs = next(a for a in activities if a.parent_id == root.id)
-    assert export_root_wbs.task_name == "Test Project"
-    assert export_root_wbs.wbs_role == "W"
-
-    structure = next(a for a in activities if a.parent_id == export_root_wbs.id)
+    structure = next(a for a in activities if a.parent_id == root.id)
     assert structure.task_name == "Structure"
     assert structure.activity_type == "wbs_summary"
 
@@ -349,6 +354,59 @@ async def test_import_root_dates_udf_and_baseline(db: AsyncSession, project: Pro
     )).scalar_one()
     assert snap.start == datetime(2015, 3, 5, 8, 0, 0)
     assert snap.duration_hours == Decimal("8")
+
+
+async def test_p6_project_id_round_trips_through_a_udf(db: AsyncSession, project: Project):
+    """2026-09-07, per Maro: "if it had a project id if previously imported
+    from P6 store it as a udf on the parent (project)... so when i export
+    back to P6 it uses that as its project id as normal" — importing a real
+    P6 file's own <Project><Id> (e.g. "JNH0001", not one of Prosota's own
+    freshly-derived acronyms) captures it as a "P6 Project ID" UDF on the
+    synthetic project-root Activity; a later re-export reads it back and
+    writes it verbatim instead of deriving a fresh one P6 has never seen."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects" '
+        b'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        b"<Project><ObjectId>1</ObjectId><Id>JNH0001</Id><Name>Juniper Nursing Home</Name>"
+        b"<DataDate>2015-03-10T00:00:00</DataDate>"
+        b'<WBS><ObjectId>10</ObjectId><Name>Building 1</Name><ProjectObjectId>1</ProjectObjectId>'
+        b'<ParentObjectId xsi:nil="true" /></WBS>'
+        b"<Activity><ObjectId>100</ObjectId><Id>A100</Id><Name>Pour Slab</Name><Type>Task Dependent</Type>"
+        b"<WBSObjectId>10</WBSObjectId><ProjectObjectId>1</ProjectObjectId>"
+        b"<PlannedDuration>8</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2015-03-10T08:00:00</StartDate><FinishDate>2015-03-11T08:00:00</FinishDate></Activity>"
+        b"</Project></APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    assert parsed.project_id_code == "JNH0001"
+    summary = await import_pmxml(db, project.id, parsed)
+
+    root = (await db.execute(
+        select(Activity).where(Activity.schedule_period_id == summary.schedule_period_id, Activity.parent_id.is_(None))
+    )).scalar_one()
+    assert root.wbs_role == "P"
+
+    udf_def = (await db.execute(
+        select(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == project.id,
+            UserDefinedFieldDefinition.name == "P6 Project ID",
+        )
+    )).scalar_one()
+    udf_value = (await db.execute(
+        select(UserDefinedFieldValue).where(
+            UserDefinedFieldValue.field_definition_id == udf_def.id,
+            UserDefinedFieldValue.record_id == root.id,
+        )
+    )).scalar_one()
+    assert udf_value.value_text == "JNH0001"
+
+    data = await gather_p6_export_data(db, summary.schedule_period_id)
+    assert data.original_project_id_code == "JNH0001"
+    xml_out = build_pmxml(data)
+    exported_root = ET.fromstring(xml_out)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = exported_root.find("p6:Project", ns)
+    assert project_el.findtext("p6:Id", namespaces=ns) == "JNH0001"
 
 
 async def test_progressed_activity_keeps_real_historical_position_not_rescheduled(db: AsyncSession, project: Project):

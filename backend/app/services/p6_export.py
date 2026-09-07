@@ -259,6 +259,13 @@ class P6ExportData:
     assignments: list[P6Assignment] = field(default_factory=list)
     udf_types: list[P6UdfType] = field(default_factory=list)
     udf_values: list[P6UdfValue] = field(default_factory=list)
+    # The project's own real P6 Project Id from a previous import (2026-09-07,
+    # per Maro — see p6_import.py's own _P6_PROJECT_ID_UDF_NAME header),
+    # e.g. "JNH0001", captured on the project-root activity as a UDF.
+    # p6_export_xml.py uses this verbatim for <Project><Id> when present,
+    # falling back to a freshly-derived acronym only when it's None (a
+    # schedule Prosota built from scratch, never imported from P6 at all).
+    original_project_id_code: str | None = None
 
 
 def _resource_type(resource_type: str) -> str:
@@ -483,6 +490,18 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             parent_id=None, seq_num=project_root_activity.sort_order or 0, is_project_node=True,
             commentary=_sanitize_p6_text(project_root_activity.commentary),
         ))
+        # A previously-imported schedule stashed P6's own real Project Id on
+        # this exact activity (2026-09-07, per Maro — see p6_import.py's own
+        # _P6_PROJECT_ID_UDF_NAME header) — reuse it verbatim on re-export
+        # instead of deriving a fresh acronym P6 wouldn't recognise as the
+        # same project.
+        project_id_udf_def = next((d for d in udf_defs if d.name == "P6 Project ID"), None)
+        if project_id_udf_def is not None:
+            out.original_project_id_code = next(
+                (v.value_text for v in udf_values
+                 if v.field_definition_id == project_id_udf_def.id and v.record_id == project_root_activity.id),
+                None,
+            )
     else:
         root_wbs_id = wbs_ids.id_for("__project_root__")
         root_name = out.project_name

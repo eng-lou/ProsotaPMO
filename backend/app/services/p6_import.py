@@ -37,6 +37,13 @@ from app.services.scheduling_cpm import _find_cycle
 
 _P6_ACTIVITY_ID_UDF_NAME = "P6 Activity ID"
 _P6_ACTUAL_COST_UDF_NAME = "P6 Actual Cost"
+# 2026-09-07, per Maro: "if it had a project id if previously imported from
+# P6 store it as a udf on the parent (project)... so when i export back to
+# P6 it uses that as its project id as normal" — same "no dedicated column,
+# capture as a UDF on the project-root Activity" precedent as
+# _P6_ACTIVITY_ID_UDF_NAME above, read back by p6_export.py on a later
+# re-export instead of it having to re-derive a fresh acronym.
+_P6_PROJECT_ID_UDF_NAME = "P6 Project ID"
 
 
 def _collapse_repeated_messages(messages: list[str]) -> list[str]:
@@ -266,6 +273,20 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         )
         db.add(p6_activity_id_udf)
     p6_activity_id_udf_id = p6_activity_id_udf.id
+
+    # P6's own real Project Id (e.g. "JNH0001") — captured the same way,
+    # but on the synthetic project-root Activity (root_activity_id, created
+    # below) rather than per-imported-activity, since a project only has
+    # one. Written after root_activity_id exists — see the value write
+    # right after root_activity is created.
+    p6_project_id_udf = existing_udf_by_name.get(_P6_PROJECT_ID_UDF_NAME)
+    if p6_project_id_udf is None:
+        p6_project_id_udf = UserDefinedFieldDefinition(
+            id=uuid.uuid4(), project_id=project_id, entity_type="activity",
+            name=_P6_PROJECT_ID_UDF_NAME, data_type="text",
+        )
+        db.add(p6_project_id_udf)
+    p6_project_id_udf_id = p6_project_id_udf.id
 
     # P6's own real Actual Cost (2026-09-04, per Maro: "AC is blank...
     # something very wrong", then, on the fix: "actuals are derived from
@@ -589,6 +610,15 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         db.add(UserDefinedFieldValue(
             id=uuid.uuid4(), field_definition_id=definition_id, record_id=root_activity_id,
             value_text=v.text, value_number=v.number, value_date=v.date_value,
+        ))
+        udf_value_count += 1
+    # P6's own real Project Id (2026-09-07, per Maro — see
+    # _P6_PROJECT_ID_UDF_NAME's own header) — captured onto the same
+    # project-root Activity row a re-export can read it back off later.
+    if parsed.project_id_code:
+        db.add(UserDefinedFieldValue(
+            id=uuid.uuid4(), field_definition_id=p6_project_id_udf_id, record_id=root_activity_id,
+            value_text=parsed.project_id_code,
         ))
         udf_value_count += 1
     # WBS-subject-area values, onto each WBS node's own real wbs_summary Activity row.

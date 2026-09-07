@@ -264,6 +264,14 @@ class ParsedBaseline:
 @dataclass
 class ParsedP6Schedule:
     project_name: str
+    # <Project>'s own real Id (2026-09-07, per Maro: "if it had a project id
+    # if previously imported from P6 store it as a udf... so when i export
+    # back to P6 it uses that as its project id as normal") — captured
+    # verbatim, independent of project_name's own Id-as-fallback logic
+    # below, so a round-tripped re-export can reuse P6's real original code
+    # (e.g. "JNH0001") instead of re-deriving a fresh acronym that wouldn't
+    # match the project P6 already knows.
+    project_id_code: str | None = None
     data_date: date | None = None
     calendars: list[ParsedCalendar] = field(default_factory=list)
     wbs_nodes: list[ParsedWbs] = field(default_factory=list)
@@ -545,6 +553,7 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
     project_data_date = _datetime(project_el, "DataDate") or _datetime(project_el, "PlannedStartDate")
     out = ParsedP6Schedule(
         project_name=_text(project_el, "Name") or _text(project_el, "Id") or "Imported Project",
+        project_id_code=_text(project_el, "Id"),
         data_date=project_data_date.date() if project_data_date else None,
         skipped=skipped,
     )

@@ -430,7 +430,11 @@ def build_pmxml(data: P6ExportData) -> str:
     parts.append("<Project>")
     parts.append(f"<DataDate>{_fmt_datetime(data.data_date)}</DataDate>")
     parts.append(f"<GUID>{data.project_guid}</GUID>")
-    parts.append(_el("Id", _project_id_code(data.project_name)))
+    # Reuse the real P6 Project Id from a previous import when one was
+    # captured (2026-09-07, per Maro — see P6ExportData.original_project_id_code's
+    # own header), so re-importing lands back on the SAME P6 project instead
+    # of a freshly-derived acronym P6 has never seen before.
+    parts.append(_el("Id", data.original_project_id_code or _project_id_code(data.project_name)))
     parts.append(_el("Name", data.project_name[:100]))
     parts.append(f"<ObjectId>{data.project_id}</ObjectId>")
     if data.plan_start is not None:
