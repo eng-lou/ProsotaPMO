@@ -5532,3 +5532,28 @@ folder of its own at all (a project-wide milestone, say) — that still
 needs somewhere real to attach to, so removing folders never means
 removing that one anchor point entirely, only flattening the one
 specific case that was reading as redundant.
+
+## 2026-09-07 — Rolling up a percentage the right way, and a quick polish pass
+
+Two smaller fixes rounded out this session. First, the Cost Plan's own
+group and Total rows already summed Budget/Forecast/Actuals/Variance
+correctly, but left % Complete and CPI blank — those are both ratios,
+and simply averaging each line's own already-computed ratio would have
+been mathematically wrong (a well-known real accounting mistake: a
+small line at 100% complete and a huge line at 10% complete don't
+average to a meaningful "55% complete" for the group). The correct way
+is to recompute each ratio fresh from the group's own summed raw
+figures — sum the underlying earned value and budget across every line
+first, then divide those totals, never average the percentages
+themselves. Variance Band (a colored status label like "On Budget" or
+"Over Budget") got the same treatment, reusing the exact same threshold
+logic a single line already used.
+
+Second, a quick round of polish on the Milestone Timeline widget: more
+breathing room on both edges of the timeline so the outermost dates
+weren't reading as clipped, bolder axis labels (they'd been rendered in
+the same faint grey as much less important text), a landscape-shaped
+expanded view instead of the same tall popup every other widget uses,
+and an optional dashed reference line marking "today" or any other
+chosen date — the same idea P6 itself uses to show where "now" sits
+against a project's own milestones.
