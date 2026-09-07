@@ -5617,3 +5617,21 @@ against — a line with no link to the schedule has nothing meaningful to
 roll into an SPI figure at all, so those lines are correctly left out of
 the SPI sum entirely rather than diluting it with a comparison that
 doesn't really apply to them.
+
+## 2026-09-07 — A correction: per-widget, not per-dashboard
+
+Maro corrected the export/print feature right after it shipped: "export
+to xlsx and print" was meant per WIDGET, not for the dashboard as one
+whole unit. The earlier version had built one Excel file holding every
+widget on the board, and a "print everything" button that laid the
+whole board out on paper. Both got reworked to act on just ONE widget
+at a time — reusing the existing "expand this widget" popup as the
+natural place for both actions, since it already isolates a single
+widget on its own, rather than adding yet more buttons to an already
+busy toolbar.
+
+A smaller correction landed in the same message: the manual "pick a
+data date" control added to the Milestone Timeline earlier that same
+day was scrapped entirely — Maro wanted it to just always reflect
+whatever date the working schedule itself is already set to, with
+nothing to configure by hand.
