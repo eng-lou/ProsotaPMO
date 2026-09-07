@@ -156,6 +156,7 @@ const TOGGLEABLE_COLUMNS = [
   { key: 'variance', label: 'Variance' },
   { key: 'pct_complete', label: '% Complete' },
   { key: 'cpi', label: 'CPI' },
+  { key: 'spi', label: 'SPI' },
 ] as const
 type CostColumnKey = (typeof TOGGLEABLE_COLUMNS)[number]['key']
 const COST_PLAN_COLUMNS_KEY = 'prosota_cost_plan_columns'
@@ -382,9 +383,18 @@ export function CostPlan() {
   // the exact same formula _apply_computed uses server-side. actuals
   // above is already the correct AC for the cost-side CPI denominator
   // (identical isPct resolution _apply_computed uses for its own `ac`).
+  //
+  // SPI (2026-09-07, per Maro: "add spi and roll it up like cpi") is a
+  // SCHEDULE-side ratio (EV/PV, not EV/AC like CPI) — el.pv/el.ev are only
+  // populated for a "schedule"-sourced element whose linked activity is
+  // actually scheduled (cost_element.py's own _schedule_evm), so summing
+  // them is scoped to exactly those elements: a manual element (pv null)
+  // has no genuine time-phased plan to compare against and correctly
+  // contributes nothing to either side, rather than diluting the ratio
+  // with an EV that has no matching PV.
   const groupTotals = (groupElements: CostElement[]) => {
     let budget = 0, forecast = 0, actuals = 0, comparisonCost = 0, hasComparison = false
-    let bac = 0, ev = 0
+    let bac = 0, ev = 0, pv = 0, scheduleEv = 0
     for (const el of groupElements) {
       const isPct = el.element_type === 'percentage'
       budget += Number((isPct ? el.computed_budget : el.budget) ?? 0)
@@ -394,11 +404,13 @@ export function CostPlan() {
       const elBac = Number(el.bac ?? 0)
       bac += elBac
       if (el.pct_complete !== null) ev += elBac * (el.pct_complete / 100)
+      if (el.pv !== null) { pv += Number(el.pv); scheduleEv += Number(el.ev ?? 0) }
     }
     return {
       budget, forecast, actuals, comparisonCost: hasComparison ? comparisonCost : null,
       pctComplete: bac > 0 ? (ev / bac) * 100 : null,
       cpi: actuals !== 0 ? ev / actuals : null,
+      spi: pv > 0 ? scheduleEv / pv : null,
       varianceBandPct: budget !== 0 ? ((forecast - budget) / budget) * 100 : null,
     }
   }
@@ -494,6 +506,7 @@ export function CostPlan() {
         {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
         {visibleColumns.has('pct_complete') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'}</td>}
         {visibleColumns.has('cpi') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.cpi !== null ? totals.cpi.toFixed(3) : '—'}</td>}
+        {visibleColumns.has('spi') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.spi !== null ? totals.spi.toFixed(3) : '—'}</td>}
         {udfDefinitions.map(d => (
           <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, summaryRecordId)} onSave={payload => setUdfValue(d.id, summaryRecordId, payload)} />
         ))}
@@ -672,6 +685,7 @@ export function CostPlan() {
           )}
           {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>}
           {visibleColumns.has('cpi') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatRatio(el.cpi)}</td>}
+          {visibleColumns.has('spi') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatRatio(el.spi)}</td>}
           {udfDefinitions.map(d => (
             <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, el.id)} onSave={payload => setUdfValue(d.id, el.id, payload)} />
           ))}
@@ -844,6 +858,7 @@ export function CostPlan() {
       }
       case 'pct_complete': return el.pct_complete !== null ? `${el.pct_complete}%` : '—'
       case 'cpi': return formatRatio(el.cpi)
+      case 'spi': return formatRatio(el.spi)
       default: return '—'
     }
   }
@@ -859,6 +874,7 @@ export function CostPlan() {
       case 'variance': return formatCurrency((totals.forecast - totals.budget).toString())
       case 'pct_complete': return totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'
       case 'cpi': return totals.cpi !== null ? totals.cpi.toFixed(3) : '—'
+      case 'spi': return totals.spi !== null ? totals.spi.toFixed(3) : '—'
       case 'variance_band': {
         const band = totals.varianceBandPct !== null ? bandForVariancePct(totals.varianceBandPct, criteria) : null
         return band?.label ?? '—'
@@ -1167,6 +1183,7 @@ export function CostPlan() {
                 {visibleColumns.has('variance') && <th className="px-4 py-2.5" title="Forecast vs Budget">Variance</th>}
                 {visibleColumns.has('pct_complete') && <th className="px-4 py-2.5">% Complete</th>}
                 {visibleColumns.has('cpi') && <th className="px-4 py-2.5">CPI</th>}
+                {visibleColumns.has('spi') && <th className="px-4 py-2.5">SPI</th>}
                 {udfDefinitions.map(d => (
                   <th key={d.id} className="px-4 py-2.5" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
                 ))}
