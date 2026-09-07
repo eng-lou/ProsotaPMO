@@ -218,7 +218,18 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
   // down by a fixed amount without touching its internal dot/label/axis
   // spacing logic.
   return (
-    <div className="h-full overflow-auto pt-4">
+    // h-full REMOVED (2026-09-07, per Maro: "its not centered, its too
+    // top... see that red milestone just alone with no title or date
+    // too") — this wrapper forcing itself to 100% of the Expand modal's
+    // own height defeated the modal's `justify-center` entirely (a
+    // stretched-to-fill child can't be centered inside its own container,
+    // it just IS the container), which also explains the seemingly
+    // "missing" label: the modal's own fixed content height reserved less
+    // room above the axis than the topmost stacked row actually needed,
+    // clipping just that one label off the rendered area while its dot
+    // (24px lower) still fit. Sizing to real content height instead of
+    // h-full fixes both at once.
+    <div className="overflow-auto pt-4">
       <MilestoneTrack
         milestones={milestones}
         onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, 'activity', [id]) : undefined}
