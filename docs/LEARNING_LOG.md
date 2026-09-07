@@ -5677,3 +5677,44 @@ once shown the comparison side by side: the Cost module should use the
 same duration-based weighting Scheduling already uses, so the two
 screens tell the same story about the same project rather than two
 quietly different ones.
+
+## 2026-09-07 — Nearly reverting a fix that was already right
+
+Maro noticed SPI reading differently depending on whether a baseline was
+assigned, and asked for an explanation first, no changes. Once shown how
+the number was built, the instinct was that this felt too tangled and
+should just always use the live schedule dates — a reasonable-sounding
+simplification. Before making that change, it was worth checking what it
+would break: two tests already existed proving the current, baseline-
+aware behavior matches a real P6 export exactly on a real activity (75%
+complete against the baseline dates, versus 0% against live dates — P6's
+own report says 75%). Reverting to "always live" would have made the app
+disagree with P6 on a case that was already nailed down. Flagged that
+concretely and asked before touching anything; Maro said hold fire, so
+nothing was changed. On reflection days later, tracing the same question
+from budget instead of schedule, the logic clicked into place from the
+other direction: once a baseline is assigned, the approved Budget At
+Completion comes from that baseline, so the pace-of-work figure derived
+from the same baseline's dates is measuring against that same reference
+plan, not a different one — which is exactly what makes the two figures
+comparable in the first place. Good reminder that "this feels
+overcomplicated" is worth a second look before acting on it, especially
+once something has already been checked against a real external answer.
+
+## 2026-09-07 — A budget baseline that was missing its other half
+
+A schedule import already saves a snapshot of the approved dates
+(a "baseline") the moment it's promoted into the working schedule, but
+the matching Cost side had no equivalent — the approved budget figure
+had no saved reference point unless someone went and created one by
+hand. Building that turned up a real ordering trap: budget line items
+for a freshly-imported schedule don't actually exist until the schedule
+is promoted (they get created in that exact moment, as a batch, for
+performance reasons) — so trying to snapshot a budget baseline any
+earlier than that would have snapshotted nothing at all. Moving the new
+capture-and-approve step to fire right after that same promotion moment,
+instead of back at import time, meant it always has real figures to work
+from. A schedule with no costed work attached still gets an (empty)
+baseline recorded rather than being silently skipped, and an existing
+baseline someone assigned by hand is never overwritten by this automatic
+one.

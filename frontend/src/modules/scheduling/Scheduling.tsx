@@ -73,7 +73,7 @@ export type ColumnKey =
   | 'code' | 'wbs' | 'type' | 'duration' | 'start' | 'bl_start' | 'finish' | 'bl_finish'
   | 'variance' | 'float' | 'critical' | 'free_float' | 'sub_float' | 'sub_critical'
   | 'pct_complete' | 'schedule_pct_complete' | 'duration_pct_complete' | 'units_pct_complete' | 'status' | 'resources'
-  | 'bac' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
+  | 'bac' | 'bl_budget' | 'pv' | 'ev' | 'ac' | 'cv' | 'sv' | 'cpi' | 'spi' | 'eac' | 'etc'
   | 'element_count' | 'elements' | 'animation_profile'
 
 // Activity status (2026-09-03, per Maro: "we need an activity status
@@ -145,7 +145,8 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; width: string; title?
   { key: 'elements', label: 'Browse Elements', width: 'w-28', title: 'Click to browse the individual 3D elements linked to this activity' },
   { key: 'animation_profile', label: '3D Profile', width: 'w-28', title: 'Animation profile every 3D element linked to this activity uses in the 4D timeline, unless one has its own override — set once here to bulk-drive all of them. "Default" = the plain opacity-only fade every schedule-generated link starts with.' },
   { key: 'bac', label: 'BAC', width: 'w-24', title: 'Budget At Completion — this activity\'s resourced budget (from Cost Plan). Blank until resources are assigned.' },
-  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own current duration it should be. Uses this activity\'s own live dates, not the assigned baseline.' },
+  { key: 'bl_budget', label: 'BL Budget', width: 'w-24', title: 'The approved budget captured at the assigned Cost Baseline — blank until one\'s been assigned. BAC falls back to the live budget when this is blank; the two read identically once a baseline is assigned.' },
+  { key: 'pv', label: 'PV', width: 'w-24', title: 'Planned Value — how much of BAC should be earned by today, based on how far along this activity\'s own duration it should be. Uses the activity\'s own captured baseline dates when one exists, live dates otherwise — the same reference plan BAC itself uses.' },
   { key: 'ev', label: 'EV', width: 'w-24', title: 'Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line.' },
   { key: 'ac', label: 'AC', width: 'w-24', title: 'Actual Cost — actuals recorded against this activity\'s linked Cost Plan line.' },
   { key: 'cv', label: 'CV', width: 'w-24', title: 'Cost Variance — EV minus AC. Negative = over budget for the work done.' },
@@ -215,7 +216,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   start: 120, bl_start: 120, finish: 120, bl_finish: 120,
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
   pct_complete: 70, schedule_pct_complete: 90, duration_pct_complete: 90, units_pct_complete: 90, status: 90, resources: 130,
-  bac: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
+  bac: 90, bl_budget: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
   element_count: 70, elements: 130, animation_profile: 110,
 }
 export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
@@ -372,7 +373,7 @@ function groupHeaderPlaceholder(key: string): Activity {
     sub_total_float_hours: null, sub_is_critical: null, pct_complete: null, commentary: null,
     constraint_type: null, constraint_date: null, calendar_id: null, animation_profile_id: null,
     created_at: '', updated_at: '', schedule_pct_complete: null, duration_pct_complete: null, units_pct_complete: null,
-    bac: null, ac: null, pv: null, ev: null, cv: null, sv: null, cpi: null, spi: null, eac: null, etc: null,
+    bac: null, bl_budget: null, ac: null, pv: null, ev: null, cv: null, sv: null, cpi: null, spi: null, eac: null, etc: null,
     wbs_role: '', is_archived: false, is_archive_container: false,
     schedule_category: null, schedule_phase_key: null, schedule_quantity: null,
     schedule_material_name: null, schedule_material_quantity: null, schedule_material_unit: null,
@@ -389,7 +390,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   units_pct_complete: 96,
   status: 96,
   resources: 96,
-  bac: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
+  bac: 96, bl_budget: 96, pv: 96, ev: 96, ac: 96, cv: 96, sv: 96, cpi: 72, spi: 72, eac: 96, etc: 96,
   element_count: 80, elements: 130, animation_profile: 110,
 }
 
@@ -3555,6 +3556,7 @@ export function Scheduling() {
               {isColumnVisible('elements') && <col style={{ width: columnWidths.elements }} />}
               {isColumnVisible('animation_profile') && <col style={{ width: columnWidths.animation_profile }} />}
               {isColumnVisible('bac') && <col style={{ width: columnWidths.bac }} />}
+              {isColumnVisible('bl_budget') && <col style={{ width: columnWidths.bl_budget }} />}
               {isColumnVisible('pv') && <col style={{ width: columnWidths.pv }} />}
               {isColumnVisible('ev') && <col style={{ width: columnWidths.ev }} />}
               {isColumnVisible('ac') && <col style={{ width: columnWidths.ac }} />}
@@ -3612,6 +3614,7 @@ export function Scheduling() {
                 {isColumnVisible('elements') && <ResizableTh width={columnWidths.elements} onResizeStart={startColumnResize('elements')} {...sortHeader('elements')} title="Click to browse the individual 3D elements linked to this activity">Browse Elements</ResizableTh>}
                 {isColumnVisible('animation_profile') && <ResizableTh width={columnWidths.animation_profile} onResizeStart={startColumnResize('animation_profile')} {...sortHeader('animation_profile')} title="Animation profile every 3D element linked to this activity uses, unless one has its own override">3D Profile</ResizableTh>}
                 {isColumnVisible('bac') && <ResizableTh width={columnWidths.bac} onResizeStart={startColumnResize('bac')} {...sortHeader('bac')} title="Budget At Completion — this activity's resourced budget (from Cost Plan)">BAC</ResizableTh>}
+                {isColumnVisible('bl_budget') && <ResizableTh width={columnWidths.bl_budget} onResizeStart={startColumnResize('bl_budget')} {...sortHeader('bl_budget')} title="The approved budget captured at the assigned Cost Baseline — blank until one's been assigned">BL Budget</ResizableTh>}
                 {isColumnVisible('pv') && <ResizableTh width={columnWidths.pv} onResizeStart={startColumnResize('pv')} {...sortHeader('pv')} title="Planned Value — how much of BAC should be earned by today, based on this activity's own current duration">PV</ResizableTh>}
                 {isColumnVisible('ev') && <ResizableTh width={columnWidths.ev} onResizeStart={startColumnResize('ev')} {...sortHeader('ev')} title="Earned Value — BAC × physical % complete, as assessed on the linked Cost Plan line">EV</ResizableTh>}
                 {isColumnVisible('ac') && <ResizableTh width={columnWidths.ac} onResizeStart={startColumnResize('ac')} {...sortHeader('ac')} title="Actual Cost — actuals recorded against this activity's linked Cost Plan line">AC</ResizableTh>}
@@ -3980,6 +3983,7 @@ export function Scheduling() {
                     </td>
                   )}
                   {isColumnVisible('bac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.bac)}</td>}
+                  {isColumnVisible('bl_budget') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.bl_budget)}</td>}
                   {isColumnVisible('pv') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.pv)}</td>}
                   {isColumnVisible('ev') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.ev)}</td>}
                   {isColumnVisible('ac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.ac)}</td>}

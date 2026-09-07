@@ -151,12 +151,15 @@ const TOGGLEABLE_COLUMNS = [
   { key: 'cost_owner', label: 'Owner' },
   { key: 'status', label: 'Status' },
   { key: 'variance_band', label: 'Variance Band' },
+  { key: 'bl_budget', label: 'BL Budget' },
   { key: 'forecast', label: 'Forecast' },
   { key: 'actuals', label: 'Actuals' },
   { key: 'variance', label: 'Variance' },
+  { key: 'bl_variance', label: 'BL Variance' },
   { key: 'pct_complete', label: '% Complete' },
   { key: 'cpi', label: 'CPI' },
   { key: 'spi', label: 'SPI' },
+  { key: 'vac', label: 'VAC' },
 ] as const
 type CostColumnKey = (typeof TOGGLEABLE_COLUMNS)[number]['key']
 const COST_PLAN_COLUMNS_KEY = 'prosota_cost_plan_columns'
@@ -406,7 +409,7 @@ export function CostPlan() {
   // with an EV that has no matching PV.
   const groupTotals = (groupElements: CostElement[]) => {
     let budget = 0, forecast = 0, actuals = 0, comparisonCost = 0, hasComparison = false
-    let bac = 0, ev = 0, pv = 0, scheduleEv = 0
+    let bac = 0, ev = 0, pv = 0, scheduleEv = 0, blBudget = 0, hasBlBudget = false
     let pctWeighted = 0, pctWeight = 0, pctSum = 0, pctCount = 0
     for (const el of groupElements) {
       const isPct = el.element_type === 'percentage'
@@ -414,6 +417,7 @@ export function CostPlan() {
       forecast += Number((isPct ? el.computed_forecast : el.forecast) ?? 0)
       actuals += Number((isPct ? el.computed_actuals : el.actuals) ?? 0)
       if (el.comparison_cost !== null) { comparisonCost += Number(el.comparison_cost); hasComparison = true }
+      if (el.bl_budget !== null) { blBudget += Number(el.bl_budget); hasBlBudget = true }
       const elBac = Number(el.bac ?? 0)
       bac += elBac
       if (el.pct_complete !== null) {
@@ -432,6 +436,18 @@ export function CostPlan() {
       cpi: actuals !== 0 ? ev / actuals : null,
       spi: pv > 0 ? scheduleEv / pv : null,
       varianceBandPct: budget !== 0 ? ((forecast - budget) / budget) * 100 : null,
+      // BL Budget/BL Variance/VAC (2026-09-07, per Maro) — blBudget sums
+      // only elements with a real captured bl_budget (an unbaselined
+      // element contributes 0, same as el.bl_budget itself reading null
+      // until a Cost Baseline is assigned — see CostElement.bl_budget's
+      // own docstring); null when NOTHING in the group has one, rather
+      // than showing a misleading £0. blVariance mirrors the backend's own
+      // el.variance formula (current estimate - bl_budget) at group level.
+      // vac (BAC - EAC) reuses the same bac/forecast(=EAC) totals CPI
+      // already needed, no new accumulator required.
+      blBudget: hasBlBudget ? blBudget : null,
+      blVariance: hasBlBudget ? budget - blBudget : null,
+      vac: bac - forecast,
     }
   }
 
@@ -520,13 +536,16 @@ export function CostPlan() {
             })()}
           </td>
         )}
+        {visibleColumns.has('bl_budget') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.blBudget !== null ? formatCurrency(totals.blBudget.toString()) : '—'}</td>}
         <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.budget.toString())}</td>
         {visibleColumns.has('forecast') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.forecast.toString())}</td>}
         {visibleColumns.has('actuals') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.actuals.toString())}</td>}
         {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
+        {visibleColumns.has('bl_variance') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.blVariance !== null ? formatCurrency(totals.blVariance.toString()) : '—'}</td>}
         {visibleColumns.has('pct_complete') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'}</td>}
         {visibleColumns.has('cpi') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.cpi !== null ? totals.cpi.toFixed(3) : '—'}</td>}
         {visibleColumns.has('spi') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.spi !== null ? totals.spi.toFixed(3) : '—'}</td>}
+        {visibleColumns.has('vac') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.vac.toString())}</td>}
         {udfDefinitions.map(d => (
           <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, summaryRecordId)} onSave={payload => setUdfValue(d.id, summaryRecordId, payload)} />
         ))}
@@ -692,6 +711,7 @@ export function CostPlan() {
               })()}
             </td>
           )}
+          {visibleColumns.has('bl_budget') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(el.bl_budget)}</td>}
           <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(budget)}</td>
           {visibleColumns.has('forecast') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(forecast)}</td>}
           {visibleColumns.has('actuals') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(actuals)}</td>}
@@ -703,9 +723,11 @@ export function CostPlan() {
               })()}
             </td>
           )}
+          {visibleColumns.has('bl_variance') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted" title="Current Budget vs BL Budget">{formatCurrency(el.variance)}</td>}
           {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{el.pct_complete !== null ? `${el.pct_complete}%` : '—'}</td>}
           {visibleColumns.has('cpi') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatRatio(el.cpi)}</td>}
           {visibleColumns.has('spi') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatRatio(el.spi)}</td>}
+          {visibleColumns.has('vac') && <td className="px-4 py-2.5 text-gray-600 dark:text-prosota-muted">{formatCurrency(el.vac)}</td>}
           {udfDefinitions.map(d => (
             <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, el.id)} onSave={payload => setUdfValue(d.id, el.id, payload)} />
           ))}
@@ -870,15 +892,18 @@ export function CostPlan() {
       case 'cost_owner': return el.cost_owner ?? '—'
       case 'status': return el.status ? COST_ELEMENT_STATUS_LABELS[el.status] : '—'
       case 'variance_band': return varianceBand(el, criteria)?.label ?? '—'
+      case 'bl_budget': return formatCurrency(el.bl_budget)
       case 'forecast': return formatCurrency(isPct ? el.computed_forecast : el.forecast)
       case 'actuals': return formatCurrency(isPct ? el.computed_actuals : el.actuals)
       case 'variance': {
         const fv = elementForecastVariance(el)
         return fv === null ? '—' : formatCurrency(fv.amount.toString())
       }
+      case 'bl_variance': return formatCurrency(el.variance)
       case 'pct_complete': return el.pct_complete !== null ? `${el.pct_complete}%` : '—'
       case 'cpi': return formatRatio(el.cpi)
       case 'spi': return formatRatio(el.spi)
+      case 'vac': return formatCurrency(el.vac)
       default: return '—'
     }
   }
@@ -889,12 +914,15 @@ export function CostPlan() {
       return definition ? formatUdfDisplay(definition, getUdfValue(definition.id, pseudoRecordId(label))) : '—'
     }
     switch (columnKey) {
+      case 'bl_budget': return totals.blBudget !== null ? formatCurrency(totals.blBudget.toString()) : '—'
       case 'forecast': return formatCurrency(totals.forecast.toString())
       case 'actuals': return formatCurrency(totals.actuals.toString())
       case 'variance': return formatCurrency((totals.forecast - totals.budget).toString())
+      case 'bl_variance': return totals.blVariance !== null ? formatCurrency(totals.blVariance.toString()) : '—'
       case 'pct_complete': return totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'
       case 'cpi': return totals.cpi !== null ? totals.cpi.toFixed(3) : '—'
       case 'spi': return totals.spi !== null ? totals.spi.toFixed(3) : '—'
+      case 'vac': return formatCurrency(totals.vac.toString())
       case 'variance_band': {
         const band = totals.varianceBandPct !== null ? bandForVariancePct(totals.varianceBandPct, criteria) : null
         return band?.label ?? '—'
@@ -1197,13 +1225,16 @@ export function CostPlan() {
                 {visibleColumns.has('cost_owner') && <th className="px-4 py-2.5">Owner</th>}
                 {visibleColumns.has('status') && <th className="px-4 py-2.5">Status</th>}
                 {visibleColumns.has('variance_band') && <th className="px-4 py-2.5">Variance Band</th>}
+                {visibleColumns.has('bl_budget') && <th className="px-4 py-2.5" title="The approved budget captured at the assigned Cost Baseline">BL Budget</th>}
                 <th className="px-4 py-2.5">Budget</th>
                 {visibleColumns.has('forecast') && <th className="px-4 py-2.5">Forecast</th>}
                 {visibleColumns.has('actuals') && <th className="px-4 py-2.5">Actuals</th>}
                 {visibleColumns.has('variance') && <th className="px-4 py-2.5" title="Forecast vs Budget">Variance</th>}
+                {visibleColumns.has('bl_variance') && <th className="px-4 py-2.5" title="Current Budget vs BL Budget">BL Variance</th>}
                 {visibleColumns.has('pct_complete') && <th className="px-4 py-2.5">% Complete</th>}
                 {visibleColumns.has('cpi') && <th className="px-4 py-2.5">CPI</th>}
                 {visibleColumns.has('spi') && <th className="px-4 py-2.5">SPI</th>}
+                {visibleColumns.has('vac') && <th className="px-4 py-2.5" title="Variance at Completion — BAC vs EAC">VAC</th>}
                 {udfDefinitions.map(d => (
                   <th key={d.id} className="px-4 py-2.5" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
                 ))}

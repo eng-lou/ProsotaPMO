@@ -370,6 +370,13 @@ class ActivityResponse(ActivityBase):
     spi: Decimal | None = None
     eac: Decimal | None = None
     etc: Decimal | None = None
+    # The raw, un-fallback-applied approved figure (2026-09-07, per Maro:
+    # "also capture column for BL Budget so i can see the figure
+    # independent of BAC") — null until a Cost Baseline has actually been
+    # assigned to this element; bac above is this-with-a-live-fallback, so
+    # the two read identically once assigned and diverge (bl_budget blank,
+    # bac showing the live budget) whenever one isn't.
+    bl_budget: Decimal | None = None
     # P/W/T/M — see app/services/activity.py:_activity_role. Never accepted as
     # API input; auto-maintained alongside `code`.
     wbs_role: str = "T"

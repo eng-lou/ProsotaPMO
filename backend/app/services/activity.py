@@ -36,7 +36,7 @@ from app.services.cost_element import compute_schedule_linked_evm, rollup_evm_fr
 from app.services.reassessment import create_reassessment
 from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
-_EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc")
+_EVM_FIELDS = ("bac", "ac", "pv", "ev", "cv", "sv", "cpi", "spi", "eac", "etc", "bl_budget")
 
 
 async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> None:
@@ -197,6 +197,12 @@ def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | N
         # subtree that's still fully budgeted).
         rolled["eac"] = _sum_if_any([k.eac if k.eac is not None else k.bac for k in kids])
         rolled["etc"] = _sum_if_any([k.etc if k.etc is not None else k.bac for k in kids])
+        # bl_budget (2026-09-07, per Maro: "also capture column for BL
+        # Budget") — genuinely additive like bac/ac/pv/ev above, not a
+        # ratio, so a straight sum; a child with no captured baseline
+        # simply doesn't contribute (_sum_if_any's own "None only if
+        # every value is None" rule), same as bac's own summing.
+        rolled["bl_budget"] = _sum_if_any([k.bl_budget for k in kids])
         for field, value in rolled.items():
             setattr(a, field, value)
 

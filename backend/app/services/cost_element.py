@@ -343,9 +343,19 @@ def compute_schedule_linked_evm(
     ac = Decimal(str(element.actuals)) if element.actuals is not None else None
     pv, ev, sv, spi = _schedule_evm(bac, element.pct_complete, start, finish, data_date, lookup, calendar)
     cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
+    bl_budget = Decimal(str(element.bl_budget)) if element.bl_budget is not None else None
     return {
         "bac": bac, "ac": ac, "pv": pv, "ev": ev,
         "cv": cv, "sv": sv, "cpi": cpi, "spi": spi, "eac": eac, "etc": etc,
+        # The raw, un-fallback-applied approved figure (2026-09-07, per
+        # Maro: "also capture column for BL Budget so i can see the figure
+        # independent of BAC") — null until a Cost Baseline has actually
+        # been assigned to this element, same distinction
+        # CostElement.bl_budget's own docstring already draws; `bac` above
+        # is this-with-a-live-fallback, so the two read identically once a
+        # baseline is assigned and diverge (bl_budget blank, bac showing
+        # the live budget) whenever one isn't.
+        "bl_budget": bl_budget,
     }
 
 

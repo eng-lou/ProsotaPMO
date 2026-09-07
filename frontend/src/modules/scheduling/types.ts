@@ -148,11 +148,17 @@ export interface Activity {
   units_pct_complete: string | null
   // EVM — sourced from this activity's linked "schedule" Cost Element (Resources
   // module); the same figures Cost Plan shows for that line. Null until the
-  // activity has a resourced cost line. PV is prorated against this activity's
-  // own live start/finish, not bl_start/bl_finish — Set Baseline drives
-  // schedule variance (variance_days), not Planned Value — see backend
+  // activity has a resourced cost line. PV is prorated against this
+  // activity's own captured baseline start/finish (bl_start/bl_finish) when
+  // one exists, live dates otherwise — the same reference plan BAC itself
+  // uses (bl_budget below with a live-budget fallback) — see backend
   // app/services/activity.py:_attach_evm_fields.
   bac: string | null
+  // The raw, un-fallback-applied approved figure — null until a Cost
+  // Baseline has actually been assigned. bac above is this-with-a-live-
+  // fallback, so the two read identically once assigned and diverge
+  // (bl_budget blank, bac showing the live budget) whenever one isn't.
+  bl_budget: string | null
   ac: string | null
   pv: string | null
   ev: string | null

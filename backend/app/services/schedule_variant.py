@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
+from app.models.cost_baseline import CostBaseline
 from app.models.cost_element import CostElement
 from app.models.record_link import RecordLink
 from app.models.resource_assignment import ResourceAssignment
@@ -18,8 +19,9 @@ from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
+from app.schemas.cost_baseline import CostBaselineCreate
 from app.schemas.schedule_variant import ScheduleVariantCreate, ScheduleVariantUpdate
-from app.services import cost_sync
+from app.services import cost_baseline, cost_sync
 from app.services.project import _clone_row
 
 
@@ -416,10 +418,56 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
                 SchedulePeriod.schedule_variant_id == new_master.id, SchedulePeriod.freeze_status == "live"
             )
         )).scalar_one_or_none()
-        if live_schedule_period is not None and live_schedule_period.start_date is not None:
+        if live_schedule_period is not None:
             cost_period = await cost_sync._get_or_create_live_period(db, new_master.project_id)
-            if cost_period.start_date is None:
+            if live_schedule_period.start_date is not None and cost_period.start_date is None:
                 cost_period.start_date = live_schedule_period.start_date
                 await db.commit()
+
+            # A P6 import's own Cost Baseline, captured+assigned to mirror
+            # the ScheduleBaseline p6_import.py already assigned above
+            # (2026-09-07, per Maro: "also capture baseline for cost (if
+            # its non resource loaded then 0 ofcourse) upon import as its
+            # just schedule that captures baseline data although cost
+            # figures are involved"). Cost Elements don't exist until this
+            # exact promotion (see sync_cost_elements_from_resources_bulk's
+            # own comment above) — this is the first point a matching Cost
+            # Baseline can be captured at all, hence living here rather
+            # than alongside the ScheduleBaseline assignment in
+            # p6_import.py. Only fires when a schedule baseline is actually
+            # *assigned* (is_active), not merely imported (an import can
+            # carry several and assign none, matching the same
+            # current-baseline-or-sole-baseline rule p6_import.py used to
+            # decide that), and only when this period has no active Cost
+            # Baseline of its own yet — never overwrites one a user
+            # deliberately assigned by hand. Auto-assigned too (per Maro:
+            # "yes, auto-assign it too"), same as the schedule side. A
+            # schedule with no resourced activities still gets a baseline
+            # row, just an empty one (0 items, BAC reads as blank/0
+            # everywhere) — create_baseline's own "no budget = no snapshot"
+            # rule already handles that, no special-casing needed here.
+            assigned_schedule_baseline = (await db.execute(
+                select(ScheduleBaseline).where(
+                    ScheduleBaseline.schedule_period_id == live_schedule_period.id,
+                    ScheduleBaseline.is_active.is_(True),
+                )
+            )).scalar_one_or_none()
+            if assigned_schedule_baseline is not None:
+                existing_cost_baseline = (await db.execute(
+                    select(CostBaseline).where(
+                        CostBaseline.period_id == cost_period.id,
+                        CostBaseline.is_active.is_(True),
+                    )
+                )).scalar_one_or_none()
+                if existing_cost_baseline is None:
+                    new_cost_baseline = await cost_baseline.create_baseline(
+                        db,
+                        CostBaselineCreate(
+                            period_id=cost_period.id,
+                            name=assigned_schedule_baseline.name,
+                            baseline_date=assigned_schedule_baseline.baseline_date,
+                        ),
+                    )
+                    await cost_baseline.assign_baseline(db, new_cost_baseline.id)
 
     return new_master, unmatched_codes

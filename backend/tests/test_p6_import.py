@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.activity import Activity
 from app.models.calendar import Calendar, CalendarBreak
+from app.models.cost_baseline import CostBaseline, CostBaselineItem
 from app.models.cost_element import CostElement
 from app.models.organisation import Organisation
+from app.models.period import Period
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
@@ -679,6 +681,67 @@ async def test_schedule_pct_complete_matches_p6_for_third_floor_masonry(db: Asyn
     # Not 66.67% (the disproven Actual/AtCompletion ratio) — exact match to
     # P6's own real 75%.
     assert abs(masonry.schedule_pct_complete - Decimal("75.00")) < Decimal("0.01")
+
+
+async def test_promote_variant_auto_captures_and_assigns_a_matching_cost_baseline(db: AsyncSession, project: Project):
+    """2026-09-07, per Maro: "also capture baseline for cost... upon import
+    as its just schedule that captures baseline data although cost figures
+    are involved," then "yes, auto-assign it too." The ScheduleBaseline
+    itself is captured+assigned straight from the embedded <BaselineProject>
+    at import time (see the two schedule_pct_complete tests just above), but
+    Cost Elements don't exist until promotion (sync_cost_elements_from_
+    resources_bulk, gated on is_master) — so the matching CostBaseline can
+    only be captured here, in promote_variant, never earlier."""
+    xml = (
+        b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
+        b"<Resource><ObjectId>50</ObjectId><Name>Framer</Name><ResourceType>Labor</ResourceType></Resource>"
+        b"<ResourceRate><ResourceObjectId>50</ResourceObjectId><PricePerUnit>10</PricePerUnit></ResourceRate>"
+        b"<Project><ObjectId>1</ObjectId><Id>Cost Baseline Capture Test</Id><DataDate>2011-05-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>100</ObjectId><Id>A1</Id><Name>Framing</Name><Type>Task Dependent</Type>"
+        b"<PlannedDuration>80</PlannedDuration><PercentComplete>0</PercentComplete>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2011-01-11T17:00:00</FinishDate></Activity>"
+        b"<ResourceAssignment><ActivityObjectId>100</ActivityObjectId><ResourceObjectId>50</ResourceObjectId>"
+        b"<PlannedUnits>80</PlannedUnits></ResourceAssignment>"
+        b"</Project>"
+        b"<BaselineProject><ObjectId>2</ObjectId><OriginalProjectObjectId>1</OriginalProjectObjectId>"
+        b"<BaselineTypeName>Approved Baseline</BaselineTypeName><DataDate>2011-01-01T00:00:00</DataDate>"
+        b"<Activity><ObjectId>900</ObjectId><Id>A1</Id><Name>Framing</Name>"
+        b"<PlannedDuration>80</PlannedDuration>"
+        b"<StartDate>2011-01-01T08:00:00</StartDate><FinishDate>2011-01-11T17:00:00</FinishDate></Activity>"
+        b"</BaselineProject>"
+        b"</APIBusinessObjects>"
+    )
+    parsed = parse_pmxml(xml)
+    summary = await import_pmxml(db, project.id, parsed)
+
+    # Nothing to capture a Cost Baseline from yet — no promotion, no elements,
+    # no cost Period even created yet (that itself is lazily created inside
+    # promote_variant).
+    assert (await db.execute(select(CostBaseline))).scalars().all() == []
+
+    await schedule_variant_svc.promote_variant(db, summary.schedule_variant_id)
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Framing")
+    )).scalar_one()
+    element = (await db.execute(
+        select(CostElement).where(CostElement.linked_activity_id == activity.id)
+    )).scalar_one()
+
+    cost_period = (await db.execute(select(Period).where(Period.project_id == project.id))).scalar_one()
+    baseline = (await db.execute(
+        select(CostBaseline).where(CostBaseline.period_id == cost_period.id)
+    )).scalar_one()
+    assert baseline.is_active is True
+    assert baseline.name == "Approved Baseline"
+
+    item = (await db.execute(
+        select(CostBaselineItem).where(
+            CostBaselineItem.baseline_id == baseline.id, CostBaselineItem.cost_element_id == element.id
+        )
+    )).scalar_one()
+    assert element.budget is not None and item.bac == element.budget
+    assert element.bl_budget == element.budget  # auto-assigned, not just captured
 
 
 async def test_wbs_summary_schedule_pct_complete_derived_from_pv_over_bac(db: AsyncSession, project: Project):
