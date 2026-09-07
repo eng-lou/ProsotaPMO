@@ -36,8 +36,10 @@ const TICK_COUNT = 6
 const DOT_BOTTOM_PX = 12
 const LABEL_BOTTOM_PX = 36
 // How far apart each stacked row sits — tall enough that row N's label
-// clears row N-1's dot+label block entirely, not just its dot.
-const ROW_STEP_PX = 62
+// clears row N-1's dot+label block entirely, not just its dot (2026-09-07,
+// per Maro: "needs some buffer between them" — 62px read as cramped with a
+// real multi-row schedule, rows N and N-1's labels nearly touching).
+const ROW_STEP_PX = 84
 // A milestone's on-screen footprint for collision purposes — the label's
 // own max-width (140px) plus a little breathing room, so two labels that
 // would otherwise touch still count as "colliding" and get stacked.

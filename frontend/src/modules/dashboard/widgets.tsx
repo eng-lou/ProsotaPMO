@@ -2326,7 +2326,13 @@ export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   kpi_strip: { label: 'KPI Strip', category: 'Overview', defaultSize: { w: 12, h: 2 }, render: props => <KpiStripWidget {...props} /> },
   schedule_performance: { label: 'Schedule Performance', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <SchedulePerformanceWidget {...props} /> },
   risk_overview: { label: 'Risk Overview', category: 'Risk', defaultSize: { w: 6, h: 4 }, render: props => <RiskOverviewWidget {...props} /> },
-  milestone_timeline: { label: 'Milestone Timeline', category: 'Schedule', defaultSize: { w: 6, h: 4 }, render: props => <MilestoneTimelineWidget {...props} /> },
+  // h bumped 4->6 (2026-09-07, per Maro: "everything needs to be visible" —
+  // the extra per-row buffer just added (MilestoneTrack's own ROW_STEP_PX)
+  // made a real multi-row schedule's stacked labels taller than the old
+  // default tile, relying on overflow-auto scrolling to see the top rows
+  // rather than showing them all at once. Only affects a freshly-added
+  // widget — one already placed on a saved layout keeps its own saved size.
+  milestone_timeline: { label: 'Milestone Timeline', category: 'Schedule', defaultSize: { w: 6, h: 6 }, render: props => <MilestoneTimelineWidget {...props} /> },
   milestone_trend_chart: { label: 'Milestone Trend Chart', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <MilestoneTrendChartWidget {...props} /> },
   risk_emv_trend: { label: 'Risk EMV Trend', category: 'Risk', defaultSize: { w: 8, h: 5 }, render: props => <RiskEmvTrendWidget {...props} /> },
   cost_cpi_trend: { label: 'Cost CPI Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostCpiTrendWidget {...props} /> },
