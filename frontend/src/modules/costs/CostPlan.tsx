@@ -371,18 +371,30 @@ export function CostPlan() {
   // already resolves them (computed_* for a percentage element, the stored
   // field for a fixed one — renderRow's own isPct logic, mirrored here).
   //
-  // % Complete/CPI (2026-09-07, per Maro: "you need to role up the %
-  // complete and CPI though") were left blank here — averaging each row's
-  // own already-computed pct_complete/cpi would have been the wrong EVM
-  // math (backend's own rollup_evm_from_totals docstring: only BAC/AC/EV
-  // are ever valid to sum across a group; every ratio must be *recomputed*
-  // from the summed totals, never averaged). el.bac is already the
-  // resolved BAC for either element type (bl_budget else the current
-  // estimate — see cost_element.py's own _apply_computed), so no isPct
-  // branching is needed for it; per-element EV is bac * pct_complete/100,
-  // the exact same formula _apply_computed uses server-side. actuals
-  // above is already the correct AC for the cost-side CPI denominator
-  // (identical isPct resolution _apply_computed uses for its own `ac`).
+  // CPI (2026-09-07, per Maro: "you need to role up the % complete and CPI
+  // though") — averaging each row's own already-computed cpi would have
+  // been the wrong EVM math (backend's own rollup_evm_from_totals
+  // docstring: only BAC/AC/EV are ever valid to sum across a group; every
+  // ratio must be *recomputed* from the summed totals, never averaged).
+  // el.bac is already the resolved BAC for either element type (bl_budget
+  // else the current estimate — see cost_element.py's own
+  // _apply_computed), so no isPct branching is needed for it; per-element
+  // EV is bac * pct_complete/100, the exact same formula _apply_computed
+  // uses server-side for CPI's own numerator. actuals above is already the
+  // correct AC for the cost-side CPI denominator (identical isPct
+  // resolution _apply_computed uses for its own `ac`).
+  //
+  // % Complete (2026-09-07, per Maro, comparing this against Scheduling's
+  // own numbers for the SAME WBS branch: "the % complete that should be
+  // used in the cost module should be the % complete (physical %) not
+  // schedule %") is DIFFERENT from the EV/BAC used for CPI above — it
+  // needs to match Scheduling's own WBS-row "% COMP" figure, which
+  // app/services/activity.py's rollup() computes as a DURATION-HOURS-
+  // weighted average of each child activity's own physical pct_complete,
+  // not a budget-weighted one. Mirrors that exact fallback too: a plain
+  // average when every element in the group has zero/null duration
+  // (a group of entirely manual, non-schedule-linked elements, say),
+  // rather than silently producing nothing.
   //
   // SPI (2026-09-07, per Maro: "add spi and roll it up like cpi") is a
   // SCHEDULE-side ratio (EV/PV, not EV/AC like CPI) — el.pv/el.ev are only
@@ -395,6 +407,7 @@ export function CostPlan() {
   const groupTotals = (groupElements: CostElement[]) => {
     let budget = 0, forecast = 0, actuals = 0, comparisonCost = 0, hasComparison = false
     let bac = 0, ev = 0, pv = 0, scheduleEv = 0
+    let pctWeighted = 0, pctWeight = 0, pctSum = 0, pctCount = 0
     for (const el of groupElements) {
       const isPct = el.element_type === 'percentage'
       budget += Number((isPct ? el.computed_budget : el.budget) ?? 0)
@@ -403,12 +416,19 @@ export function CostPlan() {
       if (el.comparison_cost !== null) { comparisonCost += Number(el.comparison_cost); hasComparison = true }
       const elBac = Number(el.bac ?? 0)
       bac += elBac
-      if (el.pct_complete !== null) ev += elBac * (el.pct_complete / 100)
+      if (el.pct_complete !== null) {
+        ev += elBac * (el.pct_complete / 100)
+        const weight = Number(el.linked_activity_duration_hours ?? 0)
+        pctWeighted += el.pct_complete * weight
+        pctWeight += weight
+        pctSum += el.pct_complete
+        pctCount += 1
+      }
       if (el.pv !== null) { pv += Number(el.pv); scheduleEv += Number(el.ev ?? 0) }
     }
     return {
       budget, forecast, actuals, comparisonCost: hasComparison ? comparisonCost : null,
-      pctComplete: bac > 0 ? (ev / bac) * 100 : null,
+      pctComplete: pctWeight > 0 ? pctWeighted / pctWeight : pctCount > 0 ? pctSum / pctCount : null,
       cpi: actuals !== 0 ? ev / actuals : null,
       spi: pv > 0 ? scheduleEv / pv : null,
       varianceBandPct: budget !== 0 ? ((forecast - budget) / budget) * 100 : null,

@@ -66,6 +66,11 @@ export interface CostElement {
   ev: string | null
   sv: string | null
   spi: string | null
+  // The linked activity's own duration_hours (2026-09-07, per Maro: Cost
+  // Plan's own group % Complete should match Scheduling's "% COMP" for the
+  // same WBS branch — which is duration-weighted, not budget-weighted).
+  // Null for a manual element or one whose linked activity has no duration.
+  linked_activity_duration_hours: string | null
   // Resources module — never sent as input, always server-managed. "schedule" =
   // this element's budget/rate lines are auto-managed from an activity's resource
   // assignments; editing budget or a rate line directly in Cost Plan unlinks it

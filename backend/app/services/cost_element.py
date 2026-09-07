@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time
+from datetime import datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -158,7 +158,7 @@ async def _project_gfa(db: AsyncSession, project_id: uuid.UUID) -> Decimal | Non
 
 async def _linked_activity_dates(
     db: AsyncSession, elements: list[CostElement]
-) -> dict[uuid.UUID, tuple[datetime | None, datetime | None, uuid.UUID | None]]:
+) -> dict[uuid.UUID, tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None]]:
     """BASELINE start/finish when one has been captured, live (current,
     CPM-computed) start/finish otherwise (+ the activity's own calendar_id,
     since elapsed_duration_fraction needs one) for every schedule-sourced
@@ -170,7 +170,15 @@ async def _linked_activity_dates(
     BASELINE dates matched three exactly and the fourth within a point —
     see app/services/activity.py:_attach_evm_fields's own header for the
     full comparison. Elements with no linked activity, or that have been
-    manually unlinked, are simply absent from the result."""
+    manually unlinked, are simply absent from the result.
+
+    duration_hours (2026-09-07, per Maro: Cost Plan's own group % Complete
+    should match Scheduling's "% COMP" for the same WBS branch, not
+    schedule_pct_complete) — the linked activity's own duration_hours, so a
+    group rollup can weight by it the exact same way _recompute_hierarchy's
+    own WBS rollup does (app/services/activity.py's own rollup()), instead
+    of the budget-weighted average CostElementResponse.bac would otherwise
+    imply."""
     activity_ids = {
         el.linked_activity_id for el in elements
         if el.source == "schedule" and el.linked_activity_id is not None
@@ -180,14 +188,14 @@ async def _linked_activity_dates(
     result = await db.execute(
         select(
             Activity.id, Activity.start, Activity.finish, Activity.calendar_id,
-            Activity.bl_start, Activity.bl_finish,
+            Activity.bl_start, Activity.bl_finish, Activity.duration_hours,
         ).where(Activity.id.in_(activity_ids))
     )
     return {
         row.id: (
             (row.bl_start, row.bl_finish) if row.bl_start is not None and row.bl_finish is not None
             else (row.start, row.finish)
-        ) + (row.calendar_id,)
+        ) + (row.calendar_id, row.duration_hours)
         for row in result.all()
     }
 
@@ -347,7 +355,7 @@ def _apply_computed(
     sub_forecast: Decimal,
     sub_actuals: Decimal,
     gfa_m2: Decimal | None,
-    activity_dates: tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None, date | None] | None = None,
+    activity_dates: tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None] | None = None,
     data_date: datetime | None = None,
     lookup: "_CalendarLookup | None" = None,
 ) -> CostElementResponse:
@@ -392,6 +400,8 @@ def _apply_computed(
     # — see _schedule_evm/activity_dates above). Every other element still leaves
     # PV/EV/SV/SPI null rather than showing a fake number (e.g. SPI would always equal
     # pct_complete/100 exactly without a real schedule position to compare to).
+    if activity_dates is not None:
+        data.linked_activity_duration_hours = activity_dates[3]
     if activity_dates is not None and lookup is not None:
         activity_calendar = lookup.resolve_calendar_id(activity_dates[2])
         data.pv, data.ev, data.sv, data.spi = _schedule_evm(

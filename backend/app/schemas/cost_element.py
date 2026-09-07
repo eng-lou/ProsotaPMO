@@ -136,3 +136,12 @@ class CostElementResponse(CostElementBase):
     ev: Decimal | None = None
     sv: Decimal | None = None
     spi: Decimal | None = None
+    # The linked activity's own duration_hours (2026-09-07, per Maro: Cost
+    # Plan's own group % Complete should match Scheduling's "% COMP" for the
+    # same WBS branch — which is duration-weighted, not budget-weighted, see
+    # app/services/activity.py's own rollup()). Null for a manual element or
+    # one whose linked activity has no duration set; a frontend group rollup
+    # should exclude those from a duration-weighted average the same way
+    # rollup() itself falls back to a plain average when every child has
+    # zero/null weight.
+    linked_activity_duration_hours: Decimal | None = None
