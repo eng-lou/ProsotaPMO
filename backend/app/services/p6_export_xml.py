@@ -247,6 +247,17 @@ def _activity_xml(a, udf_values_by_task: dict[int, list]) -> str:  # noqa: ANN00
         # etc. alongside plain 0/1, never a bare "82").
         f"<PercentComplete>{_fmt_dec(a.pct_complete / 100, 4)}</PercentComplete>"
         f"<PercentCompleteType>Physical</PercentCompleteType>"
+        # PhysicalPercentComplete (2026-09-07, per Maro: re-imported EV was
+        # "still all zeros" despite AC now populating correctly) — P6 does
+        # NOT use the generic <PercentComplete> above to compute Earned
+        # Value; it reads whichever field matches <PercentCompleteType>
+        # specifically (PhysicalPercentComplete/DurationPercentComplete/
+        # UnitsPercentComplete — confirmed against a real reference file,
+        # where all three appear as separate elements alongside the generic
+        # one). Since PercentCompleteType is "Physical" here, omitting this
+        # field left P6 reading it as 0 for EV purposes even though the
+        # generic PercentComplete/AC were both correct.
+        f"<PhysicalPercentComplete>{_fmt_dec(a.pct_complete / 100, 4)}</PhysicalPercentComplete>"
         f"<PlannedDuration>{_fmt_dec(a.duration_hours, 2)}</PlannedDuration>"
         f"{f'<PlannedFinishDate>{_fmt_datetime(a.finish)}</PlannedFinishDate>' if a.finish else '<PlannedFinishDate xsi:nil=\"true\" />'}"
         f"{f'<PlannedStartDate>{_fmt_datetime(a.start)}</PlannedStartDate>' if a.start else '<PlannedStartDate xsi:nil=\"true\" />'}"

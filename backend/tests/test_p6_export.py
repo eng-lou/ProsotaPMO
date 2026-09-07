@@ -267,6 +267,32 @@ async def test_no_baseline_project_is_exported(
     assert project_el.find("p6:CurrentBaselineProjectObjectId", ns) is None
 
 
+async def test_physical_percent_complete_is_exported(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """Real bug (2026-09-07, per Maro: AC now populates correctly on
+    re-import but "EV is still all zeros" — did you set the physical
+    percent completes for the calculation?"). PercentCompleteType is
+    written as "Physical" for every activity, but P6 doesn't use the
+    generic <PercentComplete> to compute Earned Value — it reads
+    whichever field matches the declared type specifically
+    (PhysicalPercentComplete/DurationPercentComplete/UnitsPercentComplete
+    are separate elements in a real P6 export, confirmed against a real
+    reference file). That field was never written at all, so P6 read it
+    as 0 for EV purposes regardless of the real, correct AC/PercentComplete."""
+    task = await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8, pct_complete="40")
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = root.find("p6:Project", ns)
+    activity_el = next(a for a in project_el.findall("p6:Activity", ns) if a.findtext("p6:Id", namespaces=ns) == task["code"])
+
+    assert activity_el.findtext("p6:PercentCompleteType", namespaces=ns) == "Physical"
+    assert activity_el.findtext("p6:PhysicalPercentComplete", namespaces=ns) == "0.4000"
+
+
 async def test_actual_cost_and_units_are_exported_and_prorated(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
