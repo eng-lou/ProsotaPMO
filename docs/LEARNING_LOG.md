@@ -5557,3 +5557,48 @@ expanded view instead of the same tall popup every other widget uses,
 and an optional dashed reference line marking "today" or any other
 chosen date — the same idea P6 itself uses to show where "now" sits
 against a project's own milestones.
+
+## 2026-09-07 — Exporting and printing the whole Dashboard
+
+The last big ask this session: every widget on the Dashboard needed to
+be exportable to Excel and printable, the same way Resource Tracking
+already could. Rather than guess at the shape, this got scoped up front
+with two quick questions — one worksheet per widget in the Excel file
+(so the real numbers land in a spreadsheet you can actually work with,
+not a picture of the screen), and the whole grid printed as one flowing
+page or set of pages, rather than one page per widget.
+
+The tricky part: each of the ~50 widgets already computes its own
+filtered, grouped numbers purely to draw itself on screen, with that
+computation tangled up inside the same function that renders it. Rather
+than untangle all ~50 of them (which risked breaking things that
+already worked, for a large diff with no independent way to test it
+live), a second, parallel function was written that recomputes the same
+numbers in the same order, one case per widget, producing a plain table
+instead of a chart or list. It's an accepted, disclosed duplication — if
+a widget's own filtering logic changes later, this second copy needs
+the same change or the exported file will quietly drift from what's on
+screen — but it was the safer trade for a same-day, all-widgets-at-once
+delivery.
+
+Printing turned out to be the more interesting technical problem. The
+on-screen dashboard is a free-form drag-and-drop board — every widget
+sits at an exact pixel position the user chose. That's meaningless on a
+printed page, which just flows top to bottom. The fix was to let widgets
+fall back to a plain, ordinary stacked layout only when actually
+printing, while leaving the on-screen drag-and-drop board completely
+untouched otherwise. One extra wrinkle: a few widgets are charts built
+on a charting library that sizes itself to fill whatever space its
+container gives it — a container with no real height gives it zero
+space to draw into, so the printed layout had to give every widget a
+real, fixed height rather than "shrink to fit," or its charts would
+have printed as blank rectangles.
+
+Also worth a note for its own sake: an earlier attempt to hand this
+whole feature off to a background agent burned a very large amount of
+its own effort and reported back as if the work were still ongoing —
+but a check of the actual project files showed literally nothing had
+been changed. The honest, useful move there was to notice that
+mismatch immediately (checking real project state rather than trusting
+the agent's own summary) and simply do the work directly instead of
+trying the same delegation again.
