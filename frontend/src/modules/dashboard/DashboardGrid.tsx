@@ -492,7 +492,16 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
           onClick={() => setExpandedWidgetId(null)}
         >
           <div
-            className="relative w-full max-w-5xl h-full max-h-[85vh] bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden shadow-2xl"
+            className={`relative w-full bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg flex flex-col overflow-hidden shadow-2xl ${
+              // Landscape expand (2026-09-07, per Maro: "give it to me in
+              // landscape not portrait") — Milestone Timeline is an
+              // inherently wide, short strip; the generic tall modal left
+              // most of its own height empty below the track. Scoped to
+              // this one widget type rather than a general registry field,
+              // since it's the only current case and other widgets (tables,
+              // in particular) genuinely want the taller default instead.
+              expandedWidget.widget_type === 'milestone_timeline' ? 'max-w-[1400px] aspect-[16/9] max-h-[80vh]' : 'max-w-5xl h-full max-h-[85vh]'
+            }`}
             onClick={e => e.stopPropagation()}
           >
             <div className="relative flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 shrink-0">
@@ -526,7 +535,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                 />
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-auto p-4">
+            <div className={`flex-1 min-h-0 overflow-auto p-4 ${expandedWidget.widget_type === 'milestone_timeline' ? 'flex flex-col justify-center' : ''}`}>
               {WIDGET_REGISTRY[expandedWidget.widget_type]
                 ? <MemoWidget renderFn={WIDGET_REGISTRY[expandedWidget.widget_type].render} widgetProps={widgetProps} filterConditions={expandedWidget.filter} filterMatchMode={expandedWidget.filter_match_mode} />
                 : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}

@@ -27,6 +27,13 @@ interface MilestoneTrackProps {
   // working unchanged.
   onMilestoneClick?: (id: string) => void
   selectedId?: string | null
+  // Optional data-date reference line (2026-09-07, per Maro: "add an
+  // optional data date line... allow me to set the date") — a P6-style
+  // dashed vertical line marking "as of" a chosen date, same convention as
+  // a P6 Gantt's own data-date marker. ISO date string; omitted/null draws
+  // nothing, and a date outside the track's own padded range is silently
+  // skipped rather than drawn off-screen or clamped to a misleading edge.
+  dataDate?: string | null
 }
 
 const TICK_COUNT = 6
@@ -51,7 +58,7 @@ const BASE_MIN_HEIGHT = 190
 // points is better"), not just a bare line connecting two dots. Milestones
 // sit above the axis, positioned by real date; calendar ticks sit below it,
 // so the two never collide regardless of how few milestones there are.
-export function MilestoneTrack({ milestones, onMilestoneClick, selectedId }: MilestoneTrackProps) {
+export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataDate }: MilestoneTrackProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Needed to convert each milestone's percentage position into real pixels
   // for the row-stacking collision check below — a fixed fallback (a typical
@@ -83,8 +90,12 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId }: Mil
   const rawMax = Math.max(...times)
   const rawSpan = rawMax - rawMin || 1000 * 60 * 60 * 24 * 30 // a single milestone gets a fake 30-day span to sit inside
 
-  // Pad 8% either side so a milestone never sits exactly on the axis's own edge.
-  const pad = rawSpan * 0.08
+  // Pad either side so a milestone never sits exactly on the axis's own
+  // edge — widened 8%->16% (2026-09-07, per Maro: "add some timeline
+  // buffer on the right and left side so everything can be seen properly")
+  // since the outermost milestones' own labels were reading as clipped
+  // right at the track's edge.
+  const pad = rawSpan * 0.16
   const minTime = rawMin - pad
   const maxTime = rawMax + pad
   const span = maxTime - minTime
@@ -132,11 +143,35 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId }: Mil
       {ticks.map((t, i) => (
         <div key={i} className="absolute top-1/2" style={{ left: `${positionOf(t)}%` }}>
           <span className="absolute top-2 left-1/2 -translate-x-1/2 block w-px h-3 bg-gray-300" />
-          <div className="absolute top-7 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 dark:text-prosota-muted whitespace-nowrap">
+          {/* 2026-09-07, per Maro: "bolden the x axis text, looks too
+              faint" — was text-gray-400/muted, same weight as ordinary
+              secondary text; now a real, readable ink color plus a touch of
+              weight, distinct from the (still-light) milestone date text
+              below each dot. */}
+          <div className="absolute top-7 left-1/2 -translate-x-1/2 text-[10px] font-medium text-gray-600 dark:text-prosota-paper whitespace-nowrap">
             {formatTick(t)}
           </div>
         </div>
       ))}
+
+      {/* Optional data-date reference line (2026-09-07, per Maro) — a
+          P6-style dashed vertical marker for "as of" a chosen date, full
+          height of the track so it reads clearly against every stacked row,
+          not just the axis. Silently omitted for a date outside the
+          track's own padded range rather than drawn off the visible strip. */}
+      {dataDate && (() => {
+        const t = new Date(dataDate).getTime()
+        if (Number.isNaN(t)) return null
+        const left = positionOf(t)
+        if (left < 0 || left > 100) return null
+        return (
+          <div className="absolute inset-y-0 border-l-2 border-dashed border-prosota-amber/70" style={{ left: `${left}%` }}>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-prosota-amber whitespace-nowrap">
+              Data Date
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Milestones — above the axis, positioned by real date. Anchored at
           the axis's own vertical centre (a zero-height wrapper, same trick
