@@ -88,14 +88,18 @@ function elementForecastVariance(el: CostElement): { amount: number; pct: number
   return { amount, pct: (amount / budgetNum) * 100 }
 }
 
-function varianceBand(el: CostElement, criteria: CostVarianceCriterion[]): CostVarianceCriterion | null {
-  const fv = elementForecastVariance(el)
-  if (fv === null) return null
+function bandForVariancePct(pct: number, criteria: CostVarianceCriterion[]): CostVarianceCriterion | null {
   return criteria.find(c => {
     const min = c.min_pct !== null ? Number(c.min_pct) : -Infinity
     const max = c.max_pct !== null ? Number(c.max_pct) : Infinity
-    return fv.pct >= min && fv.pct < max
+    return pct >= min && pct < max
   }) ?? null
+}
+
+function varianceBand(el: CostElement, criteria: CostVarianceCriterion[]): CostVarianceCriterion | null {
+  const fv = elementForecastVariance(el)
+  if (fv === null) return null
+  return bandForVariancePct(fv.pct, criteria)
 }
 
 // Deterministic, non-cryptographic 128-bit hash (cyrb128) formatted as a
@@ -365,16 +369,38 @@ export function CostPlan() {
   // budget/forecast/actuals/comparison the same way each individual row
   // already resolves them (computed_* for a percentage element, the stored
   // field for a fixed one — renderRow's own isPct logic, mirrored here).
+  //
+  // % Complete/CPI (2026-09-07, per Maro: "you need to role up the %
+  // complete and CPI though") were left blank here — averaging each row's
+  // own already-computed pct_complete/cpi would have been the wrong EVM
+  // math (backend's own rollup_evm_from_totals docstring: only BAC/AC/EV
+  // are ever valid to sum across a group; every ratio must be *recomputed*
+  // from the summed totals, never averaged). el.bac is already the
+  // resolved BAC for either element type (bl_budget else the current
+  // estimate — see cost_element.py's own _apply_computed), so no isPct
+  // branching is needed for it; per-element EV is bac * pct_complete/100,
+  // the exact same formula _apply_computed uses server-side. actuals
+  // above is already the correct AC for the cost-side CPI denominator
+  // (identical isPct resolution _apply_computed uses for its own `ac`).
   const groupTotals = (groupElements: CostElement[]) => {
     let budget = 0, forecast = 0, actuals = 0, comparisonCost = 0, hasComparison = false
+    let bac = 0, ev = 0
     for (const el of groupElements) {
       const isPct = el.element_type === 'percentage'
       budget += Number((isPct ? el.computed_budget : el.budget) ?? 0)
       forecast += Number((isPct ? el.computed_forecast : el.forecast) ?? 0)
       actuals += Number((isPct ? el.computed_actuals : el.actuals) ?? 0)
       if (el.comparison_cost !== null) { comparisonCost += Number(el.comparison_cost); hasComparison = true }
+      const elBac = Number(el.bac ?? 0)
+      bac += elBac
+      if (el.pct_complete !== null) ev += elBac * (el.pct_complete / 100)
     }
-    return { budget, forecast, actuals, comparisonCost: hasComparison ? comparisonCost : null }
+    return {
+      budget, forecast, actuals, comparisonCost: hasComparison ? comparisonCost : null,
+      pctComplete: bac > 0 ? (ev / bac) * 100 : null,
+      cpi: actuals !== 0 ? ev / actuals : null,
+      varianceBandPct: budget !== 0 ? ((forecast - budget) / budget) * 100 : null,
+    }
   }
 
   // "Construction is the parent of those disciplines, then the discipline
@@ -450,13 +476,24 @@ export function CostPlan() {
         {visibleColumns.has('element_type') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('cost_owner') && <td className="px-4 py-2.5"></td>}
         {visibleColumns.has('status') && <td className="px-4 py-2.5"></td>}
-        {visibleColumns.has('variance_band') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('variance_band') && (
+          <td className="px-4 py-2.5">
+            {(() => {
+              const band = totals.varianceBandPct !== null ? bandForVariancePct(totals.varianceBandPct, criteria) : null
+              return band ? (
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${VARIANCE_BAND_STYLES[band.label] ?? 'bg-gray-100 dark:bg-prosota-panel2 text-gray-600 dark:text-prosota-muted'}`}>
+                  {band.label}
+                </span>
+              ) : <span className="text-gray-400 dark:text-prosota-muted">—</span>
+            })()}
+          </td>
+        )}
         <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.budget.toString())}</td>
         {visibleColumns.has('forecast') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.forecast.toString())}</td>}
         {visibleColumns.has('actuals') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency(totals.actuals.toString())}</td>}
         {visibleColumns.has('variance') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{formatCurrency((totals.forecast - totals.budget).toString())}</td>}
-        {visibleColumns.has('pct_complete') && <td className="px-4 py-2.5"></td>}
-        {visibleColumns.has('cpi') && <td className="px-4 py-2.5"></td>}
+        {visibleColumns.has('pct_complete') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'}</td>}
+        {visibleColumns.has('cpi') && <td className={`px-4 py-2.5 text-gray-900 dark:text-prosota-paper ${boldCls}`}>{totals.cpi !== null ? totals.cpi.toFixed(3) : '—'}</td>}
         {udfDefinitions.map(d => (
           <UdfCell key={d.id} definition={d} value={getUdfValue(d.id, summaryRecordId)} onSave={payload => setUdfValue(d.id, summaryRecordId, payload)} />
         ))}
@@ -820,6 +857,12 @@ export function CostPlan() {
       case 'forecast': return formatCurrency(totals.forecast.toString())
       case 'actuals': return formatCurrency(totals.actuals.toString())
       case 'variance': return formatCurrency((totals.forecast - totals.budget).toString())
+      case 'pct_complete': return totals.pctComplete !== null ? `${totals.pctComplete.toFixed(0)}%` : '—'
+      case 'cpi': return totals.cpi !== null ? totals.cpi.toFixed(3) : '—'
+      case 'variance_band': {
+        const band = totals.varianceBandPct !== null ? bandForVariancePct(totals.varianceBandPct, criteria) : null
+        return band?.label ?? '—'
+      }
       default: return '—'
     }
   }
