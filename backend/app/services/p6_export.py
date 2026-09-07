@@ -539,11 +539,24 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             continue
         if a is project_root_activity:
             continue  # already written as the WBS root itself, above
-        parent_wbs_id = (
-            resolve_nearest_wbs(activities_by_id[a.parent_id])
-            if a.parent_id is not None and a.parent_id in activities_by_id
-            else root_wbs_id
-        )
+        if project_root_activity is not None and a.parent_id == project_root_activity.id:
+            # Flatten this one level (2026-09-07, per Maro, looking at the
+            # real P6 hierarchy: Building 1/Garage 1/etc nested one level
+            # UNDER "Juniper Nursing Home" as its own real WBS row read as
+            # a redundant extra layer — P6 already shows the project's own
+            # name as the outer container above the whole WBS tree, so its
+            # direct WBS children should sit alongside it, not inside it).
+            # A loose Activity with no WBS branch of its own (e.g. a
+            # project-level milestone) still needs root_wbs_id to exist as
+            # a real WBS row to attach to — see resolve_nearest_wbs, which
+            # this deliberately leaves untouched.
+            parent_wbs_id = None
+        else:
+            parent_wbs_id = (
+                resolve_nearest_wbs(activities_by_id[a.parent_id])
+                if a.parent_id is not None and a.parent_id in activities_by_id
+                else root_wbs_id
+            )
         wbs_id = wbs_ids.id_for(a.id)
         wbs_name = _sanitize_p6_text(a.task_name) or a.task_name
         wbs_name_by_id[wbs_id] = wbs_name

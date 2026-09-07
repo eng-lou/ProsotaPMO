@@ -243,12 +243,23 @@ async def test_single_top_level_wbs_becomes_the_root_directly(
     When there's exactly one top-level wbs_summary (Prosota's own "P"-role
     project root, the same one Scheduling & Resourcing shows as its own
     top row), it becomes the WBS root directly instead — no extra
-    synthetic wrapper, no second "Project Title" level."""
+    synthetic wrapper, no second "Project Title" level.
+
+    A second real gap found the same way (2026-09-07, per Maro's own P6
+    screenshot): even after that fix, P6 still showed "Building 1" nested
+    ONE level under "Juniper Nursing Home" as its own real WBS row — P6
+    already shows the project's own name as the outer container above the
+    whole WBS tree, so a direct WBS child of the project root should sit
+    ALONGSIDE it (a flat sibling), not nested inside a second real WBS row
+    that says the same thing again. Only that one level flattens —
+    "Building 1"'s own genuine children (a real sub-branch, not the
+    project root) stay nested normally, see the follow-up test below."""
     top = await _create_activity(client, project, live_schedule_period, "Juniper Nursing Home", activity_type="wbs_summary")
     building = await _create_activity(
         client, project, live_schedule_period, "Building 1", activity_type="wbs_summary", parent_id=top["id"],
     )
     await _create_activity(client, project, live_schedule_period, "Pour Concrete", parent_id=building["id"])
+    await _create_activity(client, project, live_schedule_period, "Site Handover", parent_id=top["id"])
 
     resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
     assert resp.status_code == 200, resp.text
@@ -263,8 +274,48 @@ async def test_single_top_level_wbs_becomes_the_root_directly(
     assert project.name not in wbs_names, "the synthetic project-name root must be gone"
 
     root_els = [el for el in wbs_els if el.find("p6:ParentObjectId", ns).text is None]
-    assert len(root_els) == 1
-    assert root_els[0].findtext("p6:Name", namespaces=ns) == "Juniper Nursing Home"
+    assert len(root_els) == 2, "Building 1 must be a flat sibling of Juniper Nursing Home, not nested under it"
+    assert {el.findtext("p6:Name", namespaces=ns) for el in root_els} == {"Juniper Nursing Home", "Building 1"}
+
+    # "Site Handover" has no WBS branch of its own — it's a loose activity
+    # directly under the project root, so it still needs Juniper Nursing
+    # Home's own WBS row to attach to (flattening Building 1 out from under
+    # it doesn't remove that row, just stops nesting real branches under it).
+    juniper_wbs_id = next(el.findtext("p6:ObjectId", namespaces=ns) for el in wbs_els if el.findtext("p6:Name", namespaces=ns) == "Juniper Nursing Home")
+    handover_el = next(a for a in project_el.findall("p6:Activity", ns) if a.findtext("p6:Name", namespaces=ns) == "Site Handover")
+    assert handover_el.findtext("p6:WBSObjectId", namespaces=ns) == juniper_wbs_id
+
+
+async def test_nested_wbs_branch_stays_nested_under_its_own_real_parent(
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+):
+    """The flattening in the test above is exactly one level (the project
+    root's own direct WBS children) — a genuine sub-branch further down the
+    tree (here, "Envelope" under "Building 1", itself under the project
+    root "Juniper Nursing Home") must stay nested under ITS OWN real
+    parent, not also get promoted to the top level."""
+    top = await _create_activity(client, project, live_schedule_period, "Juniper Nursing Home", activity_type="wbs_summary")
+    building = await _create_activity(
+        client, project, live_schedule_period, "Building 1", activity_type="wbs_summary", parent_id=top["id"],
+    )
+    envelope = await _create_activity(
+        client, project, live_schedule_period, "Envelope", activity_type="wbs_summary", parent_id=building["id"],
+    )
+    await _create_activity(client, project, live_schedule_period, "Mobilize Scaffolding", parent_id=envelope["id"])
+
+    resp = await client.get("/api/v1/p6-export/xml", params={"schedule_period_id": str(live_schedule_period.id)})
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.text)
+    ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
+    project_el = root.find("p6:Project", ns)
+    wbs_els = project_el.findall("p6:WBS", ns)
+
+    root_names = {el.findtext("p6:Name", namespaces=ns) for el in wbs_els if el.find("p6:ParentObjectId", ns).text is None}
+    assert root_names == {"Juniper Nursing Home", "Building 1"}, "Envelope must NOT also be promoted to the top level"
+
+    building_id = next(el.findtext("p6:ObjectId", namespaces=ns) for el in wbs_els if el.findtext("p6:Name", namespaces=ns) == "Building 1")
+    envelope_el = next(el for el in wbs_els if el.findtext("p6:Name", namespaces=ns) == "Envelope")
+    assert envelope_el.findtext("p6:ParentObjectId", namespaces=ns) == building_id
 
 
 async def test_no_baseline_project_is_exported(
