@@ -750,3 +750,22 @@ export interface ActivityStep {
   created_at: string
   updated_at: string
 }
+
+// One schedule-linked cost element's resolved BAC/AC/EAC as recorded in one
+// real captured Cost Baseline snapshot (2026-09-08, per Maro: "in the past
+// there is budget and actuals and even forecast bars... in future there is
+// budgeted and forecast but no actuals") — see backend's own
+// get_actuals_history for why this is raw, unbucketed history rather than
+// pre-computed periods: the Resource Usage Profile/Resource Tracking
+// widgets already own their own arbitrary-zoom bucket arrays and resource
+// rate conversions, so bucketing happens client-side against whichever
+// buckets are already on screen.
+export interface ActualsHistoryItem {
+  baseline_id: string
+  baseline_date: string
+  cost_element_id: string
+  linked_activity_id: string
+  bac: string
+  ac: string
+  eac: string | null
+}

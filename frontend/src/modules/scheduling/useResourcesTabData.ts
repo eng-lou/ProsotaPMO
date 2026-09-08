@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { toDateOnly, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { computePeriodBuckets, type GanttZoom } from './ganttZoom'
-import type { Activity, Resource, ResourceAssignment } from './types'
+import type { Activity, ActualsHistoryItem, Resource, ResourceAssignment } from './types'
 
 export interface AssignmentRow {
   assignment: ResourceAssignment
@@ -243,4 +243,173 @@ export function computeUsageProfileBars(
   }
   const maxCapacity = capacityByBucket.reduce((max, c) => Math.max(max, c), 0)
   return { barValues: bars, hasActuals: actualFlags, limitValue: maxCapacity }
+}
+
+export interface UsageProfileSeries {
+  budgetValues: number[]
+  actualValues: (number | null)[]
+  forecastValues: (number | null)[]
+  limitValue: number
+}
+
+// Converts a £ figure to the resource's day-rate-based hours/days
+// equivalent — the exact same "cost / day-rate = days, x max_hours_per_day
+// = hours" conversion ResourceAssignments.tsx's own Actual Hours/Days
+// toggle already uses (actualsFromCost/actualsToCost), reused here rather
+// than re-derived slightly differently (2026-09-08, per Maro correcting a
+// real wrong claim that no hours/days actuals conversion exists in this
+// app at all — it does, just always backed by the one cumulative £ figure,
+// never a separately time-phased hours record).
+function costToUnit(cost: number, resource: Resource, unit: 'hours' | 'days' | 'cost'): number {
+  if (unit === 'cost') return cost
+  const rate = Number(resource.rate)
+  if (!rate) return 0
+  const days = cost / rate
+  return unit === 'days' ? days : days * (Number(resource.max_hours_per_day) || 8)
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+function inclusiveDaySpan(start: Date, end: Date): number {
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / ONE_DAY_MS)) + 1
+}
+
+// Real per-period Budget/Actual/Forecast for the Resource Usage Profile
+// (2026-09-08, per Maro: "in the past there is budget and actuals and even
+// forecast bars... in future there is budgeted and forecast but no
+// actuals"). Budget is unchanged from computeUsageProfileBars' own
+// day-weighted schedule demand. Actual/Forecast are derived per ACTIVITY,
+// not per resource (an activity's own recorded history is one number
+// regardless of how many resources are assigned to it — using whichever
+// ONE time-based resource is assigned for the £-to-hours/days conversion,
+// the same "one time-based resource" convention this app's own Actual
+// Hours/Days toggle already assumes), from `history` (real captured Cost
+// Baseline snapshots, oldest first — see backend's own get_actuals_history)
+// plus each activity's own live EVM fields as the final "now" point. Never
+// invents a number: a past bucket with no snapshot bracketing it, or an
+// activity with no real actuals/baseline history at all, is left null
+// (blank), not zero or an estimate.
+export function computeUsageProfileSeries(
+  trackedResources: Resource[], assignmentsByResource: Map<string, AssignmentRow[]>,
+  buckets: { start: Date; end: Date; label: string }[], spreadByResource: Map<string, ResourceSpread>,
+  selectedActivityIds: Set<string>, unit: 'hours' | 'days' | 'cost', dataDate: Date,
+  history: ActualsHistoryItem[],
+): UsageProfileSeries {
+  const budgetValues = buckets.map(() => 0)
+  const capacityByBucket = buckets.map(() => 0)
+  const actualValues: (number | null)[] = buckets.map(() => null)
+  const forecastValues: (number | null)[] = buckets.map(() => null)
+
+  for (const resource of trackedResources) {
+    const spread = spreadByResource.get(resource.id)
+    if (!spread) continue
+    const factor = usageUnitFactor(resource, unit)
+    const { hoursByAssignmentDate, capacityByDate } = indexSpread(spread)
+    const rows = (assignmentsByResource.get(resource.id) ?? [])
+      .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
+    buckets.forEach((bucket, i) => {
+      for (const d of eachDate(bucket.start, bucket.end)) {
+        capacityByBucket[i] += (capacityByDate.get(d) ?? 0) * factor
+        for (const row of rows) {
+          const hours = hoursByAssignmentDate.get(`${row.assignment.id}:${d}`)?.hours ?? 0
+          if (hours > 0) budgetValues[i] += hours * factor
+        }
+      }
+    })
+  }
+
+  // One (activity, its resource) pair per activity, first-seen across the
+  // tracked resources — matches the "one time-based resource" convention
+  // above; avoids double-counting an activity's own actual/forecast if it
+  // somehow had more than one time-based assignment.
+  const seenActivityIds = new Set<string>()
+  const activityRows: { activity: AssignmentRow['activity']; resource: Resource }[] = []
+  for (const resource of trackedResources) {
+    const rows = (assignmentsByResource.get(resource.id) ?? [])
+      .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
+    for (const row of rows) {
+      if (seenActivityIds.has(row.activity.id)) continue
+      seenActivityIds.add(row.activity.id)
+      activityRows.push({ activity: row.activity, resource })
+    }
+  }
+
+  type HistoryPoint = { time: number; ac: number; eac: number | null }
+  const historyByActivity = new Map<string, HistoryPoint[]>()
+  for (const item of history) {
+    const list = historyByActivity.get(item.linked_activity_id) ?? []
+    list.push({ time: new Date(item.baseline_date).getTime(), ac: Number(item.ac), eac: item.eac !== null ? Number(item.eac) : null })
+    historyByActivity.set(item.linked_activity_id, list)
+  }
+  for (const list of historyByActivity.values()) list.sort((a, b) => a.time - b.time)
+
+  function pointAtOrBefore(points: HistoryPoint[], time: number): HistoryPoint | null {
+    let result: HistoryPoint | null = null
+    for (const p of points) {
+      if (p.time <= time) result = p
+      else break
+    }
+    return result
+  }
+
+  const dataDateTime = dataDate.getTime()
+
+  for (const { activity, resource } of activityRows) {
+    if (activity.start == null || activity.finish == null) continue
+    const actStart = new Date(activity.start)
+    const actFinish = new Date(activity.finish)
+    if (actFinish < actStart) continue
+
+    const points = historyByActivity.get(activity.id) ?? []
+    const live: HistoryPoint | null = activity.ac !== null
+      ? { time: dataDateTime, ac: Number(activity.ac), eac: activity.eac !== null ? Number(activity.eac) : null }
+      : null
+    const allPoints = live ? [...points, live] : points
+    if (allPoints.length === 0) continue
+
+    // Remaining span for reprofiling ETC into future buckets — from
+    // whichever is later, the data date or the activity's own start
+    // (an activity that hasn't started yet reprofiles across its whole
+    // duration; one already in progress only across what's left).
+    const remainingStart = dataDateTime > actStart.getTime() ? dataDate : actStart
+    const remainingDurationDays = inclusiveDaySpan(remainingStart, actFinish)
+
+    buckets.forEach((bucket, i) => {
+      if (bucket.end < actStart || bucket.start > actFinish) return
+
+      if (bucket.start.getTime() <= dataDateTime) {
+        // Bucket has started by the data date (even if not finished yet —
+        // a bucket straddling the data date still gets real, already-
+        // elapsed figures, not a forecast): a real delta between two
+        // snapshots/live points bracketing it, capped at the data date
+        // rather than the bucket's own end — never a smoothed estimate.
+        const before = pointAtOrBefore(allPoints, bucket.start.getTime())
+        const at = pointAtOrBefore(allPoints, Math.min(bucket.end.getTime(), dataDateTime))
+        if (at) {
+          const acDelta = at.ac - (before?.ac ?? 0)
+          actualValues[i] = (actualValues[i] ?? 0) + costToUnit(acDelta, resource, unit)
+          if (at.eac !== null) {
+            forecastValues[i] = (forecastValues[i] ?? 0) + costToUnit(at.eac, resource, unit)
+          }
+        }
+      } else if (live?.eac != null) {
+        // Bucket hasn't started yet as of the data date: no real actuals
+        // exist — reprofile this activity's own remaining ETC (live EAC - live AC)
+        // across whichever of its remaining days fall in this bucket,
+        // day-weighted across its own real remaining schedule span (the
+        // same real, schedule-driven weighting Budget already uses, never
+        // a flat/invented split). Per Maro: "no, forecast can be
+        // reprofiled" — a forecast is a projection, unlike Actual.
+        const etc = live.eac - live.ac
+        const overlapStart = bucket.start > remainingStart ? bucket.start : remainingStart
+        const overlapEnd = bucket.end < actFinish ? bucket.end : actFinish
+        if (overlapEnd >= overlapStart) {
+          const daysInBucket = inclusiveDaySpan(overlapStart, overlapEnd)
+          const share = daysInBucket / remainingDurationDays
+          forecastValues[i] = (forecastValues[i] ?? 0) + costToUnit(etc * share, resource, unit)
+        }
+      }
+    })
+  }
+
+  return { budgetValues, actualValues, forecastValues, limitValue: capacityByBucket.reduce((m, c) => Math.max(m, c), 0) }
 }

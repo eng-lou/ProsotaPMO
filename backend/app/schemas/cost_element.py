@@ -185,3 +185,33 @@ class FyBreakdownResponse(BaseModel):
     # rather than silently dumped into an arbitrary FY.
     unscheduled_budget: Decimal | None = None
     unscheduled_bl_budget: Decimal | None = None
+
+
+class ActualsHistoryItem(BaseModel):
+    """One schedule-linked cost element's resolved BAC/AC/EAC as recorded in
+    one real captured CostBaseline snapshot (2026-09-08, per Maro: "in the
+    past there is budget and actuals and even forecast bars... in future
+    there is budgeted and forecast but no actuals" — the Resource Usage
+    Profile/Resource Tracking's own per-period Actual/Forecast bars need a
+    REAL history to derive from, never an invented one). linked_activity_id
+    lets the frontend join this back onto whichever activity/resource it's
+    already displaying (and convert bac/ac/eac to hours/days via that
+    activity's own resource rate — the exact same "one time-based resource"
+    conversion ResourceAssignments.tsx's own Actual Hours/Days toggle
+    already uses), without the backend needing to know anything about
+    hours, rates, or which zoom/bucket granularity the chart is using."""
+    baseline_id: uuid.UUID
+    baseline_date: date
+    cost_element_id: uuid.UUID
+    linked_activity_id: uuid.UUID
+    bac: Decimal
+    ac: Decimal
+    eac: Decimal | None = None
+
+
+class ActualsHistoryResponse(BaseModel):
+    # Chronological (oldest first) — one row per (baseline, schedule-linked
+    # element) pair. No "live/current" point here — the caller already has
+    # that from the same live Activity/CostElement fetch it's already
+    # making elsewhere (activity.bac/.ac/.eac), so it isn't duplicated here.
+    items: list[ActualsHistoryItem]

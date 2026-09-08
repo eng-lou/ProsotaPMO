@@ -6,7 +6,13 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate, FyBreakdownResponse
+from app.schemas.cost_element import (
+    ActualsHistoryResponse,
+    CostElementCreate,
+    CostElementResponse,
+    CostElementUpdate,
+    FyBreakdownResponse,
+)
 from app.services import cost_element as svc
 
 router = APIRouter(prefix="/cost-elements", tags=["cost-elements"])
@@ -30,6 +36,15 @@ async def get_fy_breakdown(
     db: AsyncSession = Depends(get_db),
 ):
     return await svc.get_fy_breakdown(db, project_id, period_id)
+
+
+@router.get("/actuals-history", response_model=ActualsHistoryResponse)
+async def get_actuals_history(
+    project_id: uuid.UUID,
+    period_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await svc.get_actuals_history(db, project_id, period_id)
 
 
 @router.post("/", response_model=CostElementResponse, status_code=201)

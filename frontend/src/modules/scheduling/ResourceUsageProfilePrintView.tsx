@@ -1,7 +1,7 @@
 import { RESOURCE_USAGE_COLORS } from './ResourceUsageProfileWidget'
 import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
-import { computeUsageProfileBars, type AssignmentRow } from './useResourcesTabData'
-import type { Resource } from './types'
+import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
+import type { ActualsHistoryItem, Resource } from './types'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   selectedActivityIds: Set<string>
   unit: 'hours' | 'days' | 'cost'
   dataDate: string | null
+  actualsHistory: ActualsHistoryItem[]
 }
 
 const CHART_HEIGHT = 160
@@ -29,14 +30,18 @@ const GRIDLINE_COUNT = 4
 // be aligned in the same horizontal axis").
 export function ResourceUsageProfilePrintView({
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
+  actualsHistory,
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.
-  const { barValues, hasActuals, limitValue } = computeUsageProfileBars(
+  const { budgetValues, actualValues, forecastValues, limitValue } = computeUsageProfileSeries(
     trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
-    dataDate ? new Date(dataDate) : new Date(),
+    dataDate ? new Date(dataDate) : new Date(), actualsHistory,
   )
-  const maxValue = Math.max(...barValues, limitValue, 1) * 1.1
+  const maxValue = Math.max(
+    ...budgetValues, ...actualValues.filter((v): v is number => v !== null),
+    ...forecastValues.filter((v): v is number => v !== null), limitValue, 1,
+  ) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
   // Abbreviated, not full comma-formatted — see the screen widget's own
   // formatAxisValue for why (2026-07-14, per Maro).
@@ -55,7 +60,8 @@ export function ResourceUsageProfilePrintView({
 
       <div className="flex items-center gap-3 mb-3">
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.forecast }} />Forecast</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit (capacity)</span>
       </div>
@@ -101,15 +107,28 @@ export function ResourceUsageProfilePrintView({
             {limitValue > 0 && (
               <div className="absolute left-0 right-0" style={{ bottom: (limitValue / maxValue) * CHART_HEIGHT, height: 1, backgroundColor: RESOURCE_USAGE_COLORS.limit }} />
             )}
-            {barValues.map((value, i) => {
-              const overallocated = value > limitValue && limitValue > 0
-              const color = overallocated ? RESOURCE_USAGE_COLORS.overallocated : hasActuals[i] ? RESOURCE_USAGE_COLORS.actual : RESOURCE_USAGE_COLORS.budgeted
+            {budgetValues.map((budget, i) => {
+              const actual = actualValues[i]
+              const forecast = forecastValues[i]
+              const overallocated = budget > limitValue && limitValue > 0
+              const segments: { value: number; color: string }[] = [
+                { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted },
+              ]
+              if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual })
+              if (forecast !== null) segments.push({ value: forecast, color: RESOURCE_USAGE_COLORS.forecast })
+              const groupWidth = PRINT_PERIOD_COL_WIDTH - 8
+              const gap = 1
+              const segWidth = (groupWidth - gap * (segments.length - 1)) / segments.length
               return (
-                <div
-                  key={i}
-                  style={{ left: i * PRINT_PERIOD_COL_WIDTH + 4, width: PRINT_PERIOD_COL_WIDTH - 8, bottom: 0, height: (value / maxValue) * CHART_HEIGHT, backgroundColor: color }}
-                  className="absolute"
-                />
+                <div key={i} className="absolute" style={{ left: i * PRINT_PERIOD_COL_WIDTH + 4, width: groupWidth, bottom: 0, height: CHART_HEIGHT }}>
+                  {segments.map((seg, si) => (
+                    <div
+                      key={si}
+                      style={{ left: si * (segWidth + gap), width: segWidth, bottom: 0, height: (seg.value / maxValue) * CHART_HEIGHT, backgroundColor: seg.color }}
+                      className="absolute"
+                    />
+                  ))}
+                </div>
               )
             })}
           </div>

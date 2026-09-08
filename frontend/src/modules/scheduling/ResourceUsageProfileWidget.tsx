@@ -3,8 +3,8 @@ import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { buildCalendarLookup } from './durationDisplay'
 import { RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesLayoutPrefs } from './resourcesLayout'
-import { computeUsageProfileBars, type AssignmentRow } from './useResourcesTabData'
-import type { Calendar, Resource } from './types'
+import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
+import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
   calendars: Calendar[]
@@ -26,6 +26,12 @@ interface Props {
   // with any actuals recorded at all painted every bucket it touched green,
   // including ones years in the future.
   dataDate: string | null
+  // Real captured Cost Baseline history for Actual/Forecast (2026-09-08,
+  // per Maro: "in the past there is budget and actuals and even forecast
+  // bars... in future there is budgeted and forecast but no actuals") —
+  // see computeUsageProfileSeries' own header for exactly how this turns
+  // into per-bucket values.
+  actualsHistory: ActualsHistoryItem[]
   // Mirrors Resource Tracking's own tree/timeline divider position
   // (2026-07-09, per Maro) — see the matching prop on ResourceTrackingWidget.
   // Timeline scroll used to be mirrored both ways too; see that widget's
@@ -58,7 +64,9 @@ const PERIOD_COL_WIDTH = 64
 const CHART_HEIGHT_MIN = 180
 const RESOURCE_ROW_HEIGHT = 26
 
-export const RESOURCE_USAGE_COLORS = { budgeted: '#eab308', actual: '#22c55e', overallocated: '#ef4444', limit: '#111827' }
+export const RESOURCE_USAGE_COLORS = {
+  budgeted: '#eab308', actual: '#22c55e', forecast: '#8b5cf6', overallocated: '#ef4444', limit: '#111827',
+}
 
 // P6's own "Resource Usage Profile" — the resource histogram (Rita Mulcahy
 // PMP Exam Prep 11th ed., Ch.6 "Resource Histograms": "a bar chart
@@ -77,7 +85,7 @@ export const RESOURCE_USAGE_COLORS = { budgeted: '#eab308', actual: '#22c55e', o
 // of its own props changed. Safe as a pure bail-out.
 function ResourceUsageProfileWidgetImpl({
   calendars, trackedResources, assignmentsByResource, buckets, spreadByResource, loading, layoutPrefs, unit,
-  selectedResourceIds, onToggleResourceSelected, selectedActivityIds, dataDate,
+  selectedResourceIds, onToggleResourceSelected, selectedActivityIds, dataDate, actualsHistory,
   leftPaneWidth,
 }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
@@ -246,28 +254,28 @@ function ResourceUsageProfileWidgetImpl({
     })
   }
 
-  // "select an activity in the tracking, I want to see the usage profile
-  // reflected" (2026-07-08, per Maro) — shared calc with the print view so
-  // the has-actuals/overallocation colouring can't drift between the two.
-  const { barValues, hasActuals, limitValue } = useMemo(
-    // dataDate falls back to today, not null (2026-09-08, real bug found on
-    // a real project: "City Center Office Building" has never had its
-    // schedule period's start_date set at all — no P6 import, never
-    // rescheduled — so dataDate was always null here and the has-actuals
-    // fix below silently disabled itself, reverting to the exact "every
-    // bucket the activity ever touched is green" bug it was meant to fix.
-    // Matches the backend's own canonical fallback exactly — see
-    // scheduling_cpm.py:data_date_for_period's own "falls back to today
-    // only when a period has never been anchored" — never a null that
-    // switches the whole check off).
-    () => computeUsageProfileBars(
+  // Falls back to today, never to a disabled check — matches the backend's
+  // own canonical scheduling_cpm.py:data_date_for_period fallback exactly
+  // ("falls back to today only when a period has never been anchored").
+  const resolvedDataDate = useMemo(() => dataDate ? new Date(dataDate) : new Date(), [dataDate])
+
+  // Budget/Actual/Forecast per bucket (2026-09-08, per Maro: "in the past
+  // there is budget and actuals and even forecast bars... in future there
+  // is budgeted and forecast but no actuals") — shared calc with the print
+  // view so the two can't drift apart. See computeUsageProfileSeries' own
+  // header for exactly how Actual/Forecast are derived from actualsHistory.
+  const { budgetValues, actualValues, forecastValues, limitValue } = useMemo(
+    () => computeUsageProfileSeries(
       trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
-      dataDate ? new Date(dataDate) : new Date(),
+      resolvedDataDate, actualsHistory,
     ),
-    [trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate]
+    [trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, resolvedDataDate, actualsHistory]
   )
 
-  const maxValue = Math.max(...barValues, limitValue, 1) * 1.1
+  const maxValue = Math.max(
+    ...budgetValues, ...actualValues.filter((v): v is number => v !== null),
+    ...forecastValues.filter((v): v is number => v !== null), limitValue, 1,
+  ) * 1.1
   const gridlineCount = 4
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
   // Abbreviated (10.2M / 28.7k), not full comma-formatted (10,192,050) —
@@ -378,7 +386,8 @@ function ResourceUsageProfileWidgetImpl({
           <div ref={chartWrapRef} className="flex-1 flex flex-col">
             <div className="flex items-center gap-3 mb-2 px-3 pt-3 text-gray-500 dark:text-prosota-muted">
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
-              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.forecast }} />Forecast</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit</span>
             </div>
@@ -454,20 +463,42 @@ function ResourceUsageProfileWidgetImpl({
                     />
                   )}
                   {visibleBucketIndices.map(i => {
-                    const value = barValues[i]
-                    const overallocated = value > limitValue && limitValue > 0
-                    const color = overallocated ? RESOURCE_USAGE_COLORS.overallocated : hasActuals[i] ? RESOURCE_USAGE_COLORS.actual : RESOURCE_USAGE_COLORS.budgeted
+                    // Budget always shows (red instead of amber once its own
+                    // demand exceeds capacity — unrelated to Actual/Forecast,
+                    // which never "overallocate" against a capacity Limit).
+                    // Actual only shows for a bucket that's actually elapsed
+                    // and has a real recorded delta; Forecast always shows
+                    // when derivable (per Maro: "in the past there is budget
+                    // and actuals and even forecast bars... in future there
+                    // is budgeted and forecast but no actuals").
+                    const budget = budgetValues[i]
+                    const actual = actualValues[i]
+                    const forecast = forecastValues[i]
+                    const overallocated = budget > limitValue && limitValue > 0
+                    const segments: { value: number; color: string; label: string }[] = [
+                      { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget' },
+                    ]
+                    if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual' })
+                    if (forecast !== null) segments.push({ value: forecast, color: RESOURCE_USAGE_COLORS.forecast, label: 'Forecast' })
+                    const formatValue = (v: number) => unit === 'cost' ? `£${v.toFixed(0)}` : `${v.toFixed(1)}${unit === 'days' ? 'd' : 'h'}`
+                    const groupWidth = PERIOD_COL_WIDTH - 12
+                    const gap = 2
+                    const segWidth = (groupWidth - gap * (segments.length - 1)) / segments.length
                     return (
-                      <div
-                        key={i}
-                        title={`${buckets[i].label}: ${unit === 'cost' ? `£${value.toFixed(0)}` : `${value.toFixed(1)}${unit === 'days' ? 'd' : 'h'}`}`}
-                        className="absolute rounded-t-sm"
-                        style={{
-                          left: i * PERIOD_COL_WIDTH + 6, width: PERIOD_COL_WIDTH - 12,
-                          bottom: 0, height: (value / maxValue) * chartHeight,
-                          backgroundColor: color,
-                        }}
-                      />
+                      <div key={i} className="absolute" style={{ left: i * PERIOD_COL_WIDTH + 6, width: groupWidth, bottom: 0, height: chartHeight }}>
+                        {segments.map((seg, si) => (
+                          <div
+                            key={seg.label}
+                            title={`${buckets[i].label} — ${seg.label}: ${formatValue(seg.value)}`}
+                            className="absolute rounded-t-sm"
+                            style={{
+                              left: si * (segWidth + gap), width: segWidth,
+                              bottom: 0, height: (seg.value / maxValue) * chartHeight,
+                              backgroundColor: seg.color,
+                            }}
+                          />
+                        ))}
+                      </div>
                     )
                   })}
                 </div>

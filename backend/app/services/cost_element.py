@@ -14,7 +14,15 @@ from app.models.cost_baseline import CostBaseline, CostBaselineItem
 from app.models.cost_element import CostElement
 from app.models.period import Period
 from app.models.project import Project
-from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate, FyBreakdownPoint, FyBreakdownResponse
+from app.schemas.cost_element import (
+    ActualsHistoryItem,
+    ActualsHistoryResponse,
+    CostElementCreate,
+    CostElementResponse,
+    CostElementUpdate,
+    FyBreakdownPoint,
+    FyBreakdownResponse,
+)
 from app.services.fiscal_year import fiscal_year_bounds, fiscal_year_label, fiscal_years_spanning, overlap_days
 from app.services.reference_codes import next_code
 from app.services.scheduling_cpm import (
@@ -823,3 +831,71 @@ async def get_fy_breakdown(db: AsyncSession, project_id: uuid.UUID, period_id: u
         unscheduled_budget=unscheduled_budget if unscheduled_budget != 0 else None,
         unscheduled_bl_budget=unscheduled_bl_budget if has_unscheduled_bl_budget else None,
     )
+
+
+async def get_actuals_history(db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID) -> ActualsHistoryResponse:
+    """Every schedule-linked cost element's resolved BAC/AC/EAC at each real
+    captured CostBaseline snapshot, chronological (2026-09-08, per Maro: "in
+    the past there is budget and actuals and even forecast bars... in
+    future there is budgeted and forecast but no actuals" — corrected from
+    an earlier wrong assumption that no time-phased actuals data exists at
+    all; Maro pointed out the real, established Actual Hours/Days
+    conversion on a schedule-linked activity, which — while itself backed
+    by the same single cumulative actuals figure, not a separate hours
+    record — proves converting cost history to hours via an activity's own
+    resource rate is already this app's own accepted convention, not a new
+    invention).
+
+    Deliberately returns raw per-snapshot figures rather than pre-bucketing
+    them into periods — the Resource Usage Profile/Resource Tracking
+    widgets already own arbitrary-granularity bucket arrays (day/week/
+    month/quarter/year, whichever zoom the user picked) and already know
+    each activity's linked resource(s) and rate for the hours/days
+    conversion; duplicating any of that here would just be a second,
+    independently-drifting copy. The frontend finds, for each bucket
+    boundary, the latest snapshot at-or-before it, and takes the delta
+    between consecutive boundaries for that bucket's own Actual — the same
+    "real snapshot, delta between two points, never an invented smooth
+    curve" rule get_fy_breakdown already established for the Fiscal Year
+    panel, just generalized to whatever buckets the caller already has
+    instead of fixed fiscal years."""
+    method = await _get_eac_method(db, project_id)
+
+    elements_result = await db.execute(
+        select(CostElement.id, CostElement.linked_activity_id).where(
+            CostElement.project_id == project_id, CostElement.period_id == period_id,
+            CostElement.source == "schedule", CostElement.linked_activity_id.is_not(None),
+        )
+    )
+    activity_id_by_element_id = {row.id: row.linked_activity_id for row in elements_result.all()}
+    if not activity_id_by_element_id:
+        return ActualsHistoryResponse(items=[])
+
+    baselines = (await db.execute(
+        select(CostBaseline).where(CostBaseline.period_id == period_id)
+        .order_by(CostBaseline.baseline_date.asc(), CostBaseline.created_at.asc())
+    )).scalars().all()
+    if not baselines:
+        return ActualsHistoryResponse(items=[])
+    baseline_date_by_id = {b.id: b.baseline_date for b in baselines}
+
+    snapshot_items = (await db.execute(
+        select(CostBaselineItem).where(
+            CostBaselineItem.baseline_id.in_([b.id for b in baselines]),
+            CostBaselineItem.cost_element_id.in_(activity_id_by_element_id.keys()),
+        )
+    )).scalars().all()
+
+    items = []
+    for s in snapshot_items:
+        bac = Decimal(str(s.bac))
+        ac = Decimal(str(s.ac)) if s.ac is not None else Decimal(0)
+        ev = bac * Decimal(s.pct_complete) / Decimal(100) if s.pct_complete is not None else None
+        _, _, eac, _ = _cost_side_evm(bac, ac, ev, method=method)
+        items.append(ActualsHistoryItem(
+            baseline_id=s.baseline_id, baseline_date=baseline_date_by_id[s.baseline_id],
+            cost_element_id=s.cost_element_id, linked_activity_id=activity_id_by_element_id[s.cost_element_id],
+            bac=bac, ac=ac, eac=eac,
+        ))
+    items.sort(key=lambda i: i.baseline_date)
+    return ActualsHistoryResponse(items=items)

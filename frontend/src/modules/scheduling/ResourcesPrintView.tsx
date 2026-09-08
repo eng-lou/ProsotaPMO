@@ -7,7 +7,7 @@ import { ResourceTrackingPrintView, type PrintResourceGroup } from './ResourceTr
 import { ResourceUsageProfilePrintView } from './ResourceUsageProfilePrintView'
 import type { ResourcesPrintFontPrefs, ResourcesPrintTable } from './resourcesLayout'
 import type { AssignmentRow } from './useResourcesTabData'
-import type { Calendar, Resource } from './types'
+import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
   tables: Set<ResourcesPrintTable>
@@ -25,6 +25,7 @@ interface Props {
   selectedActivityIds: Set<string>
   unit: 'hours' | 'days' | 'cost'
   dataDate: string | null
+  actualsHistory: ActualsHistoryItem[]
 }
 
 // One shared letterhead header/footer for however many of Pool/Tracking/
@@ -37,6 +38,7 @@ interface Props {
 export function ResourcesPrintView({
   tables, projectName, letterhead, printFonts, resources, calendars, printGroups, bucketLabels,
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
+  actualsHistory,
 }: Props) {
   if (tables.size === 0) return null
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -55,7 +57,7 @@ export function ResourcesPrintView({
         <ResourceUsageProfilePrintView
           trackedResources={trackedResources} assignmentsByResource={assignmentsByResource}
           buckets={buckets} spreadByResource={spreadByResource} selectedActivityIds={selectedActivityIds} unit={unit}
-          dataDate={dataDate}
+          dataDate={dataDate} actualsHistory={actualsHistory}
         />
       )}
       {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={tokens} />}

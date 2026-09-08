@@ -11,6 +11,7 @@ import { useProjectLetterhead } from '@/lib/letterhead'
 import { evaluateFilter, useSchedulingFilters } from '@/lib/schedulingFilters'
 import { useSchedulingHighlights } from '@/lib/schedulingHighlights'
 import { useScheduleSubprojects } from '@/lib/scheduleSubprojects'
+import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
@@ -63,8 +64,8 @@ import {
 } from './resourceLeveling'
 import { computeUsageProfileBars, eachDate, indexSpread, usageUnitFactor, useResourcesTabData } from './useResourcesTabData'
 import {
-  ACTIVITY_TYPES, type Activity, type ActivityRelationship, type Calendar, type QualityReport, type Resource, type ResourceAssignment,
-  type SchedulingFilter,
+  ACTIVITY_TYPES, type Activity, type ActivityRelationship, type ActualsHistoryItem, type Calendar, type QualityReport,
+  type Resource, type ResourceAssignment, type SchedulingFilter,
 } from './types'
 
 const PANE_MAX_HEIGHT = 600
@@ -837,6 +838,24 @@ export function Scheduling() {
     resources, resourceAssignments, activities, selectedResourceIds,
     resourcesZoom, resourcesRangeStartOverride, resourcesRangeEndOverride,
   )
+
+  // Cost Plan's own reporting period (distinct from the schedule's own
+  // `period` above — see app/models/schedule_period.py's own docstring on
+  // why these are two separate concepts) — needed only to fetch the real
+  // Cost Baseline history the Resource Usage Profile's Actual/Forecast
+  // bars are built from (2026-09-08, per Maro).
+  const { period: costPeriod } = useActivePeriod(selectedProject?.id)
+  const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
+  useEffect(() => {
+    if (!selectedProject || !costPeriod) return
+    let cancelled = false
+    api.get<{ items: ActualsHistoryItem[] }>('/api/v1/cost-elements/actuals-history', {
+      params: { project_id: selectedProject.id, period_id: costPeriod.id },
+    })
+      .then(r => { if (!cancelled) setActualsHistory(r.data.items) })
+      .catch(() => { if (!cancelled) setActualsHistory([]) })
+    return () => { cancelled = true }
+  }, [selectedProject, costPeriod])
 
   useEffect(() => {
     if (resourcesPrintTrigger > 0) window.print()
@@ -2953,6 +2972,7 @@ export function Scheduling() {
             onToggleResourceSelected={toggleResourceSelected}
             selectedActivityIds={selectedActivityIds}
             dataDate={period?.start_date ?? null}
+            actualsHistory={actualsHistory}
             leftPaneWidth={resourcesLeftPaneWidth}
           />
         </>
@@ -4228,7 +4248,7 @@ export function Scheduling() {
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
         trackedResources={printScopedTrackedResources} assignmentsByResource={resourcesTabData.assignmentsByResource}
         buckets={resourcesTabData.buckets} spreadByResource={resourcesTabData.spreadByResource} selectedActivityIds={selectedActivityIds}
-        unit={resourcesUnit} dataDate={period?.start_date ?? null}
+        unit={resourcesUnit} dataDate={period?.start_date ?? null} actualsHistory={actualsHistory}
       />
     )}
     {printTarget === 'schedule' && activeTab === 'schedule' && (

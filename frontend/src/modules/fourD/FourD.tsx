@@ -4,6 +4,7 @@ import axios from 'axios'
 import { api } from '@/lib/api'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
+import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { buildCalendarLookup, resolveHoursPerDay } from '@/modules/scheduling/durationDisplay'
 import { GANTT_ROW_HEIGHT, GanttChart, HEADER_HEIGHT } from '@/modules/scheduling/GanttChart'
@@ -12,7 +13,7 @@ import { loadResourcesLayout } from '@/modules/scheduling/resourcesLayout'
 import { ResourceTrackingWidget } from '@/modules/scheduling/ResourceTrackingWidget'
 import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsageProfileWidget'
 import { computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
-import type { Activity, ActivityRelationship, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
+import type { Activity, ActivityRelationship, ActualsHistoryItem, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
 import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
@@ -5565,6 +5566,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null,
   )
 
+  // Real Cost Baseline history for the Resource Usage Profile's Actual/
+  // Forecast bars (2026-09-08, per Maro) — see Scheduling.tsx's own
+  // matching fetch for why this needs the separate Cost Plan period, not
+  // the schedule period already in scope here.
+  const { period: costPeriod } = useActivePeriod(selectedProject?.id)
+  const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
+  useEffect(() => {
+    if (!selectedProject || !costPeriod) return
+    let cancelled = false
+    api.get<{ items: ActualsHistoryItem[] }>('/api/v1/cost-elements/actuals-history', {
+      params: { project_id: selectedProject.id, period_id: costPeriod.id },
+    })
+      .then(r => { if (!cancelled) setActualsHistory(r.data.items) })
+      .catch(() => { if (!cancelled) setActualsHistory([]) })
+    return () => { cancelled = true }
+  }, [selectedProject, costPeriod])
+
   // Cost Profile (2026-07-25, per Maro: "the resource usage profile but
   // showing cost across the time period... it's in the Resource-Scheduling
   // tab" — pointed at this exact widget's own "cost" unit as the
@@ -6444,6 +6462,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             onToggleResourceSelected={toggleResourceSelected}
             selectedActivityIds={selectedActivityIds}
             dataDate={period?.start_date ?? null}
+            actualsHistory={actualsHistory}
             leftPaneWidth={300}
           />
         )
