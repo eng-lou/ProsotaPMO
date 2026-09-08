@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
 from app.models.calendar import Calendar
+from app.models.cost_baseline import CostBaseline, CostBaselineItem
 from app.models.cost_element import CostElement
 from app.models.period import Period
 from app.models.project import Project
-from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate
+from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate, FyBreakdownPoint, FyBreakdownResponse
+from app.services.fiscal_year import fiscal_year_bounds, fiscal_year_label, fiscal_years_spanning, overlap_days
 from app.services.reference_codes import next_code
 from app.services.scheduling_cpm import (
     _build_calendar_lookup,
@@ -621,3 +623,203 @@ async def delete_cost_element(db: AsyncSession, element_id: uuid.UUID) -> None:
     await _require_live_period(db, el.period_id)
     await db.delete(el)
     await db.commit()
+
+
+async def get_fy_breakdown(db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID) -> FyBreakdownResponse:
+    """Portfolio-wide Budget/BL Budget/Actuals/Forecast, one column per UK
+    fiscal year (2026-09-08, per Maro: "I'd like to see it per year... this
+    should apply to Budgets (Baselines too), Actuals and Forecast").
+
+    Budget/BL Budget are real: each schedule-linked element's own BAC/
+    bl_budget is spread evenly across its linked activity's own [start,
+    finish] by calendar day (the exact same "cost accrues evenly across
+    duration" assumption dashboard.py:_kpis's own bottom-up EAC already
+    uses) and apportioned into whichever FY those days fall in. Elements
+    with no real schedule link at all (manual, or no dates) go into
+    unscheduled_budget/unscheduled_bl_budget instead of an arbitrary year.
+
+    Actuals/Forecast are never invented (per Maro: "these should just be
+    saved when baselines exist... I'm not saying you should magic any
+    number"). For a past FY, both figures come verbatim from whichever real
+    CostBaseline was captured latest within that FY — a genuine recorded
+    snapshot, or null if none was ever captured that year. The one FY
+    containing today is different: its actuals is the real LIVE total
+    (cumulative to today — actuals_is_ytd=True), and per Maro's own
+    correction ("no, forecast can be reprofiled" — a forecast is a
+    projection, not a recorded fact the way actuals is) its forecast
+    combines that same real live actuals-to-date with the live ETC's own
+    day-weighted share of whatever's left in the FY, using the exact same
+    real day-weighting Budget above already computed
+    (forecast_is_reprofiled=True). A future FY with no snapshot gets a
+    purely reprofiled forecast (100% ETC share, no actuals yet); a PAST FY
+    with no snapshot at all is left fully blank — no anchor exists to
+    reprofile from, and inventing one would be exactly the "magic number"
+    Maro asked not to show."""
+    elements = await list_cost_elements(db, project_id, period_id)
+    activity_dates = await _linked_activity_dates(db, elements)
+    method = await _get_eac_method(db, project_id)
+    data_dates = await _period_data_dates(db, {period_id})
+    today = data_dates[period_id].date() if period_id in data_dates else date.today()
+
+    # --- Determine the FY span: every activity's own dates, plus whatever
+    # FY today falls in (so a not-yet-resourced or fully-complete project
+    # still gets at least a "current year" column). ---
+    span_starts: list[date] = []
+    span_ends: list[date] = []
+    for el in elements:
+        if el.source == "schedule" and el.linked_activity_id is not None:
+            dates = activity_dates.get(el.linked_activity_id)
+            if dates and dates[0] is not None and dates[1] is not None:
+                span_starts.append(dates[0].date())
+                span_ends.append(dates[1].date())
+    span_start = min([*span_starts, today])
+    span_end = max([*span_ends, today])
+    fy_years = fiscal_years_spanning(span_start, span_end)
+
+    # --- Budget/BL Budget: real, day-weighted across each element's own
+    # linked activity dates. ---
+    budget_by_fy: dict[int, Decimal] = {y: Decimal(0) for y in fy_years}
+    bl_budget_by_fy: dict[int, Decimal] = {y: Decimal(0) for y in fy_years}
+    has_budget_by_fy: dict[int, bool] = {y: False for y in fy_years}
+    has_bl_budget_by_fy: dict[int, bool] = {y: False for y in fy_years}
+    unscheduled_budget = Decimal(0)
+    unscheduled_bl_budget = Decimal(0)
+    has_unscheduled_bl_budget = False
+    for el in elements:
+        dates = activity_dates.get(el.linked_activity_id) if el.linked_activity_id else None
+        if el.source != "schedule" or dates is None or dates[0] is None or dates[1] is None:
+            if el.bac is not None:
+                unscheduled_budget += el.bac
+            if el.bl_budget is not None:
+                unscheduled_bl_budget += el.bl_budget
+                has_unscheduled_bl_budget = True
+            continue
+        a_start, a_finish = dates[0].date(), dates[1].date()
+        total_days = (a_finish - a_start).days + 1
+        if total_days <= 0:
+            continue
+        for y in fy_years:
+            fy_start, fy_end = fiscal_year_bounds(y)
+            days = overlap_days(a_start, a_finish, fy_start, fy_end)
+            if days == 0:
+                continue
+            share = Decimal(days) / Decimal(total_days)
+            if el.bac is not None:
+                budget_by_fy[y] += (el.bac * share).quantize(_MONEY)
+                has_budget_by_fy[y] = True
+            if el.bl_budget is not None:
+                bl_budget_by_fy[y] += (el.bl_budget * share).quantize(_MONEY)
+                has_bl_budget_by_fy[y] = True
+
+    # --- Actuals/Forecast: real captured CostBaseline snapshots only. ---
+    baselines = (await db.execute(
+        select(CostBaseline).where(CostBaseline.period_id == period_id)
+        .order_by(CostBaseline.baseline_date.asc(), CostBaseline.created_at.asc())
+    )).scalars().all()
+    snapshot_items_by_baseline_id: dict[uuid.UUID, list[CostBaselineItem]] = {}
+    if baselines:
+        all_items = (await db.execute(
+            select(CostBaselineItem).where(CostBaselineItem.baseline_id.in_([b.id for b in baselines]))
+        )).scalars().all()
+        for item in all_items:
+            snapshot_items_by_baseline_id.setdefault(item.baseline_id, []).append(item)
+
+    def _snapshot_totals(baseline_id: uuid.UUID) -> tuple[Decimal, Decimal, Decimal]:
+        items = snapshot_items_by_baseline_id.get(baseline_id, [])
+        bac_total = sum((i.bac for i in items), Decimal(0))
+        ac_total = sum((i.ac for i in items if i.ac is not None), Decimal(0))
+        ev_total = sum(
+            (i.bac * Decimal(i.pct_complete) / Decimal(100) for i in items if i.pct_complete is not None),
+            Decimal(0),
+        )
+        return bac_total, ac_total, ev_total
+
+    # Latest baseline captured within each FY (chronological, so "latest" is
+    # just the last one whose own year matches, since `baselines` is already
+    # date-ordered).
+    latest_baseline_by_fy: dict[int, CostBaseline] = {}
+    for b in baselines:
+        y = fiscal_years_spanning(b.baseline_date, b.baseline_date)[0]
+        latest_baseline_by_fy[y] = b
+
+    # Live current totals — every real, resolved cost element right now,
+    # same aggregation dashboard.py:_kpis already does for the portfolio.
+    live_bac_total = live_ac_total = live_ev_total = Decimal(0)
+    has_live_cost_evm = False
+    for el in elements:
+        if el.bac is None:
+            continue
+        ac = el.computed_actuals if el.element_type == "percentage" else el.actuals
+        has_live_cost_evm = True
+        live_bac_total += el.bac
+        if ac is not None:
+            live_ac_total += ac
+        if el.pct_complete is not None:
+            live_ev_total += el.bac * Decimal(el.pct_complete) / Decimal(100)
+    live_eac = (
+        rollup_evm_from_totals(live_bac_total, live_ac_total, None, live_ev_total, method)["eac"]
+        if has_live_cost_evm else None
+    )
+    live_etc = (live_eac - live_ac_total).quantize(_MONEY) if live_eac is not None else None
+    current_fy = fiscal_years_spanning(today, today)[0]
+
+    points: list[FyBreakdownPoint] = []
+    for y in fy_years:
+        fy_start, fy_end = fiscal_year_bounds(y)
+        is_current = y == current_fy
+        snapshot = latest_baseline_by_fy.get(y)
+        actuals: Decimal | None = None
+        actuals_is_ytd = False
+        forecast: Decimal | None = None
+        forecast_is_reprofiled = False
+
+        if is_current:
+            actuals = live_ac_total if has_live_cost_evm else None
+            actuals_is_ytd = True
+            if live_etc is not None:
+                # Whatever's left of the FY beyond today gets its day-weighted
+                # share of the live ETC; the elapsed part is already covered
+                # by the real live actuals-to-date above — not double-counted,
+                # since ETC by definition excludes what's already been spent.
+                remaining_days = overlap_days(today, fy_end, fy_start, fy_end)
+                fy_days = (fy_end - fy_start).days + 1
+                remaining_share = Decimal(remaining_days) / Decimal(fy_days) if fy_days else Decimal(0)
+                forecast = (live_ac_total + live_etc * remaining_share).quantize(_MONEY)
+                forecast_is_reprofiled = True
+            elif snapshot is not None:
+                # No live cost data exists at all right now (has_live_cost_evm
+                # False) but a real snapshot was captured this year — fall
+                # back to that snapshot's own recorded forecast rather than
+                # leaving a genuinely-known figure blank.
+                snap_bac, snap_ac, snap_ev = _snapshot_totals(snapshot.id)
+                forecast = rollup_evm_from_totals(snap_bac, snap_ac, None, snap_ev, method)["eac"]
+        elif y > current_fy:
+            # A future FY: nothing real has happened yet, but its own share
+            # of the live remaining cost can still be reprofiled.
+            if live_etc is not None:
+                fy_days = (fy_end - fy_start).days + 1
+                days_in_fy = overlap_days(fy_start, fy_end, today, fy_end)
+                share = Decimal(days_in_fy) / Decimal(fy_days) if fy_days else Decimal(0)
+                forecast = (live_etc * share).quantize(_MONEY)
+                forecast_is_reprofiled = True
+        elif snapshot is not None:
+            # A past FY with a real captured baseline in it.
+            snap_bac, snap_ac, snap_ev = _snapshot_totals(snapshot.id)
+            actuals = snap_ac
+            forecast = rollup_evm_from_totals(snap_bac, snap_ac, None, snap_ev, method)["eac"]
+        # A past FY with no snapshot at all stays fully blank — no real
+        # anchor to derive anything from.
+
+        points.append(FyBreakdownPoint(
+            label=fiscal_year_label(y), start_date=fy_start, end_date=fy_end,
+            budget=budget_by_fy[y] if has_budget_by_fy[y] else None,
+            bl_budget=bl_budget_by_fy[y] if has_bl_budget_by_fy[y] else None,
+            actuals=actuals, actuals_is_ytd=actuals_is_ytd,
+            forecast=forecast, forecast_is_reprofiled=forecast_is_reprofiled,
+        ))
+
+    return FyBreakdownResponse(
+        points=points,
+        unscheduled_budget=unscheduled_budget if unscheduled_budget != 0 else None,
+        unscheduled_bl_budget=unscheduled_bl_budget if has_unscheduled_bl_budget else None,
+    )

@@ -81,6 +81,24 @@ export interface CostElement {
   updated_at: string
 }
 
+export interface FyBreakdownPoint {
+  label: string
+  start_date: string
+  end_date: string
+  budget: string | null
+  bl_budget: string | null
+  actuals: string | null
+  actuals_is_ytd: boolean
+  forecast: string | null
+  forecast_is_reprofiled: boolean
+}
+
+export interface FyBreakdownResponse {
+  points: FyBreakdownPoint[]
+  unscheduled_budget: string | null
+  unscheduled_bl_budget: string | null
+}
+
 export interface CostCommitment {
   id: string
   cost_element_id: string

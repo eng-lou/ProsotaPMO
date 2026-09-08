@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate
+from app.schemas.cost_element import CostElementCreate, CostElementResponse, CostElementUpdate, FyBreakdownResponse
 from app.services import cost_element as svc
 
 router = APIRouter(prefix="/cost-elements", tags=["cost-elements"])
@@ -19,6 +19,17 @@ async def list_cost_elements(
     db: AsyncSession = Depends(get_db),
 ) -> list:
     return await svc.list_cost_elements(db, project_id, period_id)
+
+
+# Before /{element_id} — a static path segment must be matched first, or
+# FastAPI would try (and fail) to parse "fy-breakdown" as a UUID.
+@router.get("/fy-breakdown", response_model=FyBreakdownResponse)
+async def get_fy_breakdown(
+    project_id: uuid.UUID,
+    period_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await svc.get_fy_breakdown(db, project_id, period_id)
 
 
 @router.post("/", response_model=CostElementResponse, status_code=201)

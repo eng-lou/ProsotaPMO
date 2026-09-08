@@ -25,6 +25,7 @@ import { CostRateLines } from './CostRateLines'
 import { CostSummaryPanel } from './CostSummaryPanel'
 import { CostVarianceThresholds } from './CostVarianceThresholds'
 import type { CostVarianceCriterion } from './criteriaTypes'
+import { FiscalYearBreakdown } from './FiscalYearBreakdown'
 import { COST_ELEMENT_STATUSES, COST_ELEMENT_STATUS_LABELS, ELEMENT_TYPES, type CostElement } from './types'
 
 interface RiskSummary {
@@ -1005,6 +1006,8 @@ export function CostPlan() {
         criteria={criteria}
         onUpdated={updated => setCriteria(prev => prev.map(c => c.id === updated.id ? updated : c))}
       />
+
+      {period && <FiscalYearBreakdown projectId={selectedProject.id} periodId={period.id} />}
 
       {formOpen && (
         <CostForm costElement={null} onCancel={() => setFormOpen(false)} onSubmit={handleCreate} />

@@ -145,3 +145,43 @@ class CostElementResponse(CostElementBase):
     # rollup() itself falls back to a plain average when every child has
     # zero/null weight.
     linked_activity_duration_hours: Decimal | None = None
+
+
+class FyBreakdownPoint(BaseModel):
+    """One UK fiscal year's own Budget/BL Budget/Actuals/Forecast, portfolio-
+    wide across the whole project (2026-09-08, per Maro: "I'd like to see
+    it per year... FY 10/11 Budget, FY 11/12... this should apply to
+    Budgets (Baselines too), Actuals and Forecast"). See
+    app/services/cost_element.py:get_fy_breakdown for exactly how each
+    figure is derived and why — budget/bl_budget are real (day-weighted
+    across each schedule-linked element's own activity dates, the same
+    "cost accrues evenly across duration" assumption dashboard.py's own
+    bottom-up EAC already uses); actuals/forecast are never invented — see
+    that function's own docstring for the "saved snapshot" vs "reprofiled
+    remaining" split."""
+    label: str  # "FY10/11"
+    start_date: date
+    end_date: date
+    budget: Decimal | None = None
+    bl_budget: Decimal | None = None
+    actuals: Decimal | None = None
+    # True only for the one FY containing today/the data date — actuals is a
+    # cumulative-to-date figure for that year, not yet a closed-year total,
+    # same distinction Maro's own worked example drew ("cumulative figures
+    # from the april to date").
+    actuals_is_ytd: bool = False
+    forecast: Decimal | None = None
+    # True wherever forecast includes a reprofiled (not purely saved-
+    # snapshot) component — per Maro: "no, forecast can be reprofiled" (a
+    # forecast is a projection by nature; actuals never get this treatment).
+    forecast_is_reprofiled: bool = False
+
+
+class FyBreakdownResponse(BaseModel):
+    points: list[FyBreakdownPoint]
+    # Budget/BL Budget from cost elements with no real schedule link (a
+    # manual line, or one whose activity has no dates) — real money that
+    # can't honestly be assigned to any one year, so it's kept separate
+    # rather than silently dumped into an arbitrary FY.
+    unscheduled_budget: Decimal | None = None
+    unscheduled_bl_budget: Decimal | None = None
