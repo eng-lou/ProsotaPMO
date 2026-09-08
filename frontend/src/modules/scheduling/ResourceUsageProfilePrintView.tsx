@@ -30,9 +30,11 @@ const GRIDLINE_COUNT = 4
 export function ResourceUsageProfilePrintView({
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
 }: Props) {
+  // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
+  // matching comment for the real project this was found on.
   const { barValues, hasActuals, limitValue } = computeUsageProfileBars(
     trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
-    dataDate ? new Date(dataDate) : null,
+    dataDate ? new Date(dataDate) : new Date(),
   )
   const maxValue = Math.max(...barValues, limitValue, 1) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'

@@ -250,9 +250,19 @@ function ResourceUsageProfileWidgetImpl({
   // reflected" (2026-07-08, per Maro) — shared calc with the print view so
   // the has-actuals/overallocation colouring can't drift between the two.
   const { barValues, hasActuals, limitValue } = useMemo(
+    // dataDate falls back to today, not null (2026-09-08, real bug found on
+    // a real project: "City Center Office Building" has never had its
+    // schedule period's start_date set at all — no P6 import, never
+    // rescheduled — so dataDate was always null here and the has-actuals
+    // fix below silently disabled itself, reverting to the exact "every
+    // bucket the activity ever touched is green" bug it was meant to fix.
+    // Matches the backend's own canonical fallback exactly — see
+    // scheduling_cpm.py:data_date_for_period's own "falls back to today
+    // only when a period has never been anchored" — never a null that
+    // switches the whole check off).
     () => computeUsageProfileBars(
       trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
-      dataDate ? new Date(dataDate) : null,
+      dataDate ? new Date(dataDate) : new Date(),
     ),
     [trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate]
   )
