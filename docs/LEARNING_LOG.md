@@ -5786,3 +5786,65 @@ real too, but for a different reason — it comes straight from the
 resourced schedule (which activity is working when), so spreading it
 across the calendar isn't inventing anything, it's just reading a fact
 that was already there in a different shape.
+
+## 2026-09-08 — Two wrong guesses in a row, on the same real project
+
+A chart that's supposed to turn green once real spending happened, and
+yellow before that, was showing green everywhere — including years in
+the future. The actual bug (found earlier that same night) was real: the
+check compared against a schedule's own "as-of" reporting date, and
+silently skipped itself whenever that date had never been set, instead
+of falling back to today the way the rest of the app already does
+elsewhere.
+
+But asked to explain WHY that fix hadn't changed the picture on one
+specific real project, the answer given was "this project has never had
+its own reporting date set" — stated as fact, without ever actually
+checking. It was wrong: the project had a real, deliberately-set
+reporting date the whole time, visible right in the app's own Reschedule
+screen. A few messages later, a second guess landed the same way — "no
+separate hours-actuals record exists in this app at all" — also stated
+without checking, also wrong in the way that mattered: the app already
+lets someone type actual hours instead of a raw cost figure and converts
+it using a resource's own day rate, which is real, working, load-bearing
+behavior, not a fact to be casually waved away.
+
+Both times, the fix was the same: stop, go read the actual code and the
+actual data instead of reasoning from what "should" be true, and check
+before saying something as settled fact. Once that discipline was
+applied properly — pulling the real schedule-period record over the
+API, reading the actual conversion function line by line — the true
+answer to "why didn't the chart change" turned out to be a genuinely
+different, more interesting bug entirely (the chart's own colouring
+logic, once you look at real data with a real captured baseline in it,
+was still only drawing one number where three were needed — see the
+next entry). Getting confidently wrong twice on the same night, on
+things a five-minute check would have caught, is exactly the failure
+mode "verify before asserting" exists to prevent — confirmed here the
+hard way, in front of the person who actually knows the domain.
+
+## 2026-09-08 — One bar becomes three
+
+The Resource Usage Profile chart drew one bar per time period, and
+picked its colour based on whether real spending had ever been
+recorded anywhere on the underlying work. What was actually needed, once
+properly understood: three separate figures side by side for any period
+that's already happened — what was planned, what was actually spent,
+and what the current best guess at the final total looks like — and two
+figures (planned, and current best guess) for a period that hasn't
+happened yet, since nothing can have truly been spent on the future.
+
+The planned figure was already real and already correct — it comes
+straight from the resourced schedule. The other two needed a source of
+real history to draw from, which turned out to already exist in a
+different form: every time someone saves a named snapshot of the cost
+plan, that snapshot silently becomes a permanent, dated record of
+exactly what was spent and forecast at that moment. Reading that
+history back out, per line item, per snapshot, in order, is enough to
+answer "what changed between this period and the last one" using only
+real recorded numbers — never a smoothed guess. The one deliberate
+exception, agreed on directly rather than assumed: the future-looking
+"best guess at the final total" figure is allowed to be an estimate,
+spread across whatever time is left on a piece of work, because a
+forecast is supposed to be a projection — unlike money actually spent,
+which either happened or it didn't.
