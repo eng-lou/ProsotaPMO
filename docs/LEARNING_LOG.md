@@ -5718,3 +5718,71 @@ from. A schedule with no costed work attached still gets an (empty)
 baseline recorded rather than being silently skipped, and an existing
 baseline someone assigned by hand is never overwritten by this automatic
 one.
+
+## 2026-09-08 — Letting a project choose its own forecasting formula
+
+There's more than one textbook-correct way to project a final cost from
+today's progress — assume today's variance keeps happening at the same
+rate, assume it was a one-off and the rest goes back to plan, or blend
+both cost and schedule performance together. Maro noticed the app only
+ever showed one of these (silently), and asked for a setting so a project
+could choose which one it wants to see everywhere, instead of that choice
+being baked in unannounced.
+
+The risk here wasn't the formula math — it was scope. The one shared
+function this figure comes from is read from a dozen different places
+across the app (Scheduling's own columns, Cost Plan, several dashboard
+widgets, the Poe assistant). Missing even one of them would have meant
+Poe telling a different forecast than Cost Plan for the exact same
+project — the kind of quiet disagreement that erodes trust in every
+number the app shows, not just the one that's wrong. Tracing every one of
+those call sites by hand and pushing the new setting through all of them,
+while making sure the deployed app still built existing behaviour by
+default, was the actual work.
+
+## 2026-09-08 — What prints, when nobody's watching it print
+
+Two things had gone unnoticed for a while: printing a single dashboard
+widget from its own pop-up was pulling in the whole page's header and
+tabs behind it, and every colour on the printed page had vanished. The
+first turned out to be simple — nobody had ever told the browser "hide
+the rest of the page" for this specific print flow, since it was built
+after the surrounding page already existed. The second had a real
+explanation already sitting in this exact codebase from a much earlier
+fix to a Gantt chart print-out: browsers throw away background colours
+by default when printing paper, on the assumption you don't want to waste
+ink filling in a solid box. The earlier fix only told the browser to keep
+its colours for that one Gantt view — nothing told it to do the same for
+every OTHER print-out that came later, so each new one quietly inherited
+the same fade-to-white behaviour until someone happened to look at a
+printed page with colour on it.
+
+A neighbouring bug in the same area had a similar shape: a resource usage
+chart was meant to turn a time period green once real spending had
+actually happened in it, and yellow otherwise — but it was colouring
+periods years in the future green too, the moment an activity had ANY
+spending recorded anywhere on it, ever. The chart was checking "has this
+activity ever recorded a cost" instead of "did this specific period
+already happen" — a fact about the activity standing in for a fact about
+time, which drift apart the instant a project has both a past and a
+future.
+
+## 2026-09-08 — Only ever showing a real number, never a plausible one
+
+Asked to break Cost Plan's Budget/Actuals/Forecast figures down by year,
+the tempting shortcut was to spread each one smoothly across time and
+call it done. Told directly not to: a forecast is allowed to be a
+projection (that's what a forecast means), but Actuals is a record of
+what actually happened — smoothing it into a curve would let a screen
+say a specific, confident-looking number for a month nothing was
+recorded in, which reads as a fact even though nobody ever measured it.
+
+The fix wasn't a smarter smoothing formula — it was accepting that
+Actuals per year can only be as detailed as the real, saved snapshots
+already sitting in the project's own baseline history, and no more
+detailed than that. A year with a captured snapshot gets an honest
+figure. A year without one gets a blank, not a guess. Budget got to be
+real too, but for a different reason — it comes straight from the
+resourced schedule (which activity is working when), so spreading it
+across the calendar isn't inventing anything, it's just reading a fact
+that was already there in a different shape.
