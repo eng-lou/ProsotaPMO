@@ -193,6 +193,19 @@ export function computeUsageProfileBars(
   trackedResources: Resource[], assignmentsByResource: Map<string, AssignmentRow[]>,
   buckets: { start: Date; end: Date; label: string }[], spreadByResource: Map<string, ResourceSpread>,
   selectedActivityIds: Set<string>, unit: 'hours' | 'days' | 'cost' = 'hours',
+  // The schedule's own data date (2026-09-08, per Maro: "now i can see the
+  // actuals in green but not the yellow budget figures anymore" — every
+  // bar was green because `row.activity.ac` is a single cumulative "has
+  // this activity EVER recorded any actuals" figure, not time-phased per
+  // period; once an activity had any actuals at all, every bucket it
+  // touched — including ones years in the future — read as green with no
+  // way to tell them apart). A bucket only counts as "has actuals" when
+  // it's actually elapsed relative to the data date; a bucket entirely
+  // beyond it shows budgeted (yellow) regardless of the activity's overall
+  // actuals, since nothing there could genuinely have been spent yet. Optional
+  // (null skips this check entirely, same as before) since not every caller
+  // necessarily has a data date to hand.
+  dataDate: Date | null = null,
 ): { barValues: number[]; hasActuals: boolean[]; limitValue: number } {
   // 2026-07-17 perf fix: this used to build `scopedRows` (every tracked
   // resource's assignment rows, filtered by selectedActivityIds) and then,
@@ -222,7 +235,7 @@ export function computeUsageProfileBars(
           const hours = hoursByAssignmentDate.get(`${row.assignment.id}:${d}`)?.hours ?? 0
           if (hours > 0) {
             bars[i] += hours * factor
-            if (row.activity.ac !== null) actualFlags[i] = true
+            if (row.activity.ac !== null && (!dataDate || bucket.start <= dataDate)) actualFlags[i] = true
           }
         }
       }

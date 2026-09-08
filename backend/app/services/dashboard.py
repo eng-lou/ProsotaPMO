@@ -77,7 +77,7 @@ from app.schemas.dashboard import (
 from app.services import clash_test as clash_test_svc
 from app.services import scheduling_quality as quality_svc
 from app.services.activity import _subtree_ids
-from app.services.cost_element import _schedule_evm, list_cost_elements, rollup_evm_from_totals
+from app.services.cost_element import _get_eac_method, _schedule_evm, list_cost_elements, rollup_evm_from_totals
 from app.services.resource_costing import compute_assignment_budget
 from app.services.scheduling_cpm import _build_calendar_lookup
 
@@ -158,7 +158,8 @@ async def _kpis(
         if ev_el is not None:
             ev_cost_total += ev_el
         per_element_bac_ev.append((el.linked_activity_id, bac, ev_el))
-    cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total) if has_cost_evm else {}
+    eac_method = await _get_eac_method(db, project_id)
+    cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total, eac_method) if has_cost_evm else {}
 
     # Two more PMBOK EAC formulas (Batch 6) alongside cost_rollup["eac"]
     # (BAC/CPI) above — "remaining work at the original plan rate" and the
@@ -1044,8 +1045,9 @@ async def _cost_comparison(db: AsyncSession, baseline_set_id: uuid.UUID) -> Cost
             baseline_cpi=None, current_cpi=current_cpi,
         ))
 
-    baseline_rollup = rollup_evm_from_totals(baseline_bac_total, baseline_ac_total, None, baseline_ev_total)
-    current_rollup = rollup_evm_from_totals(current_bac_total, current_ac_total, None, current_ev_total)
+    eac_method = await _get_eac_method(db, period.project_id)
+    baseline_rollup = rollup_evm_from_totals(baseline_bac_total, baseline_ac_total, None, baseline_ev_total, eac_method)
+    current_rollup = rollup_evm_from_totals(current_bac_total, current_ac_total, None, current_ev_total, eac_method)
     return CostComparison(
         baseline_name=baseline.name,
         summary=CostComparisonSummary(
@@ -1315,6 +1317,7 @@ async def get_cost_performance_trend(db: AsyncSession, period_id: uuid.UUID) -> 
         for s in all_snapshots:
             snapshots_by_baseline[s.baseline_id].append(s)
 
+    eac_method = await _get_eac_method(db, period.project_id)
     points = []
     for b in baselines:
         bac_total = ac_total = ev_total = Decimal(0)
@@ -1323,7 +1326,7 @@ async def get_cost_performance_trend(db: AsyncSession, period_id: uuid.UUID) -> 
             ac_total += s.ac or Decimal(0)
             if s.pct_complete is not None:
                 ev_total += s.bac * Decimal(s.pct_complete) / Decimal(100)
-        rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total)
+        rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total, eac_method)
         points.append(CostPerformanceTrendPoint(
             baseline_id=b.id, baseline_name=b.name, baseline_date=b.baseline_date,
             bac=bac_total.quantize(_MONEY), cpi=rollup["cpi"], eac=rollup["eac"],
@@ -1341,7 +1344,7 @@ async def get_cost_performance_trend(db: AsyncSession, period_id: uuid.UUID) -> 
         ac_total += ac or Decimal(0)
         if el.pct_complete is not None:
             ev_total += bac * Decimal(el.pct_complete) / Decimal(100)
-    current_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total) if has_cost_evm else {}
+    current_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_total, eac_method) if has_cost_evm else {}
     points.append(CostPerformanceTrendPoint(
         baseline_id=None, baseline_name="Current", baseline_date=date.today(),
         bac=bac_total.quantize(_MONEY) if has_cost_evm else None,

@@ -6443,6 +6443,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             selectedResourceIds={selectedResourceIds}
             onToggleResourceSelected={toggleResourceSelected}
             selectedActivityIds={selectedActivityIds}
+            dataDate={period?.start_date ?? null}
             leftPaneWidth={300}
           />
         )

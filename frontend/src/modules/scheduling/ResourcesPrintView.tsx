@@ -24,6 +24,7 @@ interface Props {
   spreadByResource: Map<string, ResourceSpread>
   selectedActivityIds: Set<string>
   unit: 'hours' | 'days' | 'cost'
+  dataDate: string | null
 }
 
 // One shared letterhead header/footer for however many of Pool/Tracking/
@@ -35,7 +36,7 @@ interface Props {
 // PRINT_PERIOD_COL_WIDTH, resourcesLayout.ts).
 export function ResourcesPrintView({
   tables, projectName, letterhead, printFonts, resources, calendars, printGroups, bucketLabels,
-  trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
+  trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
 }: Props) {
   if (tables.size === 0) return null
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -54,6 +55,7 @@ export function ResourcesPrintView({
         <ResourceUsageProfilePrintView
           trackedResources={trackedResources} assignmentsByResource={assignmentsByResource}
           buckets={buckets} spreadByResource={spreadByResource} selectedActivityIds={selectedActivityIds} unit={unit}
+          dataDate={dataDate}
         />
       )}
       {letterhead && <PrintLetterheadFooter letterhead={letterhead} tokens={tokens} />}

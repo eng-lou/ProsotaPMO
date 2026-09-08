@@ -21,6 +21,11 @@ interface Props {
   selectedResourceIds: Set<string>
   onToggleResourceSelected: (id: string) => void
   selectedActivityIds: Set<string>
+  // The schedule's own data date (2026-09-08) — see computeUsageProfileBars'
+  // own header for why this widget needs it now: without it, an activity
+  // with any actuals recorded at all painted every bucket it touched green,
+  // including ones years in the future.
+  dataDate: string | null
   // Mirrors Resource Tracking's own tree/timeline divider position
   // (2026-07-09, per Maro) — see the matching prop on ResourceTrackingWidget.
   // Timeline scroll used to be mirrored both ways too; see that widget's
@@ -72,7 +77,7 @@ export const RESOURCE_USAGE_COLORS = { budgeted: '#eab308', actual: '#22c55e', o
 // of its own props changed. Safe as a pure bail-out.
 function ResourceUsageProfileWidgetImpl({
   calendars, trackedResources, assignmentsByResource, buckets, spreadByResource, loading, layoutPrefs, unit,
-  selectedResourceIds, onToggleResourceSelected, selectedActivityIds,
+  selectedResourceIds, onToggleResourceSelected, selectedActivityIds, dataDate,
   leftPaneWidth,
 }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
@@ -245,8 +250,11 @@ function ResourceUsageProfileWidgetImpl({
   // reflected" (2026-07-08, per Maro) — shared calc with the print view so
   // the has-actuals/overallocation colouring can't drift between the two.
   const { barValues, hasActuals, limitValue } = useMemo(
-    () => computeUsageProfileBars(trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit),
-    [trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit]
+    () => computeUsageProfileBars(
+      trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
+      dataDate ? new Date(dataDate) : null,
+    ),
+    [trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate]
   )
 
   const maxValue = Math.max(...barValues, limitValue, 1) * 1.1

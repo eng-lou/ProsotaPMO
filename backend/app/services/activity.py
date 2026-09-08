@@ -32,7 +32,7 @@ from app.schemas.activity import (
 )
 from app.schemas.reassessment import ReassessmentCreate
 from app.services import cost_sync, scheduling_cpm
-from app.services.cost_element import compute_schedule_linked_evm, rollup_evm_from_totals
+from app.services.cost_element import _get_eac_method, compute_schedule_linked_evm, rollup_evm_from_totals
 from app.services.reassessment import create_reassessment
 from app.services.scheduling_cpm import data_date_time_for_period, default_day_start_times, elapsed_duration_fraction
 
@@ -97,6 +97,13 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         project_id: await scheduling_cpm._build_calendar_lookup(db, project_id)
         for project_id in {a.project_id for a in activities}
     }
+    # Which PMBOK EAC formula each project has chosen (2026-09-08, Project.
+    # eac_method) — one lookup per distinct project among this batch, same
+    # shape as calendar_lookups above.
+    eac_methods = {
+        project_id: await _get_eac_method(db, project_id)
+        for project_id in {a.project_id for a in activities}
+    }
     for a in activities:
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
@@ -122,7 +129,7 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             for field in _EVM_FIELDS:
                 setattr(a, field, None)
             continue
-        evm = compute_schedule_linked_evm(element, pv_start, pv_finish, data_date, lookup, calendar)
+        evm = compute_schedule_linked_evm(element, pv_start, pv_finish, data_date, lookup, calendar, eac_methods[a.project_id])
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
 

@@ -34,6 +34,24 @@ class Project(Base, TimestampMixin):
     # £/m² and £/Space unit-rate figures simply don't render when these aren't set.
     gfa_m2: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     space_count: Mapped[int | None] = mapped_column(Integer)
+    # Which PMBOK EAC formula every EAC/ETC figure in the app is computed
+    # with (2026-09-08, per Maro: "depending on the EAC formula we may get
+    # different results... I want a general setting to choose what method
+    # to use"). 'cpi' (BAC/CPI, "typical variance continues") is the
+    # long-standing default and the one already verified against a real P6
+    # export to the penny — changing this per-project is opt-in, not a
+    # retroactive re-verification of every other figure. 'atypical' = AC +
+    # (BAC-EV) (today's variance was a one-off; remaining work returns to
+    # the original plan rate). 'typical' = AC + (BAC-EV)/(CPI x SPI) (both
+    # cost AND schedule performance carry forward) — silently falls back to
+    # 'cpi' wherever no real schedule SPI exists for that figure (see
+    # cost_element.py:_cost_side_evm's own docstring). Bottom-up (P6's 4th
+    # named technique) is deliberately not a choice here — it already
+    # exists as its own always-on KPI figure (dashboard.py's eac_bottom_up)
+    # but needs a real per-activity remaining-duration re-estimate, a
+    # different shape of input than this ratio-based switch, not yet wired
+    # as a per-element default.
+    eac_method: Mapped[str] = mapped_column(String(20), nullable=False, default="cpi", server_default="cpi")
 
     organisation: Mapped[Organisation] = relationship(back_populates="projects")
     periods: Mapped[list[Period]] = relationship(back_populates="project")

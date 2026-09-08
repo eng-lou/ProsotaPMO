@@ -98,7 +98,7 @@ export function Overview() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end">
+      <div className="no-print flex items-center justify-end">
         <div className="flex items-center gap-3 text-sm">
           {/* 2026-09-02, per Maro: "using the general wbs filter at the top
               right just messed up the whole dashboard... the filter edits on

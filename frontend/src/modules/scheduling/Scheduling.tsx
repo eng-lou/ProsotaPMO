@@ -2952,6 +2952,7 @@ export function Scheduling() {
             selectedResourceIds={selectedResourceIds}
             onToggleResourceSelected={toggleResourceSelected}
             selectedActivityIds={selectedActivityIds}
+            dataDate={period?.start_date ?? null}
             leftPaneWidth={resourcesLeftPaneWidth}
           />
         </>
@@ -4227,7 +4228,7 @@ export function Scheduling() {
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
         trackedResources={printScopedTrackedResources} assignmentsByResource={resourcesTabData.assignmentsByResource}
         buckets={resourcesTabData.buckets} spreadByResource={resourcesTabData.spreadByResource} selectedActivityIds={selectedActivityIds}
-        unit={resourcesUnit}
+        unit={resourcesUnit} dataDate={period?.start_date ?? null}
       />
     )}
     {printTarget === 'schedule' && activeTab === 'schedule' && (

@@ -82,6 +82,29 @@ async def test_forecast_is_eac_once_progress_assessed(client: AsyncClient, proje
     assert float(el["forecast"]) == 320000.00
 
 
+async def test_project_eac_method_selects_the_formula(client: AsyncClient, project: Project, live_period: Period):
+    """2026-09-08, per Maro: "depending on the EAC formula we may get
+    different results... I want a general setting to choose what method to
+    use." Defaults to 'cpi' (BAC/CPI) — unchanged from before this setting
+    existed. Switching a project to 'atypical' (AC+(BAC-EV)) must actually
+    change the figure every EAC/ETC read in the app goes through
+    (_cost_side_evm), not just accept the setting and ignore it."""
+    el = await _create(client, project, live_period,
+        description="Piling", budget="400000.00", actuals="160000.00", pct_complete=50,
+    )
+    # ev = 400000 * 0.5 = 200000. Default 'cpi': eac = bac*ac/ev = 400000*160000/200000 = 320000.
+    assert float(el["eac"]) == 320000.00
+
+    resp = await client.patch(f"/api/v1/projects/{project.id}", json={"eac_method": "atypical"})
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["eac_method"] == "atypical"
+
+    refetched = (await client.get(f"/api/v1/cost-elements/{el['id']}")).json()
+    # 'atypical': eac = ac + (bac - ev) = 160000 + (400000 - 200000) = 360000.
+    assert float(refetched["eac"]) == 360000.00
+    assert float(refetched["etc"]) == 200000.00  # eac - ac = 360000 - 160000
+
+
 async def test_delete_cost_element(client: AsyncClient, project: Project, live_period: Period):
     el = await _create(client, project, live_period, description="External works")
     resp = await client.delete(f"/api/v1/cost-elements/{el['id']}")

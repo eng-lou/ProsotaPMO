@@ -4,7 +4,13 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
+
+# The 3 selectable ratio-based EAC formulas — see Project.eac_method's own
+# docstring for what each means and why bottom-up isn't a 4th option here.
+EacMethod = Literal["cpi", "atypical", "typical"]
 
 
 class ProjectCreate(BaseModel):
@@ -21,6 +27,7 @@ class ProjectUpdate(BaseModel):
     status: str | None = None
     gfa_m2: Decimal | None = None
     space_count: int | None = None
+    eac_method: EacMethod | None = None
 
 
 class ProjectDuplicateRequest(BaseModel):
@@ -40,5 +47,6 @@ class ProjectResponse(BaseModel):
     status: str
     gfa_m2: Decimal | None
     space_count: int | None
+    eac_method: EacMethod
     created_at: datetime
     updated_at: datetime

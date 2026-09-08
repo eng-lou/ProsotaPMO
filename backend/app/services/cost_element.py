@@ -27,6 +27,19 @@ _MONEY = Decimal("0.01")
 _RATIO = Decimal("0.0001")
 
 
+async def _get_eac_method(db: AsyncSession, project_id: uuid.UUID) -> str:
+    """The project's chosen EAC formula (Project.eac_method — see that
+    column's own docstring for what each value means), fetched fresh
+    rather than assumed 'cpi' so every EAC/ETC figure in the app actually
+    reflects a project's own setting the moment it's changed. Falls back to
+    'cpi' if the project row is somehow gone by the time this runs (never
+    actually reachable in practice — every caller already holds a live
+    project_id) rather than raising, matching this app's "best-available,
+    never a hard failure over a display formula" convention."""
+    project = await db.get(Project, project_id)
+    return project.eac_method if project is not None else "cpi"
+
+
 async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
     period = await db.get(Period, period_id)
     if period is None:
@@ -39,7 +52,7 @@ async def _require_live_period(db: AsyncSession, period_id: uuid.UUID) -> None:
 
 
 def _element_eac_or_bac(
-    bac: Decimal | None, actuals: Decimal | None, pct_complete: int | None
+    bac: Decimal | None, actuals: Decimal | None, pct_complete: int | None, method: str = "cpi"
 ) -> Decimal | None:
     """One fixed element's own EAC (Estimate at Completion), or its bac
     before any progress has been assessed — used to cascade a percentage
@@ -49,10 +62,20 @@ def _element_eac_or_bac(
     forecast up too, not just a static rate of the live budget). bac here
     must already be resolved (bl_budget-with-live-fallback — see
     CostElement.bl_budget's own docstring), same input _apply_computed's
-    own unified bac/eac path uses for that same fixed element."""
+    own unified bac/eac path uses for that same fixed element.
+
+    method (2026-09-08, Project.eac_method — see that column's own
+    docstring): 'typical' (AC+(BAC-EV)/(CPI x SPI)) is never available
+    here — this cascade works from a raw SQL aggregate (_fixed_subtotals)
+    with no schedule linkage at all, so there's no SPI to use — and
+    silently behaves as 'cpi' instead, same "best-available fallback, not
+    a hard failure" rule _get_eac_method itself follows."""
     if bac is None:
         return None
     bac = Decimal(str(bac))
+    if method == "atypical" and pct_complete is not None and actuals is not None:
+        ev = bac * Decimal(pct_complete) / Decimal(100)
+        return (Decimal(str(actuals)) + (bac - ev)).quantize(_MONEY)
     if pct_complete is not None and actuals is not None:
         actuals = Decimal(str(actuals))
         if actuals != 0:
@@ -64,7 +87,7 @@ def _element_eac_or_bac(
 
 
 async def _fixed_subtotals(
-    db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID
+    db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID, method: str = "cpi"
 ) -> tuple[Decimal, Decimal, Decimal]:
     """Return (sum_budget, sum_forecast, sum_actuals) for all fixed elements
     in this project/period. sum_budget is the live-estimate cascade base for
@@ -88,7 +111,7 @@ async def _fixed_subtotals(
     sum_actuals = sum((Decimal(str(r.actuals)) for r in rows if r.actuals is not None), Decimal(0))
     sum_forecast = sum(
         (
-            _element_eac_or_bac(r.bl_budget if r.bl_budget is not None else r.budget, r.actuals, r.pct_complete)
+            _element_eac_or_bac(r.bl_budget if r.bl_budget is not None else r.budget, r.actuals, r.pct_complete, method)
             or Decimal(0)
             for r in rows
         ),
@@ -252,32 +275,63 @@ def _schedule_evm(
 
 
 def _cost_side_evm(
-    bac: Decimal | None, ac: Decimal | None, ev: Decimal | None
+    bac: Decimal | None, ac: Decimal | None, ev: Decimal | None,
+    spi: Decimal | None = None, method: str = "cpi",
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """CV/CPI/EAC/ETC from BAC/AC/EV — extracted so this stays the one place these
     formulas live, shared by _apply_computed (Cost Plan) and
     compute_schedule_linked_evm (Scheduling's EVM columns) rather than drifting
-    into two copies."""
+    into two copies.
+
+    method (2026-09-08, Project.eac_method — see that column's own
+    docstring, added per Maro: "depending on the EAC formula we may get
+    different results... I want a general setting to choose what method to
+    use") selects which PMBOK EAC formula to use; CPI/CV are unaffected —
+    they're inputs to every formula, not something a method changes.
+    'atypical' needs no SPI. 'typical' needs a real spi — pass None (the
+    default) wherever no genuine schedule position exists for this figure
+    (e.g. a non-schedule-linked Cost Plan line) and it silently behaves as
+    'cpi' instead, same "best-available fallback" rule _get_eac_method
+    itself follows, rather than leaving EAC blank over a method that simply
+    doesn't apply here."""
     cv = (ev - ac).quantize(_MONEY) if ev is not None and ac is not None else None
     cpi = (ev / ac).quantize(_RATIO) if ev is not None and ac is not None and ac != 0 else None
-    # EAC = BAC / CPI, but computed as BAC * AC / EV directly rather than
-    # dividing by the already-rounded `cpi` above — P6's own EAC/ETC report
-    # figures only match to the penny (verified 2026-09-06 against Juniper's
-    # real EVM export) when the full-precision ratio is used; routing
-    # through the display-rounded CPI first compounded up to a real ~£1
-    # error on some activities (e.g. "Fab & Delivery": 30948.33 vs P6's
-    # 30947.37).
-    eac = (
-        (bac * ac / ev).quantize(_MONEY)
-        if bac is not None and ac is not None and ac != 0 and ev is not None and ev != 0
-        else None
-    )
+
+    eac: Decimal | None = None
+    if method == "atypical" and bac is not None and ac is not None and ev is not None:
+        # PMBOK "atypical variance" EAC = AC + (BAC - EV) — assumes today's
+        # cost variance was a one-off and remaining work returns to the
+        # original planned rate.
+        eac = (ac + (bac - ev)).quantize(_MONEY)
+    elif (
+        method == "typical" and bac is not None and ac is not None and ac != 0
+        and ev is not None and ev != 0 and spi is not None and spi != 0
+    ):
+        # PMBOK "typical variance" EAC = AC + (BAC-EV)/(CPI x SPI) — full-
+        # precision cpi_raw here, not the already-rounded `cpi` above, for
+        # the same reason the default formula below uses full-precision
+        # ac/ev rather than the rounded cpi (see this function's own
+        # 'cpi'-branch comment).
+        cpi_raw = ev / ac
+        eac = (ac + (bac - ev) / (cpi_raw * spi)).quantize(_MONEY)
+    elif bac is not None and ac is not None and ac != 0 and ev is not None and ev != 0:
+        # Default 'cpi' method (EAC = BAC / CPI), also the fallback for
+        # 'typical' whenever no real spi was passed in. Computed as
+        # BAC * AC / EV directly rather than dividing by the already-
+        # rounded `cpi` above — P6's own EAC/ETC report figures only match
+        # to the penny (verified 2026-09-06 against Juniper's real EVM
+        # export) when the full-precision ratio is used; routing through
+        # the display-rounded CPI first compounded up to a real ~£1 error
+        # on some activities (e.g. "Fab & Delivery": 30948.33 vs P6's
+        # 30947.37).
+        eac = (bac * ac / ev).quantize(_MONEY)
+
     etc = (eac - ac).quantize(_MONEY) if eac is not None and ac is not None else None
     return cv, cpi, eac, etc
 
 
 def rollup_evm_from_totals(
-    bac: Decimal | None, ac: Decimal | None, pv: Decimal | None, ev: Decimal | None
+    bac: Decimal | None, ac: Decimal | None, pv: Decimal | None, ev: Decimal | None, method: str = "cpi"
 ) -> dict[str, Decimal | None]:
     """SV/SPI/CV/CPI/EAC/ETC from already-*summed* BAC/AC/PV/EV — a WBS
     summary's own EVM (app/services/activity.py's _rollup_wbs_evm_fields,
@@ -308,7 +362,7 @@ def rollup_evm_from_totals(
     from the real summed PV/BAC rather than an unrelated calendar span."""
     sv = (ev - pv).quantize(_MONEY) if ev is not None and pv is not None else None
     spi = (ev / pv).quantize(_RATIO) if ev is not None and pv is not None and pv != 0 else None
-    cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
+    cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev, spi=spi, method=method)
     schedule_pct_complete = (
         (pv / bac * Decimal(100)).quantize(Decimal("0.01")) if pv is not None and bac is not None and bac != 0 else None
     )
@@ -320,7 +374,7 @@ def rollup_evm_from_totals(
 
 def compute_schedule_linked_evm(
     element: CostElement, start: datetime | None, finish: datetime | None, data_date: datetime,
-    lookup: "_CalendarLookup", calendar: Calendar,
+    lookup: "_CalendarLookup", calendar: Calendar, method: str = "cpi",
 ) -> dict[str, Decimal | None]:
     """AC/PV/EV/CV/SV/CPI/SPI/BAC/EAC/ETC for a single schedule-linked cost
     element — used by app/services/activity.py to surface these as Scheduling
@@ -342,7 +396,7 @@ def compute_schedule_linked_evm(
     bac = Decimal(str(bac)) if bac is not None else None
     ac = Decimal(str(element.actuals)) if element.actuals is not None else None
     pv, ev, sv, spi = _schedule_evm(bac, element.pct_complete, start, finish, data_date, lookup, calendar)
-    cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev)
+    cv, cpi, eac, etc = _cost_side_evm(bac, ac, ev, spi=spi, method=method)
     bl_budget = Decimal(str(element.bl_budget)) if element.bl_budget is not None else None
     return {
         "bac": bac, "ac": ac, "pv": pv, "ev": ev,
@@ -368,6 +422,7 @@ def _apply_computed(
     activity_dates: tuple[datetime | None, datetime | None, uuid.UUID | None, Decimal | None] | None = None,
     data_date: datetime | None = None,
     lookup: "_CalendarLookup | None" = None,
+    method: str = "cpi",
 ) -> CostElementResponse:
     data = CostElementResponse.model_validate(element)
 
@@ -435,7 +490,7 @@ def _apply_computed(
     if bac is not None and element.pct_complete is not None:
         ev = (bac * Decimal(element.pct_complete) / Decimal(100)).quantize(_MONEY)
 
-    data.cv, data.cpi, data.eac, data.etc = _cost_side_evm(bac, ac, ev)
+    data.cv, data.cpi, data.eac, data.etc = _cost_side_evm(bac, ac, ev, spi=data.spi, method=method)
     if bac is not None and data.eac is not None:
         data.vac = (bac - data.eac).quantize(_MONEY)
     if bac is not None and ev is not None and ac is not None and (bac - ac) != 0:
@@ -469,6 +524,7 @@ async def list_cost_elements(
     activity_dates = await _linked_activity_dates(db, elements)
     data_dates = await _period_data_dates(db, {el.period_id for el in elements})
     lookup = await _build_calendar_lookup(db, project_id)
+    method = await _get_eac_method(db, project_id)
 
     # Group percentage calculations by period to avoid N+1 subtotal queries,
     # then cascade each period's own percentage elements in NRM1 order
@@ -481,7 +537,7 @@ async def list_cost_elements(
 
     period_bases: dict[uuid.UUID, dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]]] = {}
     for period_id, period_elements in percentage_by_period.items():
-        fixed_subs = await _fixed_subtotals(db, project_id, period_id)
+        fixed_subs = await _fixed_subtotals(db, project_id, period_id, method)
         period_bases[period_id] = _cascade_bases(fixed_subs, period_elements)
 
     results = []
@@ -492,6 +548,7 @@ async def list_cost_elements(
             subs = (Decimal(0), Decimal(0), Decimal(0))
         results.append(_apply_computed(
             el, *subs, gfa_m2, activity_dates.get(el.linked_activity_id), data_dates.get(el.period_id), lookup,
+            method=method,
         ))
     return results
 
@@ -504,8 +561,9 @@ async def get_cost_element(db: AsyncSession, element_id: uuid.UUID) -> CostEleme
     activity_dates = await _linked_activity_dates(db, [el])
     data_dates = await _period_data_dates(db, {el.period_id})
     lookup = await _build_calendar_lookup(db, el.project_id)
+    method = await _get_eac_method(db, el.project_id)
     if el.element_type == "percentage":
-        fixed_subs = await _fixed_subtotals(db, el.project_id, el.period_id)
+        fixed_subs = await _fixed_subtotals(db, el.project_id, el.period_id, method)
         siblings = list((await db.execute(
             select(CostElement).where(
                 CostElement.project_id == el.project_id,
@@ -518,6 +576,7 @@ async def get_cost_element(db: AsyncSession, element_id: uuid.UUID) -> CostEleme
         subs = (Decimal(0), Decimal(0), Decimal(0))
     return _apply_computed(
         el, *subs, gfa_m2, activity_dates.get(el.linked_activity_id), data_dates.get(el.period_id), lookup,
+        method=method,
     )
 
 

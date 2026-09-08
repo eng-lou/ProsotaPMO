@@ -33,10 +33,19 @@ interface RiskSummary {
   title: string
 }
 
+type EacMethod = 'cpi' | 'atypical' | 'typical'
+
 interface ProjectDetails {
   gfa_m2: string | null
   space_count: number | null
+  eac_method: EacMethod
 }
+
+const EAC_METHOD_OPTIONS: { value: EacMethod; label: string; title: string }[] = [
+  { value: 'cpi', label: 'BAC / CPI', title: '"Typical variance" (PMBOK default) — assumes cost performance so far continues at the same rate for the rest of the work. EAC = BAC / CPI.' },
+  { value: 'atypical', label: 'AC + (BAC-EV)', title: '"Atypical variance" — assumes today\'s cost variance was a one-off and remaining work returns to the original planned rate. EAC = AC + (BAC-EV).' },
+  { value: 'typical', label: 'AC + (BAC-EV)/(CPI×SPI)', title: 'Both cost AND schedule performance carry forward into the remaining work. EAC = AC + (BAC-EV)/(CPI×SPI) — falls back to BAC/CPI wherever a figure has no real schedule position (SPI) to use.' },
+]
 
 const GROUP_OPTIONS = [
   { value: 'none', label: 'No grouping' },
@@ -589,6 +598,12 @@ export function CostPlan() {
     setElements(data)
   }
 
+  const handleEacMethodChange = async (method: EacMethod) => {
+    const { data } = await api.patch(`/api/v1/projects/${selectedProject.id}`, { eac_method: method })
+    setProjectDetails(prev => prev ? { ...prev, eac_method: data.eac_method } : prev)
+    await refreshElements()
+  }
+
   const handleCreate = async (values: CostFormValues, _reassessmentNote: string | null) => {
     if (!period) return
     await api.post('/api/v1/cost-elements/', {
@@ -1063,6 +1078,14 @@ export function CostPlan() {
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted"
         >
           {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
+        </select>
+        <select
+          value={projectDetails?.eac_method ?? 'cpi'}
+          onChange={e => handleEacMethodChange(e.target.value as EacMethod)}
+          title="Which formula EAC/ETC is computed with, everywhere in the app — Scheduling, Cost Plan, dashboard widgets, Poe. Changing this recalculates every EAC/ETC/VAC figure for this project immediately."
+          className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted"
+        >
+          {EAC_METHOD_OPTIONS.map(o => <option key={o.value} value={o.value} title={o.title}>EAC: {o.label}</option>)}
         </select>
         <button
           onClick={() => downloadCostElementsCsv(visibleElements, selectedProject.name)}

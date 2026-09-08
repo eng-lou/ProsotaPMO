@@ -156,6 +156,17 @@ html.dark .print-only {
     box-shadow: none !important;
     border: none !important;
   }
+  /* Same background-drop problem as the Gantt fix above (2026-09-08, found on
+     Milestone Timeline: every status dot — a plain background-color div, no
+     border — printed as nothing at all) — widget content never carried the
+     .print-only color-adjust override, only the dedicated print VIEWS
+     (Gantt/Cost Plan/Risk) did. Every widget's own colors need it now that
+     any widget can be printed via this modal, not just the ones with a
+     bespoke print view. */
+  .dashboard-widget-modal-box, .dashboard-widget-modal-box * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   .dashboard-widget-modal-content {
     height: 500px !important;
     overflow: visible !important;

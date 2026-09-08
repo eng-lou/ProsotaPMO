@@ -11,6 +11,7 @@ interface Props {
   spreadByResource: Map<string, ResourceSpread>
   selectedActivityIds: Set<string>
   unit: 'hours' | 'days' | 'cost'
+  dataDate: string | null
 }
 
 const CHART_HEIGHT = 160
@@ -27,10 +28,11 @@ const GRIDLINE_COUNT = 4
 // spreadsheet timeline position and the usage profile timeline chart should
 // be aligned in the same horizontal axis").
 export function ResourceUsageProfilePrintView({
-  trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
+  trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
 }: Props) {
   const { barValues, hasActuals, limitValue } = computeUsageProfileBars(
-    trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit
+    trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
+    dataDate ? new Date(dataDate) : null,
   )
   const maxValue = Math.max(...barValues, limitValue, 1) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'

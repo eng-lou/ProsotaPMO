@@ -11,7 +11,7 @@ from app.models.icd_item import IcdItem
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.risk import Risk
-from app.services.cost_element import rollup_evm_from_totals
+from app.services.cost_element import _get_eac_method, rollup_evm_from_totals
 from app.services.dashboard import _live_schedule_spi, _resolve_bac_ac
 from app.services.resource_costing import compute_assignment_budget_raw
 
@@ -177,7 +177,8 @@ async def get_project_snapshot(
                 ac_total += ac
             if el.pct_complete is not None:
                 ev_cost_total += bac * Decimal(el.pct_complete) / Decimal(100)
-        cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total) if has_cost_evm else {}
+        eac_method = await _get_eac_method(db, project_id)
+        cost_rollup = rollup_evm_from_totals(bac_total, ac_total, None, ev_cost_total, eac_method) if has_cost_evm else {}
         snapshot["cost"] = {
             "bac": float(bac_total) if has_cost_evm else None,
             "ac": float(ac_total) if has_cost_evm else None,
