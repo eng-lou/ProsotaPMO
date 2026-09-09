@@ -246,14 +246,26 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # UDF here is created as a plain "activity" one and just gets its values
     # attached to whichever kind of Activity row P6 says it belongs on.
     for pu in parsed.udf_types:
-        existing = existing_udf_by_name.get(pu.title)
+        name = pu.title[:100]
+        # A real P6 export can declare the same UDF title under more than one
+        # SubjectArea (e.g. ObjectId 462 "Safety"/Project alongside ObjectId
+        # 464 "Safety"/Activity — found importing MFG00659 - B1.xml,
+        # 2026-09-09) — collapsed to the same entity_type="activity" name per
+        # this loop's own header, so the second one is a genuine name
+        # collision, not a distinct definition. existing_udf_by_name is
+        # updated as each new definition is staged (not just seeded once from
+        # the DB before the loop) so this second occurrence reuses the first
+        # one instead of trying to INSERT a duplicate (project_id,
+        # entity_type, name) and 500ing on uq_udf_definition_project_entity_name.
+        existing = existing_udf_by_name.get(name)
         if existing is not None:
             udf_def_real_id_by_object_id[pu.object_id] = existing.id
             continue
         definition = UserDefinedFieldDefinition(
-            id=uuid.uuid4(), project_id=project_id, entity_type="activity", name=pu.title[:100], data_type=pu.data_type,
+            id=uuid.uuid4(), project_id=project_id, entity_type="activity", name=name, data_type=pu.data_type,
         )
         db.add(definition)
+        existing_udf_by_name[name] = definition
         udf_def_real_id_by_object_id[pu.object_id] = definition.id
 
     # P6's own Activity Id (e.g. "EC2430", distinct from Prosota's own
