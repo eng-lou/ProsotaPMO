@@ -538,9 +538,11 @@ TOOLS: list[dict] = [
             "- clash_detail_table — fields on a Clash pair: id, test_id, test_name, "
             "element_a_label, element_b_label, distance_mm, status ('new'|'reviewed'|'approved') "
             "(no UDF support).\n"
-            "- milestone_trend_chart — one row per milestone (not per baseline): code, task_name "
-            "only. E.g. isolate one milestone's own trend line: {field:'code', operator:'eq', "
-            "value:'M-0002'} (no UDF support).\n"
+            "- milestone_trend_chart, milestone_variance — one row per milestone (not per "
+            "baseline): code, task_name only. milestone_variance is a bar-per-milestone summary "
+            "(days moved between its earliest saved baseline and the most recent point) rather "
+            "than the full line-per-baseline trend. E.g. isolate one milestone: {field:'code', "
+            "operator:'eq', value:'M-0002'} (no UDF support).\n"
             "- risk_emv_trend, cost_cpi_trend, cost_eac_trend, spi_trend, icd_open_items_trend, "
             "pv_ev_ac_trend — each plots a portfolio-level rollup (total open-risk EMV, CPI, EAC, "
             "SPI, open Issue/Change/Decision counts, or Planned/Earned Value + Actual Cost — the "
@@ -587,7 +589,7 @@ TOOLS: list[dict] = [
                                     "near_critical_watch_list", "activity_status", "project_info",
                                     "camera_view_gallery", "fourd_video_gallery", "lookahead_planner",
                                     "mitigation_actions_table", "risk_ageing_table", "project_narrative",
-                                    "milestone_trend_chart", "risk_emv_trend", "cost_cpi_trend",
+                                    "milestone_trend_chart", "milestone_variance", "risk_emv_trend", "cost_cpi_trend",
                                     "cost_eac_trend", "spi_trend", "icd_open_items_trend", "pv_ev_ac_trend",
                                 ],
                             },

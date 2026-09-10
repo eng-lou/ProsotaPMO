@@ -212,6 +212,7 @@ const WIDGET_FIELD_MAP: Record<string, { fields: DashboardFieldDef[]; udfEntity?
   mitigation_actions_table: { fields: MITIGATION_ACTION_FIELDS },
   clash_detail_table: { fields: CLASH_PAIR_FIELDS },
   milestone_trend_chart: { fields: MILESTONE_TREND_FIELDS },
+  milestone_variance: { fields: MILESTONE_TREND_FIELDS },
 }
 
 function udfRecords(data: DashboardOverviewResponse, entity: UdfEntity): { udf: Record<string, string> }[] {

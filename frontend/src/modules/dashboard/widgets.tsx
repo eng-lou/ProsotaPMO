@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   getCostPerformanceTrend, getIcdOpenItemsTrend, getPvEvAcTrend, getRiskEmvTrend, getSpiTrend,
   type CostPerformanceTrendPoint, type IcdOpenItemsTrendPoint, type PvEvAcTrendPoint, type RiskEmvTrendPoint,
@@ -53,7 +53,9 @@ export interface WidgetProps {
   // of the two smaller ones added at the same time (data.lookahead_items,
   // data.mitigation_actions), or data.clash_pairs — plus milestone_trend_chart
   // (its own, genuinely different milestone-across-baselines shape, added
-  // 2026-09-03) — 34 widget_types total now, see FILTERABLE_WIDGET_TYPES.
+  // 2026-09-03) — 34 widget_types total now, see FILTERABLE_WIDGET_TYPES. Extended
+  // again 2026-09-10 to milestone_variance, that same milestone-across-
+  // baselines shape — 35 total now.
   // risk_emv_trend/cost_cpi_trend/cost_eac_trend/spi_trend/
   // icd_open_items_trend (added same day, per Maro: "Do a trend chart for
   // Risk EMV, do for CPI, SPI, Cost EAC, Issues, Changes and Decisions
@@ -381,6 +383,126 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
           )
         })}
       </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+// Milestone Variance (2026-09-10, per Maro, referencing an AI-generated
+// dashboard mockup with a bar-per-milestone slippage summary underneath the
+// trend chart) — same underlying per-milestone-across-baselines data as
+// MilestoneTrendChartWidget above, reduced to one number per milestone: how
+// many days its finish moved between the EARLIEST saved baseline and the
+// most recent point (a later baseline, or "Current" if that's all there is
+// past the first one). Deliberately NOT a true cumulative waterfall (each
+// bar doesn't start where the previous one's top/bottom left off) — the
+// reference mockup's bars are each independent against one shared zero
+// line, which is what's built here; "waterfall" in the ask was describing
+// the look (diverging red/green bars), not literal waterfall-chart math.
+function buildMilestoneVarianceData(series: MilestoneTrendSeries[]) {
+  return series
+    .map(s => {
+      const withFinish = s.points.filter(p => p.finish)
+      if (withFinish.length < 2) return null
+      const first = new Date(withFinish[0].finish!).getTime()
+      const last = new Date(withFinish[withFinish.length - 1].finish!).getTime()
+      const days = Math.round((last - first) / 86_400_000)
+      return { activity_id: s.activity_id, name: s.task_name, days }
+    })
+    .filter((d): d is { activity_id: string; name: string; days: number } => d !== null)
+}
+
+// Recharts' own Bar `label` prop has the same unreliable content-shape
+// problem documented on MilestoneTrendChartWidget's ReferenceDot labels
+// above, so this uses LabelList's `content` render-prop instead — needed
+// here anyway to flip the label to the *outside* of the bar (above a red
+// bar, below a green one) rather than recharts' default, which anchors
+// "top" to the rect's own top edge and would print a negative bar's label
+// right on the zero line, overlapping its neighbours.
+function MilestoneVarianceLabel({ x = 0, y = 0, width = 0, height = 0, value = 0 }: { x?: number; y?: number; width?: number; height?: number; value?: number }) {
+  const isNegative = value < 0
+  return (
+    <text
+      x={x + width / 2}
+      y={isNegative ? y + height + 14 : y - 6}
+      textAnchor="middle"
+      fontSize={11}
+      fontWeight={600}
+      fill={value > 0 ? '#dc2626' : isNegative ? '#16a34a' : '#6b7280'}
+    >
+      {value > 0 ? `+${value}d` : `${value}d`}
+    </text>
+  )
+}
+
+export function MilestoneVarianceWidget({ projectId, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
+  const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
+
+  useEffect(() => {
+    if (!schedulePeriod) return
+    let cancelled = false
+    getMilestoneTrend(schedulePeriod.id).then(s => { if (!cancelled) setSeries(s) })
+    return () => { cancelled = true }
+  }, [schedulePeriod?.id])
+
+  if (!projectId) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No project selected.</span>
+  if (periodLoading || series === null) return <span className="text-xs text-gray-400 dark:text-prosota-muted">Loading…</span>
+  if (series.length === 0) return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones in this schedule yet.</span>
+
+  const visibleSeries = series
+    .filter(s => evaluateDashboardFilter(s, filterConditions, filterMatchMode))
+    .filter(s => matchesCrossFilter(s.activity_id, 'activity', crossFilter))
+  if (visibleSeries.length === 0) {
+    return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones match this filter.</span>
+  }
+
+  const chartData = buildMilestoneVarianceData(visibleSeries)
+  if (chartData.length === 0) {
+    return (
+      <span className="text-xs text-gray-400 dark:text-prosota-muted">
+        Only one data point so far (no saved baselines yet) — save at least one Schedule Baseline to see variance.
+      </span>
+    )
+  }
+  const click = activityClick
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={chartData} margin={{ top: 26, right: 12, bottom: 10, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="name"
+          tick={{ fontSize: 10 }}
+          tickLine={false}
+          axisLine={{ stroke: '#d1d5db' }}
+          interval={0}
+          angle={-25}
+          textAnchor="end"
+          height={70}
+        />
+        <YAxis
+          tickFormatter={(v: number) => (v === 0 ? '0' : `${v > 0 ? '+' : ''}${v}d`)}
+          tick={{ fontSize: 11 }}
+          tickLine={false}
+          axisLine={{ stroke: '#d1d5db' }}
+          width={50}
+        />
+        <ReferenceLine y={0} stroke="#9ca3af" />
+        <Tooltip formatter={(v: number) => [`${v > 0 ? '+' : ''}${v} days`, 'Variance']} />
+        <Bar
+          dataKey="days"
+          radius={[3, 3, 3, 3]}
+          isAnimationActive={false}
+          cursor={onCrossFilterClick ? 'pointer' : undefined}
+          onClick={onCrossFilterClick ? (entry: { activity_id: string }) => click([entry.activity_id], crossFilter, onCrossFilterClick).onClick?.() : undefined}
+        >
+          {chartData.map(d => {
+            const selected = click([d.activity_id], crossFilter, onCrossFilterClick).selected
+            return <Cell key={d.activity_id} fill={selected ? '#d97706' : d.days > 0 ? '#dc2626' : d.days < 0 ? '#16a34a' : '#9ca3af'} />
+          })}
+          <LabelList dataKey="days" content={<MilestoneVarianceLabel />} />
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   )
 }
@@ -2337,6 +2459,7 @@ export const FILTERABLE_WIDGET_TYPES = new Set([
   'milestones_table', 'milestone_timeline',
   // Smaller, single-widget data sources
   'lookahead_planner', 'mitigation_actions_table', 'clash_detail_table', 'milestone_trend_chart',
+  'milestone_variance',
 ])
 
 // Export-to-xlsx row extraction (2026-09-07, per Maro: "each dashboard
@@ -2786,6 +2909,7 @@ export function getWidgetRows(widgetType: string, props: WidgetProps): { headers
     case 'camera_view_gallery':
     case 'fourd_video_gallery':
     case 'milestone_trend_chart':
+    case 'milestone_variance':
     case 'risk_emv_trend':
     case 'cost_cpi_trend':
     case 'cost_eac_trend':
@@ -2810,6 +2934,7 @@ export const WIDGET_REGISTRY: Record<string, WidgetDefinition> = {
   // widget — one already placed on a saved layout keeps its own saved size.
   milestone_timeline: { label: 'Milestone Timeline', category: 'Schedule', defaultSize: { w: 6, h: 6 }, render: props => <MilestoneTimelineWidget {...props} /> },
   milestone_trend_chart: { label: 'Milestone Trend Chart', category: 'Schedule', defaultSize: { w: 8, h: 5 }, render: props => <MilestoneTrendChartWidget {...props} /> },
+  milestone_variance: { label: 'Milestone Variance', category: 'Schedule', defaultSize: { w: 8, h: 4 }, render: props => <MilestoneVarianceWidget {...props} /> },
   risk_emv_trend: { label: 'Risk EMV Trend', category: 'Risk', defaultSize: { w: 8, h: 5 }, render: props => <RiskEmvTrendWidget {...props} /> },
   cost_cpi_trend: { label: 'Cost CPI Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostCpiTrendWidget {...props} /> },
   cost_eac_trend: { label: 'Cost EAC Trend', category: 'Cost', defaultSize: { w: 8, h: 5 }, render: props => <CostEacTrendWidget {...props} /> },
