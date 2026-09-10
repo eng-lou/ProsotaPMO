@@ -462,21 +462,44 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
 // dashboard mockup with a bar-per-milestone slippage summary underneath the
 // trend chart) — same underlying per-milestone-across-baselines data as
 // MilestoneTrendChartWidget above, reduced to one number per milestone: how
-// many days its finish moved between the EARLIEST saved baseline and the
-// most recent point (a later baseline, or "Current" if that's all there is
-// past the first one). Deliberately NOT a true cumulative waterfall (each
-// bar doesn't start where the previous one's top/bottom left off) — the
-// reference mockup's bars are each independent against one shared zero
-// line, which is what's built here; "waterfall" in the ask was describing
-// the look (diverging red/green bars), not literal waterfall-chart math.
-function buildMilestoneVarianceData(series: MilestoneTrendSeries[]) {
+// many days its finish moved between a REFERENCE baseline (picked below,
+// earliest by default) and the most recent point (a later baseline, or
+// "Current" if that's all there is past the reference). Deliberately NOT a
+// true cumulative waterfall (each bar doesn't start where the previous
+// one's top/bottom left off) — the reference mockup's bars are each
+// independent against one shared zero line, which is what's built here;
+// "waterfall" in the ask was describing the look (diverging red/green
+// bars), not literal waterfall-chart math.
+interface MilestoneVarianceBaselineOption { id: string; name: string; date: string }
+
+// 2026-09-11, per Maro on a real screenshot: the widget silently always
+// diffed against the EARLIEST baseline with no way to tell (or change)
+// what it was comparing against — surfaced here as a real picker (option
+// values are real baseline ids, not the generic {field,operator,value}
+// filter language every other widget's Filter button uses, since "which
+// baseline is the reference point" is a chart parameter, not a per-record
+// filter condition — there's no single MilestoneTrendSeries field a
+// condition could target that would mean this).
+function getMilestoneVarianceBaselineOptions(series: MilestoneTrendSeries[]): MilestoneVarianceBaselineOption[] {
+  const byId = new Map<string, MilestoneVarianceBaselineOption>()
+  for (const s of series) {
+    for (const p of s.points) {
+      if (p.baseline_id && !byId.has(p.baseline_id)) {
+        byId.set(p.baseline_id, { id: p.baseline_id, name: p.baseline_name, date: p.baseline_date })
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function buildMilestoneVarianceData(series: MilestoneTrendSeries[], referenceBaselineId: string) {
   return series
     .map(s => {
+      const reference = s.points.find(p => p.baseline_id === referenceBaselineId && p.finish)
       const withFinish = s.points.filter(p => p.finish)
-      if (withFinish.length < 2) return null
-      const first = new Date(withFinish[0].finish!).getTime()
-      const last = new Date(withFinish[withFinish.length - 1].finish!).getTime()
-      const days = Math.round((last - first) / 86_400_000)
+      const latest = withFinish[withFinish.length - 1]
+      if (!reference || !latest) return null
+      const days = Math.round((new Date(latest.finish!).getTime() - new Date(reference.finish!).getTime()) / 86_400_000)
       return { activity_id: s.activity_id, name: s.task_name, days }
     })
     .filter((d): d is { activity_id: string; name: string; days: number } => d !== null)
@@ -484,17 +507,25 @@ function buildMilestoneVarianceData(series: MilestoneTrendSeries[]) {
 
 // Recharts' own Bar `label` prop has the same unreliable content-shape
 // problem documented on renderTrendEndLabels above, so this uses LabelList's
-// `content` render-prop instead — needed
-// here anyway to flip the label to the *outside* of the bar (above a red
-// bar, below a green one) rather than recharts' default, which anchors
-// "top" to the rect's own top edge and would print a negative bar's label
-// right on the zero line, overlapping its neighbours.
+// `content` render-prop instead — needed here anyway to flip the label to
+// the *outside* of the bar (above a red bar, below a green one) rather than
+// recharts' default, which anchors "top" to the rect's own top edge. x/y/
+// height here are Bar's own raw rect props, which for a NEGATIVE value
+// Recharts hands over unnormalized (y at the bar's pixel-bottom, height
+// negative) rather than flipped the way you'd naively expect — min/max
+// against y+height rather than trusting height's sign is what actually
+// gets a negative bar's label positioned below it instead of landing back
+// inside the bar itself, where green-on-green text rendered but was
+// functionally invisible (2026-09-11, per Maro on a real screenshot: "greens
+// not showing the numbers").
 function MilestoneVarianceLabel({ x = 0, y = 0, width = 0, height = 0, value = 0 }: { x?: number; y?: number; width?: number; height?: number; value?: number }) {
+  const top = Math.min(y, y + height)
+  const bottom = Math.max(y, y + height)
   const isNegative = value < 0
   return (
     <text
       x={x + width / 2}
-      y={isNegative ? y + height + 14 : y - 6}
+      y={isNegative ? bottom + 16 : top - 8}
       textAnchor="middle"
       fontSize={11}
       fontWeight={600}
@@ -508,6 +539,7 @@ function MilestoneVarianceLabel({ x = 0, y = 0, width = 0, height = 0, value = 0
 export function MilestoneVarianceWidget({ projectId, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
   const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
+  const [referenceBaselineId, setReferenceBaselineId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!schedulePeriod) return
@@ -527,54 +559,91 @@ export function MilestoneVarianceWidget({ projectId, filterConditions, filterMat
     return <span className="text-xs text-gray-400 dark:text-prosota-muted">No milestones match this filter.</span>
   }
 
-  const chartData = buildMilestoneVarianceData(visibleSeries)
-  if (chartData.length === 0) {
+  const baselineOptions = getMilestoneVarianceBaselineOptions(series)
+  if (baselineOptions.length === 0) {
     return (
       <span className="text-xs text-gray-400 dark:text-prosota-muted">
         Only one data point so far (no saved baselines yet) — save at least one Schedule Baseline to see variance.
       </span>
     )
   }
+  const effectiveReferenceId = referenceBaselineId && baselineOptions.some(b => b.id === referenceBaselineId)
+    ? referenceBaselineId
+    : baselineOptions[0].id
+  const referenceOption = baselineOptions.find(b => b.id === effectiveReferenceId)!
+
+  const chartData = buildMilestoneVarianceData(visibleSeries, effectiveReferenceId)
   const click = activityClick
+  // Extra headroom above/below the tallest bars (2026-09-11, per Maro on a
+  // real screenshot: a negative bar's label had nowhere to sit — it landed
+  // right on top of the rotated X-axis tick labels below it, since Recharts'
+  // own auto domain hugs the data tightly with no room reserved for an
+  // external label) — proportional to the chart's own value range so it
+  // scales sensibly whether variances are single- or triple-digit.
+  const varianceValues = chartData.map(d => d.days)
+  const domainMin = Math.min(0, ...varianceValues)
+  const domainMax = Math.max(0, ...varianceValues)
+  const domainPad = Math.max(8, Math.round((domainMax - domainMin) * 0.18))
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={chartData} margin={{ top: 26, right: 12, bottom: 10, left: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-        <XAxis
-          dataKey="name"
-          tick={{ fontSize: 10 }}
-          tickLine={false}
-          axisLine={{ stroke: '#d1d5db' }}
-          interval={0}
-          angle={-25}
-          textAnchor="end"
-          height={70}
-        />
-        <YAxis
-          tickFormatter={(v: number) => (v === 0 ? '0' : `${v > 0 ? '+' : ''}${v}d`)}
-          tick={{ fontSize: 11 }}
-          tickLine={false}
-          axisLine={{ stroke: '#d1d5db' }}
-          width={50}
-        />
-        <ReferenceLine y={0} stroke="#9ca3af" />
-        <Tooltip formatter={(v: number) => [`${v > 0 ? '+' : ''}${v} days`, 'Variance']} />
-        <Bar
-          dataKey="days"
-          radius={[3, 3, 3, 3]}
-          isAnimationActive={false}
-          cursor={onCrossFilterClick ? 'pointer' : undefined}
-          onClick={onCrossFilterClick ? (entry: { activity_id: string }) => click([entry.activity_id], crossFilter, onCrossFilterClick).onClick?.() : undefined}
+    <div className="h-full flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-prosota-muted shrink-0">
+        <span>Comparing against:</span>
+        <select
+          className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded-md px-2 py-1 text-xs"
+          value={effectiveReferenceId}
+          onChange={e => setReferenceBaselineId(e.target.value)}
         >
-          {chartData.map(d => {
-            const selected = click([d.activity_id], crossFilter, onCrossFilterClick).selected
-            return <Cell key={d.activity_id} fill={selected ? '#d97706' : d.days > 0 ? '#dc2626' : d.days < 0 ? '#16a34a' : '#9ca3af'} />
-          })}
-          <LabelList dataKey="days" content={<MilestoneVarianceLabel />} />
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+          {baselineOptions.map(b => <option key={b.id} value={b.id}>{b.name} ({formatDate(b.date)})</option>)}
+        </select>
+      </div>
+      {chartData.length === 0 ? (
+        <span className="flex-1 flex items-center justify-center text-center px-4 text-xs text-gray-400 dark:text-prosota-muted">
+          No milestones have a finish date at both {referenceOption.name} and now.
+        </span>
+      ) : (
+        <div className="flex-1 min-h-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 26, right: 12, bottom: 10, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="name"
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+                axisLine={{ stroke: '#d1d5db' }}
+                interval={0}
+                angle={-25}
+                textAnchor="end"
+                height={70}
+              />
+              <YAxis
+                domain={[domainMin - domainPad, domainMax + domainPad]}
+                tickFormatter={(v: number) => (v === 0 ? '0' : `${v > 0 ? '+' : ''}${v}d`)}
+                tick={{ fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: '#d1d5db' }}
+                width={50}
+              />
+              <ReferenceLine y={0} stroke="#9ca3af" />
+              <Tooltip formatter={(v: number) => [`${v > 0 ? '+' : ''}${v} days`, 'Variance']} />
+              <Bar
+                dataKey="days"
+                radius={[3, 3, 3, 3]}
+                isAnimationActive={false}
+                cursor={onCrossFilterClick ? 'pointer' : undefined}
+                onClick={onCrossFilterClick ? (entry: { activity_id: string }) => click([entry.activity_id], crossFilter, onCrossFilterClick).onClick?.() : undefined}
+              >
+                {chartData.map(d => {
+                  const selected = click([d.activity_id], crossFilter, onCrossFilterClick).selected
+                  return <Cell key={d.activity_id} fill={selected ? '#d97706' : d.days > 0 ? '#dc2626' : d.days < 0 ? '#16a34a' : '#9ca3af'} />
+                })}
+                <LabelList dataKey="days" content={<MilestoneVarianceLabel />} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
   )
 }
 
