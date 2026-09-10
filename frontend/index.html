@@ -7,10 +7,33 @@
     <link rel="icon" type="image/png" href="/logo.png" />
     <!-- Brand fonts (2026-07-25) — same Google Fonts import as the real
          marketing site (prosota-site.html): Archivo for display/headings,
-         IBM Plex Sans/Mono for body/labels. -->
+         IBM Plex Sans/Mono for body/labels.
+
+         Loaded non-render-blocking (2026-09-11, per Maro chasing a real
+         field LCP on Speed Insights) — a plain `<link rel="stylesheet">`
+         to fonts.googleapis.com blocks first paint of EVERY page,
+         including the marketing homepage's own hero heading (this app's
+         actual LCP element), on a full extra round trip to Google's
+         servers before the browser can paint anything at all, even
+         fallback-font text. `media="print"` makes the browser fetch it at
+         normal priority without waiting on it to render; the onload swap
+         to `media="all"` applies it the instant it arrives — same
+         resulting styles, just no longer gating first paint on the
+         request. `display=swap` (kept from before) still governs the
+         actual web-font swap itself, avoiding invisible text if the font
+         file lags behind the stylesheet. <noscript> covers browsers/tools
+         with JS disabled, where the onload trick never fires. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+    </noscript>
   </head>
   <body>
     <div id="root"></div>

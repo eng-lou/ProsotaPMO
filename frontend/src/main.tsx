@@ -44,8 +44,20 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </QueryClientProvider>
       </ErrorBoundary>
     </React.StrictMode>
-    {/* No SSR here (plain client-rendered Vite app), so SpeedInsights needs
-        no route prop / hydration dance — it reads window.location itself. */}
-    <SpeedInsights />
+    {/* route (2026-09-11, per Maro chasing a real field LCP on Speed
+        Insights): without it every beacon landed in a single "Unknown"
+        bucket in the dashboard's Routes view — this app rewrites every
+        path to this same index.html (vercel.json), so unlike a
+        server-rendered app there's nothing in the request itself telling
+        Vercel which page was actually loaded. Read directly off
+        window.location rather than a router hook: this renders once,
+        outside any router (the marketing homepage has none at all — see
+        HomePage.tsx), and only needs the hard-navigation's own path, which
+        is exactly what a page-load metric like LCP/FCP is attributed to
+        (matches this component's own doc: data points are collected on
+        hard navigations). Doesn't track subsequent in-app SPA navigation
+        — a real limitation for attributing later CLS/INP within one
+        session to the specific in-app route, not attempted here. */}
+    <SpeedInsights route={window.location.pathname} />
   </Auth0Provider>,
 )

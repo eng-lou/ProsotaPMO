@@ -161,6 +161,24 @@ function AccessGate() {
 function AuthGate() {
   const { isLoading, isAuthenticated } = useAuth0()
 
+  // The public marketing route (`/`) shows its real content immediately
+  // rather than gating it behind Auth0's own isLoading (2026-09-11, per
+  // Maro, chasing a real 5s field LCP on Speed Insights) — isLoading only
+  // resolves after a checkSession() round trip to Auth0 (slower still when
+  // third-party cookies are blocked, see AuthTokenProvider.tsx's own
+  // header), and the overwhelming majority of visitors to `/` are
+  // anonymous and were never going to need that check at all; the hero
+  // heading below doesn't depend on auth state, so blocking it behind that
+  // network round trip was pure unnecessary latency sitting directly on
+  // top of the LCP element. Once isLoading resolves authenticated, this
+  // falls through to the real app on the next render same as before.
+  // Scoped to `/` specifically (checked directly off window.location, not
+  // react-router — BrowserRouter isn't mounted this high up) rather than
+  // every route, since a signed-in user's deep link into the app (e.g.
+  // /dashboard) would otherwise flash the marketing page before bouncing
+  // back in, a worse regression than the extra wait is worth there.
+  if (isLoading && window.location.pathname === '/') return <LoginPage />
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
