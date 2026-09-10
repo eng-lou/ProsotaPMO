@@ -26,11 +26,12 @@ interface Props {
   // with any actuals recorded at all painted every bucket it touched green,
   // including ones years in the future.
   dataDate: string | null
-  // Real captured Cost Baseline history for Actual/Forecast (2026-09-08,
-  // per Maro: "in the past there is budget and actuals and even forecast
-  // bars... in future there is budgeted and forecast but no actuals") —
-  // see computeUsageProfileSeries' own header for exactly how this turns
-  // into per-bucket values.
+  // Real captured Cost Baseline history for Actual/EV (2026-09-08, per
+  // Maro: "in the past there is budget and actuals and even forecast
+  // bars... in future there is budgeted and forecast but no actuals"; the
+  // third series became a real Earned Value one on 2026-09-10, per Maro:
+  // "its meant to be PV, EV, AC") — see computeUsageProfileSeries' own
+  // header for exactly how this turns into per-bucket values.
   actualsHistory: ActualsHistoryItem[]
   // Mirrors Resource Tracking's own tree/timeline divider position
   // (2026-07-09, per Maro) — see the matching prop on ResourceTrackingWidget.
@@ -65,7 +66,7 @@ const CHART_HEIGHT_MIN = 180
 const RESOURCE_ROW_HEIGHT = 26
 
 export const RESOURCE_USAGE_COLORS = {
-  budgeted: '#eab308', actual: '#22c55e', forecast: '#8b5cf6', overallocated: '#ef4444', limit: '#111827',
+  budgeted: '#eab308', actual: '#22c55e', ev: '#8b5cf6', overallocated: '#ef4444', limit: '#111827',
 }
 
 // P6's own "Resource Usage Profile" — the resource histogram (Rita Mulcahy
@@ -259,12 +260,14 @@ function ResourceUsageProfileWidgetImpl({
   // ("falls back to today only when a period has never been anchored").
   const resolvedDataDate = useMemo(() => dataDate ? new Date(dataDate) : new Date(), [dataDate])
 
-  // Budget/Actual/Forecast per bucket (2026-09-08, per Maro: "in the past
-  // there is budget and actuals and even forecast bars... in future there
-  // is budgeted and forecast but no actuals") — shared calc with the print
-  // view so the two can't drift apart. See computeUsageProfileSeries' own
-  // header for exactly how Actual/Forecast are derived from actualsHistory.
-  const { budgetValues, actualValues, forecastValues, limitValue } = useMemo(
+  // Budget/Actual/EV per bucket — Prosota's own PV/AC/EV triad (2026-09-08,
+  // per Maro: "in the past there is budget and actuals and even forecast
+  // bars... in future there is budgeted and forecast but no actuals";
+  // redone 2026-09-10, per Maro: "its meant to be PV, EV, AC") — shared
+  // calc with the print view so the two can't drift apart. See
+  // computeUsageProfileSeries' own header for exactly how Actual/EV are
+  // derived from actualsHistory.
+  const { budgetValues, actualValues, evValues, limitValue } = useMemo(
     () => computeUsageProfileSeries(
       trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
       resolvedDataDate, actualsHistory,
@@ -274,7 +277,7 @@ function ResourceUsageProfileWidgetImpl({
 
   const maxValue = Math.max(
     ...budgetValues, ...actualValues.filter((v): v is number => v !== null),
-    ...forecastValues.filter((v): v is number => v !== null), limitValue, 1,
+    ...evValues.filter((v): v is number => v !== null), limitValue, 1,
   ) * 1.1
   const gridlineCount = 4
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
@@ -387,7 +390,7 @@ function ResourceUsageProfileWidgetImpl({
             <div className="flex items-center gap-3 mb-2 px-3 pt-3 text-gray-500 dark:text-prosota-muted">
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
-              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.forecast }} />Forecast</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit</span>
             </div>
@@ -464,22 +467,21 @@ function ResourceUsageProfileWidgetImpl({
                   )}
                   {visibleBucketIndices.map(i => {
                     // Budget always shows (red instead of amber once its own
-                    // demand exceeds capacity — unrelated to Actual/Forecast,
+                    // demand exceeds capacity — unrelated to Actual/EV,
                     // which never "overallocate" against a capacity Limit).
-                    // Actual only shows for a bucket that's actually elapsed
-                    // and has a real recorded delta; Forecast always shows
-                    // when derivable (per Maro: "in the past there is budget
-                    // and actuals and even forecast bars... in future there
-                    // is budgeted and forecast but no actuals").
+                    // Actual and EV both only show for a bucket that's
+                    // actually elapsed and has a real recorded delta —
+                    // neither is ever reprofiled into a future bucket (per
+                    // Maro, 2026-09-10: "its meant to be PV, EV, AC").
                     const budget = budgetValues[i]
                     const actual = actualValues[i]
-                    const forecast = forecastValues[i]
+                    const ev = evValues[i]
                     const overallocated = budget > limitValue && limitValue > 0
                     const segments: { value: number; color: string; label: string }[] = [
                       { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget' },
                     ]
                     if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual' })
-                    if (forecast !== null) segments.push({ value: forecast, color: RESOURCE_USAGE_COLORS.forecast, label: 'Forecast' })
+                    if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, label: 'Earned Value' })
                     const formatValue = (v: number) => unit === 'cost' ? `£${v.toFixed(0)}` : `${v.toFixed(1)}${unit === 'days' ? 'd' : 'h'}`
                     const groupWidth = PERIOD_COL_WIDTH - 12
                     const gap = 2

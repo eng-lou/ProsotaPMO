@@ -34,13 +34,13 @@ export function ResourceUsageProfilePrintView({
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.
-  const { budgetValues, actualValues, forecastValues, limitValue } = computeUsageProfileSeries(
+  const { budgetValues, actualValues, evValues, limitValue } = computeUsageProfileSeries(
     trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
     dataDate ? new Date(dataDate) : new Date(), actualsHistory,
   )
   const maxValue = Math.max(
     ...budgetValues, ...actualValues.filter((v): v is number => v !== null),
-    ...forecastValues.filter((v): v is number => v !== null), limitValue, 1,
+    ...evValues.filter((v): v is number => v !== null), limitValue, 1,
   ) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
   // Abbreviated, not full comma-formatted — see the screen widget's own
@@ -61,7 +61,7 @@ export function ResourceUsageProfilePrintView({
       <div className="flex items-center gap-3 mb-3">
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.forecast }} />Forecast</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit (capacity)</span>
       </div>
@@ -109,13 +109,13 @@ export function ResourceUsageProfilePrintView({
             )}
             {budgetValues.map((budget, i) => {
               const actual = actualValues[i]
-              const forecast = forecastValues[i]
+              const ev = evValues[i]
               const overallocated = budget > limitValue && limitValue > 0
               const segments: { value: number; color: string }[] = [
                 { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted },
               ]
               if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual })
-              if (forecast !== null) segments.push({ value: forecast, color: RESOURCE_USAGE_COLORS.forecast })
+              if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev })
               const groupWidth = PRINT_PERIOD_COL_WIDTH - 8
               const gap = 1
               const segWidth = (groupWidth - gap * (segments.length - 1)) / segments.length

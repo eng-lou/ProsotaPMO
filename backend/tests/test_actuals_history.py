@@ -77,11 +77,13 @@ async def test_actuals_history_returns_one_row_per_snapshot_per_element(
     assert float(week1["bac"]) == 10000.00
     assert float(week1["ac"]) == 2000.00
     # ev = 10000*0.25 = 2500, eac = bac*ac/ev = 10000*2000/2500 = 8000
+    assert float(week1["ev"]) == 2500.00
     assert float(week1["eac"]) == 8000.00
 
     week2 = next(i for i in items if i["baseline_date"] == "2024-06-10")
     assert float(week2["ac"]) == 4000.00
     # ev = 10000*0.5 = 5000, eac = 10000*4000/5000 = 8000
+    assert float(week2["ev"]) == 5000.00
     assert float(week2["eac"]) == 8000.00
 
     # Chronological order.

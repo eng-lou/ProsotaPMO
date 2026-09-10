@@ -842,8 +842,8 @@ export function Scheduling() {
   // Cost Plan's own reporting period (distinct from the schedule's own
   // `period` above — see app/models/schedule_period.py's own docstring on
   // why these are two separate concepts) — needed only to fetch the real
-  // Cost Baseline history the Resource Usage Profile's Actual/Forecast
-  // bars are built from (2026-09-08, per Maro).
+  // Cost Baseline history the Resource Usage Profile's Actual/EV bars are
+  // built from (2026-09-08, per Maro).
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
   useEffect(() => {

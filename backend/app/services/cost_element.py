@@ -834,17 +834,23 @@ async def get_fy_breakdown(db: AsyncSession, project_id: uuid.UUID, period_id: u
 
 
 async def get_actuals_history(db: AsyncSession, project_id: uuid.UUID, period_id: uuid.UUID) -> ActualsHistoryResponse:
-    """Every schedule-linked cost element's resolved BAC/AC/EAC at each real
-    captured CostBaseline snapshot, chronological (2026-09-08, per Maro: "in
-    the past there is budget and actuals and even forecast bars... in
-    future there is budgeted and forecast but no actuals" — corrected from
-    an earlier wrong assumption that no time-phased actuals data exists at
-    all; Maro pointed out the real, established Actual Hours/Days
-    conversion on a schedule-linked activity, which — while itself backed
-    by the same single cumulative actuals figure, not a separate hours
-    record — proves converting cost history to hours via an activity's own
-    resource rate is already this app's own accepted convention, not a new
-    invention).
+    """Every schedule-linked cost element's resolved BAC/AC/EV/EAC at each
+    real captured CostBaseline snapshot, chronological (2026-09-08, per
+    Maro: "in the past there is budget and actuals and even forecast
+    bars... in future there is budgeted and forecast but no actuals" —
+    corrected from an earlier wrong assumption that no time-phased actuals
+    data exists at all; Maro pointed out the real, established Actual
+    Hours/Days conversion on a schedule-linked activity, which — while
+    itself backed by the same single cumulative actuals figure, not a
+    separate hours record — proves converting cost history to hours via an
+    activity's own resource rate is already this app's own accepted
+    convention, not a new invention). ev was added 2026-09-10 once that
+    original "Forecast" series (raw per-snapshot EAC, a whole-activity
+    total, dumped unscaled into a single bucket) turned out to look wildly
+    disproportionate next to genuinely time-phased Budget/Actual bars —
+    the Resource Usage Profile's third series is a real PV/EV/AC triad now,
+    and ev here is what makes a real, delta-able EV possible, the same way
+    ac already is.
 
     Deliberately returns raw per-snapshot figures rather than pre-bucketing
     them into periods — the Resource Usage Profile/Resource Tracking
@@ -854,8 +860,8 @@ async def get_actuals_history(db: AsyncSession, project_id: uuid.UUID, period_id
     conversion; duplicating any of that here would just be a second,
     independently-drifting copy. The frontend finds, for each bucket
     boundary, the latest snapshot at-or-before it, and takes the delta
-    between consecutive boundaries for that bucket's own Actual — the same
-    "real snapshot, delta between two points, never an invented smooth
+    between consecutive boundaries for that bucket's own Actual/EV — the
+    same "real snapshot, delta between two points, never an invented smooth
     curve" rule get_fy_breakdown already established for the Fiscal Year
     panel, just generalized to whatever buckets the caller already has
     instead of fixed fiscal years."""
@@ -895,7 +901,7 @@ async def get_actuals_history(db: AsyncSession, project_id: uuid.UUID, period_id
         items.append(ActualsHistoryItem(
             baseline_id=s.baseline_id, baseline_date=baseline_date_by_id[s.baseline_id],
             cost_element_id=s.cost_element_id, linked_activity_id=activity_id_by_element_id[s.cost_element_id],
-            bac=bac, ac=ac, eac=eac,
+            bac=bac, ac=ac, eac=eac, ev=ev,
         ))
     items.sort(key=lambda i: i.baseline_date)
     return ActualsHistoryResponse(items=items)

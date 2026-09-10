@@ -207,6 +207,17 @@ class ActualsHistoryItem(BaseModel):
     bac: Decimal
     ac: Decimal
     eac: Decimal | None = None
+    # bac x this snapshot's own captured pct_complete (2026-09-10, per Maro:
+    # the Resource Usage Profile's third bar is meant to be a real EVM
+    # triad — PV/EV/AC — not Budgeted/Actual/Forecast; the old "Forecast"
+    # series dumped this same snapshot's whole-activity EAC into a single
+    # bucket unscaled, which is what made it look wildly disproportionate
+    # next to genuinely time-phased Budget/Actual bars. EV, like ac above,
+    # is a real per-snapshot figure the frontend can delta between two
+    # points the same "real snapshot, never a smoothed estimate" way
+    # get_actuals_history's own header already establishes for ac/eac —
+    # null only when this snapshot never captured a pct_complete at all.
+    ev: Decimal | None = None
 
 
 class ActualsHistoryResponse(BaseModel):

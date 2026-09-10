@@ -5567,9 +5567,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   )
 
   // Real Cost Baseline history for the Resource Usage Profile's Actual/
-  // Forecast bars (2026-09-08, per Maro) — see Scheduling.tsx's own
-  // matching fetch for why this needs the separate Cost Plan period, not
-  // the schedule period already in scope here.
+  // EV bars (2026-09-08, per Maro) — see Scheduling.tsx's own matching
+  // fetch for why this needs the separate Cost Plan period, not the
+  // schedule period already in scope here.
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
   useEffect(() => {

@@ -751,15 +751,18 @@ export interface ActivityStep {
   updated_at: string
 }
 
-// One schedule-linked cost element's resolved BAC/AC/EAC as recorded in one
-// real captured Cost Baseline snapshot (2026-09-08, per Maro: "in the past
-// there is budget and actuals and even forecast bars... in future there is
-// budgeted and forecast but no actuals") — see backend's own
+// One schedule-linked cost element's resolved BAC/AC/EV/EAC as recorded in
+// one real captured Cost Baseline snapshot (2026-09-08, per Maro: "in the
+// past there is budget and actuals and even forecast bars... in future
+// there is budgeted and forecast but no actuals") — see backend's own
 // get_actuals_history for why this is raw, unbucketed history rather than
 // pre-computed periods: the Resource Usage Profile/Resource Tracking
 // widgets already own their own arbitrary-zoom bucket arrays and resource
 // rate conversions, so bucketing happens client-side against whichever
-// buckets are already on screen.
+// buckets are already on screen. ev (2026-09-10) is what lets
+// computeUsageProfileSeries build a real, delta-able Earned Value series —
+// see that function's own header for why the chart's third series moved
+// from a raw-EAC "Forecast" to a proper PV/EV/AC triad.
 export interface ActualsHistoryItem {
   baseline_id: string
   baseline_date: string
@@ -768,4 +771,5 @@ export interface ActualsHistoryItem {
   bac: string
   ac: string
   eac: string | null
+  ev: string | null
 }
