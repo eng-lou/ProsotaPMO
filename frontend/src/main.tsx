@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Auth0Provider } from '@auth0/auth0-react'
 import { QueryClientProvider } from '@tanstack/react-query'
+import { SpeedInsights } from '@vercel/speed-insights/react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { installStaleChunkReload } from './lib/staleChunkReload'
 import { queryClient } from './lib/query'
@@ -43,5 +44,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </QueryClientProvider>
       </ErrorBoundary>
     </React.StrictMode>
+    {/* No SSR here (plain client-rendered Vite app), so SpeedInsights needs
+        no route prop / hydration dance — it reads window.location itself. */}
+    <SpeedInsights />
   </Auth0Provider>,
 )
