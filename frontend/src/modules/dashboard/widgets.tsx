@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, Customized, LabelList, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   getCostPerformanceTrend, getIcdOpenItemsTrend, getPvEvAcTrend, getRiskEmvTrend, getSpiTrend,
   type CostPerformanceTrendPoint, type IcdOpenItemsTrendPoint, type PvEvAcTrendPoint, type RiskEmvTrendPoint,
@@ -270,6 +270,88 @@ function buildMilestoneTrendAxis(series: MilestoneTrendSeries[]): MilestoneTrend
   return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
+// Collision-avoided end-of-line labels for a trend chart's last data point
+// (2026-09-11, per Maro on a real screenshot: with several milestones
+// landing close together — or sharing a name like two "Roof Complete"
+// lines — plain one-label-per-line placement stacked them right on top of
+// each other, illegible, and a long milestone name ran straight off the
+// tile's right edge instead of wrapping or truncating). Recharts' own
+// Customized component hands the `component` prop the EXACT xAxisMap/
+// yAxisMap/offset the chart itself just computed — its real d3 scale
+// functions, not a guess at one — so labels land pixel-perfect against the
+// actual layout without reimplementing (and risking drifting out of sync
+// with) the chart's own margin/domain math. Used instead of Line's own
+// `label` prop, which silently rendered nothing at all when first tried
+// (Line delegates a function `label` to LabelList/Label's own
+// content-render path, whose exact prop shape isn't the simple
+// {x,y,index,value} it looks like from the docs — confirmed by inspecting
+// the real rendered SVG in a live browser and finding zero label <text>
+// nodes).
+interface TrendEndLabelSpec { key: string; label: string; color: string; value: number }
+
+const TREND_END_LABEL_MAX_CHARS = 20
+const TREND_END_LABEL_MIN_GAP = 14
+
+function renderTrendEndLabels(specs: TrendEndLabelSpec[], lastLabel: string) {
+  return (
+    <Customized
+      key="end-labels"
+      component={(props: { xAxisMap?: Record<string, { scale: (v: unknown) => number }>; yAxisMap?: Record<string, { scale: (v: unknown) => number }>; offset?: { top: number; height: number } }) => {
+        const { xAxisMap, yAxisMap, offset } = props
+        if (!xAxisMap || !yAxisMap || !offset) return null
+        const xScale = Object.values(xAxisMap)[0]?.scale
+        const yScale = Object.values(yAxisMap)[0]?.scale
+        if (!xScale || !yScale) return null
+        const anchorX = xScale(lastLabel)
+        const top = offset.top
+        const bottom = offset.top + offset.height
+
+        // Sort by true (unavoidably overlapping) pixel position, then push
+        // later ones down to keep a minimum gap, then — since a long run
+        // of clustered points can get pushed straight past the chart's own
+        // bottom edge — pull the whole stack back up from the bottom so it
+        // stays inside the plot area while still respecting the gap.
+        const positioned = specs
+          .map(s => ({ ...s, trueY: yScale(s.value), y: yScale(s.value) }))
+          .sort((a, b) => a.trueY - b.trueY)
+        for (let i = 1; i < positioned.length; i++) {
+          positioned[i].y = Math.max(positioned[i].y, positioned[i - 1].y + TREND_END_LABEL_MIN_GAP)
+        }
+        const overflow = positioned.length ? positioned[positioned.length - 1].y - bottom : 0
+        if (overflow > 0) {
+          for (const p of positioned) p.y -= overflow
+          for (let i = positioned.length - 2; i >= 0; i--) {
+            positioned[i].y = Math.min(positioned[i].y, positioned[i + 1].y - TREND_END_LABEL_MIN_GAP)
+          }
+        }
+        if (positioned.length) positioned[0].y = Math.max(positioned[0].y, top)
+
+        return (
+          <g>
+            {positioned.map(p => {
+              const truncated = p.label.length > TREND_END_LABEL_MAX_CHARS
+                ? `${p.label.slice(0, TREND_END_LABEL_MAX_CHARS - 1)}…`
+                : p.label
+              const shifted = Math.abs(p.y - p.trueY) > 2
+              return (
+                <g key={p.key}>
+                  {shifted && (
+                    <line x1={anchorX} y1={p.trueY} x2={anchorX + 6} y2={p.y} stroke={p.color} strokeWidth={1} strokeOpacity={0.45} />
+                  )}
+                  <text x={anchorX + (shifted ? 10 : 6)} y={p.y} dy={4} fontSize={11} fill={p.color}>
+                    <title>{p.label}</title>
+                    {truncated}
+                  </text>
+                </g>
+              )
+            })}
+          </g>
+        )
+      }}
+    />
+  )
+}
+
 export function MilestoneTrendChartWidget({ projectId, filterConditions, filterMatchMode, crossFilter }: WidgetProps) {
   const { period: schedulePeriod, loading: periodLoading } = useActiveScheduleVariant(projectId)
   const [series, setSeries] = useState<MilestoneTrendSeries[] | null>(null)
@@ -319,22 +401,18 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
   return (
     <ResponsiveContainer width="100%" height="100%">
       {/* horizontal-only gridlines, no axis box, and each line labelled
-          directly at its own last point (via a zero-radius ReferenceDot —
-          far more reliable than Line's own `label` prop, which silently
-          rendered nothing at all when first tried: Line delegates a
-          function `label` to LabelList/Label's own content-render path,
-          whose exact prop shape isn't the simple {x,y,index,value} it
-          looks like from the docs, confirmed by inspecting the real
-          rendered SVG in a live browser and finding zero label <text>
-          nodes; ReferenceDot's x/y are real DATA values Recharts resolves
-          through its own scale itself, so this doesn't depend on guessing
-          an internal prop shape) instead of a separate legend (2026-09-03,
-          per Maro: the bottom-legend/full-grid-box version "looks like
-          trash" next to a clean reference chart) — reads which line is
-          which without eye travel back and forth to a key, and survives
-          lines clustering close together far better than colour alone
-          would. */}
-      <LineChart data={chartData} margin={{ top: 10, right: 150, bottom: 10, left: 8 }}>
+          directly at its own last point (via renderTrendEndLabels — see its
+          own header for why that's a Customized layer over Line's own
+          `label` prop, which silently rendered nothing at all when first
+          tried) instead of a separate legend (2026-09-03, per Maro: the
+          bottom-legend/full-grid-box version "looks like trash" next to a
+          clean reference chart) — reads which line is which without eye
+          travel back and forth to a key, and survives lines clustering
+          close together far better than colour alone would (collision
+          avoidance added 2026-09-11 once a real chart had several
+          milestones landing close enough to make the labels stack right on
+          top of each other — see renderTrendEndLabels). */}
+      <LineChart data={chartData} margin={{ top: 10, right: 165, bottom: 10, left: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
         <YAxis
@@ -365,23 +443,16 @@ export function MilestoneTrendChartWidget({ projectId, filterConditions, filterM
             />
           )
         })}
-        {visibleSeries.map((s, i) => {
-          const color = MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
-          const lastValue = chartData[chartData.length - 1][s.code]
-          if (typeof lastValue !== 'number') return null
-          return (
-            <ReferenceDot
-              key={`${s.activity_id}-end-label`}
-              x={lastLabel}
-              y={lastValue}
-              r={0}
-              fill="transparent"
-              stroke="transparent"
-              label={{ value: s.task_name, position: 'right', fill: color, fontSize: 11 }}
-              isFront
-            />
-          )
-        })}
+        {renderTrendEndLabels(
+          visibleSeries
+            .map((s, i) => {
+              const lastValue = chartData[chartData.length - 1][s.code]
+              if (typeof lastValue !== 'number') return null
+              return { key: s.activity_id, label: s.task_name, color: MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length], value: lastValue }
+            })
+            .filter((s): s is TrendEndLabelSpec => s !== null),
+          lastLabel,
+        )}
       </LineChart>
     </ResponsiveContainer>
   )
@@ -412,8 +483,8 @@ function buildMilestoneVarianceData(series: MilestoneTrendSeries[]) {
 }
 
 // Recharts' own Bar `label` prop has the same unreliable content-shape
-// problem documented on MilestoneTrendChartWidget's ReferenceDot labels
-// above, so this uses LabelList's `content` render-prop instead — needed
+// problem documented on renderTrendEndLabels above, so this uses LabelList's
+// `content` render-prop instead — needed
 // here anyway to flip the label to the *outside* of the bar (above a red
 // bar, below a green one) rather than recharts' default, which anchors
 // "top" to the rect's own top edge and would print a negative bar's label
@@ -512,8 +583,8 @@ export function MilestoneVarianceWidget({ projectId, filterConditions, filterMat
 // changes... more comprehensive analysis, not just a snapshot but we have
 // baseline data/s, being able to see the trend is important") — same visual
 // language as Milestone Trend Chart above (horizontal-only gridlines, no
-// legend, each line labelled at its own last point via a zero-radius
-// ReferenceDot), factored into one shared renderer since these four widgets
+// legend, each line labelled at its own last point via renderTrendEndLabels),
+// factored into one shared renderer since these four widgets
 // are otherwise near-identical: a handful of named numeric series plotted
 // against the same {baseline_name, baseline_date}-shaped x-axis. Unlike
 // Milestone Trend Chart, these read a server-pre-aggregated rollup (total
@@ -550,7 +621,7 @@ function BaselineTrendChart<T extends TrendChartPoint>({
   const lastLabel = chartData[chartData.length - 1].label as string
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={chartData} margin={{ top: 10, right: 140, bottom: 10, left: 8 }}>
+      <LineChart data={chartData} margin={{ top: 10, right: 165, bottom: 10, left: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
         <YAxis
@@ -579,23 +650,16 @@ function BaselineTrendChart<T extends TrendChartPoint>({
             />
           )
         })}
-        {series.map((s, i) => {
-          const color = s.color ?? MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length]
-          const lastValue = chartData[chartData.length - 1][s.key]
-          if (typeof lastValue !== 'number') return null
-          return (
-            <ReferenceDot
-              key={`${s.key}-end-label`}
-              x={lastLabel}
-              y={lastValue}
-              r={0}
-              fill="transparent"
-              stroke="transparent"
-              label={{ value: s.label, position: 'right', fill: color, fontSize: 11 }}
-              isFront
-            />
-          )
-        })}
+        {renderTrendEndLabels(
+          series
+            .map((s, i) => {
+              const lastValue = chartData[chartData.length - 1][s.key]
+              if (typeof lastValue !== 'number') return null
+              return { key: s.key, label: s.label, color: s.color ?? MILESTONE_TREND_COLORS[i % MILESTONE_TREND_COLORS.length], value: lastValue }
+            })
+            .filter((s): s is TrendEndLabelSpec => s !== null),
+          lastLabel,
+        )}
       </LineChart>
     </ResponsiveContainer>
   )
