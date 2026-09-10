@@ -111,20 +111,25 @@ export function ResourceUsageProfilePrintView({
               const actual = actualValues[i]
               const ev = evValues[i]
               const overallocated = budget > limitValue && limitValue > 0
-              const segments: { value: number; color: string }[] = [
-                { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted },
+              // Fixed 3-slot layout — see ResourceUsageProfileWidget.tsx's
+              // own matching comment (2026-09-10, per Maro): slot width
+              // must not depend on how many series happen to have data in
+              // a given bucket, or a Budget-only bucket's bar balloons to
+              // the full group width next to a genuinely three-series one.
+              const segments: { value: number; color: string; slot: number }[] = [
+                { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, slot: 0 },
               ]
-              if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual })
-              if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev })
+              if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, slot: 1 })
+              if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, slot: 2 })
               const groupWidth = PRINT_PERIOD_COL_WIDTH - 8
               const gap = 1
-              const segWidth = (groupWidth - gap * (segments.length - 1)) / segments.length
+              const segWidth = (groupWidth - gap * 2) / 3
               return (
                 <div key={i} className="absolute" style={{ left: i * PRINT_PERIOD_COL_WIDTH + 4, width: groupWidth, bottom: 0, height: CHART_HEIGHT }}>
-                  {segments.map((seg, si) => (
+                  {segments.map(seg => (
                     <div
-                      key={si}
-                      style={{ left: si * (segWidth + gap), width: segWidth, bottom: 0, height: (seg.value / maxValue) * CHART_HEIGHT, backgroundColor: seg.color }}
+                      key={seg.slot}
+                      style={{ left: seg.slot * (segWidth + gap), width: segWidth, bottom: 0, height: (seg.value / maxValue) * CHART_HEIGHT, backgroundColor: seg.color }}
                       className="absolute"
                     />
                   ))}

@@ -473,28 +473,39 @@ function ResourceUsageProfileWidgetImpl({
                     // actually elapsed and has a real recorded delta —
                     // neither is ever reprofiled into a future bucket (per
                     // Maro, 2026-09-10: "its meant to be PV, EV, AC").
+                    // Slot width is ALWAYS a third of the group (never
+                    // segments.length-dependent) — per Maro, same day:
+                    // "still make space for the actual/forecast in future
+                    // ones so its not disproportionate". A bucket with only
+                    // Budget present used to get one bar spanning the WHOLE
+                    // group width while a bucket with all three got three
+                    // bars a third as wide each — same £ value, wildly
+                    // different visual weight depending on how many series
+                    // happened to have data that period. Reserving Actual's
+                    // and EV's own slots even when empty keeps Budget's own
+                    // bar width identical across every bucket.
                     const budget = budgetValues[i]
                     const actual = actualValues[i]
                     const ev = evValues[i]
                     const overallocated = budget > limitValue && limitValue > 0
-                    const segments: { value: number; color: string; label: string }[] = [
-                      { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget' },
+                    const segments: { value: number; color: string; label: string; slot: number }[] = [
+                      { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget', slot: 0 },
                     ]
-                    if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual' })
-                    if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, label: 'Earned Value' })
+                    if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual', slot: 1 })
+                    if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, label: 'Earned Value', slot: 2 })
                     const formatValue = (v: number) => unit === 'cost' ? `£${v.toFixed(0)}` : `${v.toFixed(1)}${unit === 'days' ? 'd' : 'h'}`
                     const groupWidth = PERIOD_COL_WIDTH - 12
                     const gap = 2
-                    const segWidth = (groupWidth - gap * (segments.length - 1)) / segments.length
+                    const segWidth = (groupWidth - gap * 2) / 3
                     return (
                       <div key={i} className="absolute" style={{ left: i * PERIOD_COL_WIDTH + 6, width: groupWidth, bottom: 0, height: chartHeight }}>
-                        {segments.map((seg, si) => (
+                        {segments.map(seg => (
                           <div
                             key={seg.label}
                             title={`${buckets[i].label} — ${seg.label}: ${formatValue(seg.value)}`}
                             className="absolute rounded-t-sm"
                             style={{
-                              left: si * (segWidth + gap), width: segWidth,
+                              left: seg.slot * (segWidth + gap), width: segWidth,
                               bottom: 0, height: (seg.value / maxValue) * chartHeight,
                               backgroundColor: seg.color,
                             }}
