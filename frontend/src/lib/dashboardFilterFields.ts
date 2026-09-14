@@ -204,6 +204,7 @@ const WIDGET_FIELD_MAP: Record<string, { fields: DashboardFieldDef[]; udfEntity?
   float_distribution: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
   activities_by_category: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
   activity_status: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
+  schedule_performance: { fields: SCHEDULE_ACTIVITY_FIELDS, udfEntity: 'activity' },
   // Milestones
   milestones_table: { fields: MILESTONE_FIELDS },
   milestone_timeline: { fields: MILESTONE_FIELDS },

@@ -64,9 +64,17 @@ export interface WidgetProps {
   // read a server-pre-aggregated portfolio rollup (total EMV, portfolio
   // CPI/EAC/SPI, open counts) computed across baselines, not a raw
   // per-record array there's anything to filter down to.
+  // schedule_performance moved OUT of that server-aggregated bucket and
+  // into this one on 2026-09-14 (per Maro: "doesn't interact with the
+  // rest... does it include all activities?") — its on_time/at_risk/
+  // delayed buckets are now recomputed client-side straight off
+  // data.schedule_activities (see SchedulePerformanceWidget), the exact
+  // same classification dashboard.py's own _schedule_buckets already used
+  // server-side (delayed: variance_days>0; else at_risk: is_critical;
+  // else on_time) — 36 total now.
   // Deliberately NOT extended to the
   // handful of widgets that read a server-pre-aggregated summary instead
-  // of a raw array (kpi_strip, schedule_performance, risk_overview,
+  // of a raw array (kpi_strip, risk_overview,
   // risk_exposure, dcma_score, clash_summary, eac_forecast_comparison,
   // earned_value_summary_table) — those numbers are computed server-side
   // over the WHOLE project (dashboard.py's own EVM/DCMA/clash rollups), so
@@ -150,26 +158,65 @@ export function KpiStripWidget({ data }: WidgetProps) {
   )
 }
 
-export function SchedulePerformanceWidget({ data }: WidgetProps) {
-  const { schedule_buckets } = data
-  const bucketPct = (n: number) => (schedule_buckets.total > 0 ? Math.round((n / schedule_buckets.total) * 100) : 0)
+// 2026-09-14, per Maro looking at a real screenshot: "doesn't interact
+// with the rest... does it include all activities?" — it used to read
+// data.schedule_buckets, a server-pre-aggregated count with no per-record
+// ids behind it, so there was nothing for evaluateDashboardFilter/
+// matchesCrossFilter to narrow down and no id to seed a cross-filter click
+// with (same reason kpi_strip/risk_overview/etc. are still unfilterable —
+// see WidgetProps.filterConditions's own header). Rebuilt to recompute the
+// three buckets client-side off data.schedule_activities instead, the same
+// raw per-record array every other schedule widget already reads — same
+// scope as before (every non-WBS-summary, non-archived Activity in the
+// schedule, milestones included; further narrowed by the page's own WBS
+// slicer server-side before this array ever arrives), now additionally
+// narrowable by this widget's own Filter button and by cross-filter clicks
+// from elsewhere on the dashboard. Classification mirrors
+// dashboard.py's own _schedule_buckets exactly: delayed (variance_days>0)
+// beats at_risk (is_critical) beats on_time, in that order.
+const SCHEDULE_PERFORMANCE_LEGEND
+  = 'On-Time — not on the critical path and not late. At Risk — on the critical path (zero float), hasn’t slipped yet. Delayed — already past its baseline finish.'
+
+export function SchedulePerformanceWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
+  const activities = data.schedule_activities
+    .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+    .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+
+  const buckets = { on_time: [] as string[], at_risk: [] as string[], delayed: [] as string[] }
+  for (const a of activities) {
+    if (a.variance_days !== null && a.variance_days > 0) buckets.delayed.push(a.id)
+    else if (a.is_critical === true) buckets.at_risk.push(a.id)
+    else buckets.on_time.push(a.id)
+  }
+  const total = activities.length
+  const bucketPct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0)
+  const click = activityClick
+
   return (
-    <div className="space-y-2 text-xs h-full overflow-auto">
+    <div className="h-full flex flex-col gap-2 text-xs overflow-auto">
+      <p className="text-[11px] leading-snug text-gray-400 dark:text-prosota-muted">{SCHEDULE_PERFORMANCE_LEGEND}</p>
       {([
-        ['On-Time', schedule_buckets.on_time, 'bg-green-500'],
-        ['At Risk', schedule_buckets.at_risk, 'bg-amber-500'],
-        ['Delayed', schedule_buckets.delayed, 'bg-red-500'],
-      ] as const).map(([label, count, color]) => (
-        <div key={label}>
+        ['On-Time', buckets.on_time, 'bg-green-500'],
+        ['At Risk', buckets.at_risk, 'bg-amber-500'],
+        ['Delayed', buckets.delayed, 'bg-red-500'],
+      ] as const).map(([label, ids, color]) => {
+        const c = ids.length > 0 ? click(ids, crossFilter, onCrossFilterClick) : { onClick: undefined, selected: false }
+        return (
+        <div
+          key={label}
+          className={`-mx-1 rounded px-1 py-0.5 ${c.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${c.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+          onClick={c.onClick}
+        >
           <div className="flex justify-between mb-0.5">
             <span className="text-gray-600 dark:text-prosota-muted">{label}</span>
-            <span className="font-medium">{count} ({bucketPct(count)}%)</span>
+            <span className="font-medium">{ids.length} ({bucketPct(ids.length)}%)</span>
           </div>
           <div className="h-2 bg-gray-100 dark:bg-prosota-panel2 rounded-full overflow-hidden">
-            <div className={`h-full ${color}`} style={{ width: `${bucketPct(count)}%` }} />
+            <div className={`h-full ${color}`} style={{ width: `${bucketPct(ids.length)}%` }} />
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -2587,7 +2634,7 @@ export const FILTERABLE_WIDGET_TYPES = new Set([
   'resource_budget_by_company', 'top_resources_by_budget',
   // Schedule activities (data.schedule_activities)
   'baseline_variance_table', 'critical_activities_table', 'near_critical_watch_list',
-  'float_distribution', 'activities_by_category', 'activity_status',
+  'float_distribution', 'activities_by_category', 'activity_status', 'schedule_performance',
   // Milestones (data.milestones)
   'milestones_table', 'milestone_timeline',
   // Smaller, single-widget data sources
@@ -2633,8 +2680,21 @@ export function getWidgetRows(widgetType: string, props: WidgetProps): { headers
       }
     }
     case 'schedule_performance': {
-      const b = data.schedule_buckets
-      return { headers: ['Status', 'Count'], rows: [['On-Time', b.on_time], ['At Risk', b.at_risk], ['Delayed', b.delayed]] }
+      // Mirrors SchedulePerformanceWidget's own client-side recompute (not
+      // data.schedule_buckets — that's the server's unfiltered total, and
+      // this export should reflect whatever this widget's own Filter/
+      // cross-filter narrowed it down to, same as every other filterable
+      // widget's export here does).
+      const activities = data.schedule_activities
+        .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
+        .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
+      let onTime = 0, atRisk = 0, delayed = 0
+      for (const a of activities) {
+        if (a.variance_days !== null && a.variance_days > 0) delayed++
+        else if (a.is_critical === true) atRisk++
+        else onTime++
+      }
+      return { headers: ['Status', 'Count'], rows: [['On-Time', onTime], ['At Risk', atRisk], ['Delayed', delayed]] }
     }
     case 'risk_overview': {
       const r = data.risk_overview
