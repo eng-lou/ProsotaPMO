@@ -77,6 +77,7 @@ from app.schemas.dashboard import (
 from app.services import clash_test as clash_test_svc
 from app.services import scheduling_quality as quality_svc
 from app.services.activity import _subtree_ids
+from app.services.scheduling_cpm import data_date_for_period
 from app.services.cost_element import _get_eac_method, _schedule_evm, list_cost_elements, rollup_evm_from_totals
 from app.services.resource_costing import compute_assignment_budget
 from app.services.scheduling_cpm import _build_calendar_lookup
@@ -386,7 +387,20 @@ async def _project_info(
     )).scalars().all() if activity_ids else []
     resources = (await db.execute(select(Resource).where(Resource.project_id == project_id))).scalars().all()
     info = ProjectInfoSummary(
-        data_date=period.cutoff_date if period is not None else None,
+        # data_date_for_period, not period.cutoff_date (2026-09-14, per Maro
+        # noticing Look-Ahead Planner using today's real date instead of the
+        # schedule's own Data Date) — cutoff_date is a real column but
+        # nothing in the app ever sets it (confirmed: NULL on every
+        # schedule_period in this database), so reading it here always fell
+        # through to a null data_date, which is exactly what made
+        # Milestone Timeline's own reference line and Look-Ahead's window
+        # below silently fall back to datetime.now() instead. start_date is
+        # the actual anchor Reschedule/the CPM forward pass and PV
+        # proration already treat as the real Data Date (see
+        # data_date_for_period's own docstring) — same field, one source of
+        # truth, instead of a second "data date" concept that was never
+        # wired up to anything.
+        data_date=data_date_for_period(period) if period is not None else None,
         total_activities=len(all_activities),
         total_relationships=len(relationships),
         total_resources=len(resources),
@@ -692,7 +706,12 @@ async def get_overview(
     project_info, period, relationships = await _project_info(db, project_id, schedule_period_id, all_activities)
     dcma_quality = await _dcma_quality_summary(db, schedule_period_id, all_activities, relationships)
     clash_summary, clash_pairs = await _clash_summary_and_pairs(db, project_id)
-    now = datetime.combine(period.cutoff_date, time.min) if period is not None and period.cutoff_date is not None else datetime.now()
+    # data_date_for_period, not period.cutoff_date — see _project_info's own
+    # data_date field above for why; same fix, same root cause, this is the
+    # one Maro actually noticed live ("Look-Ahead Planner might be
+    # referencing todays date when its meant to reference the data date of
+    # the schedule").
+    now = datetime.combine(data_date_for_period(period), time.min) if period is not None else datetime.now()
     lookahead_items, lookahead_summary = _lookahead(all_activities, scoped_activities, relationships, milestones, now)
 
     return DashboardOverviewResponse(

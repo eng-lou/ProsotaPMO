@@ -165,20 +165,34 @@ export function KpiStripWidget({ data }: WidgetProps) {
 // matchesCrossFilter to narrow down and no id to seed a cross-filter click
 // with (same reason kpi_strip/risk_overview/etc. are still unfilterable —
 // see WidgetProps.filterConditions's own header). Rebuilt to recompute the
-// three buckets client-side off data.schedule_activities instead, the same
-// raw per-record array every other schedule widget already reads — same
-// scope as before (every non-WBS-summary, non-archived Activity in the
-// schedule, milestones included; further narrowed by the page's own WBS
-// slicer server-side before this array ever arrives), now additionally
-// narrowable by this widget's own Filter button and by cross-filter clicks
-// from elsewhere on the dashboard. Classification mirrors
-// dashboard.py's own _schedule_buckets exactly: delayed (variance_days>0)
-// beats at_risk (is_critical) beats on_time, in that order.
+// three buckets client-side instead, now additionally narrowable by this
+// widget's own Filter button and by cross-filter clicks from elsewhere on
+// the dashboard. Classification mirrors dashboard.py's own
+// _schedule_buckets exactly: delayed (variance_days>0) beats at_risk
+// (is_critical) beats on_time, in that order.
+//
+// data.schedule_activities ALONE isn't the same scope _schedule_buckets
+// used server-side — its own docstring is explicit that milestones are
+// "deliberately excluded" there (that's what data.milestones/
+// milestone_timeline already cover, kept as a separate array precisely so
+// Float Distribution/Activities by Category/etc., which genuinely are
+// task-only, don't get milestones polluting their own aggregations). The
+// first version of this rebuild missed that and read schedule_activities
+// on its own, which quietly dropped every milestone from the count AND
+// meant clicking a milestone bar elsewhere (Milestone Variance, Milestone
+// Trend Chart) — a cross-filter seeded with that milestone's own activity
+// id — could never match anything here, blanking the widget to 0/0/0
+// (2026-09-14, per Maro: "i selected that milestone, how come schedule
+// performance has blanked out"). Reunioned here instead, back to the same
+// non-WBS-summary, non-archived scope _schedule_buckets always used.
 const SCHEDULE_PERFORMANCE_LEGEND
   = 'On-Time — not on the critical path and not late. At Risk — on the critical path (zero float), hasn’t slipped yet. Delayed — already past its baseline finish.'
 
 export function SchedulePerformanceWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
-  const activities = data.schedule_activities
+  const activities: { id: string; variance_days: number | null; is_critical: boolean | null }[] = [
+    ...data.schedule_activities,
+    ...data.milestones,
+  ]
     .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
     .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
 
@@ -2684,8 +2698,13 @@ export function getWidgetRows(widgetType: string, props: WidgetProps): { headers
       // data.schedule_buckets — that's the server's unfiltered total, and
       // this export should reflect whatever this widget's own Filter/
       // cross-filter narrowed it down to, same as every other filterable
-      // widget's export here does).
-      const activities = data.schedule_activities
+      // widget's export here does) — schedule_activities alone excludes
+      // milestones (see that widget's own header), so this unions in
+      // data.milestones too, same as it does.
+      const activities: { variance_days: number | null; is_critical: boolean | null; id: string }[] = [
+        ...data.schedule_activities,
+        ...data.milestones,
+      ]
         .filter(a => evaluateDashboardFilter(a, filterConditions, filterMatchMode))
         .filter(a => matchesCrossFilter(a.id, 'activity', crossFilter))
       let onTime = 0, atRisk = 0, delayed = 0
