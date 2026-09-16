@@ -44,10 +44,22 @@ export function Overview() {
   const [wbsNodeId, setWbsNodeId] = useState<string>('')
   const [data, setData] = useState<DashboardOverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  // error (2026-09-16, per Maro: this screen — the default landing page
+  // after sign-in — got stuck on "Loading…" forever on a work laptop where
+  // this request never got a response at all) — the render guard below used
+  // to check `!data` alone, which is indistinguishable from "still loading"
+  // once a request fails: `data` stays null either way, so a failed request
+  // looked identical to a slow one, forever, with no way out. Tracked
+  // separately from `loading` (which api.ts's own new request timeout now
+  // guarantees resolves within 25s either way) so a genuine failure shows a
+  // real message with a retry instead of silently staying on "Loading…".
+  const [error, setError] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
 
   useEffect(() => {
     if (!selectedProject || !period || !schedulePeriod) return
     setLoading(true)
+    setError(false)
     api.get<DashboardOverviewResponse>('/api/v1/dashboard/overview', {
       params: {
         project_id: selectedProject.id,
@@ -57,8 +69,9 @@ export function Overview() {
       },
     })
       .then(({ data }) => setData(data))
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
-  }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId])
+  }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId, retryCount])
 
   // Cross-widget "click to filter" (2026-09-06, per Maro — see
   // lib/dashboardCrossFilter.ts's own header for the full design).
@@ -92,7 +105,21 @@ export function Overview() {
     setCrossFilterSeed(nextKey ? { key: nextKey, seedType, seedIds } : null)
   }
 
-  if (periodLoading || scheduleLoading || !data) {
+  if (error) {
+    return (
+      <div className="p-8 text-sm">
+        <p className="text-gray-500 dark:text-prosota-muted mb-3">Couldn't load the dashboard. Check your connection and try again.</p>
+        <button
+          onClick={() => setRetryCount(c => c + 1)}
+          className="px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  if (periodLoading || scheduleLoading || loading || !data) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
 
