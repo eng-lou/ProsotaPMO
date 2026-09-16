@@ -29,6 +29,40 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
+// REAUTH_FLAG / clearAuth0CacheAndReauth (2026-09-16, per Maro: on a work
+// laptop, every module besides FourD looked permanently stuck — the actual
+// console showed the real cause fast, not a hang: `/periods/bootstrap` and
+// `/schedule-variants/bootstrap` both 403, then this file's own forced
+// token refresh (below) failing with Auth0's "Missing Refresh Token").
+// auth0-react's own cached tokens (cacheLocation="localstorage" in
+// main.tsx) can go stale in a way a silent refresh can never recover from
+// — no refresh token in the cache at all, which a corporate laptop clearing
+// site data between sessions, or a login that predates this app's own
+// offline_access scope, both produce. Before this, that case fell through
+// to `Promise.reject(error)` below with nothing else — every subsequent
+// request hit the exact same unrecoverable 401/403, forever, which is what
+// actually looked like a stuck loading screen (the request settles fine,
+// nothing ever shows why). This is the same fix already validated manually
+// for this bug (see feedback_auth0_missing_refresh_token — clearing
+// browser localStorage, not an Auth0 logout, is what actually clears it),
+// just automatic: remove the SDK's own stale cache entries — scoped to its
+// own key prefixes, not a blanket localStorage.clear(), so this doesn't
+// touch unrelated stored state like the theme toggle — and send the user
+// through a real top-level login redirect, which reliably issues a fresh
+// refresh token the same way the very first sign-in did. sessionStorage
+// (not an in-memory flag) guards against multiple requests failing at
+// once each independently triggering their own redirect.
+const REAUTH_FLAG = 'prosota-reauth-after-missing-refresh-token'
+
+function clearAuth0LocalStorageCache() {
+  const staleKeys: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && (key.startsWith('@@auth0spajs@@') || key.startsWith('a0.spajs.'))) staleKeys.push(key)
+  }
+  staleKeys.forEach(key => localStorage.removeItem(key))
+}
+
 // A couple of retries with a short backoff — not a fixed one-shot try.
 // getAccessTokenSilently() needs a real round-trip (a silent iframe auth
 // check) the very first time it's called in a session, and that first call
@@ -52,7 +86,7 @@ async function getTokenWithRetry(getAccessTokenSilently: () => Promise<string>, 
 }
 
 export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
-  const { getAccessTokenSilently } = useAuth0()
+  const { getAccessTokenSilently, loginWithRedirect } = useAuth0()
   // Gates `children` (and everything they mount) until a token has been
   // fetched at least once (2026-07-12, per Maro: "when i hard refresh...
   // literally have to log out then log back in to see what i was working
@@ -119,6 +153,13 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
             // refresh token" / "login_required"), not just that some API
             // call got a 401/403.
             console.error('Forced token refresh failed after a 401/403', refreshErr)
+            // See REAUTH_FLAG's own header — this is the case that used to
+            // just dead-end here, forever, for every subsequent request.
+            if (!sessionStorage.getItem(REAUTH_FLAG)) {
+              sessionStorage.setItem(REAUTH_FLAG, '1')
+              clearAuth0LocalStorageCache()
+              loginWithRedirect()
+            }
           }
         }
         return Promise.reject(error)
