@@ -3,6 +3,32 @@ import { useAuth0 } from '@auth0/auth0-react'
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios'
 import { api } from './api'
 
+// TOKEN_CALL_TIMEOUT_MS / withTimeout (2026-09-16, per Maro: on a work
+// laptop, every module was stuck on "Loading…" forever, even after api.ts
+// got its own 25s request timeout) — getAccessTokenSilently() is a network
+// call to Auth0's own domain (a silent-auth iframe, or a refresh-token POST
+// when the cached access token has expired), completely outside axios and
+// outside its timeout. The request interceptor below `await`s it before
+// every single API call, and axios never dispatches the actual request
+// until that interceptor's promise settles — so if Auth0's own call hangs
+// (exactly what a corporate proxy doing TLS inspection on a third-party
+// auth domain can do), the request never leaves the browser at all, and
+// api.ts's own timeout never gets the chance to start its clock. Racing
+// every such call against a hard local deadline is what actually bounds
+// this — the retry loop's own `catch` already assumes getAccessTokenSilently
+// can fail, so a rejection from the race is the exact same recoverable case.
+const TOKEN_CALL_TIMEOUT_MS = 8_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Auth token request timed out')), ms)
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      err => { clearTimeout(timer); reject(err) },
+    )
+  })
+}
+
 // A couple of retries with a short backoff — not a fixed one-shot try.
 // getAccessTokenSilently() needs a real round-trip (a silent iframe auth
 // check) the very first time it's called in a session, and that first call
@@ -17,7 +43,7 @@ import { api } from './api'
 async function getTokenWithRetry(getAccessTokenSilently: () => Promise<string>, attempts = 3): Promise<string | null> {
   for (let i = 0; i < attempts; i++) {
     try {
-      return await getAccessTokenSilently()
+      return await withTimeout(getAccessTokenSilently(), TOKEN_CALL_TIMEOUT_MS)
     } catch {
       if (i < attempts - 1) await new Promise(resolve => setTimeout(resolve, 400))
     }
@@ -81,7 +107,7 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
         if ((status === 401 || status === 403) && config && !config._retriedAfterAuth) {
           config._retriedAfterAuth = true
           try {
-            const token = await getAccessTokenSilently({ cacheMode: 'off' })
+            const token = await withTimeout(getAccessTokenSilently({ cacheMode: 'off' }), TOKEN_CALL_TIMEOUT_MS)
             config.headers.set('Authorization', `Bearer ${token}`)
             return api.request(config)
           } catch (refreshErr) {
