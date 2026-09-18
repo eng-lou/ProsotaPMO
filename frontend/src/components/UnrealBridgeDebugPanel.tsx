@@ -26,6 +26,21 @@ export function UnrealBridgeDebugPanel() {
     return () => clearInterval(interval)
   }, [bridgeReady])
 
+  // Keyboard fallback for the buttons above: mouse clicks inside the CEF
+  // panel need real pixel coordinates that aren't reliably discoverable
+  // from outside the browser, while a keypress just routes to whatever
+  // currently has focus, same as the rest of Unreal's own input handling.
+  useEffect(() => {
+    if (!bridgeReady) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === '1') unrealBridge.selectActivity('cube-1')
+      if (e.key === '2') unrealBridge.selectActivity('cube-2')
+      if (e.key === '3') unrealBridge.selectActivity('cube-3')
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [bridgeReady])
+
   if (!bridgeReady) return null
 
   return (
