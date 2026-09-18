@@ -4,7 +4,9 @@ import { Auth0Provider } from '@auth0/auth0-react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { SpeedInsights } from '@vercel/speed-insights/react'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { UnrealBridgeDebugPanel } from './components/UnrealBridgeDebugPanel'
 import { installStaleChunkReload } from './lib/staleChunkReload'
+import { installUnrealBridge } from './lib/unrealBridge'
 import { queryClient } from './lib/query'
 import App from './App'
 import './index.css'
@@ -14,6 +16,10 @@ import './index.css'
 // staleChunkReload.ts's own header for the full explanation. Installed
 // before the render call so it's listening from the very first paint.
 installStaleChunkReload()
+
+// ProsotaUE hybrid desktop app bridge (see unrealBridge.ts) — a no-op when
+// this build runs in a normal browser, so safe to install unconditionally.
+installUnrealBridge()
 
 // Auth0Provider is deliberately OUTSIDE StrictMode, not inside it. StrictMode
 // intentionally double-invokes effects in development, and Auth0Provider's
@@ -41,6 +47,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <App />
+          <UnrealBridgeDebugPanel />
         </QueryClientProvider>
       </ErrorBoundary>
     </React.StrictMode>
