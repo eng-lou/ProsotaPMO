@@ -44,14 +44,14 @@ export function UnrealBridgeDebugPanel() {
   if (!bridgeReady) return null
 
   return (
-    <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 2147483647, display: 'flex', gap: 4 }}>
+    <div style={{ position: 'fixed', bottom: 8, left: 8, zIndex: 2147483647, display: 'flex', gap: 4, opacity: 0.6 }}>
       {['cube-1', 'cube-2', 'cube-3'].map((id) => (
         <button
           key={id}
           onClick={() => unrealBridge.selectActivity(id)}
-          style={{ padding: '6px 10px', fontSize: 14, background: 'red', color: '#fff', border: '2px solid #fff' }}
+          style={{ padding: '3px 6px', fontSize: 10, background: '#222', color: '#fff', border: '1px solid #555', borderRadius: 3 }}
         >
-          Select {id}
+          {id}
         </button>
       ))}
     </div>
