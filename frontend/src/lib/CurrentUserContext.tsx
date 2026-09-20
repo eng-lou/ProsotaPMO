@@ -33,17 +33,36 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Bounded retry (2 extra attempts, short backoff) before surfacing `error`
+  // — AccessGate.tsx (App.tsx) treats an unresolved `error` differently from
+  // a real "not approved" status, but only once this actually gives up. The
+  // underlying flakiness this exists for (a cold Auth0 token acquisition on
+  // a brand-new browser profile — e.g. the CEF panel embedded in the
+  // Unreal desktop shell, which has no cached localStorage token the way a
+  // normal warm browser session does, per AuthTokenProvider.tsx's own
+  // getTokenWithRetry) is often transient and resolves itself within a
+  // second or two, so it's worth a couple of quick retries here rather than
+  // failing on the very first hiccup.
+  const RETRY_DELAYS_MS = [1000, 2000]
+
   const refetch = async () => {
     setLoading(true)
-    try {
-      const res = await api.get<CurrentUser>('/api/v1/users/me')
-      setCurrentUser(res.data)
-      setError(null)
-    } catch {
-      setError('Could not load your account. Try refreshing the page.')
-    } finally {
-      setLoading(false)
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await api.get<CurrentUser>('/api/v1/users/me')
+        setCurrentUser(res.data)
+        setError(null)
+        break
+      } catch {
+        if (attempt < RETRY_DELAYS_MS.length) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+          continue
+        }
+        setError('Could not load your account. Try refreshing the page.')
+        break
+      }
     }
+    setLoading(false)
   }
 
   useEffect(() => { refetch() }, [])

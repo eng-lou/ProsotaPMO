@@ -136,12 +136,40 @@ function AuthenticatedApp() {
 // own API calls (project list, etc.), which the backend would now 403 for
 // anyone not status="approved" (see _auth_approved in backend/app/main.py).
 function AccessGate() {
-  const { loading, currentUser } = useCurrentUser()
+  const { loading, currentUser, error, refetch } = useCurrentUser()
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
         <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
+      </div>
+    )
+  }
+
+  // A failed /users/me fetch (network hiccup, backend unreachable, a cold
+  // Auth0 token acquisition losing its race — see CurrentUserContext.tsx's
+  // own retry comment) is NOT the same thing as the backend genuinely
+  // saying status != "approved", but until this branch existed both landed
+  // on the identical AccessPendingScreen — indistinguishable from "you need
+  // approval" even for an already-approved user whose request simply never
+  // reached the backend. Checked for before the currentUser-status check
+  // below so a stale `error` from a previous failed attempt can't linger
+  // and misfire once a retry actually succeeds (refetch clears it on
+  // success), and so this never shows the Request-access form/copy, which
+  // would be actively misleading here.
+  if (error && !currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink px-4">
+        <div className="max-w-sm w-full text-center">
+          <p className="text-sm text-gray-700 dark:text-prosota-paper font-medium mb-1">Couldn't verify your access</p>
+          <p className="text-sm text-gray-500 dark:text-prosota-muted mb-4">{error}</p>
+          <button
+            onClick={() => refetch()}
+            className="text-sm bg-blue-600 dark:bg-prosota-azure text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     )
   }

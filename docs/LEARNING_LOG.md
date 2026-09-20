@@ -5848,3 +5848,41 @@ exception, agreed on directly rather than assumed: the future-looking
 spread across whatever time is left on a piece of work, because a
 forecast is supposed to be a projection — unlike money actually spent,
 which either happened or it didn't.
+
+## 2026-09-16 — A stuck spinner that was never actually stuck
+
+Every module except one (the one whose loading path happens to be built
+differently) sat on "Loading…" forever on a work laptop, on a network
+sitting behind a corporate proxy. Two earlier fixes that night — a
+25-second timeout on the shared API client, and a real error state on
+the post-login landing page that had previously mistaken "the request
+already failed" for "still loading" — were both real, separate bugs.
+Neither was the actual cause here, because both only bound the request
+after it left the browser, and this one never did: every API call
+first has to wait on a token fetch to a completely different domain
+(Auth0's own), outside the shared client entirely, and that fetch was
+never bounded by anything. A proxy that stalls the auth domain stalls
+every request in the app before axios's own clock even starts.
+
+The real cause, once the work laptop's own browser console was actually
+read instead of guessed at, was a different failure shape entirely —
+not a hang at all, but a fast, real 403 with nothing recovering from
+it: the cached Auth0 session had no refresh token left to renew with,
+so the forced re-fetch after every 401/403 failed the same way forever,
+and nothing downstream ever surfaced that as an auth problem — it just
+looked like nothing had loaded. This exact failure had already been
+worked around by hand before (clearing browser storage, not logging
+out — a distinction that matters because they clear different caches).
+Automating that — clear only Auth0's own cached keys, then send the
+user through a real sign-in redirect — is what actually closed it,
+because a fresh sign-in is the one thing that reliably re-issues a
+refresh token the same way the very first login did.
+
+The lesson isn't "add more timeouts" — two genuinely correct timeout
+fixes were shipped first and neither one was the fix, because a timeout
+only helps once a request has actually been dispatched, and this bug
+lived entirely in the step before that. The console showing a fast,
+clean 403 rather than a stalled connection was the one piece of
+evidence that mattered, and it was only available at all because it
+came from the actual hardware/network where the bug reproduced — not
+something reproducible locally.
