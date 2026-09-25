@@ -5886,3 +5886,39 @@ clean 403 rather than a stalled connection was the one piece of
 evidence that mattered, and it was only available at all because it
 came from the actual hardware/network where the bug reproduced — not
 something reproducible locally.
+
+## 2026-09-25 — "403" meant two different things, and a guard that never reset
+
+The 2026-09-16 auto-recovery for a missing refresh token had two gaps
+that could still leave modules looking permanently stuck. First, the
+guard that stops redirect loops was a flag in sessionStorage that was
+never cleared. sessionStorage survives the login redirect in the same
+tab, so after one re-login, any later failure in that tab (a refresh
+token expiring hours later) silently skipped the recovery. The flag
+now expires after a minute and is cleared as soon as a token fetch
+succeeds. If recovery really can't work, the user now sees a "Sign in
+again" screen instead of a blank module.
+
+Second, the backend answered a request with *no token* using 403, the
+same code as "you're not allowed to do this". The frontend couldn't tell
+the two apart, so it treated every permission refusal as a broken login,
+forcing a token refresh and, on a stale device, a full sign-in. A
+missing token is now a 401, 403 only ever means "not allowed", and
+only a 401 triggers the refresh. Using the right code for each case
+removed a whole class of confusion.
+
+An unrecoverable session detected at startup now redirects to sign-in
+immediately. Before, the app mounted anyway and every module fired
+requests that were doomed to fail. The backend also stopped calling
+Auth0's /userinfo on every request for users whose stored email is
+still a placeholder. That call was rate-limited and slow, and ran on
+every single API request.
+
+Bundle pass: one shared file (the schedule-generation helpers) imported a
+three.js-heavy 4D file just to read one list of category names. That was
+enough to make the Scheduling, Costs, Risks and ICD screens download the
+whole 3D engine. Moving the list into its own small file cut those
+screens' JavaScript from about 1.2 MB to about 120–450 KB. The same "one
+static import drags in a whole module" shape explained the rest: the
+letterhead editor (pulling in all of Scheduling) and the spreadsheet
+parser inside Poe. Both now load only when they're actually opened.

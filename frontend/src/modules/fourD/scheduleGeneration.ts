@@ -1,4 +1,5 @@
-import { CATEGORY_ORDER, type ExtractedElement, type ScheduleCategory } from './ifcScheduleExtraction'
+import type { ExtractedElement, ScheduleCategory } from './ifcScheduleExtraction'
+import { CATEGORY_ORDER } from './scheduleCategoryOrder'
 
 // IFC Schedule Wizard, step 2 (2026-07-13) — groups a proposed WBS (one
 // summary per storey, one child activity per storey+category+construction

@@ -53,6 +53,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 // (not an in-memory flag) guards against multiple requests failing at
 // once each independently triggering their own redirect.
 const REAUTH_FLAG = 'prosota-reauth-after-missing-refresh-token'
+// The flag holds a timestamp, not a bare '1' (2026-09-25). The old flag
+// was never cleared, and sessionStorage outlives the login redirect in
+// the same tab. So once one re-login had happened, any later unrecoverable
+// token failure in that tab (a refresh token expiring hours later)
+// dead-ended silently. That is exactly the "modules never turn up" symptom
+// this exists to prevent. Now it only suppresses a second redirect within
+// REAUTH_COOLDOWN_MS (which is still enough to stop a redirect loop), and
+// is cleared outright once a token fetch succeeds.
+const REAUTH_COOLDOWN_MS = 60_000
+
+// Auth0 SDK error codes that no amount of retrying fixes — only a real
+// interactive login does. Retrying them just added seconds of dead time
+// in front of every API request before the inevitable failure.
+const UNRECOVERABLE_AUTH_ERRORS = new Set([
+  'missing_refresh_token',
+  'invalid_grant',
+  'login_required',
+  'consent_required',
+  'interaction_required',
+])
+
+function isUnrecoverableAuthError(err: unknown): boolean {
+  const code = (err as { error?: unknown } | null)?.error
+  return typeof code === 'string' && UNRECOVERABLE_AUTH_ERRORS.has(code)
+}
 
 function clearAuth0LocalStorageCache() {
   const staleKeys: string[] = []
@@ -62,6 +87,18 @@ function clearAuth0LocalStorageCache() {
   }
   staleKeys.forEach(key => localStorage.removeItem(key))
 }
+
+// Returns true if a redirect was actually started.
+function reauthenticate(loginWithRedirect: () => Promise<void>): boolean {
+  const last = Number(sessionStorage.getItem(REAUTH_FLAG) || 0)
+  if (Date.now() - last < REAUTH_COOLDOWN_MS) return false
+  sessionStorage.setItem(REAUTH_FLAG, String(Date.now()))
+  clearAuth0LocalStorageCache()
+  loginWithRedirect()
+  return true
+}
+
+class UnrecoverableAuthError extends Error {}
 
 // A couple of retries with a short backoff — not a fixed one-shot try.
 // getAccessTokenSilently() needs a real round-trip (a silent iframe auth
@@ -77,8 +114,11 @@ function clearAuth0LocalStorageCache() {
 async function getTokenWithRetry(getAccessTokenSilently: () => Promise<string>, attempts = 3): Promise<string | null> {
   for (let i = 0; i < attempts; i++) {
     try {
-      return await withTimeout(getAccessTokenSilently(), TOKEN_CALL_TIMEOUT_MS)
-    } catch {
+      const token = await withTimeout(getAccessTokenSilently(), TOKEN_CALL_TIMEOUT_MS)
+      sessionStorage.removeItem(REAUTH_FLAG)
+      return token
+    } catch (err) {
+      if (isUnrecoverableAuthError(err)) throw new UnrecoverableAuthError(String((err as Error).message))
       if (i < attempts - 1) await new Promise(resolve => setTimeout(resolve, 400))
     }
   }
@@ -105,10 +145,20 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
   // getTokenWithRetry's own header on why a failure still lets requests
   // through rather than blocking forever).
   const [ready, setReady] = useState(false)
+  // Set when the session is unrecoverable and a redirect couldn't be started
+  // (cooldown active, i.e. a login just happened and still produced a broken
+  // session). Shown as a real message instead of rendering an app whose every
+  // request is guaranteed to fail.
+  const [authFailed, setAuthFailed] = useState(false)
 
   useEffect(() => {
     const requestInterceptor = api.interceptors.request.use(async (config) => {
-      const token = await getTokenWithRetry(getAccessTokenSilently)
+      let token: string | null = null
+      try {
+        token = await getTokenWithRetry(getAccessTokenSilently)
+      } catch (err) {
+        if (err instanceof UnrecoverableAuthError && !reauthenticate(loginWithRedirect)) setAuthFailed(true)
+      }
       if (token) config.headers.Authorization = `Bearer ${token}`
       // else: genuinely not authenticated after retrying — let the request
       // go through and the backend will correctly reject it with 403.
@@ -138,7 +188,14 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
       async (error: AxiosError) => {
         const status = error.response?.status
         const config = error.config as (InternalAxiosRequestConfig & { _retriedAfterAuth?: boolean }) | undefined
-        if ((status === 401 || status === 403) && config && !config._retriedAfterAuth) {
+        // 401 only (2026-09-25). A 403 used to trigger this too, back when the
+        // backend answered a missing token with 403. It now answers with 401
+        // (backend/app/core/auth.py), so a 403 is always a real permission
+        // refusal (access_pending, forbidden, project cap). Forcing a token
+        // refresh for those was wasted Auth0 round trips at best. At worst,
+        // on a device with a stale cache, it bounced a user who had simply
+        // clicked something they aren't allowed to use into a full re-login.
+        if (status === 401 && config && !config._retriedAfterAuth) {
           config._retriedAfterAuth = true
           try {
             const token = await withTimeout(getAccessTokenSilently({ cacheMode: 'off' }), TOKEN_CALL_TIMEOUT_MS)
@@ -155,11 +212,7 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
             console.error('Forced token refresh failed after a 401/403', refreshErr)
             // See REAUTH_FLAG's own header — this is the case that used to
             // just dead-end here, forever, for every subsequent request.
-            if (!sessionStorage.getItem(REAUTH_FLAG)) {
-              sessionStorage.setItem(REAUTH_FLAG, '1')
-              clearAuth0LocalStorageCache()
-              loginWithRedirect()
-            }
+            if (isUnrecoverableAuthError(refreshErr) && !reauthenticate(loginWithRedirect)) setAuthFailed(true)
           }
         }
         return Promise.reject(error)
@@ -174,13 +227,44 @@ export function AuthTokenProvider({ children }: { children: React.ReactNode }) {
     // should still fall through to `ready`, same as every other call in
     // this file — this is only closing the startup race, not adding a new
     // way to get stuck on a blank screen.
-    getTokenWithRetry(getAccessTokenSilently).finally(() => setReady(true))
+    // Unrecoverable at startup (2026-09-25): redirect straight to login
+    // instead of rendering the app. Before this, the app mounted anyway, and
+    // every module fired its request burst, each one failing, before the
+    // response interceptor finally redirected. That was seconds of "Loading…"
+    // modules for nothing, and permanently if the old never-cleared flag
+    // blocked the redirect.
+    getTokenWithRetry(getAccessTokenSilently)
+      .then(() => setReady(true))
+      .catch(err => {
+        if (err instanceof UnrecoverableAuthError) {
+          if (!reauthenticate(loginWithRedirect)) setAuthFailed(true)
+          return // stay on the loading screen while the redirect happens
+        }
+        setReady(true)
+      })
 
     return () => {
       api.interceptors.request.eject(requestInterceptor)
       api.interceptors.response.eject(responseInterceptor)
     }
-  }, [getAccessTokenSilently])
+  }, [getAccessTokenSilently, loginWithRedirect])
+
+  if (authFailed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink px-4">
+        <div className="max-w-sm w-full text-center">
+          <p className="text-sm text-gray-700 dark:text-prosota-paper font-medium mb-1">Your sign-in session couldn't be renewed</p>
+          <p className="text-sm text-gray-500 dark:text-prosota-muted mb-4">Sign in again to continue.</p>
+          <button
+            onClick={() => { sessionStorage.removeItem(REAUTH_FLAG); reauthenticate(loginWithRedirect) }}
+            className="text-sm bg-blue-600 dark:bg-prosota-azure text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Sign in again
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (!ready) {
     return (

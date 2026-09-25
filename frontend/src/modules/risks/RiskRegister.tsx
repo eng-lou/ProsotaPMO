@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -10,7 +10,6 @@ import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
 import { HeatMatrix } from '@/components/HeatMatrix'
-import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { RiskForm, toRiskPayload, type RiskFormValues } from './RiskForm'
 import { MitigationActions } from './MitigationActions'
@@ -19,6 +18,12 @@ import { downloadRisksCsv } from './exportRisks'
 import { RiskPrintView } from './RiskPrintView'
 import { buildRiskDraft } from './riskGeneration'
 import { RISK_STATUSES, type Risk } from './types'
+
+// Lazy (2026-09-25): the letterhead editor statically imports Scheduling.tsx
+// (column definitions + print view), so a static import here made this
+// module download the entire Scheduling screen just to show a dialog most
+// sessions never open.
+const LetterheadEditorWidget = lazy(() => import('@/components/LetterheadEditorWidget').then(m => ({ default: m.LetterheadEditorWidget })))
 
 interface CostElementSummary {
   id: string
@@ -536,16 +541,18 @@ export function RiskRegister() {
       )}
 
       {letterheadWidgetOpen && letterhead && (
-        <LetterheadEditorWidget
-          letterhead={letterhead}
-          previewTokens={{
-            project: selectedProject.name, module: 'Risk Register',
-            count: `${visibleRisks.length} risk${visibleRisks.length === 1 ? '' : 's'}`,
-            printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
-          }}
-          onSave={saveLetterhead}
-          onClose={() => setLetterheadWidgetOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <LetterheadEditorWidget
+            letterhead={letterhead}
+            previewTokens={{
+              project: selectedProject.name, module: 'Risk Register',
+              count: `${visibleRisks.length} risk${visibleRisks.length === 1 ? '' : 's'}`,
+              printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+            }}
+            onSave={saveLetterhead}
+            onClose={() => setLetterheadWidgetOpen(false)}
+          />
+        </Suspense>
       )}
 
       {filtersOpen && (

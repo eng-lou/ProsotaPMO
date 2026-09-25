@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -8,7 +8,6 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
-import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { downloadIcdItemsCsv } from './exportIcdItems'
@@ -19,6 +18,12 @@ import { IcdForm, toIcdPayload, type IcdFormValues } from './IcdForm'
 import { buildIcdDraft } from './icdGeneration'
 import { IcdPrintView } from './IcdPrintView'
 import { ITEM_TYPE_LABELS, ITEM_TYPES, PRIORITIES, PRIORITY_LABELS, STATUS_LABELS, type IcdItem, type ItemType } from './types'
+
+// Lazy (2026-09-25): the letterhead editor statically imports Scheduling.tsx
+// (column definitions + print view), so a static import here made this
+// module download the entire Scheduling screen just to show a dialog most
+// sessions never open.
+const LetterheadEditorWidget = lazy(() => import('@/components/LetterheadEditorWidget').then(m => ({ default: m.LetterheadEditorWidget })))
 
 interface RiskSummary { id: string; code: string; title: string }
 interface CostElementSummary { id: string; code: string; description: string }
@@ -519,16 +524,18 @@ export function IcdTracker() {
       )}
 
       {letterheadWidgetOpen && letterhead && (
-        <LetterheadEditorWidget
-          letterhead={letterhead}
-          previewTokens={{
-            project: selectedProject.name, module: 'ICD Tracker',
-            count: `${visibleItems.length} item${visibleItems.length === 1 ? '' : 's'}`,
-            printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
-          }}
-          onSave={saveLetterhead}
-          onClose={() => setLetterheadWidgetOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <LetterheadEditorWidget
+            letterhead={letterhead}
+            previewTokens={{
+              project: selectedProject.name, module: 'ICD Tracker',
+              count: `${visibleItems.length} item${visibleItems.length === 1 ? '' : 's'}`,
+              printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+            }}
+            onSave={saveLetterhead}
+            onClose={() => setLetterheadWidgetOpen(false)}
+          />
+        </Suspense>
       )}
 
       {filtersOpen && (

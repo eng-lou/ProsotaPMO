@@ -15,7 +15,9 @@ async def test_health_requires_no_auth(raw_client: AsyncClient):
 
 async def test_protected_route_rejects_no_token(raw_client: AsyncClient):
     resp = await raw_client.get(f"/api/v1/activities/?project_id={uuid.uuid4()}")
-    assert resp.status_code == 403  # HTTPBearer returns 403 when no credentials at all
+    # 401, not HTTPBearer's default 403 — missing credentials are an
+    # authentication failure; 403 is reserved for authorization refusals.
+    assert resp.status_code == 401
 
 
 async def test_protected_route_rejects_bad_token(raw_client: AsyncClient):
@@ -217,11 +219,32 @@ async def test_display_name_heals_even_when_email_already_resolved(user: User, d
     await db.commit()
 
     monkeypatch.setattr(auth_module, "_fetch_userinfo_sync", lambda access_token: {"name": "Real Name"})
+    monkeypatch.setattr(auth_module, "_last_identity_attempt", {})
 
     token = TokenPayload(sub=user.auth0_sub, email=None, access_token="fake-token")
     healed = await get_db_user(token=token, db=db)
     assert healed.display_name == "Real Name"
     assert healed.email == "already-real@example.com"  # untouched, was already fine
+
+
+async def test_unhealable_identity_does_not_call_userinfo_every_request(user: User, db, monkeypatch):
+    # 2026-09-25: a placeholder identity that /userinfo can't heal used to
+    # trigger a blocking /userinfo round trip on every request. Now at most
+    # one per interval.
+    import app.core.auth as auth_module
+    from app.core.auth import TokenPayload, get_db_user
+
+    user.email = f"user+{user.auth0_sub.split('|')[-1]}@prosotapmo.local"
+    await db.commit()
+
+    calls = []
+    monkeypatch.setattr(auth_module, "_fetch_userinfo_sync", lambda access_token: calls.append(1) or None)
+    monkeypatch.setattr(auth_module, "_last_identity_attempt", {})
+
+    token = TokenPayload(sub=user.auth0_sub, email=None, access_token="fake-token")
+    for _ in range(5):
+        await get_db_user(token=token, db=db)
+    assert len(calls) == 1
 
 
 async def test_last_active_at_set_on_first_request_and_throttled_after(user: User, db):

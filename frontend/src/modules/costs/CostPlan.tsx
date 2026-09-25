@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -10,7 +10,6 @@ import { resourceLabelForActivity } from '@/lib/resourceLabel'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
-import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { UdfCell } from '@/modules/scheduling/UdfCell'
 import { UserDefinedFieldsWidget } from '@/modules/scheduling/UserDefinedFieldsWidget'
@@ -27,6 +26,12 @@ import { CostVarianceThresholds } from './CostVarianceThresholds'
 import type { CostVarianceCriterion } from './criteriaTypes'
 import { FiscalYearBreakdown } from './FiscalYearBreakdown'
 import { COST_ELEMENT_STATUSES, COST_ELEMENT_STATUS_LABELS, ELEMENT_TYPES, type CostElement } from './types'
+
+// Lazy (2026-09-25): the letterhead editor statically imports Scheduling.tsx
+// (column definitions + print view), so a static import here made this
+// module download the entire Scheduling screen just to show a dialog most
+// sessions never open.
+const LetterheadEditorWidget = lazy(() => import('@/components/LetterheadEditorWidget').then(m => ({ default: m.LetterheadEditorWidget })))
 
 interface RiskSummary {
   id: string
@@ -1168,16 +1173,18 @@ export function CostPlan() {
       )}
 
       {letterheadWidgetOpen && letterhead && (
-        <LetterheadEditorWidget
-          letterhead={letterhead}
-          previewTokens={{
-            project: selectedProject.name, module: 'Cost Plan',
-            count: `${visibleElements.length} element${visibleElements.length === 1 ? '' : 's'}`,
-            printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
-          }}
-          onSave={saveLetterhead}
-          onClose={() => setLetterheadWidgetOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <LetterheadEditorWidget
+            letterhead={letterhead}
+            previewTokens={{
+              project: selectedProject.name, module: 'Cost Plan',
+              count: `${visibleElements.length} element${visibleElements.length === 1 ? '' : 's'}`,
+              printed_at: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+            }}
+            onSave={saveLetterhead}
+            onClose={() => setLetterheadWidgetOpen(false)}
+          />
+        </Suspense>
       )}
 
       {filtersOpen && (

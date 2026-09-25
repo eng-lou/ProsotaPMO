@@ -49,12 +49,20 @@ class TokenPayload:
     access_token: str = ""
 
 
-_bearer = HTTPBearer()
+# auto_error=False (2026-09-25): FastAPI 0.111's HTTPBearer answers a
+# missing Authorization header with 403, the same status as a real
+# authorization refusal (access_pending, forbidden). The frontend can't tell
+# "no token" from "not allowed" apart, and was forcing token refreshes and
+# full re-logins on plain permission 403s. Missing credentials are an
+# authentication failure, so they get 401 here, and 403 keeps a single meaning.
+_bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> TokenPayload:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = _decode_token(credentials.credentials)
     except jwt.ExpiredSignatureError:
@@ -128,6 +136,25 @@ async def _resolve_real_identity(token: TokenPayload) -> tuple[str | None, str |
     return None, None
 
 
+# Throttle for the /userinfo self-heal (2026-09-25). If a row's placeholder
+# identity can't be healed (/userinfo returns nothing, or Auth0 rate-limits
+# it), needs_identity_check stays true, and every single API request made
+# another blocking /userinfo round trip of up to 5s. Every screen fires
+# several requests at once, so that user saw lag everywhere. Kept in
+# process memory: losing it on a cold start costs one extra attempt, nothing more.
+_IDENTITY_RETRY_INTERVAL = timedelta(minutes=5)
+_last_identity_attempt: dict[str, datetime] = {}
+
+
+def _identity_check_due(sub: str) -> bool:
+    now = datetime.now(timezone.utc)
+    last = _last_identity_attempt.get(sub)
+    if last is not None and now - last < _IDENTITY_RETRY_INTERVAL:
+        return False
+    _last_identity_attempt[sub] = now
+    return True
+
+
 async def get_db_user(
     token: TokenPayload = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -166,7 +193,7 @@ async def get_db_user(
             or user.display_name.endswith("@prosotapmo.local")
             or (token.email and user.email != token.email)
         )
-        if needs_identity_check:
+        if needs_identity_check and _identity_check_due(token.sub):
             real_email, real_name = await _resolve_real_identity(token)
             if real_email and real_email != user.email:
                 user.email = real_email

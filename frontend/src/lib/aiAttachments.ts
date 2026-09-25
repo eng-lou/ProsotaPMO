@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx'
 import { presignAttachment, type AiContentBlock, type AttachmentStorageSource } from '@/lib/aiAssistant'
 import { uploadDirectToStorage } from '@/lib/directUpload'
 
@@ -76,6 +75,9 @@ async function prepareCsvAttachment(file: File): Promise<PreparedAttachment> {
 // sheet is the easy mistake here) and a multi-sheet risk/cost export is a
 // completely normal real-world spreadsheet shape to attach.
 async function prepareXlsxAttachment(file: File): Promise<PreparedAttachment> {
+  // Loaded on demand (2026-09-25): xlsx is most of PoePanel's chunk, and it's
+  // only needed when someone actually attaches a workbook, not to open Poe.
+  const XLSX = await import('xlsx')
   const buffer = await file.arrayBuffer()
   const workbook = XLSX.read(buffer, { type: 'array' })
   const parts = workbook.SheetNames.map(sheetName => {

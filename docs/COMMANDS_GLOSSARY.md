@@ -130,3 +130,6 @@ This is a safety net: if a change breaks something, it shows up as a red ✗ on 
 
 - "Terminal" / "command line" / "shell" all mean the same thing: a text-based way of giving the computer instructions, instead of clicking buttons.
 - Commands in this file are the ones actually used on this project so far — not a generic tutorial. If a new tool or command gets introduced in a future session, it gets added here.
+
+### `npx knip` (2026-09-25)
+Scans the frontend for files, exports and packages that nothing uses, plus packages the code uses but `package.json` doesn't list. Used to find dead code during the bloat pass. Its "unused exports" list includes functions that are still used inside their own file, so it's a lead to check, not a delete list.
