@@ -1,4 +1,7 @@
 {
+    "regions": [
+        "lhr1"
+    ],
     "services": {
         "frontend": {
             "root": "frontend",
