@@ -61,8 +61,8 @@ export interface ViewerSettings {
   // Real-Time Sky (2026-08-22, per Maro: "the sun position remains the
   // same, i take its the hdr doing this... add real time option so i can
   // use the sun controls with a dynamic shadow effect") — the default
-  // environment is a *static* baked HDR photo (DEFAULT_ENVIRONMENT_URL,
-  // Viewport3D.tsx), which has its own real sun already baked into its
+  // environment was a *static* baked HDR photo (a default sky HDR, removed
+  // 2026-09-25; an uploaded HDR still behaves this way), which has its own real sun already baked into its
   // pixels: dragging Sun Azimuth/Elevation only ever moved the shadow-
   // casting directional light, never that image, so a model's own IBL
   // reflections/ambient shading (dominated by the HDR, the directional
@@ -90,11 +90,10 @@ export interface ViewerSettings {
   // shadows above.
   ambientOcclusion: boolean
   // Blender's "Scene World" checkbox equivalent (2026-07-11, per Maro: "see
-  // the sky as well from the added HDR"). Defaults on — Viewport3D.tsx's
-  // DEFAULT_ENVIRONMENT_URL is an actual outdoor sky (a self-hosted HDR,
-  // per Maro: "copy and save it in our files for default load out"), so
-  // showing it as the backdrop is the right out-of-the-box look, unlike
-  // the earlier "apartment" CDN preset (an indoor scene) this replaced.
+  // the sky as well from the added HDR"). Defaults on. Only applies to a
+  // user-uploaded HDR/EXR since 2026-09-25: with no HDR loaded there's no
+  // sky image at all, and the backdrop is white (see DefaultEnvironment in
+  // Viewport3D.tsx).
   environmentBackground: boolean
   // Plain white backdrop, as an alternative to the HDR sky (2026-07-24, per
   // Maro, comparing against the Baseline pane's own plain white look:

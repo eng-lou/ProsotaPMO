@@ -2698,7 +2698,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleClearEnvironment = () => { setCustomEnvironment(null); setEnvironmentError(null) }
   // Fires from ViewportErrorBoundary when the *active* environment fails to
   // render (2026-07-11 fix) — e.g. a corrupt uploaded .hdr/.exr. Reverts to
-  // Viewport3D.tsx's self-hosted DEFAULT_ENVIRONMENT_URL rather than leaving
+  // Viewport3D.tsx's DefaultEnvironment (no HDR) rather than leaving
   // the boundary stuck reporting a now-permanent error with no way back.
   const handleEnvironmentError = (message: string) => {
     setEnvironmentError(message)

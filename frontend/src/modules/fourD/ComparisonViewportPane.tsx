@@ -19,7 +19,7 @@ import { cloneSceneHierarchy } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import type { RenderMode } from './viewerSettings'
 import {
-  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DEFAULT_ENVIRONMENT_URL,
+  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment,
   ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
@@ -144,11 +144,13 @@ export function ComparisonViewportPane({
   // mutate light.shadow.camera every frame.
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null)
   const dpr = Math.min(window.devicePixelRatio * (dprMultiplier ?? 1), 4)
-  const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
   // Same "background=false during a capture override, else live setting"
   // logic as Viewport3D.tsx's own showWhiteBackground/Environment
   // background — see that file's own comments for the full reasoning.
-  const showWhiteBackground = captureBackgroundOverride === null && whiteBackground
+  // No custom HDR and no Real-Time Sky: nothing to show but white (see
+  // DefaultEnvironment's header in Viewport3D.tsx).
+  const showWhiteBackground = (captureBackgroundOverride === null && whiteBackground)
+    || (!dynamicSky && !environmentUrl)
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
   // center-offset sun position + explicit target (2026-08-22, mirrors
   // Viewport3D.tsx's own fix — see computeModelBounds's header there for
@@ -450,9 +452,11 @@ export function ComparisonViewportPane({
             >
               <Sky sunPosition={skySunPosition} />
             </Environment>
+          ) : !environmentUrl ? (
+            <DefaultEnvironment />
           ) : (
             <Environment
-              files={activeEnvironmentUrl}
+              files={environmentUrl}
               background={showEnvironmentBackground}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}

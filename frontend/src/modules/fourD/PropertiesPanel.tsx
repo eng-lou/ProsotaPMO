@@ -293,8 +293,8 @@ export function PropertiesPanel({
           }}
         />
         <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted">
-          <span className="truncate" title={environmentName ?? 'kloofendal_48d_partly_cloudy_puresky_4k.hdr (default)'}>
-            {environmentName ?? 'kloofendal (default)'}
+          <span className="truncate" title={environmentName ?? 'No HDR: studio lighting on a white background (default)'}>
+            {environmentName ?? 'Studio light (default)'}
           </span>
           {environmentName && (
             <button onClick={onClearEnvironment} title="Revert to default" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>

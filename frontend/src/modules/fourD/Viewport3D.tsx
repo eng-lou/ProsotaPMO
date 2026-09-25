@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
 // loaded) package never lands in the main bundle" discipline just below —
@@ -385,14 +386,34 @@ export const AmbientOcclusionEffect = lazy(() =>
   })),
 )
 
-// Self-hosted default environment (2026-07-11, per Maro — replaces the
-// earlier RoomEnvironment/drei-CDN-preset fallback: "copy and save it in
-// our files for default load out"). Served straight from Vite's public/
-// dir, same self-hosting precedent as ifcModel.ts's WASM — no CDN, no
-// network dependency beyond our own server. A partly-cloudy outdoor sky,
-// so — unlike the old "apartment" preset — it's actually a sensible
-// backdrop too (see DEFAULT_VIEWER_SETTINGS.environmentBackground).
-export const DEFAULT_ENVIRONMENT_URL = '/hdr/kloofendal_48d_partly_cloudy_puresky_4k.hdr'
+// Default lighting with no HDR (2026-09-25, per Maro: "remove the hdri as
+// the default completely. use white background"). The self-hosted 4K
+// kloofendal sky it replaces was a 20MB download on every 4D session. The
+// scene still needs *some* image-based lighting, or PBR materials render
+// flat and dark, so this lights it with three.js's own RoomEnvironment: a
+// neutral studio light generated in code, so nothing is downloaded. It only
+// sets scene.environment (lighting), never scene.background; the visible
+// backdrop is white whenever no custom HDR is loaded (see
+// showWhiteBackground in both viewports). A user-uploaded HDR/EXR and the
+// Real-Time Sky both still replace this exactly as before.
+export function DefaultEnvironment() {
+  const gl = useThree(state => state.gl)
+  const scene = useThree(state => state.scene)
+  useEffect(() => {
+    const pmrem = new THREE.PMREMGenerator(gl)
+    const room = new RoomEnvironment()
+    const target = pmrem.fromScene(room, 0.04)
+    const previous = scene.environment
+    scene.environment = target.texture
+    return () => {
+      if (scene.environment === target.texture) scene.environment = previous
+      target.dispose()
+      room.dispose()
+      pmrem.dispose()
+    }
+  }, [gl, scene])
+  return null
+}
 
 // Extracted + exported (2026-07-25, per Maro: "baseline 3d doesnt share
 // the same render shader settings etc") — ComparisonViewportPane.tsx calls
@@ -4422,14 +4443,12 @@ function ClippingSetup() {
 // any mesh with no material assigned is metalness:1/roughness:1, and a
 // fully metallic surface has essentially no diffuse response — it only
 // shows reflected environment light, which plain ambient+directional lights
-// don't provide. Defaults to DEFAULT_ENVIRONMENT_URL above (self-hosted,
-// per Maro) — environmentUrl (a user-uploaded .hdr/.exr, PropertiesPanel.tsx's
-// "Environment" section) overrides it when set, both going through the same
-// files= path since both are just URLs at this point (a local data: URL for
-// an upload, a same-origin path for the default) — no CDN involved either
-// way. Wrapped in ViewportErrorBoundary regardless, so a missing/corrupt
-// file (default or uploaded) degrades to "no environment" instead of
-// crashing the app the way the old CDN-preset default once did.
+// don't provide. Defaults to DefaultEnvironment above (generated in code,
+// no download) — environmentUrl (a user-uploaded .hdr/.exr, PropertiesPanel.tsx's
+// "Environment" section) overrides it when set, via <Environment files=>
+// (a local data: URL). That branch is wrapped in ViewportErrorBoundary, so a
+// corrupt upload degrades to "no environment" instead of crashing the app
+// the way the old CDN-preset default once did.
 //
 // TransformControls' onChange calls onTransformChange (a plain callback,
 // not local state) — the actual Transform number fields moved out of this
@@ -4487,7 +4506,6 @@ export function Viewport3D({
     }
     return activeImportedObject
   })()
-  const activeEnvironmentUrl = environmentUrl ?? DEFAULT_ENVIRONMENT_URL
   const zUp = settings.upAxis === 'z'
 
   // Model-scale bounds (2026-07-19 fix, per Maro: "shadow is still weird
@@ -4926,7 +4944,11 @@ export function Viewport3D({
   // never applied during a capture/still-export, same reasoning
   // captureBackgroundOverride's own comment just above already gives for
   // that feature's independence from the live view's current look.
-  const showWhiteBackground = captureBackgroundOverride === null && settings.whiteBackground
+  // No custom HDR loaded (and no Real-Time Sky) means there's no sky image
+  // to show at all (DefaultEnvironment only lights the scene), so the
+  // backdrop is always white there, captures included.
+  const showWhiteBackground = (captureBackgroundOverride === null && settings.whiteBackground)
+    || (!settings.dynamicSky && !environmentUrl)
   // Path/Zone drag handles (PathGizmo.tsx/ZoneGizmo.tsx) are pure live-
   // editing chrome, not part of the model — forced off for the duration of
   // a capture/still-export the same way captureBackgroundOverride forces
@@ -6169,8 +6191,10 @@ export function Viewport3D({
             >
               <Sky sunPosition={skySunPosition} />
             </Environment>
+          ) : !environmentUrl ? (
+            <DefaultEnvironment />
           ) : (
-            <ViewportErrorBoundary key={activeEnvironmentUrl} onError={onEnvironmentError}>
+            <ViewportErrorBoundary key={environmentUrl} onError={onEnvironmentError}>
               {/* Equirect HDR/EXR skies are authored assuming Y is the zenith
                   direction (2026-07-08 fix, per Maro: "hdr too off") — that
                   mapping is baked into the texture sampling itself, not the
@@ -6179,7 +6203,7 @@ export function Viewport3D({
                   environmentRotation (three.js r162+) are the actual hook for
                   this — same +90-about-X correction as everything else Y-up. */}
               <Environment
-                files={activeEnvironmentUrl}
+                files={environmentUrl}
                 background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
                 backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
                 environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
