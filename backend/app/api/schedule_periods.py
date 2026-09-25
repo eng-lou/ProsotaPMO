@@ -22,7 +22,8 @@ async def create_period(data: SchedulePeriodCreate, db: AsyncSession = Depends(g
     return await svc.create_period(db, data)
 
 
-@router.post("/bootstrap", response_model=SchedulePeriodResponse)
+# GET as well as POST: see app/api/periods.py's bootstrap_period.
+@router.api_route("/bootstrap", methods=["GET", "POST"], response_model=SchedulePeriodResponse)
 async def bootstrap_period(schedule_variant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return await svc.bootstrap_period(db, schedule_variant_id)
 

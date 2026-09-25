@@ -183,7 +183,8 @@ async def test_bootstrap_period_creates_once_then_reuses(client: AsyncClient):
     p = await _create(client)
     first = await client.post("/api/v1/periods/bootstrap", params={"project_id": p["id"]})
     assert first.status_code == 200
-    second = await client.post("/api/v1/periods/bootstrap", params={"project_id": p["id"]})
+    # GET (what the frontend uses since 2026-09-25) must find the same row POST made.
+    second = await client.get("/api/v1/periods/bootstrap", params={"project_id": p["id"]})
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
 

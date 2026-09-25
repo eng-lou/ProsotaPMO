@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import { describeLoadError } from './describeLoadError'
 import type { Period } from './types'
 
 // Every module (Risks, Cost Plan, ...) is period-scoped, but Period Manager
@@ -14,6 +15,7 @@ export function useActivePeriod(projectId: string | undefined) {
     if (!projectId) return
     try {
       setLoading(true)
+      setError(null)
       // The find-or-create used to happen here, client-side (fetch periods,
       // create one if the list was empty) — two of these racing for the same
       // brand-new project could both see an empty list and both create a
@@ -21,12 +23,12 @@ export function useActivePeriod(projectId: string | undefined) {
       // periods (see backend migration a3f9c02e5b71). One atomic backend call
       // now does the whole thing, with a DB-level constraint as the real
       // guard against the race.
-      const { data } = await api.post<Period>('/api/v1/periods/bootstrap', null, {
+      const { data } = await api.get<Period>('/api/v1/periods/bootstrap', {
         params: { project_id: projectId },
       })
       setPeriod(data)
-    } catch {
-      setError('Failed to load period')
+    } catch (err) {
+      setError(describeLoadError(err, "this project's period"))
     } finally {
       setLoading(false)
     }

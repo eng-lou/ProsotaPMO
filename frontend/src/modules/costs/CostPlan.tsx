@@ -10,6 +10,7 @@ import { resourceLabelForActivity } from '@/lib/resourceLabel'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { UdfCell } from '@/modules/scheduling/UdfCell'
 import { UserDefinedFieldsWidget } from '@/modules/scheduling/UserDefinedFieldsWidget'
@@ -202,7 +203,7 @@ function uniqueGroups(elements: CostElement[]): string[] {
 
 export function CostPlan() {
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
   // Scheduling's own schedule-variant/period pair (distinct from `period`
   // above — Risk/Cost/ICD's shared Period) — needed to fetch resource
   // assignments/activities for "Group by Resource" and the Rate Card's
@@ -840,6 +841,7 @@ export function CostPlan() {
     )
   }
 
+  if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading cost plan…</div>
   }

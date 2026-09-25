@@ -10,6 +10,7 @@ import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
 import { HeatMatrix } from '@/components/HeatMatrix'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { RiskForm, toRiskPayload, type RiskFormValues } from './RiskForm'
 import { MitigationActions } from './MitigationActions'
@@ -74,7 +75,7 @@ function uniqueValues(risks: Risk[], field: 'category' | 'area'): string[] {
 
 export function RiskRegister() {
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
@@ -409,6 +410,7 @@ export function RiskRegister() {
     </Fragment>
   )
 
+  if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading risk register…</div>
   }

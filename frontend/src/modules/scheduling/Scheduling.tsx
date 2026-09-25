@@ -19,6 +19,7 @@ import { stringifyUdfValue } from '@/modules/fourD/scheduleScope'
 import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
 import { buildResourceRecipe, type ResourceRecipeActivity } from '@/modules/fourD/scheduleGeneration'
 import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
@@ -2570,6 +2571,7 @@ export function Scheduling() {
     await refresh()
   }
 
+  if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading schedule…</div>
   }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
@@ -25,8 +26,8 @@ export function formatDate(value: string | null) {
 export function Overview() {
   const navigate = useNavigate()
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading } = useActivePeriod(selectedProject?.id)
-  const { period: schedulePeriod, loading: scheduleLoading } = useActiveScheduleVariant(selectedProject?.id)
+  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
+  const { period: schedulePeriod, loading: scheduleLoading, error: scheduleError, refetch: refetchSchedule } = useActiveScheduleVariant(selectedProject?.id)
 
   // WBS slicer (2026-08-28, per Maro: "allow slicers for wbs which affects
   // all the cards") — replaces the old registered-sub-project picker with
@@ -103,6 +104,15 @@ export function Overview() {
   const handleCrossFilterClick = (key: string, seedType: CrossFilterEntityKind, seedIds: string[]) => {
     const nextKey = toggleCrossFilterKey(crossFilter, key)
     setCrossFilterSeed(nextKey ? { key: nextKey, seedType, seedIds } : null)
+  }
+
+  if ((!period && periodError) || (!schedulePeriod && scheduleError)) {
+    return (
+      <ModuleLoadError
+        message={(!period && periodError) || scheduleError || ''}
+        onRetry={() => { if (!period) refetchPeriod(); if (!schedulePeriod) refetchSchedule() }}
+      />
+    )
   }
 
   if (error) {

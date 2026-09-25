@@ -71,7 +71,13 @@ async def create_period(
 # relying on the DB's own partial unique index (one live period per
 # project) as the actual race guard — a losing concurrent request gets an
 # IntegrityError here, which just means it re-fetches the winner instead.
-@router.post("/bootstrap", response_model=PeriodResponse)
+# GET as well as POST (2026-09-25, per Maro): an HS2-managed work laptop got
+# 403 on these bootstrap POSTs, most likely from the corporate network, which
+# left every module but 4D unable to load. The frontend now calls this with
+# GET. It's still a find-or-create, but repeating it returns the same row, so
+# it's safe as a GET. POST is kept so a browser still running the previous
+# frontend build keeps working through a deploy.
+@router.api_route("/bootstrap", methods=["GET", "POST"], response_model=PeriodResponse)
 async def bootstrap_period(
     project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),

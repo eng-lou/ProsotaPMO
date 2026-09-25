@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import { describeLoadError } from './describeLoadError'
 import type { SchedulePeriod, ScheduleVariant } from '@/modules/scheduling/types'
 
 const STORAGE_PREFIX = 'prosota_selected_schedule_variant:'
@@ -21,7 +22,7 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
   const [error, setError] = useState<string | null>(null)
 
   const loadPeriodFor = async (v: ScheduleVariant) => {
-    const { data: p } = await api.post<SchedulePeriod>('/api/v1/schedule-periods/bootstrap', null, {
+    const { data: p } = await api.get<SchedulePeriod>('/api/v1/schedule-periods/bootstrap', {
       params: { schedule_variant_id: v.id },
     })
     setPeriod(p)
@@ -65,7 +66,7 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
       // network at all means loadPeriodFor is still only ever called once —
       // no risk of a stale-then-corrected flash of the wrong variant's data
       // the way racing both fetches and reconciling afterward would.
-      const { data: master } = await api.post<ScheduleVariant>('/api/v1/schedule-variants/bootstrap', null, {
+      const { data: master } = await api.get<ScheduleVariant>('/api/v1/schedule-variants/bootstrap', {
         params: { project_id: projectId },
       })
       const storedId = sessionStorage.getItem(STORAGE_PREFIX + projectId)
@@ -79,8 +80,8 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
         setVariant(active)
         await loadPeriodFor(active)
       }
-    } catch {
-      setError('Failed to load schedule')
+    } catch (err) {
+      setError(describeLoadError(err, "this project's schedule"))
     } finally {
       setLoading(false)
     }

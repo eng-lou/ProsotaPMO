@@ -30,7 +30,8 @@ async def create_variant(data: ScheduleVariantCreate, db: AsyncSession = Depends
 # Registered ahead of any client-side find-or-create logic — mirrors
 # app/api/periods.py's own bootstrap endpoint exactly, same real race it
 # guards against.
-@router.post("/bootstrap", response_model=ScheduleVariantResponse)
+# GET as well as POST: see app/api/periods.py's bootstrap_period.
+@router.api_route("/bootstrap", methods=["GET", "POST"], response_model=ScheduleVariantResponse)
 async def bootstrap_variant(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return await svc.get_or_create_master(db, project_id)
 

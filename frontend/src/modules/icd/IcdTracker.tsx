@@ -8,6 +8,7 @@ import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
 import { RecordLinks, type LinkCandidate } from '@/components/RecordLinks'
 import { BaselineManagerWidget } from '@/components/BaselineManagerWidget'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
 import { downloadIcdItemsCsv } from './exportIcdItems'
@@ -54,7 +55,7 @@ function uniqueValues(items: IcdItem[], field: 'owner' | 'status'): string[] {
 
 export function IcdTracker() {
   const { selectedProject } = useProject()
-  const { period, loading: periodLoading, error: periodError } = useActivePeriod(selectedProject?.id)
+  const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
@@ -386,6 +387,7 @@ export function IcdTracker() {
     </Fragment>
   )
 
+  if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
   if (loading || periodLoading) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading ICD tracker…</div>
   }

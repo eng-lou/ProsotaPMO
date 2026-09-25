@@ -8,13 +8,13 @@ from app.models.project import Project
 
 
 async def _bootstrap_master(client: AsyncClient, project: Project) -> dict:
-    resp = await client.post("/api/v1/schedule-variants/bootstrap", params={"project_id": str(project.id)})
+    resp = await client.get("/api/v1/schedule-variants/bootstrap", params={"project_id": str(project.id)})
     assert resp.status_code == 200, resp.text
     return resp.json()
 
 
 async def _bootstrap_period(client: AsyncClient, variant_id: str) -> dict:
-    resp = await client.post("/api/v1/schedule-periods/bootstrap", params={"schedule_variant_id": variant_id})
+    resp = await client.get("/api/v1/schedule-periods/bootstrap", params={"schedule_variant_id": variant_id})
     assert resp.status_code == 200, resp.text
     return resp.json()
 
