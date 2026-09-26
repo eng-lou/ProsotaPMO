@@ -5922,3 +5922,27 @@ screens' JavaScript from about 1.2 MB to about 120–450 KB. The same "one
 static import drags in a whole module" shape explained the rest: the
 letterhead editor (pulling in all of Scheduling) and the spreadsheet
 parser inside Poe. Both now load only when they're actually opened.
+
+## 2026-09-25 (later) — The real blocker was the network, and the server was on the wrong continent
+
+Once the auth fixes were live, the work laptop's console showed the real
+pattern: only POST requests failed, each with a 403 that came back in
+about 40ms carrying a 15kB page. The Prosota backend can't answer that
+fast, and it never sends a page like that. It was HS2's web filter, which
+lets pages load (GET) but blocks sending data (POST). 4D worked because it
+opens using only GETs. Switching the three "find or create the period"
+startup calls to GET got every module loading. Saves are still POSTs, so
+fixing those on that network is up to HS2 IT (allowlisting the domain).
+
+Along the way, every module turned out to sit on "Loading…" forever when
+its startup call failed, because it only stopped loading once it had a
+period. Modules now show the error, with a Retry button, and say whether
+Prosota or something in between refused the request.
+
+The slowness had a separate cause, spotted in Vercel's own response
+header (`X-Vercel-Id: lhr1::iad1`). The backend ran in Washington DC
+while the database sits in London, so every database step crossed the
+Atlantic twice. Pinning the backend to London (`"regions": ["lhr1"]`)
+made it noticeably faster. The general lesson: when every request has
+the same fixed delay regardless of size, look at where things run
+before looking at the code.
