@@ -5987,3 +5987,23 @@ per frame, even though the main view draws the same model in a handful
 of calls. The pane now clones the batch itself, sharing the same
 geometry, and costs 5ms a frame. Lesson: when two views of the same
 data perform very differently, compare draw calls first.
+
+## 2026-09-29 (later) — Why Generate Schedule failed on the clinic models
+
+Production answered with a bare 500 and no detail. Running the same five
+IFCs against the local backend gave the real error at once: a
+duplicate-key violation on the rule that each element links to an
+activity only once. The cause was in the models, not the code's size or
+speed. `Eng-ELE.ifc` and `Eng-MEP-Optimized.ifc` both contain the same
+2,048 light fittings under the same GlobalIds (the MEP model already
+includes the electrical content), so the "Lighting" activity got every
+fitting twice.
+
+Generation now counts each GlobalId once, and the server skips any
+repeated reference instead of failing the whole request. Lesson: a
+bare 500 from a big import is worth reproducing locally with the same
+files before guessing at limits. Here it wasn't a size or time limit.
+
+Still open: 4D playback applies a GlobalId link to the first model that
+has it, so the duplicate copies in the MEP model stay visible during
+playback.

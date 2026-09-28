@@ -781,7 +781,16 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
     categories: Map<ScheduleCategory, { elementRefs: string[]; elementLabels: string[]; quantity: number; materialVolumeM3: number }>
   }
   const byStorey = new Map<string, Bucket>()
+  // Each element once (2026-09-29, real production failure): federated
+  // models can carry the same element under the same GlobalId in more than
+  // one file — the NBU Medical Clinic's Eng-ELE.ifc and Eng-MEP.ifc share
+  // 2,048 light fittings — which double-counted its quantity and sent the
+  // same link twice (a 500 from the backend's one-link-per-element rule).
+  // First model scanned wins.
+  const seenGlobalIds = new Set<string>()
   for (const el of elements) {
+    if (seenGlobalIds.has(el.globalId)) continue
+    seenGlobalIds.add(el.globalId)
     let group = byStorey.get(el.storeyName)
     if (!group) { group = { storeyName: el.storeyName, elevationMetres: el.storeyElevation, categories: new Map() }; byStorey.set(el.storeyName, group) }
     let bucket = group.categories.get(el.category)

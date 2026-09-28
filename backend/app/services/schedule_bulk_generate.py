@@ -339,7 +339,17 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         # schema default) shouldn't get an IndexError, just the old
         # behaviour.
         labels_match = len(staged.element_labels) == len(staged.element_refs)
+        # One link per element per activity (2026-09-29, real production
+        # 500): federated models can carry the same element under the same
+        # GlobalId in two files — the NBU Medical Clinic's Eng-ELE.ifc and
+        # Eng-MEP.ifc share 2,048 light fittings — and a repeated ref here
+        # would hit uq_model_element_links_activity_element and roll back
+        # the entire generation. First occurrence (and its label) wins.
+        seen_refs: set[str] = set()
         for i, element_ref in enumerate(staged.element_refs):
+            if element_ref in seen_refs:
+                continue
+            seen_refs.add(element_ref)
             element_label = staged.element_labels[i] if labels_match else staged.task_name
             db.add(ModelElementLink(
                 id=uuid.uuid4(), project_id=data.project_id, activity_id=activity_id,

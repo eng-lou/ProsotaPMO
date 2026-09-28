@@ -372,6 +372,25 @@ async def test_bulk_generate_creates_model_element_links(client: AsyncClient, pr
     assert all(l["source_kind"] == "ifc" for l in footing_links)
 
 
+async def test_bulk_generate_dedupes_repeated_element_refs(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
+    # Real case (2026-09-29): the NBU Medical Clinic's Eng-ELE.ifc and
+    # Eng-MEP.ifc both carry the same 2,048 light fittings under the same
+    # GlobalIds, so one "Lighting" activity got each GUID twice and the
+    # (activity, source_kind, element_ref) unique constraint 500'd the
+    # whole generation.
+    payload = _payload(str(project.id), str(live_schedule_period.id))
+    payload["activities"][1]["element_refs"] = ["GUID-FOOTING-1", "GUID-FOOTING-2", "GUID-FOOTING-1"]
+    payload["activities"][1]["element_labels"] = ["Footing A", "Footing B", "Footing A (other model)"]
+    resp = await client.post("/api/v1/schedule-bulk-generate/", json=payload)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["model_element_link_count"] == 3  # 2 footings + 1 column
+    activity_id = resp.json()["activity_ids_by_temp_id"]["act-footings"]
+
+    links = (await client.get("/api/v1/model-element-links/", params={"project_id": str(project.id)})).json()
+    footing_links = sorted((l["element_ref"], l["element_label"]) for l in links if l["activity_id"] == activity_id)
+    assert footing_links == [("GUID-FOOTING-1", "Footing A"), ("GUID-FOOTING-2", "Footing B")]
+
+
 async def test_bulk_generate_resource_assignment_drives_cost(client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod):
     # Confirms cost_sync actually ran (once per activity with an
     # assignment, at the end of the batch, not per-row) — the activity
