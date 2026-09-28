@@ -22,7 +22,10 @@
 // as plain Rendered (PBR) instead, the same graceful-fallback behaviour
 // this file's own comment above already establishes for unmigrated values,
 // not a crash.
-export type RenderMode = 'hiddenLine' | 'flat' | 'gouraud' | 'shaded'
+// 'realistic' (2026-09-28, per Maro) — Rendered (PBR) plus per-material
+// realistic looks (concrete/render, glass, metal, grass, brick, timber)
+// matched from imported material names; see realisticMaterials.ts.
+export type RenderMode = 'hiddenLine' | 'flat' | 'gouraud' | 'shaded' | 'realistic'
 
 export interface ViewerSettings {
   renderMode: RenderMode
@@ -176,6 +179,11 @@ export interface ViewerSettings {
   // ~400MB; raised a user's own choice to trade browser memory for fewer
   // LOD pop-ins while working a small area repeatedly.
   tilesCacheSizeMb: number
+  // Realistic Materials mode only: real refracting glass (three.js
+  // transmission, which re-renders the opaque scene into a texture every
+  // frame) instead of the cheap transparent-with-reflections glass. Off by
+  // default for the same GPU-cost reason as shadows/AO.
+  realisticGlassTransmission: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -200,6 +208,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   xrayUnselected: false,
   tilesErrorTarget: 16,
   tilesCacheSizeMb: 400,
+  realisticGlassTransmission: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

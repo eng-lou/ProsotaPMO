@@ -45,6 +45,11 @@ import {
   clearClonedRenderModeVariantCache, enableBatchPerInstanceAlpha, getGouraudVariant, getHiddenLineMaterial,
   HIDDEN_LINE_BASE_COLOR,
 } from './renderModeMaterials'
+import {
+  applyRealisticToBatch, classIndexForMesh, classReplacesColour, clearRealisticFromBatch, disposeRealisticVariant,
+  getRealisticVariant, releaseRealisticTextureArrayGpu, syncRealisticGlassBatch, syncRealisticVariant,
+  type RealisticMaterialMap, type RealisticModelInfo,
+} from './realisticMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { computeWorldClipPlanes } from './sectionBoxGeometry'
 import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
@@ -437,6 +442,68 @@ export function DefaultEnvironment() {
 // the sun/its shadow-camera actually aim at the real model; `min` gives the
 // ground-catcher plane the model's real base elevation to sit at instead of
 // a hardcoded 0.
+// Realistic Materials mode's image-based lighting (2026-09-28): a simple
+// outdoor sky — blue zenith, bright hazy horizon, darker ground — instead of
+// DefaultEnvironment's indoor studio room. The studio room's boxy light
+// panels read as a room reflected in every pane of glass and polished metal;
+// an outdoor gradient reflects as sky above the horizon and ground below,
+// which is what glazing on a building actually shows. Only used when no HDR
+// is uploaded and Real-Time Sky is off (either of those already supplies a
+// real sky). Built Y-up; environmentRotation turns it Z-up like the HDR
+// branch does.
+export function RealisticEnvironment({ zUp }: { zUp: boolean }) {
+  const gl = useThree(state => state.gl)
+  const scene = useThree(state => state.scene)
+  useEffect(() => {
+    const pmrem = new THREE.PMREMGenerator(gl)
+    const skyScene = new THREE.Scene()
+    const geometry = new THREE.SphereGeometry(10, 64, 32)
+    const material = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      vertexShader: `varying vec3 vDir;
+        void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      // Linear radiance values (PMREM renders into a float target).
+      fragmentShader: `varying vec3 vDir;
+        void main() {
+          float h = normalize(vDir).y;
+          vec3 zenith = vec3(0.22, 0.38, 0.80);
+          vec3 horizon = vec3(0.78, 0.82, 0.88);
+          vec3 ground = vec3(0.16, 0.15, 0.14);
+          vec3 c = h > 0.0 ? mix(horizon, zenith, pow(h, 0.55)) : mix(horizon * 0.8, ground, pow(-h, 0.35));
+          gl_FragColor = vec4(c, 1.0);
+        }`,
+    })
+    skyScene.add(new THREE.Mesh(geometry, material))
+    const target = pmrem.fromScene(skyScene, 0)
+    const previous = scene.environment
+    const previousRotation = scene.environmentRotation.clone()
+    scene.environment = target.texture
+    scene.environmentRotation.set(zUp ? Math.PI / 2 : 0, 0, 0)
+    return () => {
+      if (scene.environment === target.texture) {
+        scene.environment = previous
+        scene.environmentRotation.copy(previousRotation)
+      }
+      target.dispose()
+      geometry.dispose()
+      material.dispose()
+      pmrem.dispose()
+    }
+  }, [gl, scene, zUp])
+  return null
+}
+
+// Light balance for Realistic Materials mode: the default look leans on a
+// strong flat ambient term, which washes out exactly the roughness/metal/
+// bump differences that mode adds. Less ambient, a stronger warm sun, and
+// the sky environment above doing the fill instead.
+export function lightingForRenderMode(renderMode: string): { ambient: number; sun: number; sunColor: string } {
+  return renderMode === 'realistic'
+    ? { ambient: 0.15, sun: 2.4, sunColor: '#fff4e6' }
+    : { ambient: 0.6, sun: 1, sunColor: '#ffffff' }
+}
+
 export interface ModelBounds {
   center: [number, number, number]
   min: [number, number, number]
@@ -519,6 +586,12 @@ interface Props {
   // is simpler than three independent ones, and correctly covers every
   // caller of materializeAll, not just this file's own Select All button.
   materializeVersion: number
+  // Realistic Materials mode (realisticMaterials.ts): the per-project manual
+  // material -> class mapping, and a counter FourD.tsx bumps whenever a
+  // model's extracted material table (object.userData.realisticMaterialInfo)
+  // lands, so the material pass re-runs once names are known.
+  realisticMapping: RealisticMaterialMap
+  realisticInfoVersion: number
   onMaterializeAll: () => void
   // Select Unassigned (2026-07-15, per Maro: "pick elements that havent
   // been 4d linked to an activity yet") — linkedObjectIds is which whole
@@ -877,6 +950,7 @@ const SELECTED_EMISSIVE = new THREE.Color(0x2563eb)
 // still reads as present/for-context, not fully invisible, while a selected
 // element behind it clearly reads through.
 const XRAY_FADE_OPACITY = 0.15
+const REALISTIC_WHITE = new THREE.Color(1, 1, 1)
 // Reused every frame by TimelinePlayback's own material diff below —
 // avoids allocating a fresh THREE.Color per material per frame just to
 // compare a candidate colour against what's already applied.
@@ -1007,7 +1081,7 @@ function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   customOpacity,
   boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
-  varianceByElementKey, clashByElementKey, elementParents, materializeVersion,
+  varianceByElementKey, clashByElementKey, elementParents, materializeVersion, realisticMapping, realisticInfoVersion,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
   selectedExpressIds: Set<number>
@@ -1064,6 +1138,8 @@ function ModelObjects({
   // why the render-mode/shadow/AO/selection material effect needs to know
   // about it, not just TimelinePlayback).
   materializeVersion: number
+  realisticMapping: RealisticMaterialMap
+  realisticInfoVersion: number
 }) {
   const upAxis = settings.upAxis
 
@@ -1181,7 +1257,7 @@ function ModelObjects({
       objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
       settings.showClashColors, settings.shadows, settings.xrayUnselected, hasSelection, upAxis, customTextures,
       customOpacity, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
-      materializeVersion,
+      materializeVersion, settings.realisticGlassTransmission, realisticMapping, realisticInfoVersion,
     ]
     const heavyChanged = heavyDepsRef.current === null
       || heavyDeps.length !== heavyDepsRef.current.length
@@ -1272,6 +1348,12 @@ function ModelObjects({
       // regardless (BatchedMesh.js's own _initColorsTexture) — read here
       // once per call rather than once per instance.
       const wantsXray = settings.xrayUnselected && hasSelection
+      // Realistic mode: colour-replacing classes (brick/timber/grass/glass)
+      // take a white base so the class texture's own colour shows, with any
+      // selection tint still lerped on top (realisticMaterials.ts).
+      const realisticClasses = settings.renderMode === 'realistic'
+        ? batch.mesh.userData.realisticActiveClasses as Uint8Array | undefined
+        : undefined
       let colorsArrayChanged = false
       for (const expressID of expressIDs) {
         const infos = batch.byExpressId.get(expressID)
@@ -1287,11 +1369,12 @@ function ModelObjects({
         const elementSelected = isExpressSelected || isExpressAlsoSelected
         const alpha = wantsXray && !elementSelected ? XRAY_FADE_OPACITY : 1
         for (const info of infos) {
+          const baseColor = realisticClasses && classReplacesColour(realisticClasses[info.instanceId]) ? REALISTIC_WHITE : info.color
           if (lerpAmount > 0) {
-            _scratchColor.copy(info.color).lerp(SELECTED_EMISSIVE, lerpAmount)
+            _scratchColor.copy(baseColor).lerp(SELECTED_EMISSIVE, lerpAmount)
             batch.mesh.setColorAt(info.instanceId, _scratchColor)
           } else {
-            batch.mesh.setColorAt(info.instanceId, info.color)
+            batch.mesh.setColorAt(info.instanceId, baseColor)
           }
           // setColorAt above only ever writes 3 of the 4 floats per
           // instance (color.toArray, itemSize 3) — the untouched 4th
@@ -1359,6 +1442,10 @@ function ModelObjects({
         // alone here; the heavy-pass block that builds/disposes them,
         // further down this same effect, owns them entirely.
         if (child.userData.isEdgesBatchMesh) return
+        // Realistic mode's glass-only BatchedMesh — same "owns its own
+        // lifecycle" reasoning: built/disposed by applyRealisticToBatch
+        // below, synced per frame by syncRealisticGlassBatch.
+        if (child.userData.isRealisticGlassBatch) return
         // Split-by-level's own live preview planes (SplitByLevelPanel.tsx)
         // are plain MeshBasicMaterial quads added straight into
         // handle.object, not real IFC/split elements — this whole effect's
@@ -1758,7 +1845,31 @@ function ModelObjects({
             // Wireframe/Flat Shaded/Rendered(PBR) show `mat` itself
             // (full PBR fidelity — see renderModeMaterials.ts's own header
             // for why Gouraud can't preserve metalness/roughness).
-            if (settings.renderMode === 'gouraud') {
+            // Realistic mode's variant is only kept while that mode is on —
+            // switching away frees it, and the real material is displayed
+            // as-is again (nothing on `mat` itself was ever changed).
+            if (settings.renderMode !== 'realistic') disposeRealisticVariant(mat)
+            if (settings.renderMode === 'realistic') {
+              // Explicit custom materials always win: a texture override or
+              // preset on this element/object, or a model material that
+              // arrived with its own authored base-colour texture.
+              const hasExplicitMaterial = (!!overrides && Object.values(overrides).some(Boolean)) || !!original?.map
+              const realisticClass = hasExplicitMaterial
+                ? 0
+                : classIndexForMesh(child, mat, object.userData.realisticMaterialInfo as RealisticModelInfo | undefined, realisticMapping)
+              if (realisticClass > 0) {
+                displayMaterials.push(getRealisticVariant(
+                  mat, realisticClass, original?.color, settings.realisticGlassTransmission,
+                  // This pass forces mat.opacity to the user's own opacity
+                  // (see baseOpacity above), so the IFC's glass transparency
+                  // has to come from the import-time capture instead.
+                  (child.userData.ifcColorAlpha as number | undefined) ?? 1,
+                ))
+              } else {
+                disposeRealisticVariant(mat)
+                displayMaterials.push(mat)
+              }
+            } else if (settings.renderMode === 'gouraud') {
               displayMaterials.push(getGouraudVariant(mat))
             } else if (settings.renderMode === 'hiddenLine') {
               const hiddenLineTint = HIDDEN_LINE_BASE_COLOR.clone()
@@ -1932,7 +2043,6 @@ function ModelObjects({
         // *currently* selected regardless of what actually triggered this
         // particular pass — recomputing all of it here is the simplest way
         // to guarantee that without a second selection-membership diff.
-        applyBatchSelectionColour(batch, [...batch.byExpressId.keys()])
 
         // Render mode (2026-07-21 fix, per Maro: "render modes not
         // working" — a direct, self-inflicted regression from this same
@@ -1991,13 +2101,31 @@ function ModelObjects({
         // own correct alpha regardless of batch membership now).
         batchMat.transparent = settings.xrayUnselected && hasSelection
 
-        if (settings.renderMode === 'gouraud') {
-          batch.mesh.material = getGouraudVariant(batchMat, true)
-        } else if (settings.renderMode === 'hiddenLine') {
-          batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR, true)
+        if (settings.renderMode === 'realistic') {
+          // Per-instance material classes + a glass-only companion batch —
+          // see realisticMaterials.ts's own header. A whole-model texture
+          // override keeps every batched element on its imported look
+          // (explicit custom materials win).
+          const wholeObjectOverride = customTextures[id]
+          const suppressed = !!wholeObjectOverride && Object.values(wholeObjectOverride).some(Boolean)
+          batch.mesh.material = applyRealisticToBatch(
+            batch, batchMat, object.userData.realisticMaterialInfo as RealisticModelInfo | undefined, realisticMapping,
+            suppressed, settings.realisticGlassTransmission, settings.shadows,
+          )
         } else {
-          batch.mesh.material = batchMat
+          clearRealisticFromBatch(batch)
+          if (settings.renderMode === 'gouraud') {
+            batch.mesh.material = getGouraudVariant(batchMat, true)
+          } else if (settings.renderMode === 'hiddenLine') {
+            batch.mesh.material = getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR, true)
+          } else {
+            batch.mesh.material = batchMat
+          }
         }
+        // After the render-mode block (moved from just above it,
+        // 2026-09-28) — Realistic mode's per-instance classes, which decide
+        // each instance's base colour here, are only computed in that block.
+        applyBatchSelectionColour(batch, [...batch.byExpressId.keys()])
 
         // Batched Edges overlay (2026-07-25 — see elementBatching.ts's own
         // buildEdgesBatch header for the full "why": THREE.BatchedMesh can't
@@ -2066,6 +2194,8 @@ function ModelObjects({
             if (lambertVariant) lambertVariant.transparent = wantsTransparent
             const hiddenLineVariant = batchMat.userData.hiddenLineVariant as THREE.MeshBasicMaterial | undefined
             if (hiddenLineVariant) hiddenLineVariant.transparent = wantsTransparent
+            const realisticBatchVariant = batchMat.userData.realisticBatchVariant as THREE.Material | undefined
+            if (realisticBatchVariant) realisticBatchVariant.transparent = wantsTransparent
           }
         }
       }
@@ -2098,7 +2228,25 @@ function ModelObjects({
     objects, selectedExpressId, selectedExpressIds, selectedObjectIds, hasSelection, customTextures, customOpacity,
     isolateMode, hiddenExpressIds, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
     settings.showClashColors, settings.shadows, settings.xrayUnselected, upAxis, materializeVersion,
+    settings.realisticGlassTransmission, realisticMapping, realisticInfoVersion,
   ])
+
+  // Realistic mode's shared generated texture array: GPU copy freed while
+  // the mode is off (the CPU pixels are kept for a quick re-upload).
+  useEffect(() => {
+    if (settings.renderMode !== 'realistic') releaseRealisticTextureArrayGpu()
+  }, [settings.renderMode])
+
+  // Realistic mode's glass-only batches mirror their main batch's
+  // per-instance visibility/colour/clipping every frame — see
+  // syncRealisticGlassBatch's own header.
+  useFrame(() => {
+    if (settings.renderMode !== 'realistic') return
+    for (const { object } of objects) {
+      const batch = object.userData.batch as BatchState | undefined
+      if (batch) syncRealisticGlassBatch(batch)
+    }
+  })
 
   // Section Box clipping is applied every frame here, not inside the
   // effect above (2026-07-09 fix, per Maro: "if i move the object midway
@@ -2234,6 +2382,10 @@ function ModelObjects({
           if (lambertVariant) { lambertVariant.clippingPlanes = mat.clippingPlanes; lambertVariant.clipShadows = true }
           const hiddenLineVariant = mat.userData.hiddenLineVariant as THREE.Material | undefined
           if (hiddenLineVariant) { hiddenLineVariant.clippingPlanes = mat.clippingPlanes; hiddenLineVariant.clipShadows = true }
+          for (const key of ['realisticVariant', 'realisticBatchVariant']) {
+            const realisticVariant = mat.userData[key] as THREE.Material | undefined
+            if (realisticVariant) { realisticVariant.clippingPlanes = mat.clippingPlanes; realisticVariant.clipShadows = true }
+          }
         })
 
         // The edges overlay's own LineBasicMaterial was never included
@@ -3799,6 +3951,8 @@ export function TimelinePlayback({
             hiddenLineVariant.clippingPlanes = material.clippingPlanes
             hiddenLineVariant.clipShadows = true
           }
+          // Realistic mode's variant — same reason as the two above.
+          syncRealisticVariant(material)
 
           // The black EdgesGeometry overlay (ModelObjects' own effect
           // above) has its own separate LineBasicMaterial, set once at
@@ -4459,7 +4613,7 @@ function ClippingSetup() {
 
 export function Viewport3D({
   settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, materializeVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
+  onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures, customOpacity, cameraSyncRef,
@@ -6088,7 +6242,7 @@ export function Viewport3D({
         <ActiveCameraPose activeCamera={activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />
         {cameras.filter(c => c.id !== activeCameraId).map(c => <CameraGizmo key={c.id} camera={c} />)}
         <ClippingSetup />
-        <ambientLight intensity={0.6} />
+        <ambientLight intensity={lightingForRenderMode(settings.renderMode).ambient} />
         {/* Shadow camera frustum (2026-07-09 fix, per Maro: "check if the
             shadows effects works") — three.js's DirectionalLight defaults to
             a +-5 unit orthographic shadow-camera frustum (near 0.5, far 500,
@@ -6127,7 +6281,8 @@ export function Viewport3D({
         <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
           ref={sunLightRef}
-          position={sunPosition} target={sunTarget} intensity={1} castShadow={settings.shadows}
+          position={sunPosition} target={sunTarget} castShadow={settings.shadows}
+          intensity={lightingForRenderMode(settings.renderMode).sun} color={lightingForRenderMode(settings.renderMode).sunColor}
           shadow-mapSize={highQuality ? [highQualityShadowMapSize, highQualityShadowMapSize] : [2048, 2048]}
           // normalBias, not (only) bias (2026-07-21 fix, per Maro: a real,
           // flat exterior wall self-shadowing with a hard diagonal band
@@ -6192,7 +6347,7 @@ export function Viewport3D({
               <Sky sunPosition={skySunPosition} />
             </Environment>
           ) : !environmentUrl ? (
-            <DefaultEnvironment />
+            settings.renderMode === 'realistic' ? <RealisticEnvironment zUp={zUp} /> : <DefaultEnvironment />
           ) : (
             <ViewportErrorBoundary key={environmentUrl} onError={onEnvironmentError}>
               {/* Equirect HDR/EXR skies are authored assuming Y is the zenith
@@ -6296,6 +6451,8 @@ export function Viewport3D({
             clashByElementKey={clashByElementKey}
             elementParents={elementParents}
             materializeVersion={materializeVersion}
+            realisticMapping={realisticMapping}
+            realisticInfoVersion={realisticInfoVersion}
           />
           <SectionBoxGizmos
             boxes={sectionBoxes}

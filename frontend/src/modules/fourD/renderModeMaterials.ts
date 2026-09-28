@@ -191,14 +191,9 @@ export function getHiddenLineMaterial(
 // (a documented trade-off, not an overlooked one) rather than also
 // building and maintaining a second, parallel shadow-depth shader patch
 // for a comparatively minor visual mismatch.
-export function enableBatchPerInstanceAlpha(material: THREE.Material) {
-  if (material.userData.batchPerInstanceAlphaPatched) return
-  material.userData.batchPerInstanceAlphaPatched = true
-  material.onBeforeCompile = shader => {
-    shader.vertexAlphas = true
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <color_vertex>',
-      `#include <color_vertex>
+// Shared with realisticMaterials.ts, whose batch materials need the same
+// per-instance alpha on top of their own patch.
+export const BATCH_ALPHA_VERTEX_PATCH = `#include <color_vertex>
       #ifdef USE_BATCHING_COLOR
       {
         float batchAlphaIndex = getIndirectIndex( gl_DrawID );
@@ -208,8 +203,14 @@ export function enableBatchPerInstanceAlpha(material: THREE.Material) {
         int batchAlphaY = batchAlphaJ / batchAlphaSize;
         vColor.a = texelFetch( batchingColorTexture, ivec2( batchAlphaX, batchAlphaY ), 0 ).a;
       }
-      #endif`,
-    )
+      #endif`
+
+export function enableBatchPerInstanceAlpha(material: THREE.Material) {
+  if (material.userData.batchPerInstanceAlphaPatched) return
+  material.userData.batchPerInstanceAlphaPatched = true
+  material.onBeforeCompile = shader => {
+    shader.vertexAlphas = true
+    shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', BATCH_ALPHA_VERTEX_PATCH)
   }
   material.needsUpdate = true
   material.customProgramCacheKey = () => material.uuid
@@ -242,4 +243,6 @@ export const HIDDEN_LINE_BASE_COLOR = new THREE.Color(0xe5e7eb)
 export function clearClonedRenderModeVariantCache(material: THREE.Material) {
   delete material.userData.lambertVariant
   delete material.userData.hiddenLineVariant
+  delete material.userData.realisticVariant
+  delete material.userData.realisticBatchVariant
 }

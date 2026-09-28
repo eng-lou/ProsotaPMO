@@ -133,3 +133,6 @@ This is a safety net: if a change breaks something, it shows up as a red ✗ on 
 
 ### `npx knip` (2026-09-25)
 Scans the frontend for files, exports and packages that nothing uses, plus packages the code uses but `package.json` doesn't list. Used to find dead code during the bloat pass. Its "unused exports" list includes functions that are still used inside their own file, so it's a lead to check, not a delete list.
+
+### `node --experimental-strip-types` / `npx esbuild --bundle` (2026-09-28)
+Ways to run a TypeScript file directly without the whole app. Used to check the Realistic Materials name-matching rules against real material names from an IFC model. `esbuild --bundle` packs the file and its imports into one plain JavaScript file that `node` can run.

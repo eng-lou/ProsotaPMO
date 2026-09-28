@@ -1,12 +1,13 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { Canvas, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Environment, Grid, OrbitControls, Sky } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { Collection } from './collections'
 import { applyPaneIsolationVisibility, type PaneConfig, type PaneContentMode } from './comparisonPane'
+import { buildEdgesBatch, disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
 import type { ElementKeyframe } from './elementKeyframes'
 import type { IfcModelHandle } from './ifcModel'
 import type { ResolvedIsolationTarget } from './linkedElements'
@@ -14,12 +15,16 @@ import type { ModelElementLink } from './modelElementLinks'
 import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
+import {
+  applyRealisticToBatch, classIndexForMesh, classReplacesColour, clearRealisticFromBatch, disposeRealisticVariant,
+  getRealisticVariant, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
+} from './realisticMaterials'
 import { ScopeFilterFields } from './ScopeFilterFields'
-import { cloneSceneHierarchy } from './sceneClone'
+import { cloneSceneHierarchy, disposeClonedBatch } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import type { RenderMode } from './viewerSettings'
 import {
-  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment,
+  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment, lightingForRenderMode, RealisticEnvironment,
   ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
@@ -60,6 +65,10 @@ interface Props {
   // live selection/date context, not a rendering setting, and this pane
   // has neither.
   renderMode: RenderMode
+  // Realistic Materials mode inputs — same values the primary viewport gets.
+  realisticMapping: RealisticMaterialMap
+  realisticInfoVersion: number
+  realisticGlassTransmission: boolean
   showEdges: boolean
   ambientOcclusion: boolean
   dynamicSky: boolean
@@ -104,6 +113,43 @@ function CaptureCamera({ cameraRef }: { cameraRef: React.MutableRefObject<THREE.
 
 // Same idiom as CaptureCamera just above, for this pane's own real WebGL
 // canvas element (2026-07-24) — see canvasRef's own header.
+// Realistic Materials mode: each cloned batch's glass-only companion
+// mirrors the clone's own per-instance visibility/colour/clipping every
+// frame, same as the primary viewport's (realisticMaterials.ts).
+function RealisticGlassSync({ clones, enabled }: { clones: Iterable<THREE.Object3D>; enabled: boolean }) {
+  useFrame(() => {
+    if (!enabled) return
+    for (const clone of clones) {
+      const batch = clone.userData.batch as BatchState | undefined
+      if (batch) syncRealisticGlassBatch(batch)
+    }
+  })
+  return null
+}
+
+const PANE_WHITE = new THREE.Color(1, 1, 1)
+
+// The cloned batch's per-instance colours (sceneClone.ts copies whatever
+// the primary viewport last wrote, selection tint included): each
+// element's own IFC colour, or white under a Realistic class whose texture
+// carries its own colour — same rule as Viewport3D.tsx's
+// applyBatchSelectionColour. Alpha reset to 1 (the primary's Fade
+// Unselected isn't a pane concept).
+function writeClonedBatchColours(batch: BatchState, realisticClasses: Uint8Array | undefined) {
+  for (const infos of batch.byExpressId.values()) {
+    for (const info of infos) {
+      const replaces = realisticClasses !== undefined && classReplacesColour(realisticClasses[info.instanceId])
+      batch.mesh.setColorAt(info.instanceId, replaces ? PANE_WHITE : info.color)
+    }
+  }
+  const colorsTexture = (batch.mesh as unknown as { _colorsTexture: THREE.DataTexture | null })._colorsTexture
+  if (colorsTexture) {
+    const data = colorsTexture.image.data as Float32Array
+    for (let i = 3; i < data.length; i += 4) data[i] = 1
+    colorsTexture.needsUpdate = true
+  }
+}
+
 function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCanvasElement | null> }) {
   const { gl } = useThree()
   useEffect(() => { canvasRef.current = gl.domElement }, [gl, canvasRef])
@@ -133,7 +179,7 @@ export function ComparisonViewportPane({
   importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
-  renderMode, showEdges, ambientOcclusion, dynamicSky, showGrid,
+  renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
 }: Props) {
   const zUp = upAxis === 'z'
@@ -247,7 +293,7 @@ export function ComparisonViewportPane({
     for (const clone of clonesByOriginal.values()) {
       clone.traverse(child => {
         if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
-          child.castShadow = shadows
+          child.castShadow = shadows && !child.userData.isRealisticGlassBatch
           child.receiveShadow = shadows
         }
       })
@@ -269,13 +315,63 @@ export function ComparisonViewportPane({
   // built one for this exact render mode, this reuses that same cached
   // instance rather than building a second one.
   useEffect(() => {
-    for (const clone of clonesByOriginal.values()) {
+    for (const [original, clone] of clonesByOriginal) {
+      // The clone carries no material table of its own; its source model's
+      // (realisticMaterials.ts) applies unchanged — clones keep expressID and
+      // ifcGeometryId (sceneClone.ts).
+      const realisticInfo = original.userData.realisticMaterialInfo as RealisticModelInfo | undefined
+      const wantsEdges = showEdges || renderMode === 'hiddenLine'
+      // The cloned batch (sceneClone.ts) — one shared material for every
+      // still-batched element, swapped the same way the primary viewport's
+      // own batch block does (Viewport3D.tsx), plus the batched Edges
+      // overlay built from the clone rather than per mesh.
+      const batch = clone.userData.batch as BatchState | undefined
+      if (batch) {
+        const batchMat = batch.mesh.userData.standardMaterial as THREE.MeshStandardMaterial
+        if (renderMode === 'realistic') {
+          batch.mesh.material = applyRealisticToBatch(
+            batch, batchMat, realisticInfo, realisticMapping, false, realisticGlassTransmission, shadows,
+          )
+        } else {
+          clearRealisticFromBatch(batch)
+          batch.mesh.material = renderMode === 'gouraud' ? getGouraudVariant(batchMat, true)
+            : renderMode === 'hiddenLine' ? getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR, true)
+            : batchMat
+        }
+        writeClonedBatchColours(batch, renderMode === 'realistic' ? batch.mesh.userData.realisticActiveClasses as Uint8Array | undefined : undefined)
+        const existingEdges = clone.userData.edgesBatch as EdgesBatch | undefined
+        if (wantsEdges && !existingEdges) {
+          const edgesBatch = buildEdgesBatch(clone)
+          for (const entry of edgesBatch.entries.values()) clone.add(entry.mesh)
+          clone.userData.edgesBatch = edgesBatch
+        } else if (!wantsEdges && existingEdges) {
+          disposeEdgesBatch(existingEdges)
+          for (const entry of existingEdges.entries.values()) clone.remove(entry.mesh)
+          clone.userData.edgesBatch = undefined
+        }
+      }
       clone.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
+        if (child === batch?.mesh || child.userData.isRealisticGlassBatch || child.userData.isEdgesBatchMesh) return
         const base = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
         const materials = Array.isArray(base) ? base : [base]
         const display = materials.map(mat => {
           if (!(mat instanceof THREE.MeshStandardMaterial)) return mat
+          if (renderMode === 'realistic') {
+            // Same explicit-material precedence as the primary viewport: a
+            // material with its own base-colour texture (an override, or an
+            // authored model texture) is shown as-is.
+            const realisticClass = mat.map ? 0 : classIndexForMesh(child, mat, realisticInfo, realisticMapping)
+            if (realisticClass > 0) {
+              return getRealisticVariant(
+                mat, realisticClass, undefined, realisticGlassTransmission, (child.userData.ifcColorAlpha as number | undefined) ?? 1,
+              )
+            }
+          }
+          // Mode off: free the variant. One shared with the primary viewport
+          // (same source material) is unused there too, since both follow
+          // the same render mode setting.
+          if (renderMode !== 'realistic') disposeRealisticVariant(mat)
           if (renderMode === 'gouraud') return getGouraudVariant(mat)
           if (renderMode === 'hiddenLine') return getHiddenLineMaterial(mat, HIDDEN_LINE_BASE_COLOR)
           return mat
@@ -283,7 +379,6 @@ export function ComparisonViewportPane({
         child.material = display.length > 1 ? display : display[0]
 
         let edges = child.userData.edgesHelper as THREE.LineSegments | undefined
-        const wantsEdges = showEdges || renderMode === 'hiddenLine'
         if (wantsEdges) {
           if (!edges) {
             edges = new THREE.LineSegments(new THREE.EdgesGeometry(child.geometry), new THREE.LineBasicMaterial({ color: 0x1f2937 }))
@@ -296,7 +391,22 @@ export function ComparisonViewportPane({
         }
       })
     }
-  }, [clonesByOriginal, renderMode, showEdges])
+  }, [clonesByOriginal, renderMode, showEdges, realisticMapping, realisticInfoVersion, realisticGlassTransmission, shadows])
+
+  // Frees each clone set's own GPU-side batch state when it's replaced or
+  // the pane closes — the cloned batch's textures/materials, its Realistic
+  // companions and Edges overlay. Never the geometry, which is shared with
+  // the primary viewport (sceneClone.ts's cloneBatch).
+  useEffect(() => () => {
+    for (const clone of clonesByOriginal.values()) {
+      const batch = clone.userData.batch as BatchState | undefined
+      if (!batch) continue
+      clearRealisticFromBatch(batch)
+      disposeClonedBatch(batch)
+      const edgesBatch = clone.userData.edgesBatch as EdgesBatch | undefined
+      if (edgesBatch) disposeEdgesBatch(edgesBatch)
+    }
+  }, [clonesByOriginal])
 
   // Ambient Occlusion (2026-09-01, second attempt — a first attempt the
   // same day was reverted after producing visibly broken rendering; see
@@ -405,7 +515,7 @@ export function ComparisonViewportPane({
         <CaptureCamera cameraRef={cameraRef} />
         <CaptureCanvas canvasRef={canvasRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} disconnected={config.cameraDisconnected} />
-        <ambientLight intensity={0.6} />
+        <ambientLight intensity={lightingForRenderMode(renderMode).ambient} />
         {/* Settings-driven sun light (2026-07-25), replacing this pane's old
             fixed directionalLight — mirrors Viewport3D.tsx's own
             sunPosition/shadow-frustum setup (see computeSunPosition/
@@ -431,11 +541,13 @@ export function ComparisonViewportPane({
         <primitive object={sunTarget} position={modelBounds.center} />
         <directionalLight
           ref={sunLightRef}
-          position={sunPosition} target={sunTarget} intensity={1} castShadow={shadows}
+          position={sunPosition} target={sunTarget} castShadow={shadows}
+          intensity={lightingForRenderMode(renderMode).sun} color={lightingForRenderMode(renderMode).sunColor}
           shadow-mapSize={[2048, 2048]}
           shadow-camera-near={0.5}
         />
         <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
+        <RealisticGlassSync clones={clonesByOriginal.values()} enabled={renderMode === 'realistic'} />
         <Suspense fallback={null}>
           {dynamicSky ? (
             // Real-Time Sky (2026-09-01) — same Environment-with-children
@@ -453,7 +565,7 @@ export function ComparisonViewportPane({
               <Sky sunPosition={skySunPosition} />
             </Environment>
           ) : !environmentUrl ? (
-            <DefaultEnvironment />
+            renderMode === 'realistic' ? <RealisticEnvironment zUp={zUp} /> : <DefaultEnvironment />
           ) : (
             <Environment
               files={environmentUrl}

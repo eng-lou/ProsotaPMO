@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import * as THREE from 'three'
 import type { Activity, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { Collection } from './collections'
+import type { BatchState } from './elementBatching'
 import { flattenCollectionMemberRefs } from './collections'
 import type { IfcModelHandle } from './ifcModel'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, type LinkableSceneObject, type ResolvedIsolationTarget } from './linkedElements'
@@ -141,6 +142,21 @@ export function applyPaneIsolationVisibility(
     }
     object.visible = true
     object.userData.baseVisible = true
+    // The cloned batch (sceneClone.ts, 2026-09-29): per-instance
+    // visibility, recorded in the same batchBaseVisibleByInstanceId map the
+    // primary viewport keeps, so TimelinePlayback's batch fast path ANDs
+    // its schedule verdict with this isolation instead of overwriting it.
+    const batch = object.userData.batch as BatchState | undefined
+    if (batch) {
+      const baseVisibleByInstanceId = (batch.mesh.userData.batchBaseVisibleByInstanceId ??= new Map<number, boolean>()) as Map<number, boolean>
+      for (const [expressID, infos] of batch.byExpressId) {
+        const shown = isolation.expressIds.has(expressID)
+        for (const info of infos) {
+          baseVisibleByInstanceId.set(info.instanceId, shown)
+          batch.mesh.setVisibleAt(info.instanceId, shown)
+        }
+      }
+    }
     object.traverse(child => {
       if (child instanceof THREE.Mesh && child.userData.expressID !== undefined) {
         const shown = isolation.expressIds.has(child.userData.expressID)

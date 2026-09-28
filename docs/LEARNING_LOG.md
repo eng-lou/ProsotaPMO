@@ -5946,3 +5946,44 @@ Atlantic twice. Pinning the backend to London (`"regions": ["lhr1"]`)
 made it noticeably faster. The general lesson: when every request has
 the same fixed delay regardless of size, look at where things run
 before looking at the code.
+
+## 2026-09-28 — Realistic Materials mode, and a GPU cost hiding in one line
+
+A new render mode, Realistic Materials, gives surfaces a real-world look
+(concrete/render, glass, metal, grass, brick, timber). It matches each
+surface by the *names* in the IFC (surface style, then material, then
+IFC type plus transparency for window glass), never by colour. Anything
+unclear is left as imported and flagged in a mapping list, where a
+person picks the class. That's how the clinic's bright green roof
+became grass: its IFC only calls it "Default Roof", so no rule could
+safely guess.
+
+Walls with layers needed care. The first rule used the outer layer,
+which made stud-and-plasterboard walls come out as metal. Hidden core
+layers (studs, insulation, furring) are now skipped in favour of the
+other face.
+
+The expensive lesson was performance. The first version made a
+6-million-triangle model 2–4× slower. Timing each piece on the GPU
+found the cause: one extra integer value passed from the vertex step to
+the pixel step of the shader. Packing it into a value that was being
+passed anyway brought the overview from 53ms to 15.6ms a frame (plain
+PBR is 14.9ms). The general lesson: measure the GPU directly
+(EXT_disjoint_timer_query) and remove pieces one at a time. Every guess
+before that (texture filtering, the glass, lookup tables) was wrong.
+
+## 2026-09-29 — Why the Baseline pane lagged, and why its glass looked different
+
+Two follow-ups on the same clinic model.
+
+The glass looked clearer in the Baseline pane because the pane was
+following the IFC's own transparency (the window glass is set to 10%
+opaque) while the main view ignored it. Both now use the IFC value.
+
+The orbit lag was almost entirely the Baseline pane. To show a second
+copy of a model it rebuilt every element as its own mesh: about 60,000
+of them, or 118,547 draw calls a frame. That took 3.5–8.3 seconds of CPU
+per frame, even though the main view draws the same model in a handful
+of calls. The pane now clones the batch itself, sharing the same
+geometry, and costs 5ms a frame. Lesson: when two views of the same
+data perform very differently, compare draw calls first.

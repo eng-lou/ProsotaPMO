@@ -127,6 +127,10 @@ import { UnloadModelDialog } from './UnloadModelDialog'
 import { ReloadIfcDialog } from './ReloadIfcDialog'
 import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
+import {
+  extractMeshRealisticInfo, loadRealisticMapping, mergeRealisticEntries, saveRealisticMapping,
+  type RealisticMaterialEntry, type RealisticMaterialMap, type RealisticModelInfo,
+} from './realisticMaterials'
 import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
 import { WindowChrome, type DockSide } from './WindowChrome'
 
@@ -5644,6 +5648,55 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
 
+  // Realistic Materials render mode (2026-09-28, per Maro — see
+  // realisticMaterials.ts). Each loaded model's material-name table is
+  // extracted once, the first time the mode is on while it's loaded, and
+  // cached on its root object (userData.realisticMaterialInfo) where the
+  // viewports read it; realisticInfoVersion tells them it has landed. The
+  // manual material -> class mapping is per project, saved in this
+  // browser's localStorage like the rest of the 3D view settings.
+  const [realisticMapping, setRealisticMappingState] = useState<RealisticMaterialMap>({})
+  useEffect(() => { setRealisticMappingState(loadRealisticMapping(selectedProject?.id)) }, [selectedProject?.id])
+  const setRealisticMapping = (next: RealisticMaterialMap) => {
+    setRealisticMappingState(next)
+    saveRealisticMapping(selectedProject?.id, next)
+  }
+  const [realisticInfoVersion, setRealisticInfoVersion] = useState(0)
+  const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
+  const [realisticAnalysing, setRealisticAnalysing] = useState(false)
+  useEffect(() => {
+    if (settings.renderMode !== 'realistic') return
+    let cancelled = false
+    const run = async () => {
+      const missingIfc = ifcHandles.filter(h => !h.object.userData.realisticMaterialInfo)
+      if (missingIfc.length > 0) {
+        setRealisticAnalysing(true)
+        const { extractRealisticMaterialInfo } = await import('./ifcModel')
+        for (const handle of missingIfc) {
+          if (cancelled) break
+          // Yield between models so the "Analysing" state can paint.
+          await new Promise(resolve => setTimeout(resolve, 0))
+          try {
+            handle.object.userData.realisticMaterialInfo = extractRealisticMaterialInfo(handle)
+          } catch (err) {
+            console.error('[4D] Realistic Materials: material extraction failed', err)
+            handle.object.userData.realisticMaterialInfo = { entries: new Map(), keyByPiece: new Map(), keyByExpressId: new Map() }
+          }
+        }
+      }
+      for (const o of sceneObjects) {
+        if (o.kind === 'ifc' || o.object.userData.realisticMaterialInfo) continue
+        o.object.userData.realisticMaterialInfo = extractMeshRealisticInfo(o.object)
+      }
+      if (cancelled) return
+      setRealisticAnalysing(false)
+      setRealisticEntries(mergeRealisticEntries(sceneObjects.map(o => o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined)))
+      setRealisticInfoVersion(v => v + 1)
+    }
+    run()
+    return () => { cancelled = true }
+  }, [settings.renderMode, ifcHandles, sceneObjects])
+
   // Element Parenting / rigging (2026-07-12, per Maro's crane-rigging
   // request: base -> jib -> trolley -> hook) — mesh-kind only, one parent
   // per child, upsert-repoints (element_parents.py's own docstring on why,
@@ -6593,6 +6646,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         sunElevation={settings.sunElevation}
         captureBackgroundOverride={baselineBackgroundOverride}
         renderMode={settings.renderMode}
+        realisticMapping={realisticMapping}
+        realisticInfoVersion={realisticInfoVersion}
+        realisticGlassTransmission={settings.realisticGlassTransmission}
         showEdges={settings.showEdges}
         ambientOcclusion={settings.ambientOcclusion}
         dynamicSky={settings.dynamicSky}
@@ -7002,6 +7058,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onSelectObject={handleSelectObject}
       onSelectAll={handleSelectAll}
       materializeVersion={materializeVersion}
+      realisticMapping={realisticMapping}
+      realisticInfoVersion={realisticInfoVersion}
       onMaterializeAll={() => setMaterializeVersion(v => v + 1)}
       onBoxSelect={handleBoxSelect}
       linkedObjectIds={linkedMeshObjectIds}
@@ -7534,6 +7592,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onToggle={toggleProperties}
           settings={settings}
           onSettingsChange={setSettings}
+          realisticEntries={realisticEntries}
+          realisticMapping={realisticMapping}
+          onRealisticMappingChange={setRealisticMapping}
+          realisticAnalysing={realisticAnalysing}
           environmentName={customEnvironment?.name ?? null}
           onUploadEnvironment={handleUploadEnvironment}
           onClearEnvironment={handleClearEnvironment}

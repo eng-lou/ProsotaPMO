@@ -1,7 +1,11 @@
 import * as THREE from 'three'
-import { IfcAPI, IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES } from 'web-ifc'
+import {
+  IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
+  IFCSTYLEDITEM,
+} from 'web-ifc'
 import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { buildElementMaterial, disposeEdgesBatch, finalizeIndividualMesh, type BatchState, type EdgesBatch } from './elementBatching'
+import { addRealisticPiece, clearRealisticFromBatch, createRealisticModelInfo, type RealisticModelInfo } from './realisticMaterials'
 export { ensureMaterialized, type BatchInstanceInfo, type BatchState } from './elementBatching'
 
 // "Import IFC" (2026-07-10, per Maro — linked github.com/ThatOpen/engine_components
@@ -380,7 +384,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
         // elementBatching.ts for why a single slot would silently drop
         // every piece but the last.
         const infos = batch.byExpressId.get(flatMesh.expressID) ?? []
-        infos.push({ geometryId: entry.geometryId, instanceId, color, colorAlpha: placed.color.w, matrix })
+        infos.push({ geometryId: entry.geometryId, instanceId, color, colorAlpha: placed.color.w, matrix, ifcGeometryId: placed.geometryExpressID })
         batch.byExpressId.set(flatMesh.expressID, infos)
         batch.expressIdByInstanceId.set(instanceId, flatMesh.expressID)
         batchedInstanceCount++
@@ -392,6 +396,8 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
       const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
       const geometry = buildGeometryFromIfc(vertexData, indexData)
       const mesh = new THREE.Mesh(geometry, buildElementMaterial(placed.color))
+      mesh.userData.ifcGeometryId = placed.geometryExpressID
+      mesh.userData.ifcColorAlpha = placed.color.w
       finalizeIndividualMesh(mesh, flatMesh.expressID, matrix, group)
       ifcGeom.delete()
       individualMeshCount++
@@ -547,12 +553,15 @@ export function disposeIfcModel(handle: IfcModelHandle) {
     // the instant any one of them unloads. Disposed correctly below instead
     // (geometries only, never the shared material).
     if (child.userData.isEdgesBatchMesh) return
+    // Disposed by clearRealisticFromBatch below.
+    if (child.userData.isRealisticGlassBatch) return
     if (child instanceof THREE.Mesh && child !== batchMesh) {
       disposeMeshGeometries(child)
       disposeMeshMaterials(child, false)
     }
   })
   if (handle.batch) {
+    clearRealisticFromBatch(handle.batch)
     handle.batch.mesh.material && (Array.isArray(handle.batch.mesh.material) ? handle.batch.mesh.material.forEach(m => m.dispose()) : handle.batch.mesh.material.dispose())
     handle.batch.mesh.dispose()
     for (const entry of handle.batch.geometryByIfcId.values()) entry.geometry.dispose()
@@ -1167,4 +1176,139 @@ export async function getElementInfo(handle: IfcModelHandle, expressID: number):
         : [],
     })),
   }
+}
+
+// Names for Realistic Materials mode (realisticMaterials.ts), per geometry
+// piece: the IfcSurfaceStyle name styling that exact representation item
+// (IfcStyledItem.Item is the same entity web-ifc reports as a placed
+// geometry's geometryExpressID), the element's associated IfcMaterial
+// name(s) (directly, or inherited from its type object), its IFC entity
+// type, and whether the piece is transparent. Computed once per model, the
+// first time the mode is switched on, and cached on the model's root by the
+// caller.
+type IfcLine = Record<string, unknown>
+
+function refId(ref: unknown): number | null {
+  if (typeof ref === 'number') return ref
+  if (ref && typeof ref === 'object' && typeof (ref as { value?: unknown }).value === 'number') return (ref as { value: number }).value
+  return null
+}
+
+function labelOf(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (value && typeof value === 'object' && 'value' in value) return String((value as { value: unknown }).value ?? '').trim()
+  return ''
+}
+
+function refList(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    const single = refId(value)
+    return single === null ? [] : [single]
+  }
+  return value.map(refId).filter((id): id is number => id !== null)
+}
+
+export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticModelInfo {
+  const { api, modelID } = handle
+  const getLine = (id: number): IfcLine | null => {
+    try { return api.GetLine(modelID, id, false) as IfcLine } catch { return null }
+  }
+
+  // Representation item -> surface style name.
+  const styleByItem = new Map<number, string>()
+  const styleNameCache = new Map<number, string>()
+  const resolveStyleName = (id: number, depth: number): string => {
+    const cached = styleNameCache.get(id)
+    if (cached !== undefined) return cached
+    const line = depth > 4 ? null : getLine(id)
+    let name = ''
+    if (line) {
+      if ('Side' in line) name = labelOf(line.Name) // IfcSurfaceStyle
+      else if ('Styles' in line) { // IfcPresentationStyleAssignment (IFC2x3)
+        for (const child of refList(line.Styles)) { name = resolveStyleName(child, depth + 1); if (name) break }
+      }
+    }
+    styleNameCache.set(id, name)
+    return name
+  }
+  const styledItems = api.GetLineIDsWithType(modelID, IFCSTYLEDITEM)
+  for (let i = 0; i < styledItems.size(); i++) {
+    const line = getLine(styledItems.get(i))
+    const item = line ? refId(line.Item) : null
+    if (!line || item === null || styleByItem.has(item)) continue
+    for (const styleId of refList(line.Styles)) {
+      const name = resolveStyleName(styleId, 0)
+      if (name) { styleByItem.set(item, name); break }
+    }
+  }
+
+  // Element (or type object) -> material names, in layer order for a
+  // layer set.
+  const materialCache = new Map<number, { names: string[]; layered: boolean }>()
+  const resolveMaterial = (id: number, depth: number): { names: string[]; layered: boolean } => {
+    const cached = materialCache.get(id)
+    if (cached) return cached
+    const result = { names: [] as string[], layered: false }
+    const line = depth > 6 ? null : getLine(id)
+    const collect = (ids: number[]) => {
+      for (const child of ids) {
+        const r = resolveMaterial(child, depth + 1)
+        for (const n of r.names) if (!result.names.includes(n)) result.names.push(n)
+        result.layered ||= r.layered
+      }
+    }
+    if (line) {
+      if ('ForLayerSet' in line) { collect(refList(line.ForLayerSet)); result.layered = true }
+      else if ('MaterialLayers' in line) { collect(refList(line.MaterialLayers)); result.layered = true }
+      else if ('ForProfileSet' in line) collect(refList(line.ForProfileSet))
+      else if ('MaterialProfiles' in line) collect(refList(line.MaterialProfiles))
+      else if ('MaterialConstituents' in line) collect(refList(line.MaterialConstituents))
+      else if ('Materials' in line) collect(refList(line.Materials))
+      else if ('Material' in line) collect(refList(line.Material))
+      else if ('Name' in line) { const n = labelOf(line.Name); if (n) result.names.push(n) }
+    }
+    materialCache.set(id, result)
+    return result
+  }
+  const materialByObject = new Map<number, { names: string[]; layered: boolean }>()
+  const associations = api.GetLineIDsWithType(modelID, IFCRELASSOCIATESMATERIAL)
+  for (let i = 0; i < associations.size(); i++) {
+    const rel = getLine(associations.get(i))
+    const materialId = rel ? refId(rel.RelatingMaterial) : null
+    if (!rel || materialId === null) continue
+    const resolved = resolveMaterial(materialId, 0)
+    if (resolved.names.length === 0) continue
+    for (const objectId of refList(rel.RelatedObjects)) materialByObject.set(objectId, resolved)
+  }
+  const typeRels = api.GetLineIDsWithType(modelID, IFCRELDEFINESBYTYPE)
+  for (let i = 0; i < typeRels.size(); i++) {
+    const rel = getLine(typeRels.get(i))
+    const typeId = rel ? refId(rel.RelatingType) : null
+    const typeMaterial = typeId !== null ? materialByObject.get(typeId) : undefined
+    if (!rel || !typeMaterial) continue
+    for (const objectId of refList(rel.RelatedObjects)) if (!materialByObject.has(objectId)) materialByObject.set(objectId, typeMaterial)
+  }
+
+  const typeByExpressId = buildIfcTypeByExpressId(handle)
+  const info = createRealisticModelInfo()
+  const addPiece = (expressID: number, geometryId: number | undefined, alpha: number) => {
+    const material = materialByObject.get(expressID)
+    addRealisticPiece(info, expressID, geometryId, {
+      styleName: geometryId !== undefined ? styleByItem.get(geometryId) ?? '' : '',
+      materialNames: material?.names ?? [],
+      layered: material?.layered ?? false,
+      ifcType: typeByExpressId.get(expressID) ?? '',
+      transparent: alpha < 0.99,
+    })
+  }
+  if (handle.batch) {
+    for (const [expressID, infos] of handle.batch.byExpressId) {
+      for (const inst of infos) addPiece(expressID, inst.ifcGeometryId, inst.colorAlpha)
+    }
+  }
+  const meshIndex = handle.object.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
+  for (const [expressID, meshes] of meshIndex ?? []) {
+    for (const mesh of meshes) addPiece(expressID, mesh.userData.ifcGeometryId as number | undefined, (mesh.userData.ifcColorAlpha as number | undefined) ?? 1)
+  }
+  return info
 }

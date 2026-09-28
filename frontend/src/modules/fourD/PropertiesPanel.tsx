@@ -10,6 +10,8 @@ import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
+import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
+import type { RealisticMaterialEntry, RealisticMaterialMap } from './realisticMaterials'
 
 interface ActiveObject {
   id: string
@@ -23,6 +25,10 @@ interface Props {
   onToggle: () => void
   settings: ViewerSettings
   onSettingsChange: (settings: ViewerSettings) => void
+  realisticEntries: RealisticMaterialEntry[]
+  realisticMapping: RealisticMaterialMap
+  onRealisticMappingChange: (mapping: RealisticMaterialMap) => void
+  realisticAnalysing: boolean
   environmentName: string | null
   onUploadEnvironment: (file: File) => void
   onClearEnvironment: () => void
@@ -124,7 +130,8 @@ function SectionHeader({ label }: { label: string }) {
 // that actually do something given "the 3D capabilities" this pass actually
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
-  open, onToggle, settings, onSettingsChange, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
+  open, onToggle, settings, onSettingsChange, realisticEntries, realisticMapping, onRealisticMappingChange, realisticAnalysing,
+  environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
   activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
@@ -168,8 +175,24 @@ export function PropertiesPanel({
           <option value="flat">Flat Shaded</option>
           <option value="gouraud">Gouraud Shaded</option>
           <option value="shaded">Rendered (PBR)</option>
+          <option value="realistic">Realistic Materials</option>
         </select>
       </Row>
+      {settings.renderMode === 'realistic' && (
+        <>
+          <Row label="Glass transmission">
+            <input
+              type="checkbox" checked={settings.realisticGlassTransmission}
+              title="Real refracting glass. Slower: renders the scene an extra time every frame."
+              onChange={e => set('realisticGlassTransmission', e.target.checked)}
+            />
+          </Row>
+          <RealisticMaterialsPanel
+            entries={realisticEntries} mapping={realisticMapping}
+            onMappingChange={onRealisticMappingChange} analysing={realisticAnalysing}
+          />
+        </>
+      )}
       <Row label="Up Axis">
         <select
           value={settings.upAxis}

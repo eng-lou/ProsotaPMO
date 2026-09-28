@@ -16,6 +16,9 @@ export interface BatchInstanceInfo {
   color: THREE.Color
   colorAlpha: number
   matrix: THREE.Matrix4
+  // web-ifc's own geometryExpressID for this piece (the IFC representation
+  // item) — how realisticMaterials.ts finds the piece's own surface style.
+  ifcGeometryId: number
 }
 
 // One shared THREE.BatchedMesh carries every element in the file (2026-07-17,
@@ -235,6 +238,8 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
     // the moment any one of them gets individually modified or disposed.
     const geometry = sourceGeometry.clone()
     const mesh = new THREE.Mesh(geometry, buildElementMaterial({ x: info.color.r, y: info.color.g, z: info.color.b, w: info.colorAlpha }))
+    mesh.userData.ifcGeometryId = info.ifcGeometryId
+    mesh.userData.ifcColorAlpha = info.colorAlpha
     finalizeIndividualMesh(mesh, expressID, info.matrix, rootObject)
     batch.expressIdByInstanceId.delete(info.instanceId)
     firstMesh = firstMesh ?? mesh
