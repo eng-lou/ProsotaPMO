@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 from app.models.project import Project
 from app.models.schedule_period import SchedulePeriod
+from app.services import object_storage
+
+# Uploads go direct-to-R2 (2026-08-23); faked in memory (conftest.py).
+pytestmark = pytest.mark.usefixtures("fake_object_storage")
 
 
 async def _make_collection(client: AsyncClient, project: Project, name: str) -> str:
@@ -15,9 +20,13 @@ async def _make_collection(client: AsyncClient, project: Project, name: str) -> 
 
 
 async def _make_capture(client: AsyncClient, project: Project, name: str = "cloud.xyz") -> str:
-    data = {"project_id": str(project.id), "name": name, "captured_at": "2026-08-15", "kind": "xyz", "source_up_axis": "y"}
-    files = {"file": (name, b"-21.7 -3.3 1.4 77 33 34\n", "application/octet-stream")}
-    resp = await client.post("/api/v1/site-captures/", data=data, files=files)
+    resp = await client.post("/api/v1/site-captures/presign", json={"name": name, "content_type": "application/octet-stream"})
+    storage_key = resp.json()["storage_key"]
+    object_storage.upload_bytes(storage_key, b"-21.7 -3.3 1.4 77 33 34\n")
+    resp = await client.post("/api/v1/site-captures/", json={
+        "project_id": str(project.id), "name": name, "captured_at": "2026-08-15", "kind": "xyz", "source_up_axis": "y",
+        "storage_key": storage_key,
+    })
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 

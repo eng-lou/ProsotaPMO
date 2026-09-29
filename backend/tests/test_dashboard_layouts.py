@@ -39,7 +39,12 @@ async def test_apply_activates_layout_and_persists_positions(client: AsyncClient
     assert apply_resp.json()["is_active"] is True
 
     config = (await client.get("/api/v1/dashboard-layouts/active-config", params={"project_id": str(project.id)})).json()
-    assert config["widgets"] == [{"id": "kpi_strip", "widget_type": "kpi_strip", "x": 3, "y": 1, "w": 9, "h": 2}]
+    # filter/filter_match_mode: per-widget filtering's own defaults
+    # (added 2026-09-02), filled in for a widget saved without them.
+    assert config["widgets"] == [{
+        "id": "kpi_strip", "widget_type": "kpi_strip", "x": 3, "y": 1, "w": 9, "h": 2,
+        "filter": None, "filter_match_mode": "all",
+    }]
 
 
 async def test_applying_second_layout_deactivates_first(client: AsyncClient, project: Project):

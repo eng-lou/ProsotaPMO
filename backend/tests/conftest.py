@@ -189,3 +189,66 @@ async def frozen_schedule_period(db: AsyncSession, schedule_variant: ScheduleVar
     await db.commit()
     await db.refresh(p)
     return p
+
+
+class FakeObjectStorage:
+    """In-memory stand-in for Cloudflare R2 (app/services/object_storage.py).
+
+    Every upload feature moved to direct-to-R2 presigned uploads on
+    2026-08-23 (51e97fc): the browser PUTs the bytes to a presigned url and
+    the API only records the resulting storage_key. Tests for those features
+    use this instead of real R2 credentials, so they run on any machine.
+    `presign_and_put` plays the browser's part of that flow.
+    """
+
+    PUT_PREFIX = "https://fake-object-storage.test/put/"
+    GET_PREFIX = "https://fake-object-storage.test/get/"
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def read_url(self, url: str) -> bytes:
+        """Bytes behind a presigned GET url (a download endpoint's redirect)."""
+        return self.objects[url.removeprefix(self.GET_PREFIX)]
+
+    async def presign_and_put(
+        self, client: AsyncClient, presign_path: str, content: bytes, **presign_fields,
+    ) -> str:
+        """POST to the feature's /presign endpoint, 'upload' the bytes to the
+        returned url, and return the storage_key to register."""
+        resp = await client.post(presign_path, json={"content_type": "application/octet-stream", **presign_fields})
+        assert resp.status_code == 200, resp.text
+        presigned = resp.json()
+        assert presigned["upload_url"].startswith(self.PUT_PREFIX)
+        self.objects[presigned["upload_url"].removeprefix(self.PUT_PREFIX)] = content
+        return presigned["storage_key"]
+
+
+@pytest.fixture
+def fake_object_storage(monkeypatch) -> FakeObjectStorage:
+    from pathlib import Path
+
+    from app.services import object_storage
+
+    fake = FakeObjectStorage()
+
+    def head_object_size(key: str) -> int:
+        return len(fake.objects[key])  # KeyError, like a missing R2 object, if never uploaded
+
+    def download_to_path(key: str, dest: Path) -> None:
+        Path(dest).write_bytes(fake.objects[key])
+
+    def upload_from_path(key: str, src: Path, content_type: str | None = None) -> None:
+        fake.objects[key] = Path(src).read_bytes()
+
+    def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> None:
+        fake.objects[key] = data
+
+    monkeypatch.setattr(object_storage, "presigned_put_url", lambda key, content_type, expires_in=3600: fake.PUT_PREFIX + key)
+    monkeypatch.setattr(object_storage, "presigned_get_url", lambda key, expires_in=3600: fake.GET_PREFIX + key)
+    monkeypatch.setattr(object_storage, "head_object_size", head_object_size)
+    monkeypatch.setattr(object_storage, "download_to_path", download_to_path)
+    monkeypatch.setattr(object_storage, "upload_from_path", upload_from_path)
+    monkeypatch.setattr(object_storage, "upload_bytes", upload_bytes)
+    monkeypatch.setattr(object_storage, "delete_object", lambda key: fake.objects.pop(key, None))
+    return fake

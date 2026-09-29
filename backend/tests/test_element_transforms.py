@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 from app.models.project import Project
+from app.services import object_storage
+
+# Uploads go direct-to-R2 (2026-08-23); faked in memory (conftest.py).
+pytestmark = pytest.mark.usefixtures("fake_object_storage")
 
 
 async def _create_model_file(client: AsyncClient, project: Project) -> str:
-    data = {"project_id": str(project.id), "name": "tower.ifc", "kind": "ifc", "source_up_axis": "z"}
-    files = {"file": ("tower.ifc", b"fake-ifc-bytes", "application/octet-stream")}
-    resp = await client.post("/api/v1/model3d-files/", data=data, files=files)
+    resp = await client.post("/api/v1/model3d-files/presign", json={"name": "tower.ifc", "content_type": "application/octet-stream"})
+    storage_key = resp.json()["storage_key"]
+    object_storage.upload_bytes(storage_key, b"fake-ifc-bytes")
+    resp = await client.post("/api/v1/model3d-files/", json={
+        "project_id": str(project.id), "name": "tower.ifc", "kind": "ifc", "source_up_axis": "z", "storage_key": storage_key,
+    })
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 

@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 from app.models.project import Project
+from tests.conftest import FakeObjectStorage
+
+# Texture bytes are stored in R2 (2026-08-23); faked in memory (conftest.py).
+pytestmark = pytest.mark.usefixtures("fake_object_storage")
+
+
+async def _texture_bytes(client: AsyncClient, storage: FakeObjectStorage, preset_id: str, slot: str = "map") -> bytes:
+    # Downloads redirect to a presigned storage url.
+    resp = await client.get(f"/api/v1/material-presets/{preset_id}/textures/{slot}")
+    assert resp.status_code == 307, resp.text
+    return storage.read_url(resp.headers["location"])
 
 
 def _create_data(project_id: str, name: str = "Brick Facade"):
@@ -44,14 +56,12 @@ async def test_create_with_multiple_slots(client: AsyncClient, project: Project)
     assert slots == {"map", "roughnessMap", "normalMap"}
 
 
-async def test_download_texture_round_trips_bytes(client: AsyncClient, project: Project):
+async def test_download_texture_round_trips_bytes(client: AsyncClient, project: Project, fake_object_storage: FakeObjectStorage):
     created = (await client.post(
         "/api/v1/material-presets/", data=_create_data(str(project.id)), files=_files(map=b"exact-bytes-here"),
     )).json()
 
-    download = await client.get(f"/api/v1/material-presets/{created['id']}/textures/map")
-    assert download.status_code == 200
-    assert download.content == b"exact-bytes-here"
+    assert await _texture_bytes(client, fake_object_storage, created["id"]) == b"exact-bytes-here"
 
 
 async def test_download_missing_slot_404s(client: AsyncClient, project: Project):
@@ -60,7 +70,7 @@ async def test_download_missing_slot_404s(client: AsyncClient, project: Project)
     assert resp.status_code == 404
 
 
-async def test_update_rename_leaves_existing_texture_untouched(client: AsyncClient, project: Project):
+async def test_update_rename_leaves_existing_texture_untouched(client: AsyncClient, project: Project, fake_object_storage: FakeObjectStorage):
     # The whole point of cleared_slots/omitted-slots (2026-07-13, per the
     # real incident this table exists to fix): renaming a preset must not
     # require re-uploading every large texture it already has.
@@ -73,11 +83,10 @@ async def test_update_rename_leaves_existing_texture_untouched(client: AsyncClie
     assert update.json()["name"] == "Weathered Steel"
     assert len(update.json()["textures"]) == 1
 
-    download = await client.get(f"/api/v1/material-presets/{created['id']}/textures/map")
-    assert download.content == b"original-bytes"  # untouched, not re-uploaded/cleared
+    assert await _texture_bytes(client, fake_object_storage, created["id"]) == b"original-bytes"  # untouched, not re-uploaded/cleared
 
 
-async def test_update_replaces_slot(client: AsyncClient, project: Project):
+async def test_update_replaces_slot(client: AsyncClient, project: Project, fake_object_storage: FakeObjectStorage):
     created = (await client.post(
         "/api/v1/material-presets/", data=_create_data(str(project.id)), files=_files(map=b"old-bytes"),
     )).json()
@@ -86,8 +95,7 @@ async def test_update_replaces_slot(client: AsyncClient, project: Project):
         f"/api/v1/material-presets/{created['id']}", data={"name": created["name"], "cleared_slots": ""},
         files=_files(map=b"new-bytes"),
     )
-    download = await client.get(f"/api/v1/material-presets/{created['id']}/textures/map")
-    assert download.content == b"new-bytes"
+    assert await _texture_bytes(client, fake_object_storage, created["id"]) == b"new-bytes"
 
 
 async def test_update_clears_slot_without_replacement(client: AsyncClient, project: Project):
@@ -104,7 +112,7 @@ async def test_update_clears_slot_without_replacement(client: AsyncClient, proje
     assert slots == {"map"}  # roughnessMap gone, map untouched
 
     assert (await client.get(f"/api/v1/material-presets/{created['id']}/textures/roughnessMap")).status_code == 404
-    assert (await client.get(f"/api/v1/material-presets/{created['id']}/textures/map")).status_code == 200
+    assert (await client.get(f"/api/v1/material-presets/{created['id']}/textures/map")).status_code == 307
 
 
 async def test_update_unknown_preset_404s(client: AsyncClient, project: Project):
