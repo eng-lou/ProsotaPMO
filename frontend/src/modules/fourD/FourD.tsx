@@ -33,6 +33,7 @@ import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sec
 import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
+import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
 import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { createCamera, deleteCamera, listCameras, updateCamera, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { uploadFourDVideo } from './fourDVideos'
@@ -168,6 +169,7 @@ const PROFILE_PANEL_OPEN_KEY = 'prosota_4d_profile_panel_open'
 const PROFILE_PANEL_DOCK_KEY = 'prosota_4d_profile_panel_dock'
 const SECTION_PANEL_OPEN_KEY = 'prosota_4d_section_panel_open'
 const SECTION_PANEL_DOCK_KEY = 'prosota_4d_section_panel_dock'
+const REALISTIC_PANEL_DOCK_KEY = 'prosota_4d_realistic_panel_dock'
 const CAMERA_PANEL_OPEN_KEY = 'prosota_4d_camera_panel_open'
 const CAMERA_PANEL_DOCK_KEY = 'prosota_4d_camera_panel_dock'
 const CAMERAS_PANEL_OPEN_KEY = 'prosota_4d_cinematic_cameras_panel_open'
@@ -5703,6 +5705,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [settings.renderMode, ifcHandles, sceneObjects])
 
+  // Realistic Materials' own dock panel (2026-09-29, per Maro: mapping +
+  // glass were "a bit compressed" inside 3D View Properties — "give them
+  // their own widget panel that pops only... when realistic materials are
+  // selected"). Opens itself every time the mode is switched on; closing it
+  // only hides it until the next switch (3D View Properties offers reopening
+  // it meanwhile). Dock side persists like every other dock panel.
+  const [realisticPanelDismissed, setRealisticPanelDismissed] = useState(false)
+  useEffect(() => {
+    if (settings.renderMode === 'realistic') setRealisticPanelDismissed(false)
+  }, [settings.renderMode])
+  const realisticPanelOpen = settings.renderMode === 'realistic' && !realisticPanelDismissed
+  const [realisticPanelDock, setRealisticPanelDock] = useState<PanelSide>(() => {
+    try {
+      return localStorage.getItem(REALISTIC_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
+    } catch {
+      return 'right'
+    }
+  })
+  const toggleRealisticPanelDock = () => {
+    setRealisticPanelDock(prev => {
+      const next = prev === 'left' ? 'right' : 'left'
+      try { localStorage.setItem(REALISTIC_PANEL_DOCK_KEY, next) } catch { /* per-browser convenience only */ }
+      return next
+    })
+  }
+
   // Mapping panel's Select button: every element in one model using that
   // material entry, through the same multi-select path Select by Type uses.
   const handleSelectRealisticEntry = (key: string, objectId: string) => {
@@ -6699,6 +6727,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // below into what SideDock.tsx actually renders. Adding a third dockable
   // panel later is just a third entry here, not a new rendering path.
   const dockablePanels: (DockedPanel & { dock: PanelSide })[] = []
+  if (realisticPanelOpen) {
+    dockablePanels.push({
+      id: 'realistic-materials', label: 'Realistic Materials', dock: realisticPanelDock,
+      onToggleDock: toggleRealisticPanelDock, onClose: () => setRealisticPanelDismissed(true),
+      content: (
+        <RealisticMaterialsPanel
+          entries={realisticEntries} mapping={realisticMapping} onMappingChange={setRealisticMapping}
+          analysing={realisticAnalysing} entryModels={realisticEntryModels} onSelectEntry={handleSelectRealisticEntry}
+          glassTransmission={settings.realisticGlassTransmission}
+          onGlassTransmissionChange={value => setSettings({ ...settings, realisticGlassTransmission: value })}
+        />
+      ),
+    })
+  }
   if (profilePanelOpen) {
     dockablePanels.push({
       id: 'profiles', label: 'Animation Profiles', dock: profilePanelDock,
@@ -7606,12 +7648,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onToggle={toggleProperties}
           settings={settings}
           onSettingsChange={setSettings}
-          realisticEntries={realisticEntries}
-          realisticMapping={realisticMapping}
-          onRealisticMappingChange={setRealisticMapping}
-          realisticAnalysing={realisticAnalysing}
-          realisticEntryModels={realisticEntryModels}
-          onSelectRealisticEntry={handleSelectRealisticEntry}
+          realisticPanelOpen={realisticPanelOpen}
+          onOpenRealisticPanel={() => setRealisticPanelDismissed(false)}
           environmentName={customEnvironment?.name ?? null}
           onUploadEnvironment={handleUploadEnvironment}
           onClearEnvironment={handleClearEnvironment}

@@ -24,7 +24,12 @@ import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 // the opaque batch and redrawn by a second, glass-only BatchedMesh (one extra
 // draw call per model, however many panes there are).
 
-export const REALISTIC_CLASSES = ['concrete', 'glass', 'metal', 'grass', 'brick', 'timber'] as const
+// asphalt/stone/gravel/soil/tile added 2026-09-29, per Maro ("add more
+// material types e.g asphalt"). Appended, never reordered: the shader's
+// class index and texture layer both follow this order.
+export const REALISTIC_CLASSES = [
+  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile',
+] as const
 export type RealisticClass = typeof REALISTIC_CLASSES[number]
 // 'original' — explicitly keep the imported look for this material, even
 // if its name would otherwise auto-match a class.
@@ -38,11 +43,18 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
   grass: 'Grass / green roof',
   brick: 'Brick',
   timber: 'Timber',
+  asphalt: 'Asphalt / tarmac',
+  stone: 'Stone / paving',
+  gravel: 'Gravel',
+  soil: 'Soil / earth',
+  tile: 'Tiles',
 }
 
 // Shader-side class index. 0 = no class (keep the imported look). The
 // generated texture array's layer for a class is its index - 1.
-const CLASS_INDEX: Record<RealisticClass, number> = { concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6 }
+const CLASS_INDEX: Record<RealisticClass, number> = {
+  concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6, asphalt: 7, stone: 8, gravel: 9, soil: 10, tile: 11,
+}
 export const GLASS_CLASS = CLASS_INDEX.glass
 // Classes whose texture carries its own colour (a brick is brick-coloured
 // whatever flat colour the IFC author picked), as opposed to concrete/metal,
@@ -50,7 +62,11 @@ export const GLASS_CLASS = CLASS_INDEX.glass
 // these, the element's colour is replaced by white at rest, so any tint
 // applied on top of it (selection, variance, clash) still shows as a tint
 // of the texture rather than being lost.
-const REPLACES_COLOUR = [false, false, true, false, true, true, true]
+// Stone and tile keep the imported colour (a limestone and a granite, a
+// white and a grey tile, are the modeller's real choice) with texture
+// detail on top; asphalt, gravel and soil read the same whatever flat
+// colour the model gave them.
+const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false]
 export function classReplacesColour(classIndex: number): boolean {
   return REPLACES_COLOUR[classIndex] ?? false
 }
@@ -64,6 +80,11 @@ const CLASS_PATTERNS: [RealisticClass, RegExp][] = [
   ['brick', /\b(brick|bricks|brickwork)\b/],
   ['timber', /\b(timber|wood|wooden|oak|pine|spruce|larch|cedar|birch|beech|plywood|ply|osb|clt|glulam|lvl|softwood|hardwood|lumber|veneer|mdf)\b/],
   ['concrete', /\b(concrete|render|rendered|plaster|plasterboard|cement|screed|precast|in situ|insitu|stucco|blockwork|mortar|gypsum)\b/],
+  ['asphalt', /\b(asphalt|tarmac|tarmacadam|bitumen|bituminous|macadam|blacktop|road surface)\b/],
+  ['stone', /\b(stone|granite|limestone|sandstone|marble|slate|basalt|travertine|flagstone|flagstones|cobble|cobbles|cobblestone|quartzite)\b/],
+  ['gravel', /\b(gravel|shingle|pebble|pebbles|ballast)\b/],
+  ['soil', /\b(soil|topsoil|subsoil|earth|earthwork|earthworks|backfill|clay|dirt|made ground)\b/],
+  ['tile', /\b(tile|tiles|tiled|tiling|ceramic|porcelain|mosaic)\b/],
 ]
 // Layers that sit inside a build-up and are never the visible face.
 const CONCEALED_LAYER = /\b(stud|studs|insulation|insulated|furring|firring|batten|battens|membrane|vapour|vapor|cavity|air gap|air space|sheathing|framing)\b/
@@ -124,6 +145,7 @@ export interface RealisticPieceDescription {
 // real IfcSurfaceStyleRendering property, not a colour guess; restricted to
 // these types so a transparent-styled duct or slab never becomes glass.
 const GLAZING_TYPES = new Set(['IFCWINDOW', 'IFCDOOR', 'IFCPLATE', 'IFCCURTAINWALL', 'IFCWINDOWSTANDARDCASE', 'IFCDOORSTANDARDCASE'])
+const EARTHWORKS_TYPES = new Set(['IFCEARTHWORKSFILL', 'IFCEARTHWORKSCUT', 'IFCEARTHWORKSELEMENT'])
 
 export function pieceKey(p: RealisticPieceDescription): string {
   const hasNames = p.styleName !== '' || p.materialNames.length > 0
@@ -145,28 +167,37 @@ function autoClassifyPiece(p: RealisticPieceDescription): { cls: RealisticClass 
     if (found.length > 1) return { cls: null, candidates: found }
   }
   if (p.materialNames.length > 0) {
-    let text: string | null
+    // Which names to try, in order.
+    let texts: string[]
     if (p.layered) {
       // A layered wall/slab is seen from its outer faces: its first layer
-      // (the exterior side, as Revit/ArchiCAD export it), or — when that's a
-      // concealed core layer (studs, insulation...) — its last. The full
+      // (the exterior side, as Revit/ArchiCAD export it), then its last —
+      // skipping concealed core layers (studs, insulation...), and falling
+      // through to the other face when one says nothing (2026-09-29: a
+      // ceiling exported as "Default / Ceiling Tile 600 x 600"). The full
       // layer list is shown in the mapping panel to override a wrong guess.
       const first = p.materialNames[0]
       const last = p.materialNames[p.materialNames.length - 1]
-      text = !CONCEALED_LAYER.test(normaliseName(first)) ? first : !CONCEALED_LAYER.test(normaliseName(last)) ? last : null
+      texts = [...new Set([first, last])].filter(name => !CONCEALED_LAYER.test(normaliseName(name)))
     } else if (p.materialNames.length === 1) {
-      text = p.materialNames[0]
+      texts = [p.materialNames[0]]
     } else {
       // Several constituent materials (a light fitting's paint + plastic +
       // aluminium) and no style saying which one this piece is: any single
       // match would be a guess, so leave it for manual mapping.
-      text = null
+      texts = []
     }
-    const found = text ? matchClassesInText(text) : []
-    if (found.length === 1) return { cls: found[0], candidates: [] }
-    if (found.length > 1) return { cls: null, candidates: found }
+    for (const text of texts) {
+      const found = matchClassesInText(text)
+      if (found.length === 1) return { cls: found[0], candidates: [] }
+      if (found.length > 1) return { cls: null, candidates: found }
+    }
   }
   if (p.transparent && GLAZING_TYPES.has(p.ifcType)) return { cls: 'glass', candidates: [] }
+  // Earthworks solids are earth by definition (IFC4.3 IfcEarthworksFill/
+  // Cut), whatever their style is called — Revit exports name those styles
+  // "SurfaceStyle_8f887e" and the like, which match nothing.
+  if (EARTHWORKS_TYPES.has(p.ifcType)) return { cls: 'soil', candidates: [] }
   return { cls: null, candidates: [] }
 }
 
@@ -344,7 +375,6 @@ export function saveRealisticMapping(projectId: string | undefined, mapping: Rea
 // ifcModel.ts's box-projected UVs, which are in model metres.
 
 const TEX_SIZE = 256
-const LAYER_COUNT = 6
 
 function hash2(ix: number, iy: number, seed: number): number {
   let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 144665)) | 0
@@ -470,7 +500,85 @@ const timberLayer: LayerFn = (u, v) => {
   return [tone[0] * shade / 255, tone[1] * shade / 255, tone[2] * shade / 255, 0.6 + grain * 0.08 + (fine - 0.5) * 0.06]
 }
 
-const LAYERS: LayerFn[] = [concreteLayer, glassLayer, metalLayer, grassLayer, brickLayer, timberLayer]
+const asphaltLayer: LayerFn = (u, v) => {
+  // Dark binder with pale aggregate showing through; faint wear patches.
+  const wear = fbm(u, v, 3, 3, 3, 61)
+  const grain = valueNoise(u, v, 200, 200, 62)
+  const chip = valueNoise(u, v, 110, 110, 63)
+  const base = 0.2 + (wear - 0.5) * 0.06 + (grain - 0.5) * 0.05
+  const c = chip > 0.82 ? base + 0.22 : base
+  return [c, c, c * 1.02, 0.45 + (grain - 0.5) * 0.3 + (chip > 0.82 ? 0.15 : 0)]
+}
+
+const stoneLayer: LayerFn = (u, v) => {
+  // Neutral detail (the imported colour carries the stone's own hue):
+  // cloudy variation, a few soft veins, fine grain.
+  const cloud = fbm(u, v, 4, 4, 4, 71)
+  const vein = Math.abs(Math.sin((u * 3 + fbm(u, v, 3, 3, 3, 72) * 2.5) * Math.PI * 2))
+  const grain = valueNoise(u, v, 160, 160, 73)
+  const d = 0.5 + (cloud - 0.5) * 0.35 + (vein < 0.06 ? -0.12 : 0) + (grain - 0.5) * 0.08
+  return [d, d, d, 0.5 + (grain - 0.5) * 0.2]
+}
+
+const GRAVEL_TONES: [number, number, number][] = [[150, 146, 138], [122, 118, 110], [168, 158, 140], [104, 98, 90], [140, 128, 112]]
+const gravelLayer: LayerFn = (u, v) => {
+  // Tileable cellular noise: each cell is one pebble, shaded by distance to
+  // its own centre, coloured from a stone palette.
+  const cells = 18
+  const x = u * cells
+  const y = v * cells
+  const cx = Math.floor(x)
+  const cy = Math.floor(y)
+  let best = 9
+  let bestId = 0
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const gx = cx + dx
+      const gy = cy + dy
+      const wx = ((gx % cells) + cells) % cells
+      const wy = ((gy % cells) + cells) % cells
+      const px = gx + hash2(wx, wy, 81)
+      const py = gy + hash2(wx, wy, 82)
+      const d = (x - px) ** 2 + (y - py) ** 2
+      if (d < best) { best = d; bestId = wy * cells + wx }
+    }
+  }
+  const tone = GRAVEL_TONES[Math.floor(hash2(bestId, 3, 83) * GRAVEL_TONES.length)]
+  const dome = clamp01(1 - Math.sqrt(best) * 1.4)
+  const shade = 0.55 + dome * 0.55
+  return [tone[0] * shade / 255, tone[1] * shade / 255, tone[2] * shade / 255, dome]
+}
+
+const SOIL_TONES: [number, number, number][] = [[92, 70, 50], [118, 90, 62], [76, 58, 42], [104, 84, 60]]
+const soilLayer: LayerFn = (u, v) => {
+  const patch = fbm(u, v, 5, 5, 4, 91)
+  const clod = valueNoise(u, v, 90, 90, 92)
+  const fine = valueNoise(u, v, 240, 240, 93)
+  const tone = SOIL_TONES[Math.min(3, Math.floor(patch * 4))]
+  const shade = 0.78 + clod * 0.3 + (fine - 0.5) * 0.12
+  return [tone[0] * shade / 255, tone[1] * shade / 255, tone[2] * shade / 255, 0.3 + clod * 0.5 + (fine - 0.5) * 0.15]
+}
+
+const tileLayer: LayerFn = (u, v) => {
+  // Tile = 2 x 2 tiles (300mm in a 0.6m repeat) with 3mm grout joints; the
+  // face keeps the imported colour, grout reads darker and recessed.
+  const tiles = 2
+  const fu = u * tiles - Math.floor(u * tiles)
+  const fv = v * tiles - Math.floor(v * tiles)
+  const joint = 3 / 300
+  const grain = valueNoise(u, v, 128, 128, 101)
+  if (fu < joint || fv < joint) return [0.34, 0.34, 0.34, 0.2]
+  const tileId = Math.floor(u * tiles) + Math.floor(v * tiles) * tiles
+  const d = 0.5 + (hash2(tileId, 5, 102) - 0.5) * 0.06 + (grain - 0.5) * 0.03
+  return [d, d, d, 0.6]
+}
+
+// Order = REALISTIC_CLASSES order (layer = class index - 1).
+const LAYERS: LayerFn[] = [
+  concreteLayer, glassLayer, metalLayer, grassLayer, brickLayer, timberLayer,
+  asphaltLayer, stoneLayer, gravelLayer, soilLayer, tileLayer,
+]
+const LAYER_COUNT = LAYERS.length
 
 let textureArray: THREE.DataArrayTexture | null = null
 
@@ -527,9 +635,14 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [2.2, 2.2], roughness: 0.95, metalness: 0, bump: 0.9, detail: 0, textured: true }, // grass
   { tile: [0.45, 0.3], roughness: 0.88, metalness: 0, bump: 1.4, detail: 0, textured: true }, // brick
   { tile: [1.2, 0.6], roughness: 0.62, metalness: 0, bump: 0.6, detail: 0, textured: true }, // timber
+  { tile: [2, 2], roughness: 0.92, metalness: 0, bump: 0.4, detail: 0, textured: true }, // asphalt
+  { tile: [1.6, 1.6], roughness: 0.7, metalness: 0, bump: 0.3, detail: 1, textured: false }, // stone
+  { tile: [0.8, 0.8], roughness: 0.97, metalness: 0, bump: 1.5, detail: 0, textured: true }, // gravel
+  { tile: [2, 2], roughness: 1, metalness: 0, bump: 0.8, detail: 0, textured: true }, // soil
+  { tile: [0.6, 0.6], roughness: 0.3, metalness: 0, bump: 0.5, detail: 1, textured: false }, // tile
 ]
 
-// The table above as a 7x2 float texture, read with two texelFetches per
+// The table above as a (classes x 2) float texture, read with two texelFetches per
 // vertex (2026-09-28, measured live on a 6M-triangle model: indexing GLSL
 // const arrays by a non-constant class instead — per fragment, then per
 // vertex — cost 2-4x the whole PBR frame on ANGLE/D3D, which lowers

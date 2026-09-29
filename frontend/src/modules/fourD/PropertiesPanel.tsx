@@ -10,8 +10,6 @@ import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
-import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
-import type { RealisticEntryModel, RealisticMaterialEntry, RealisticMaterialMap } from './realisticMaterials'
 
 interface ActiveObject {
   id: string
@@ -25,12 +23,10 @@ interface Props {
   onToggle: () => void
   settings: ViewerSettings
   onSettingsChange: (settings: ViewerSettings) => void
-  realisticEntries: RealisticMaterialEntry[]
-  realisticMapping: RealisticMaterialMap
-  onRealisticMappingChange: (mapping: RealisticMaterialMap) => void
-  realisticAnalysing: boolean
-  realisticEntryModels: Record<string, RealisticEntryModel[]>
-  onSelectRealisticEntry: (key: string, objectId: string) => void
+  // Realistic Materials' own dock panel (mapping + glass) — shown
+  // automatically with the mode; this only offers reopening it once closed.
+  realisticPanelOpen: boolean
+  onOpenRealisticPanel: () => void
   environmentName: string | null
   onUploadEnvironment: (file: File) => void
   onClearEnvironment: () => void
@@ -132,8 +128,7 @@ function SectionHeader({ label }: { label: string }) {
 // that actually do something given "the 3D capabilities" this pass actually
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
-  open, onToggle, settings, onSettingsChange, realisticEntries, realisticMapping, onRealisticMappingChange, realisticAnalysing,
-  realisticEntryModels, onSelectRealisticEntry,
+  open, onToggle, settings, onSettingsChange, realisticPanelOpen, onOpenRealisticPanel,
   environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
   activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
@@ -181,21 +176,15 @@ export function PropertiesPanel({
           <option value="realistic">Realistic Materials</option>
         </select>
       </Row>
-      {settings.renderMode === 'realistic' && (
-        <>
-          <Row label="Glass transmission">
-            <input
-              type="checkbox" checked={settings.realisticGlassTransmission}
-              title="Real refracting glass. Slower: renders the scene an extra time every frame."
-              onChange={e => set('realisticGlassTransmission', e.target.checked)}
-            />
-          </Row>
-          <RealisticMaterialsPanel
-            entries={realisticEntries} mapping={realisticMapping}
-            onMappingChange={onRealisticMappingChange} analysing={realisticAnalysing}
-            entryModels={realisticEntryModels} onSelectEntry={onSelectRealisticEntry}
-          />
-        </>
+      {settings.renderMode === 'realistic' && !realisticPanelOpen && (
+        <Row label="Materials">
+          <button
+            onClick={onOpenRealisticPanel}
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
+          >
+            Open panel
+          </button>
+        </Row>
       )}
       <Row label="Up Axis">
         <select
