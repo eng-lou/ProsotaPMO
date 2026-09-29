@@ -2,6 +2,7 @@ import axios from 'axios'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import type { Calendar } from '@/modules/scheduling/types'
+import { flattenCollectionMemberRefs, type Collection } from './collections'
 import type { IfcModelHandle } from './ifcModel'
 import { extractScheduleElements, type ExtractedElement } from './ifcScheduleExtraction'
 import {
@@ -28,6 +29,10 @@ interface Props {
   // Architectural + HVAC + Plumbing", unreadable past 2-3 files).
   projectName: string
   schedulePeriodId: string
+  // The project's Collections, for "Exclude from schedule" (2026-09-29, per
+  // Maro: "its a single ifc but it has landscape, i dont want the landscape
+  // animated... so i dont have to unload it since its still useful").
+  collections: Collection[]
   onCancel: () => void
   onGenerated: () => void
 }
@@ -54,7 +59,7 @@ type Step = 'source' | 'extract' | 'review'
 // motivated it at the time, and the extra path wasn't worth keeping
 // alongside that; see scheduleGeneration.ts's own git history for
 // groupFromCollections if this ever needs resurrecting.)
-export function IfcScheduleWizard({ models, calendars, projectId, projectName, schedulePeriodId, onCancel, onGenerated }: Props) {
+export function IfcScheduleWizard({ models, calendars, projectId, projectName, schedulePeriodId, collections, onCancel, onGenerated }: Props) {
   const [step, setStep] = useState<Step>('source')
   // Defaults to every loaded model selected — matches this app's usual
   // "editable default, not forced choice" convention (same shape as the
@@ -71,6 +76,49 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
     })
   }
   const selectedModels = models.filter(m => selectedModelIds.has(m.handle.modelID))
+
+  // Collections whose IFC elements are left out of the scan entirely — never
+  // linked to an activity, so never animated, but still loaded and visible
+  // (2026-09-29, per Maro). A nested collection's own children are excluded
+  // with it (flattenCollectionMemberRefs walks the subtree). Changing this
+  // after a scan clears that scan, so the review can never show a WBS built
+  // with a different exclusion set than the one on screen.
+  const [excludedCollectionIds, setExcludedCollectionIds] = useState<Set<string>>(() => new Set())
+  const toggleExcludedCollection = (collectionId: string) => {
+    setExcludedCollectionIds(prev => {
+      const next = new Set(prev)
+      if (next.has(collectionId)) next.delete(collectionId); else next.add(collectionId)
+      return next
+    })
+    setElements(null)
+    setStoreys(null)
+    setExcludedCount(0)
+  }
+  const [excludedCount, setExcludedCount] = useState(0)
+  // Every collection, parents followed by their own children (indented), so
+  // any one — top-level or nested — can be picked on its own; ticking a
+  // parent also covers everything nested under it.
+  const collectionRows: { collection: Collection; depth: number }[] = []
+  const addCollectionRows = (parentId: string | null, depth: number) => {
+    const children = collections
+      .filter(c => c.parent_collection_id === parentId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name))
+    for (const c of children) {
+      collectionRows.push({ collection: c, depth })
+      addCollectionRows(c.id, depth + 1)
+    }
+  }
+  addCollectionRows(null, 0)
+  const isCoveredByExcludedParent = (c: Collection): boolean => {
+    let parentId = c.parent_collection_id
+    while (parentId) {
+      if (excludedCollectionIds.has(parentId)) return true
+      parentId = collections.find(p => p.id === parentId)?.parent_collection_id ?? null
+    }
+    return false
+  }
+  const collectionIfcCount = (collectionId: string) =>
+    flattenCollectionMemberRefs(collectionId, collections).filter(r => r.source_kind === 'ifc').length
 
   const [extracting, setExtracting] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
@@ -157,8 +205,18 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
         // fix finally let execution reach this line for the first time.
         for (const el of fromThisModel) found.push(el)
       }
-      setElements(found)
-      const grouped = groupByStorey(found)
+      // IFC collection members are GlobalIds (collections.ts), the same
+      // identity every extracted element carries.
+      const excludedGlobalIds = new Set<string>()
+      for (const collectionId of excludedCollectionIds) {
+        for (const ref of flattenCollectionMemberRefs(collectionId, collections)) {
+          if (ref.source_kind === 'ifc') excludedGlobalIds.add(ref.element_ref)
+        }
+      }
+      const kept = excludedGlobalIds.size > 0 ? found.filter(el => !excludedGlobalIds.has(el.globalId)) : found
+      setExcludedCount(found.length - kept.length)
+      setElements(kept)
+      const grouped = groupByStorey(kept)
       setStoreys(grouped)
       seedRates(grouped)
       setStep('review')
@@ -254,6 +312,35 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                   ))}
                 </div>
               )}
+              {collectionRows.length > 0 && (
+                <div className="border border-gray-200 dark:border-prosota-line rounded-md px-2.5 py-2 space-y-1">
+                  <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
+                    Exclude from schedule
+                  </div>
+                  <div className="text-[11px] text-gray-400 dark:text-prosota-muted">
+                    Elements in a ticked collection stay loaded and visible, but aren't scheduled or animated.
+                  </div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {collectionRows.map(({ collection: c, depth }) => (
+                      <label
+                        key={c.id}
+                        className="flex items-center gap-1.5 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer"
+                        style={{ paddingLeft: depth * 14 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={excludedCollectionIds.has(c.id) || isCoveredByExcludedParent(c)}
+                          disabled={isCoveredByExcludedParent(c)}
+                          title={isCoveredByExcludedParent(c) ? 'Already excluded with its parent collection' : undefined}
+                          onChange={() => toggleExcludedCollection(c.id)}
+                        />
+                        <span className="truncate">{c.name}</span>
+                        <span className="text-[10px] text-gray-400 dark:text-prosota-muted shrink-0">{collectionIfcCount(c.id)} elements</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 onClick={chooseScan}
                 disabled={selectedModels.length === 0}
@@ -299,6 +386,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 <div className="text-xs text-gray-600 dark:text-prosota-muted">
                   Found {elements.length} elements across {storeys.length} storeys:
                   {' '}{categoryNames.map(c => `${elements.filter(el => el.category === c).length} ${c}`).join(', ')}.
+                  {excludedCount > 0 && ` ${excludedCount} excluded by collection.`}
                 </div>
               )}
             </div>

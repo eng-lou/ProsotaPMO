@@ -7749,6 +7749,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           projectId={selectedProject.id}
           projectName={selectedProject.name}
           schedulePeriodId={period.id}
+          collections={collections}
           onCancel={() => setScheduleWizardOpen(false)}
           onGenerated={() => {
             setScheduleWizardOpen(false)
