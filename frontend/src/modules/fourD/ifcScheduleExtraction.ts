@@ -62,7 +62,7 @@ import { getExpressIdWorldBounds, getExpressIdWorldVolume } from './elementBatch
 export type ScheduleCategory =
   | 'Piling' | 'Foundation' | 'Reinforcement' | 'Columns' | 'Beams' | 'Slabs' | 'Walls' | 'Non-Structural Walls'
   | 'Structural Members' | 'Stairs' | 'Elevators' | 'Ramps' | 'Roofs' | 'Curtain Walls' | 'Facade Ornamentation' | 'Windows' | 'Doors' | 'Railings'
-  | 'Ductwork' | 'Air Terminals' | 'Piping' | 'Plumbing Fixtures'
+  | 'Mechanical Equipment' | 'Ductwork' | 'Air Terminals' | 'Piping' | 'Plumbing Fixtures'
   | 'Electrical Containment' | 'Lighting' | 'Electrical Devices'
   | 'Coverings' | 'Furnishings' | 'Site & Landscaping'
   | 'Preliminaries' | 'Substructure Earthworks' | 'Procurement' | 'Testing & Commissioning'
@@ -191,6 +191,34 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
   { ifcType: 'IfcFlowFitting', category: 'Ductwork' },
   { ifcType: 'IfcFlowTerminal', category: 'Ductwork' },
   { ifcType: 'IfcFlowController', category: 'Piping' },
+  // Mechanical plant (2026-09-29, per Maro: VAV units, air handling units
+  // and chillers were never linked to any activity on the NBU Medical
+  // Clinic models — none of these IFC classes were in this table, so they
+  // never became schedule candidates at all). IFC2x3 exports use the
+  // generic IfcFlowMovingDevice (fans, VAV units, pumps) /
+  // IfcEnergyConversionDevice (AHUs, chillers, boilers) /
+  // IfcFlowStorageDevice (tanks) / IfcFlowTreatmentDevice (filters); the
+  // IFC4 specific classes are listed too. Deliberately NOT name-keyword
+  // re-bucketed like the Flow* runs above (MEP_FAMILY_TYPES): a "VAV Unit -
+  // Single Duct" would match 'duct' and land in Ductwork.
+  { ifcType: 'IfcFlowMovingDevice', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcEnergyConversionDevice', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcFlowStorageDevice', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcFlowTreatmentDevice', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcUnitaryEquipment', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcFan', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcPump', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcCompressor', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcChiller', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcBoiler', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcCoolingTower', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcCondenser', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcCoil', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcHeatExchanger', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcHumidifier', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcAirToAirHeatRecovery', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcTank', category: 'Mechanical Equipment' },
+  { ifcType: 'IfcFilter', category: 'Mechanical Equipment' },
   { ifcType: 'IfcCovering', category: 'Coverings' },
   { ifcType: 'IfcFurnishingElement', category: 'Furnishings' },
 ]

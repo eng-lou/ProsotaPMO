@@ -50,6 +50,9 @@ export const CATEGORY_ORDER: ScheduleCategory[] = [
   // same rough timeline as stairs going in floor-by-floor, well before
   // Roofs/envelope closes in.
   'Structural Members', 'Stairs', 'Elevators', 'Ramps', 'Roofs', 'Curtain Walls', 'Windows', 'Doors', 'Facade Ornamentation',
-  'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
+  // Mechanical Equipment (2026-09-29) just ahead of Ductwork/Piping —
+  // plant (AHUs, chillers, VAV units, fans) is set in position first, then
+  // the duct/pipe rough-in connects to it.
+  'Mechanical Equipment', 'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
   'Air Terminals', 'Plumbing Fixtures', 'Lighting', 'Electrical Devices', 'Furnishings', 'Site & Landscaping',
 ]

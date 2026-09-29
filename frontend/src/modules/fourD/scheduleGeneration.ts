@@ -355,6 +355,17 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
       equipmentName: 'Scissor Lift', equipmentCostPerDay: 400,
     } },
   ],
+  // Mechanical plant (2026-09-29 — see IFC_TYPE_CATEGORIES' own header,
+  // ifcScheduleExtraction.ts). Counted per unit: a chiller and a VAV box
+  // are both "one item set, fixed and connected", with the lifting kit an
+  // AHU/chiller placement needs. Same typical-industry ballpark as every
+  // other rate here, freely edited in the wizard's Rates & Crews step.
+  'Mechanical Equipment': [
+    { key: 'install', label: 'Install Mechanical Equipment', rate: {
+      crewName: 'Mechanical Plant Crew', crewSize: 3, productivityPerCrewDay: 8, unit: 'each', costPerCrewDay: 1500,
+      equipmentName: 'Scissor Lift', equipmentCostPerDay: 400,
+    } },
+  ],
   Ductwork: [
     { key: 'install', label: 'Install Ductwork', rate: {
       crewName: 'HVAC Ductwork Crew', crewSize: 4, productivityPerCrewDay: 25, unit: 'each', costPerCrewDay: 1400,
@@ -764,7 +775,7 @@ const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
   // discrete family instance (a duct fitting, a light fixture, a
   // receptacle), not a continuous surface — same "installed per crew-day"
   // count basis as Foundation/Columns/Beams above, never an area measurement.
-  'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
+  'Mechanical Equipment', 'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
   'Electrical Containment', 'Lighting', 'Electrical Devices', 'Facade Ornamentation',
   // Same reasoning, 2026-07-17 — a tree/bench/bollard is a discrete
   // planted/placed instance, not a continuous surface.
@@ -1169,7 +1180,7 @@ export const CATEGORY_DISCIPLINE: Record<string, string> = {
   // its own DEFAULT_CATEGORY_PHASES header) — a non-load-bearing wall reads
   // more naturally as an architectural/envelope element for reporting.
   'Non-Structural Walls': 'Architecture',
-  Ductwork: 'HVAC', 'Air Terminals': 'HVAC',
+  'Mechanical Equipment': 'HVAC', Ductwork: 'HVAC', 'Air Terminals': 'HVAC',
   Piping: 'Plumbing', 'Plumbing Fixtures': 'Plumbing',
   'Electrical Containment': 'Electrical', Lighting: 'Electrical', 'Electrical Devices': 'Electrical',
   // Its own named discipline (2026-07-27), not 'Misc' — FF&E is a real NRM1
@@ -1221,7 +1232,7 @@ export const CATEGORY_DISCIPLINE: Record<string, string> = {
 // member of this set that's actually present in a real generation.
 const PROCURABLE_CATEGORIES: ReadonlySet<string> = new Set([
   'Curtain Walls', 'Windows', 'Doors', 'Railings', 'Facade Ornamentation', 'Roofs', 'Non-Structural Walls',
-  'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
+  'Mechanical Equipment', 'Ductwork', 'Air Terminals', 'Piping', 'Plumbing Fixtures',
   'Electrical Containment', 'Lighting', 'Electrical Devices',
   'Coverings', 'Furnishings',
 ])
