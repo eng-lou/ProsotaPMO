@@ -3297,17 +3297,17 @@ export function TimelinePlayback({
         // moves/fades in lockstep with its siblings, reconstructing the
         // whole element's animation instead of just one arbitrary member
         // of it.
-        let objects: THREE.Object3D[] = []
-        // Mirrors customTextures'/varianceByElementKey's own key convention
-        // exactly (2026-07-24, for the getOrCreate call below) — set
-        // alongside `objects` in every branch that can actually populate
-        // it, null for anything that can't (ifc_split clones have no real
-        // ModelElementLink-facing identity of their own to key variance
-        // off).
-        let elementKey: string | null = null
+        // Each resolved piece with its own element key — mirrors
+        // customTextures'/varianceByElementKey's own key convention exactly
+        // (2026-07-24, for the getOrCreate call below); null for anything
+        // with no real ModelElementLink-facing identity of its own to key
+        // variance off (ifc_split clones). Per piece, not per link, since
+        // 2026-09-29: one GlobalId link can now resolve into several loaded
+        // models (see the ifc branch below), each with its own key.
+        const resolved: { object: THREE.Object3D; elementKey: string | null }[] = []
         if (link.source_kind === 'mesh') {
           const mesh = meshByName.get(link.element_ref)
-          if (mesh) { objects = [mesh]; elementKey = meshIdByName.get(link.element_ref) ?? null }
+          if (mesh) resolved.push({ object: mesh, elementKey: meshIdByName.get(link.element_ref) ?? null })
         } else if (link.source_kind === 'ifc_split') {
           // A level-slice (elementSplitTargets.ts) — its clone mesh(es)
           // already live in the same handle.object tree as everything
@@ -3321,15 +3321,19 @@ export function TimelinePlayback({
             const expressId = getSplitExpressId(handle, link.element_ref)
             if (expressId === undefined) continue
             const matches = getExpressIdIndex(handle).get(expressId)
-            if (matches && matches.length > 0) { objects = matches; break }
+            if (matches && matches.length > 0) {
+              for (const object of matches) resolved.push({ object, elementKey: null })
+              break
+            }
           }
         } else if (ifcModel) {
-          // Tries each loaded IFC model in turn for a GlobalId match
-          // (2026-07-09, per federated/assembly modeling) — a link doesn't
-          // record *which* model it belongs to, so this now has to ask
-          // every currently-loaded one instead of assuming a single global
-          // handle, same reasoning as linkedElements.ts's own
-          // resolveInAnyHandle.
+          // Asks every loaded IFC model for a GlobalId match (2026-07-09,
+          // per federated/assembly modeling) — a link doesn't record
+          // *which* model it belongs to. Applies to EVERY model that has
+          // it, not just the first (2026-09-29, per Maro: the NBU Medical
+          // Clinic's Eng-ELE.ifc and Eng-MEP.ifc carry the same 2,048 light
+          // fittings under the same GlobalIds, and stopping at the first
+          // match left the MEP copies visible for the whole of 4D playback).
           for (const handle of ifcHandles) {
             const expressId = ifcModel.getExpressIdFromGuid(handle, link.element_ref)
             if (expressId === undefined) continue
@@ -3411,8 +3415,7 @@ export function TimelinePlayback({
                   for (const { instanceId } of batchInfo.instances) timelineControlledInstanceIds.add(instanceId)
                 }
                 bvTarget.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
-                objects = []
-                break
+                continue
               }
             }
 
@@ -3430,12 +3433,11 @@ export function TimelinePlayback({
             // transform-driven profile, or an element that wasn't eligible
             // for the fast path.
             const matches = getMaterializedMeshes(handle.object, expressId)
-            if (matches.length > 0) { objects = matches; elementKey = `ifc-${handle.modelID}::${expressId}`; break }
+            for (const object of matches) resolved.push({ object, elementKey: `ifc-${handle.modelID}::${expressId}` })
           }
         }
-        if (objects.length === 0) continue
 
-        for (const object of objects) {
+        for (const { object, elementKey } of resolved) {
           const target = getOrCreate(object, elementKey)
           target.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
           // Tells ModelObjects' own per-mesh effect to back off `.visible`
