@@ -136,3 +136,9 @@ Scans the frontend for files, exports and packages that nothing uses, plus packa
 
 ### `node --experimental-strip-types` / `npx esbuild --bundle` (2026-09-28)
 Ways to run a TypeScript file directly without the whole app. Used to check the Realistic Materials name-matching rules against real material names from an IFC model. `esbuild --bundle` packs the file and its imports into one plain JavaScript file that `node` can run.
+
+### `pytest --lf` (2026-09-29)
+Re-runs only the tests that failed last time ("last failed"). Used to get the full list of the 60 failing backend tests in a couple of minutes instead of re-running the whole hour-long suite.
+
+### `git fetch` + `git log origin/main` (2026-09-29)
+Checks what GitHub actually has, not just the local copy. `git log --oneline -1 origin/main` shows the latest commit on GitHub, which is how "pushed?" gets answered with evidence rather than memory.

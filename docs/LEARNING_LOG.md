@@ -6004,6 +6004,49 @@ repeated reference instead of failing the whole request. Lesson: a
 bare 500 from a big import is worth reproducing locally with the same
 files before guessing at limits. Here it wasn't a size or time limit.
 
-Still open: 4D playback applies a GlobalId link to the first model that
-has it, so the duplicate copies in the MEP model stay visible during
-playback.
+That left the duplicate copies in the MEP model visible during 4D
+playback, since links were applied only to the first model with each
+GlobalId. That's fixed too (see below).
+
+## 2026-09-29 (afternoon) — 4D playback, 60 old test failures, mechanical plant, excluding collections
+
+**Duplicate elements now animate in every model.** A schedule link
+stores an element's GlobalId, not which file it came from. Playback used
+to stop at the first loaded model containing that GlobalId, so the MEP
+model's copies of the shared light fittings never faded in. It now
+applies the link to every model that has it. On the clinic models,
+visible MEP pieces before the project start went from 6,878 to 420 (the
+genuinely unscheduled remainder).
+
+**The 60 old backend test failures were stale tests, not bugs.** In
+August, file uploads moved to going straight from the browser to
+storage (Cloudflare R2), with the server only recording where the file
+landed. Nine test files still sent the file to the server the old way.
+The fix was a stand-in for R2 that keeps files in memory during tests,
+plus rewriting those uploads as "get an upload link, put the file,
+register it". The tests now run without real storage credentials, and
+the full suite passes: 966 passed, 0 failed.
+
+**Mechanical plant was never scheduled.** The schedule scan only
+considers IFC classes on its list. VAV units, fans, air handling units,
+chillers and tanks (`IfcFlowMovingDevice`, `IfcEnergyConversionDevice`,
+`IfcFlowStorageDevice`) weren't on it, so about 160 items across the
+clinic's MEP/HVAC/ELE models were never linked and stayed visible
+through the whole animation. They now go into a new "Mechanical
+Equipment" category, set in place just before the ductwork and piping
+that connects to it. They deliberately skip the name keywords used for
+duct and pipe runs, because a "VAV Unit - Single Duct" would otherwise
+be filed as ductwork.
+
+**Excluding collections from Generate Schedule.** The wizard's first
+step lists your collections; anything in a ticked collection stays
+loaded and visible but isn't scheduled or animated. The motivating case
+was landscape inside a single architectural IFC. Checked on the Arch
+model: 2,586 linked elements, and 2,583 with a 3-element collection
+excluded.
+
+**Why Realistic Materials looked different in production.** The green
+roof only became grass locally because it was mapped by hand, and those
+mappings are saved per browser and per project. Production had none
+yet. The IFC calls the roof "Default Roof" with no material, so it
+can't be matched automatically.
