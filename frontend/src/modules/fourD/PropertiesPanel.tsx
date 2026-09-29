@@ -11,7 +11,7 @@ import type { UpAxis } from './upAxis'
 import { applyTransformKeepPosition } from './applyTransform'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
 import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
-import type { RealisticMaterialEntry, RealisticMaterialMap } from './realisticMaterials'
+import type { RealisticEntryModel, RealisticMaterialEntry, RealisticMaterialMap } from './realisticMaterials'
 
 interface ActiveObject {
   id: string
@@ -29,6 +29,8 @@ interface Props {
   realisticMapping: RealisticMaterialMap
   onRealisticMappingChange: (mapping: RealisticMaterialMap) => void
   realisticAnalysing: boolean
+  realisticEntryModels: Record<string, RealisticEntryModel[]>
+  onSelectRealisticEntry: (key: string, objectId: string) => void
   environmentName: string | null
   onUploadEnvironment: (file: File) => void
   onClearEnvironment: () => void
@@ -131,6 +133,7 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, realisticEntries, realisticMapping, onRealisticMappingChange, realisticAnalysing,
+  realisticEntryModels, onSelectRealisticEntry,
   environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
   activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
@@ -190,6 +193,7 @@ export function PropertiesPanel({
           <RealisticMaterialsPanel
             entries={realisticEntries} mapping={realisticMapping}
             onMappingChange={onRealisticMappingChange} analysing={realisticAnalysing}
+            entryModels={realisticEntryModels} onSelectEntry={onSelectRealisticEntry}
           />
         </>
       )}

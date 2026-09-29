@@ -128,8 +128,9 @@ import { ReloadIfcDialog } from './ReloadIfcDialog'
 import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
 import {
-  extractMeshRealisticInfo, loadRealisticMapping, mergeRealisticEntries, saveRealisticMapping,
-  type RealisticMaterialEntry, type RealisticMaterialMap, type RealisticModelInfo,
+  entryModelsByKey, expressIdsForKey, extractMeshRealisticInfo, loadRealisticMapping, mergeRealisticEntries,
+  saveRealisticMapping, type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
+  type RealisticModelInfo,
 } from './realisticMaterials'
 import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
 import { WindowChrome, type DockSide } from './WindowChrome'
@@ -5663,6 +5664,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   const [realisticInfoVersion, setRealisticInfoVersion] = useState(0)
   const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
+  const [realisticEntryModels, setRealisticEntryModels] = useState<Record<string, RealisticEntryModel[]>>({})
   const [realisticAnalysing, setRealisticAnalysing] = useState(false)
   useEffect(() => {
     if (settings.renderMode !== 'realistic') return
@@ -5691,11 +5693,23 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       if (cancelled) return
       setRealisticAnalysing(false)
       setRealisticEntries(mergeRealisticEntries(sceneObjects.map(o => o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined)))
+      setRealisticEntryModels(entryModelsByKey(sceneObjects.map(o => ({
+        objectId: o.id, name: o.name, isIfc: o.kind === 'ifc',
+        info: o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined,
+      }))))
       setRealisticInfoVersion(v => v + 1)
     }
     run()
     return () => { cancelled = true }
   }, [settings.renderMode, ifcHandles, sceneObjects])
+
+  // Mapping panel's Select button: every element in one model using that
+  // material entry, through the same multi-select path Select by Type uses.
+  const handleSelectRealisticEntry = (key: string, objectId: string) => {
+    const info = sceneObjects.find(o => o.id === objectId)?.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
+    if (!info) return
+    handleSelectExpressIds(expressIdsForKey(info, key), false, objectId)
+  }
 
   // Element Parenting / rigging (2026-07-12, per Maro's crane-rigging
   // request: base -> jib -> trolley -> hook) — mesh-kind only, one parent
@@ -7596,6 +7610,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           realisticMapping={realisticMapping}
           onRealisticMappingChange={setRealisticMapping}
           realisticAnalysing={realisticAnalysing}
+          realisticEntryModels={realisticEntryModels}
+          onSelectRealisticEntry={handleSelectRealisticEntry}
           environmentName={customEnvironment?.name ?? null}
           onUploadEnvironment={handleUploadEnvironment}
           onClearEnvironment={handleClearEnvironment}

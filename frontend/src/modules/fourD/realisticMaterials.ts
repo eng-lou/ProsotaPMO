@@ -250,6 +250,38 @@ export function mergeRealisticEntries(infos: (RealisticModelInfo | undefined)[])
   return [...merged.values()].sort((a, b) => b.count - a.count)
 }
 
+// Every IFC element (expressID) in one model whose geometry uses this
+// material entry — for the mapping panel's Select button (2026-09-29, per
+// Maro: "i want them selectable... so i can identify accordingly").
+export function expressIdsForKey(info: RealisticModelInfo, key: string): number[] {
+  const ids = new Set<number>()
+  for (const [piece, pieceKey] of info.keyByPiece) {
+    if (pieceKey === key) ids.add(Number(piece.slice(0, piece.indexOf(':'))))
+  }
+  // Pieces with no geometry id of their own only ever reach keyByExpressId.
+  for (const [expressID, elementKey] of info.keyByExpressId) {
+    if (elementKey === key) ids.add(expressID)
+  }
+  return [...ids]
+}
+
+// Which loaded models use each entry, and how often — the mapping panel
+// offers one Select button per model, since a selection is per model.
+export interface RealisticEntryModel { objectId: string; name: string; count: number }
+
+export function entryModelsByKey(
+  models: { objectId: string; name: string; info: RealisticModelInfo | undefined; isIfc: boolean }[],
+): Record<string, RealisticEntryModel[]> {
+  const byKey: Record<string, RealisticEntryModel[]> = {}
+  for (const { objectId, name, info, isIfc } of models) {
+    if (!info || !isIfc) continue
+    for (const entry of info.entries.values()) {
+      (byKey[entry.key] ??= []).push({ objectId, name, count: entry.count })
+    }
+  }
+  return byKey
+}
+
 export function classIndexForKey(key: string | undefined, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap): number {
   if (key === undefined) return 0
   const manual = mapping[key]

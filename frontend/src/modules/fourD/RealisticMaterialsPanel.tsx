@@ -1,7 +1,16 @@
 import { useState } from 'react'
 import {
-  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, type RealisticMapping, type RealisticMaterialEntry, type RealisticMaterialMap,
+  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, type RealisticEntryModel, type RealisticMapping, type RealisticMaterialEntry,
+  type RealisticMaterialMap,
 } from './realisticMaterials'
+
+// "NBU_MedicalClinic_Eng-MEP-Optimized.ifc" -> "Eng-MEP-Optimized": the part
+// after the last shared-looking prefix separator, extension dropped.
+function shortModelName(name: string): string {
+  const base = name.replace(/\.[^.]+$/, '')
+  const parts = base.split('_')
+  return parts.length > 1 ? parts[parts.length - 1] : base
+}
 
 // Manual material -> class mapping for Realistic Materials mode (2026-09-28,
 // per Maro). Every distinct imported material (IFC surface style + material,
@@ -9,12 +18,17 @@ import {
 // which is left blank when a name matches nothing or matches more than one
 // class — those rows are flagged, since only a person can settle them.
 export function RealisticMaterialsPanel({
-  entries, mapping, onMappingChange, analysing,
+  entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry,
 }: {
   entries: RealisticMaterialEntry[]
   mapping: RealisticMaterialMap
   onMappingChange: (mapping: RealisticMaterialMap) => void
   analysing: boolean
+  // Which IFC models use each entry — one Select button per model
+  // (2026-09-29, per Maro: to see what an unmatched "IfcBeam (no material)"
+  // actually is before mapping it).
+  entryModels: Record<string, RealisticEntryModel[]>
+  onSelectEntry: (key: string, objectId: string) => void
 }) {
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
   const needsMapping = (e: RealisticMaterialEntry) => !mapping[e.key] && !e.autoClass
@@ -60,6 +74,20 @@ export function RealisticMaterialsPanel({
                 <span className="text-[10px] text-gray-400 dark:text-prosota-muted shrink-0 ml-auto">×{entry.count}</span>
               </div>
               {entry.detail && <span className="text-[10px] text-gray-400 dark:text-prosota-muted truncate">{entry.detail}</span>}
+              {(entryModels[entry.key]?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {entryModels[entry.key].map(m => (
+                    <button
+                      key={m.objectId}
+                      onClick={() => onSelectEntry(entry.key, m.objectId)}
+                      title={`Select the ${m.count} element piece${m.count === 1 ? '' : 's'} using this material in ${m.name}`}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-100 dark:hover:bg-prosota-panel2"
+                    >
+                      {entryModels[entry.key].length > 1 ? `Select in ${shortModelName(m.name)}` : 'Select'}
+                    </button>
+                  ))}
+                </div>
+              )}
               <select
                 value={manual ?? 'auto'}
                 onChange={e => setEntry(entry.key, e.target.value as RealisticMapping | 'auto')}
