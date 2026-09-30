@@ -25,7 +25,7 @@ import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, re
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, createModelElementLinksBulk, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind } from './modelElementLinks'
 import {
-  deleteModel3DFile, downloadModel3DFile, listModel3DFiles, updateUnloadedElements, uploadModel3DFile,
+  deleteModel3DFile, downloadModel3DFile, listModel3DFiles, pruneModel3DFileCache, updateUnloadedElements, uploadModel3DFile,
   type Model3DKind, type UnloadedElementInfo,
 } from './model3dFiles'
 import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds, type SectionBoxRotation } from './sectionBoxes'
@@ -100,7 +100,7 @@ import {
 } from './clashTests'
 import { ClashDetectionPanel } from './ClashDetectionPanel'
 import { resolveMembersToElements, findClashes, type ClashSceneObject } from './sceneClash'
-import { listSiteCaptures, uploadSiteCapture, convertSiteCapture, generateIfcFromCapture, downloadSiteCapture, deleteSiteCapture, type SiteCapture, type SiteCaptureKind } from './siteCaptures'
+import { listSiteCaptures, uploadSiteCapture, convertSiteCapture, downloadSiteCapture, deleteSiteCapture, type SiteCapture, type SiteCaptureKind } from './siteCaptures'
 import {
   createProgressVarianceTest, deleteProgressVarianceTest, listProgressVarianceTests,
   replaceProgressVarianceResults, updateProgressVarianceResult, updateProgressVarianceTest,
@@ -3378,35 +3378,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  // "Generate IFC" (2026-08-20, per Maro: "pointcloud to ifc" / "build") —
-  // runs the vendored Cloud2BIM pipeline server-side against this
-  // capture's own xyz point cloud, then immediately loads the resulting
-  // Model3DFile into the viewport the exact same way any other persisted
-  // IFC restore does — download its bytes, wrap them as a File, hand off
-  // to handleImportIfc (defined further down this component) rather than
-  // duplicating that function's own scene-object/persistence wiring here.
-  // handleImportIfc's own persistModelFile re-upload at the end re-saves
-  // bytes the server just generated — a real but small waste (a generated
-  // room-scale IFC is KB-to-low-MB, nothing like the point-cloud sizes
-  // this session's other work had to specifically design around), traded
-  // for reusing already-correct, already-tested import wiring instead of
-  // a second copy of it.
-  const [generatingIfcCaptureId, setGeneratingIfcCaptureId] = useState<string | null>(null)
-  const handleGenerateIfcFromCapture = async (captureId: string) => {
-    setGeneratingIfcCaptureId(captureId)
-    try {
-      setProgressVarianceError(null)
-      const model3dFile = await generateIfcFromCapture(captureId)
-      const blob = await downloadModel3DFile(model3dFile.id)
-      const file = new File([blob], model3dFile.name)
-      await handleImportIfc(file, model3dFile.source_up_axis, model3dFile.name)
-    } catch (err) {
-      setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to generate IFC'))
-    } finally {
-      setGeneratingIfcCaptureId(null)
-    }
-  }
-
   // "Load in Viewport" (2026-08-20) parses the FULL cloud once (cached by
   // progressVarianceEngine.ts, reused by every later "Run Test" against
   // this capture) and separately renders a decimated preview
@@ -4322,7 +4293,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // once, so this only overlaps the safe, side-effect-free part
       // (pure network I/O) rather than gambling on WASM concurrency it's
       // never been exercised under.
-      const downloads = files.map(file => downloadModel3DFile(file.id).then(
+      void pruneModel3DFileCache(selectedProject.id, files.map(f => f.id))
+      const downloads = files.map(file => downloadModel3DFile(file).then(
         blob => ({ file, blob, error: null as unknown }),
         error => ({ file, blob: null as Blob | null, error }),
       ))
@@ -4996,13 +4968,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // already has today, and this is a deliberate, occasional action, not a
   // hot-path click that trade-off would actually sting on.
   const handleReloadIfc = async (guidsToRestore: string[]) => {
-    if (!reloadIfcTarget) return
+    if (!reloadIfcTarget || !selectedProject) return
     const { objectId, fileId, fileName } = reloadIfcTarget
     setReloadIfcTarget(null)
     const oldHandle = getIfcHandleFor(objectId)
     if (!oldHandle) return
     try {
-      const blob = await downloadModel3DFile(fileId)
+      const blob = await downloadModel3DFile({ id: fileId, project_id: selectedProject.id })
       const freshFile = new File([blob], fileName)
       const { loadIfcModel, disposeIfcModel, getExpressIdFromGuid } = await import('./ifcModel')
       const handle = await loadIfcModel(freshFile)
@@ -7027,12 +6999,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           loadedCaptureIds={loadedCaptureIds}
           uploadingCapture={uploadingCapture}
           convertingCaptureId={convertingCaptureId}
-          generatingIfcCaptureId={generatingIfcCaptureId}
           onUploadCapture={handleUploadSiteCapture}
           onDeleteCapture={handleDeleteSiteCapture}
           onToggleLoadCapture={handleToggleLoadCapture}
           onConvertCapture={handleConvertSiteCapture}
-          onGenerateIfc={handleGenerateIfcFromCapture}
           onCreateTest={handleCreateProgressVarianceTest}
           onDeleteTest={handleDeleteProgressVarianceTest}
           onRunTest={handleRunProgressVarianceTest}

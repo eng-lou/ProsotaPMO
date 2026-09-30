@@ -37,3 +37,40 @@ export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '',
   timeout: REQUEST_TIMEOUT_MS,
 })
+
+// Large file downloads (2026-09-30, per Maro: "reloading models is still a
+// very big issue... a few always gets left out" — two ~100MB+ IFC files
+// failed every reload with "timeout of 25000ms exceeded"). REQUEST_TIMEOUT_MS
+// above is a *total* ceiling, which is right for a JSON call but wrong for a
+// big blob: a healthy download that's simply still transferring (several
+// models are fetched in parallel on restore, sharing the bandwidth) got
+// killed mid-stream. This swaps the total ceiling for a stall watchdog —
+// the request only aborts if no bytes arrive for STALL_TIMEOUT_MS, which
+// still protects against the never-responding-connection case the global
+// timeout exists for, without capping how long a real transfer may take.
+const STALL_TIMEOUT_MS = 60_000
+
+export async function downloadLargeBlob(url: string): Promise<Blob> {
+  const controller = new AbortController()
+  let timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
+  const resetWatchdog = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
+  }
+  try {
+    const res = await api.get<Blob>(url, {
+      responseType: 'blob',
+      timeout: 0,
+      signal: controller.signal,
+      onDownloadProgress: resetWatchdog,
+    })
+    return res.data
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`download stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}

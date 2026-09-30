@@ -6091,3 +6091,53 @@ length unit. The measurement tool did the same on every measurement.
 Now the unit is read straight from the model's IfcProject record and
 remembered per model: 1.7 ms the first time, instant after that, same
 answer (0.3048, feet, on the hospital model).
+
+## Models missing after reload: the 25-second timeout (2026-09-30)
+
+**Symptom.** On every reload, the same two large IFC files (CON and MEP
+"Optimized") failed with "timeout of 25000ms exceeded". The smaller ones
+loaded.
+
+**Cause.** On 2026-09-16 every API request got a 25-second limit, so a
+request that never answers can't leave a screen stuck on "Loading…".
+That limit is a *total* time. It suits small data calls, but model files
+are large and all of them download at once on reload, sharing the
+connection. The biggest ones were still downloading healthily when the
+clock ran out.
+
+**Fix.** Large downloads (models, 4D videos, site captures) now use
+`downloadLargeBlob` in `lib/api.ts`. It has no total time limit. It only
+gives up if **no data at all** arrives for 60 seconds. A slow but
+working download finishes, and a dead connection still fails.
+
+**Lesson.** A global safety net such as a timeout also catches the
+legitimate slow cases. When one is added, list which requests are
+expected to take long (file downloads, long server jobs) and exempt them.
+
+**Follow-up: making reloads actually fast.** A longer timeout only lets
+slow downloads finish. The real waste was that every reload downloaded
+every model again (about 189 MB for the clinic set). The download link
+is a freshly *signed* URL each time, so the browser's normal cache never
+recognised it as the same file. A model's bytes never change under the
+same id, because a re-import creates a new id. So each model is now kept
+in the browser's on-disk Cache Storage, keyed by project and file id. It
+goes in after the first download, or straight after an upload. Reloads
+read it from local disk. Stale entries (deleted or replaced files) are
+removed on each restore.
+
+**Then compression, for first loads.** IFC and OBJ files are plain text,
+so they're now gzipped in the browser before upload. The MEP file goes
+from 126 MB to 30 MB (1.7 s to compress, 0.4 s to unpack); CON goes from
+19 MB to 3.7 MB. The server doesn't know or care. On download, the app
+checks the first two bytes for gzip's fixed signature (`1f 8b`) and
+unpacks only if it's there. No IFC, OBJ, GLB or FBX file starts with
+those bytes, so every file uploaded before this still loads unchanged.
+Existing files only get smaller if they're re-imported. A round-trip
+test on the real MEP file came back byte-for-byte identical.
+
+## Cloud2BIM removed (2026-09-30)
+Per Maro, "Generate IFC" from a point cloud is gone: the vendored library,
+its endpoint, its tests, and PyYAML/tqdm, which only it used. Scan upload,
+E57→XYZ Convert, Load and Progress Variance all stay. Convert also now
+opts out of the 25 s request limit, since a big E57 legitimately takes
+minutes.

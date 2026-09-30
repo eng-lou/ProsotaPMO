@@ -25,12 +25,10 @@ interface Props {
   loadedCaptureIds: Set<string>
   uploadingCapture: boolean
   convertingCaptureId: string | null
-  generatingIfcCaptureId: string | null
   onUploadCapture: (file: File) => void
   onDeleteCapture: (captureId: string) => void
   onToggleLoadCapture: (capture: SiteCapture) => void
   onConvertCapture: (captureId: string) => void
-  onGenerateIfc: (captureId: string) => void
   onCreateTest: (draft: NewTestDraft) => void
   onDeleteTest: (testId: string) => void
   onRunTest: (testId: string) => void
@@ -49,19 +47,17 @@ const STATUS_STYLE: Record<ProgressVarianceResult['status'], string> = {
 }
 
 function CapturesSection({
-  siteCaptures, loadedCaptureIds, uploading, convertingCaptureId, generatingIfcCaptureId,
-  onUpload, onDelete, onToggleLoad, onConvert, onGenerateIfc,
+  siteCaptures, loadedCaptureIds, uploading, convertingCaptureId,
+  onUpload, onDelete, onToggleLoad, onConvert,
 }: {
   siteCaptures: SiteCapture[]
   loadedCaptureIds: Set<string>
   uploading: boolean
   convertingCaptureId: string | null
-  generatingIfcCaptureId: string | null
   onUpload: (file: File) => void
   onDelete: (id: string) => void
   onToggleLoad: (capture: SiteCapture) => void
   onConvert: (captureId: string) => void
-  onGenerateIfc: (captureId: string) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -90,7 +86,6 @@ function CapturesSection({
           {siteCaptures.map(c => {
             const loaded = loadedCaptureIds.has(c.id)
             const converting = convertingCaptureId === c.id
-            const generatingIfc = generatingIfcCaptureId === c.id
             return (
               <div key={c.id} className="flex items-center gap-1.5 text-xs">
                 <span className="flex-1 min-w-0 truncate text-gray-700 dark:text-prosota-muted" title={c.name}>{c.name}</span>
@@ -117,16 +112,6 @@ function CapturesSection({
                     }`}
                   >
                     {loaded ? 'Loaded' : 'Load'}
-                  </button>
-                )}
-                {c.kind === 'xyz' && (
-                  <button
-                    onClick={() => onGenerateIfc(c.id)}
-                    disabled={generatingIfc}
-                    title="Auto-generate IFC walls/slabs/openings from this scan (Cloud2BIM) — can take a while, and the result is a starting point to review, not a finished model"
-                    className="text-[11px] px-1.5 py-0.5 rounded border shrink-0 border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
-                  >
-                    {generatingIfc ? 'Generating…' : 'Generate IFC'}
                   </button>
                 )}
                 <button onClick={() => onDelete(c.id)} title="Delete capture" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
@@ -376,8 +361,7 @@ function TestItem({
 // test against it means anything.
 export function ProgressVariancePanel({
   collections, siteCaptures, tests, error, runProgress, loadedCaptureIds, uploadingCapture, convertingCaptureId,
-  generatingIfcCaptureId,
-  onUploadCapture, onDeleteCapture, onToggleLoadCapture, onConvertCapture, onGenerateIfc,
+  onUploadCapture, onDeleteCapture, onToggleLoadCapture, onConvertCapture,
   onCreateTest, onDeleteTest, onRunTest, onUpdateThreshold, onUpdateResult, onSelectElement,
   activityProgressSuggestions, applyingActivityId, onApplyActivityProgress,
 }: Props) {
@@ -403,12 +387,10 @@ export function ProgressVariancePanel({
         loadedCaptureIds={loadedCaptureIds}
         uploading={uploadingCapture}
         convertingCaptureId={convertingCaptureId}
-        generatingIfcCaptureId={generatingIfcCaptureId}
         onUpload={onUploadCapture}
         onDelete={onDeleteCapture}
         onToggleLoad={onToggleLoadCapture}
         onConvert={onConvertCapture}
-        onGenerateIfc={onGenerateIfc}
       />
       {creating && (
         <NewTestForm

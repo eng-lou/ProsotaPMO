@@ -11,14 +11,10 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.project import Project
 from app.models.site_capture import SiteCapture
-from app.schemas.model3d_file import Model3DFileResponse
 from app.schemas.site_capture import PresignedUpload, SiteCaptureKind, SiteCaptureResponse, SiteCaptureUpdate, UpAxis
 from app.services import object_storage
-from app.services.cloud2bim_convert import Cloud2BimError, generate_ifc_from_xyz
 from app.services.e57_convert import convert_e57_to_xyz
-from app.services.model3d_file import create_file_from_path
 
 STORAGE_PREFIX = "site-captures"
 
@@ -139,39 +135,3 @@ async def convert_capture(db: AsyncSession, capture_id: uuid.UUID) -> SiteCaptur
     await run_in_threadpool(object_storage.delete_object, old_storage_key)
     return SiteCaptureResponse.model_validate(row)
 
-
-# "Generate IFC" (2026-08-20, per Maro: "pointcloud to ifc" / "build") —
-# runs the vendored Cloud2BIM pipeline (cloud2bim_convert.py) against this
-# capture's own stored .xyz and registers the result as a normal
-# Model3DFile (kind='ifc'). Downloads to a local temp file first (2026-08-23
-# — same R2-not-local-disk reasoning as convert_capture above); Cloud2BIM's
-# own subprocess-based pipeline needs real local paths in and out.
-async def generate_ifc(db: AsyncSession, capture_id: uuid.UUID) -> Model3DFileResponse:
-    row = await db.get(SiteCapture, capture_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Site capture not found")
-    if row.kind != "xyz":
-        raise HTTPException(
-            status_code=400,
-            detail="Convert this capture to XYZ first — IFC generation needs the precision point cloud, not a raw .e57",
-        )
-
-    project = await db.get(Project, row.project_id)
-    project_name = project.name if project is not None else "Project"
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        xyz_path = Path(tmp_dir) / "capture.xyz"
-        try:
-            await run_in_threadpool(object_storage.download_to_path, row.storage_filename, xyz_path)
-        except Exception:
-            raise HTTPException(status_code=404, detail="Stored file is missing in storage") from None
-
-        try:
-            ifc_bytes = await run_in_threadpool(generate_ifc_from_xyz, xyz_path, project_name, row.name)
-        except Cloud2BimError as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to generate IFC: {exc}") from None
-
-        ifc_path = Path(tmp_dir) / "result.ifc"
-        ifc_path.write_bytes(ifc_bytes)
-        ifc_name = f"{row.name.rsplit('.', 1)[0]} (Generated IFC).ifc"
-        return await create_file_from_path(db, row.project_id, ifc_name, "ifc", "z", ifc_path)

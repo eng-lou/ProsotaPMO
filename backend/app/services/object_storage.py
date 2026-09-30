@@ -62,10 +62,10 @@ def head_object_size(key: str) -> int:
     return _client().head_object(Bucket=settings.r2_bucket_name, Key=key)["ContentLength"]
 
 
-# Used only by the two site_capture.py pipelines that need the file's real
-# bytes on local disk to process it at all (pye57's C++ bindings for E57->
-# XYZ conversion, Cloud2BIM's own subprocess-based pipeline) — everything
-# else only ever needs a presigned URL, never the bytes themselves.
+# Used only by the pipelines that need the file's real bytes on local disk
+# to process it at all (pye57's C++ bindings for site_capture.py's E57->XYZ
+# conversion, p6_import.py's XML parse) — everything else only ever needs a
+# presigned URL, never the bytes themselves.
 def download_to_path(key: str, dest: Path) -> None:
     _client().download_file(settings.r2_bucket_name, key, str(dest))
 

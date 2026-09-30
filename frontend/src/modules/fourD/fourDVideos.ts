@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
 
 // Frontend for fourd_video.py's backend (2026-07-20, per Maro: a dashboard
@@ -45,8 +45,7 @@ export async function uploadFourDVideo(projectId: string, name: string, duration
 // endpoint — fetch as a Blob through `api`, then the caller turns it into
 // an object URL for playback.
 export async function downloadFourDVideo(videoId: string): Promise<Blob> {
-  const res = await api.get<Blob>(`/api/v1/fourd-videos/${videoId}/download`, { responseType: 'blob' })
-  return res.data
+  return downloadLargeBlob(`/api/v1/fourd-videos/${videoId}/download`)
 }
 
 export async function deleteFourDVideo(videoId: string): Promise<void> {

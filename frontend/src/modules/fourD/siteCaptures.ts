@@ -1,6 +1,5 @@
-import { api } from '@/lib/api'
+import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
-import type { Model3DFile } from './model3dFiles'
 import type { UpAxis } from './upAxis'
 
 export type SiteCaptureKind = 'xyz' | 'e57'
@@ -62,31 +61,17 @@ export async function updateSiteCapture(id: string, data: {
 // Converts a raw kind='e57' capture into a plain kind='xyz' one, server-
 // side (2026-08-20, per Maro's own real 14.4GB, 105-scan MatterPak
 // export) — see site_capture.py's own convert_capture for the full "why
-// server-side, not in the browser" story. No axios timeout is set
-// anywhere in this app's shared client (`@/lib/api`), so this plain await
-// is fine even though the request itself can genuinely take minutes for
-// a large multi-scan file — there's no client-side deadline to hit.
+// server-side, not in the browser" story. The request can genuinely take
+// minutes for a large multi-scan file, so it opts out of the shared
+// client's 25s total timeout (`@/lib/api`, added 2026-09-16 — this comment
+// used to say no timeout existed, which stopped being true then).
 export async function convertSiteCapture(id: string): Promise<SiteCapture> {
-  const res = await api.post<SiteCapture>(`/api/v1/site-captures/${id}/convert`)
-  return res.data
-}
-
-// "Generate IFC" (2026-08-20, per Maro: "pointcloud to ifc" / "build") —
-// runs Cloud2BIM (backend/app/services/cloud2bim/, vendored from
-// https://github.com/VaclavNezerka/Cloud2BIM) server-side against this
-// capture's own xyz point cloud, registering the result as a normal
-// Model3DFile (kind='ifc') — loadable through this app's existing IFC
-// pipeline, not a new rendering path. Can genuinely take minutes for a
-// real multi-storey scan (see the backend endpoint's own header); same
-// "no axios timeout, this is fine" reasoning as convertSiteCapture above.
-export async function generateIfcFromCapture(id: string): Promise<Model3DFile> {
-  const res = await api.post<Model3DFile>(`/api/v1/site-captures/${id}/generate-ifc`)
+  const res = await api.post<SiteCapture>(`/api/v1/site-captures/${id}/convert`, undefined, { timeout: 0 })
   return res.data
 }
 
 export async function downloadSiteCapture(id: string): Promise<Blob> {
-  const res = await api.get<Blob>(`/api/v1/site-captures/${id}/download`, { responseType: 'blob' })
-  return res.data
+  return downloadLargeBlob(`/api/v1/site-captures/${id}/download`)
 }
 
 export async function deleteSiteCapture(id: string): Promise<void> {

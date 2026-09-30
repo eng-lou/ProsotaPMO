@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -68,38 +67,6 @@ async def create_file(
     row = Model3DFile(
         project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,
         storage_filename=storage_key, size_bytes=size, keep_raw_animation=keep_raw_animation,
-    )
-    db.add(row)
-    await db.commit()
-    await db.refresh(row)
-    return Model3DFileResponse.model_validate(row)
-
-
-# Used by site_capture.py's own generate_ifc (Cloud2BIM integration — an
-# .ifc generated server-side from a SiteCapture's point cloud, not a
-# browser upload) — same replace-on-reimport convention as create_file
-# above, just uploading an already-local temp file to R2 instead of
-# recording a browser-uploaded storage_key directly.
-async def create_file_from_path(
-    db: AsyncSession, project_id: uuid.UUID, name: str, kind: Model3DKind, source_up_axis: UpAxis, source_path: Path,
-) -> Model3DFileResponse:
-    existing = (await db.execute(
-        select(Model3DFile).where(
-            Model3DFile.project_id == project_id, Model3DFile.name == name, Model3DFile.kind == kind,
-        )
-    )).scalar_one_or_none()
-    if existing is not None:
-        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
-        await db.delete(existing)
-        await db.flush()
-
-    storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, name)
-    await run_in_threadpool(object_storage.upload_from_path, storage_key, source_path)
-    size = source_path.stat().st_size
-
-    row = Model3DFile(
-        project_id=project_id, name=name, kind=kind, source_up_axis=source_up_axis,
-        storage_filename=storage_key, size_bytes=size,
     )
     db.add(row)
     await db.commit()

@@ -7,7 +7,6 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.model3d_file import Model3DFileResponse
 from app.schemas.site_capture import (
     PresignedUpload, PresignedUploadRequest, SiteCaptureCreate, SiteCaptureResponse, SiteCaptureUpdate,
 )
@@ -85,15 +84,3 @@ async def convert_capture(
 ):
     return await svc.convert_capture(db, capture_id)
 
-
-# Same long-single-request shape as .../convert above, same reasoning —
-# see svc.generate_ifc's own header for the full Cloud2BIM integration
-# story. Returns a Model3DFileResponse, not a SiteCaptureResponse — the
-# result is a new, independent IFC import (Model3DFile), not a mutation of
-# this capture itself.
-@router.post("/{capture_id}/generate-ifc", response_model=Model3DFileResponse)
-async def generate_ifc(
-    capture_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    return await svc.generate_ifc(db, capture_id)

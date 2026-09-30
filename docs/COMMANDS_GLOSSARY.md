@@ -148,3 +148,12 @@ Browser code pasted into the page's console that records how long each click tak
 
 ### `PerformanceObserver` with `type: 'long-animation-frame'` (2026-09-30)
 Records every browser frame that took over 50 ms and names the functions that ran in it, with file and position. This is how the 255 ms freeze after selecting an element was traced to one specific callback in `FourD.tsx`.
+
+### Stall timeout vs total timeout (2026-09-30)
+A total timeout gives up after N seconds no matter what. A stall timeout gives up only if nothing has arrived for N seconds, and each chunk of data restarts its clock. Large downloads use the stall kind (via axios's `onDownloadProgress` plus an `AbortController`), so a big model can take as long as it needs while a dead connection still fails.
+
+### Cache Storage (`caches.open`) (2026-09-30)
+A browser store on disk for whole files, keyed by URL, which scripts can read and write directly. It is separate from the browser's automatic HTTP cache, which never matched the models because their download link is re-signed each time. To inspect it: DevTools → Application → Cache Storage → `prosota-model-files-v1`.
+
+### `CompressionStream` / `DecompressionStream` (2026-09-30)
+Built-in browser tools that gzip or un-gzip data as it streams through, with no library needed. `file.stream().pipeThrough(new CompressionStream('gzip'))` compresses a file before upload. A "magic number" is the fixed first few bytes that identify a file format; gzip's is `1f 8b`, which is how a download knows whether to unpack.
