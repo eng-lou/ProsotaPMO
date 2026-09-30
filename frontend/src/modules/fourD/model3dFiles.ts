@@ -68,22 +68,22 @@ export async function listModel3DFiles(projectId: string): Promise<Model3DFile[]
 // this mirrors downloadModel3DFile's own plain-Promise shape) doesn't need
 // to pass one.
 //
-// Compression (2026-09-30, per Maro: "build compression") — text formats
-// (IFC is STEP text, OBJ is text) are gzipped in the browser before the
-// PUT, so storage holds and every later download transfers the smaller
-// copy: measured on the real NBU clinic IFCs, MEP-Optimized 120MB -> 29MB,
-// CON 18MB -> 3MB. Nothing server-side needs to know — downloadModel3DFile
+// Compression (2026-09-30, per Maro: "build compression") — models are
+// gzipped in the browser before the PUT, so storage holds and every later
+// download transfers the smaller copy. Measured on real files: IFC 4-5x
+// (MEP-Optimized 126MB -> 30MB), OBJ 83% smaller, FBX 10-30%, GLB anywhere
+// from 1% (texture-heavy site GLBs — embedded JPG/PNG is already
+// compressed) to 41% (geometry-heavy). Because that varies per file, not
+// per format, every model is sampled first (see worthCompressing). Nothing server-side needs to know — downloadModel3DFile
 // recognises gzip by its own 2-byte magic number and unpacks it, and no
 // IFC/OBJ/GLB/FBX file ever starts with those bytes, so every file
 // uploaded before this change still loads unchanged. size_bytes (read back
 // from R2) becomes the stored, compressed size; nothing displays it.
-// Binary formats (GLB/FBX) are left alone — they barely compress and it
-// would only cost upload time.
 export async function uploadModel3DFile(
   projectId: string, name: string, kind: Model3DKind, sourceUpAxis: UpAxis, file: Blob,
   onProgress?: (percent: number) => void, keepRawAnimation = false,
 ): Promise<Model3DFile> {
-  const stored = await maybeCompress(name, kind, file)
+  const stored = await maybeCompress(kind, file)
   const contentType = stored === file ? (file.type || 'application/octet-stream') : 'application/gzip'
   const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
     '/api/v1/model3d-files/presign', { name, content_type: contentType },
@@ -99,12 +99,26 @@ export async function uploadModel3DFile(
   return res.data
 }
 
-const isTextModel = (name: string, kind: Model3DKind) => kind === 'ifc' || /\.obj$/i.test(name)
+const gzip = (blob: Blob) => new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob()
 
-async function maybeCompress(name: string, kind: Model3DKind, file: Blob): Promise<Blob> {
-  if (!isTextModel(name, kind) || typeof CompressionStream === 'undefined') return file
+// Compresses three 1MB samples (start/middle/end) before committing to the
+// whole file — ~30ms, and it spares a large texture-heavy GLB ~1s per
+// 100MB of compression work that would only save ~1%. IFC is always worth it.
+const SAMPLE_BYTES = 1024 * 1024
+async function worthCompressing(kind: Model3DKind, file: Blob): Promise<boolean> {
+  if (kind === 'ifc' || file.size <= 3 * SAMPLE_BYTES) return true
+  const mid = Math.floor(file.size / 2 - SAMPLE_BYTES / 2)
+  const sample = new Blob([
+    file.slice(0, SAMPLE_BYTES), file.slice(mid, mid + SAMPLE_BYTES), file.slice(file.size - SAMPLE_BYTES),
+  ])
+  return (await gzip(sample)).size < sample.size * 0.9
+}
+
+async function maybeCompress(kind: Model3DKind, file: Blob): Promise<Blob> {
+  if (typeof CompressionStream === 'undefined') return file
   try {
-    const gz = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+    if (!(await worthCompressing(kind, file))) return file
+    const gz = await gzip(file)
     // Only worth it if it actually saves something meaningful.
     return gz.size < file.size * 0.9 ? gz : file
   } catch (err) {
