@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
-  IFCSTYLEDITEM,
+  IFCPROJECT, IFCSTYLEDITEM,
 } from 'web-ifc'
 import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { buildElementMaterial, disposeEdgesBatch, finalizeIndividualMesh, type BatchState, type EdgesBatch } from './elementBatching'
@@ -807,6 +807,28 @@ export function getLengthUnitToMetres(handle: IfcModelHandle, projectExpressID: 
   } catch {
     return 1
   }
+}
+
+// The model's own length unit, read from its IfcProject directly and cached
+// per model (2026-09-30). The two callers (TransformPanel's unit factor on
+// every change of active model, and each new measurement) used to build the
+// whole getSpatialTree first just to learn the project's expressID: one
+// WASM round trip per element, ~255ms on the 2018 hospital model, measured
+// live as the long task after "select an element" and "Select All". A
+// model's unit never changes, so one lookup per model is enough.
+const lengthUnitCache = new WeakMap<IfcModelHandle, number>()
+export function getModelLengthUnitToMetres(handle: IfcModelHandle): number {
+  const cached = lengthUnitCache.get(handle)
+  if (cached !== undefined) return cached
+  let factor = 1
+  try {
+    const projectIds = handle.api.GetLineIDsWithType(handle.modelID, IFCPROJECT)
+    if (projectIds.size() > 0) factor = getLengthUnitToMetres(handle, projectIds.get(0))
+  } catch {
+    factor = 1
+  }
+  lengthUnitCache.set(handle, factor)
+  return factor
 }
 
 // IFC values arrive wrapped — simple types as {value}, measures (area/

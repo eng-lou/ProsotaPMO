@@ -6081,3 +6081,13 @@ three.js/R3F's "demand" mode.
   recompute the camera every frame with about 1e-16 of noise, so an
   exact "has the camera moved?" check kept the viewer awake forever. The
   check now uses a small tolerance.
+
+**Follow-up: the leftover long task.** After the fix above, selecting
+an element or pressing Select All still caused one ~255 ms freeze just
+after the click. The browser's long-animation-frame timing named the
+code: whenever a model became the active one, the app rebuilt that
+model's whole spatial tree (one call per element) only to read its
+length unit. The measurement tool did the same on every measurement.
+Now the unit is read straight from the model's IfcProject record and
+remembered per model: 1.7 ms the first time, instant after that, same
+answer (0.3048, feet, on the hospital model).

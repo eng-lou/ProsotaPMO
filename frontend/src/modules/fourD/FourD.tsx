@@ -2477,9 +2477,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const sceneObjectId = node?.userData.sceneObjectId as string | undefined
     const handle = sceneObjectId ? getIfcHandleFor(sceneObjectId) : null
     if (!handle) return 1
-    const { getSpatialTree, getLengthUnitToMetres } = await import('./ifcModel')
-    const tree = await getSpatialTree(handle)
-    return getLengthUnitToMetres(handle, tree.expressID)
+    const { getModelLengthUnitToMetres } = await import('./ifcModel')
+    return getModelLengthUnitToMetres(handle)
   }
 
   const handleCreateMeasurement = async (
@@ -5808,11 +5807,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const activeIfcHandle = activeSceneObject?.kind === 'ifc' ? getIfcHandleFor(activeObjectId) : null
 
   // TransformPanel's own Location-field unit factor (2026-07-11, per Maro:
-  // "rewire units") — re-derived from the active IFC handle's own spatial
-  // tree root (same getLengthUnitToMetres call IfcDataPanel.tsx's own
-  // ModelItem already makes for its Spatial Decomposition list; a second,
-  // cheap getSpatialStructure round trip here rather than threading that
-  // panel's own per-model state across to this unrelated one). Stays null
+  // "rewire units") — read from the active IFC model's own IfcProject via
+  // getModelLengthUnitToMetres (cached per model; this used to rebuild the
+  // whole spatial tree on every change of active model, ~255ms on a large
+  // model — see that function's header). Stays null
   // — TransformPanel's own no-op passthrough — for a plain mesh import,
   // which has no IfcUnitAssignment to read at all.
   const [activeIfcLengthUnitToMetres, setActiveIfcLengthUnitToMetres] = useState<number | null>(null)
@@ -5820,11 +5818,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     setActiveIfcLengthUnitToMetres(null)
     if (!activeIfcHandle) return
-    import('./ifcModel').then(({ getSpatialTree, getLengthUnitToMetres }) => {
-      getSpatialTree(activeIfcHandle).then(tree => {
-        if (cancelled) return
-        setActiveIfcLengthUnitToMetres(getLengthUnitToMetres(activeIfcHandle, tree.expressID))
-      })
+    import('./ifcModel').then(({ getModelLengthUnitToMetres }) => {
+      if (cancelled) return
+      setActiveIfcLengthUnitToMetres(getModelLengthUnitToMetres(activeIfcHandle))
     })
     return () => { cancelled = true }
   }, [activeIfcHandle])
