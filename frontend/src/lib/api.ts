@@ -50,7 +50,21 @@ export const api = axios.create({
 // timeout exists for, without capping how long a real transfer may take.
 const STALL_TIMEOUT_MS = 60_000
 
-export async function downloadLargeBlob(url: string): Promise<Blob> {
+// Retries (2026-09-30, per Maro's next reload: a *different* file failed
+// with a plain "Network Error" — the connection itself dropped mid-download,
+// a different file each time, so transient rather than one bad file). A
+// dropped connection or stall is retried with a short backoff; a real HTTP
+// error response (404, 403...) is not, since retrying can't change it —
+// except 5xx, which can be transient too.
+const RETRY_DELAYS_MS = [2_000, 5_000]
+
+const isRetryable = (err: unknown) => {
+  if (!axios.isAxiosError(err)) return true // our own "stalled" error
+  const status = err.response?.status
+  return status === undefined || status >= 500
+}
+
+async function downloadOnce(url: string): Promise<Blob> {
   const controller = new AbortController()
   let timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
   const resetWatchdog = () => {
@@ -72,5 +86,21 @@ export async function downloadLargeBlob(url: string): Promise<Blob> {
     throw err
   } finally {
     clearTimeout(timer)
+  }
+}
+
+export async function downloadLargeBlob(url: string): Promise<Blob> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await downloadOnce(url)
+    } catch (err) {
+      if (attempt >= RETRY_DELAYS_MS.length || !isRetryable(err)) {
+        if (attempt === 0) throw err
+        const detail = err instanceof Error ? err.message : String(err)
+        throw new Error(`${detail} — failed ${attempt + 1} times`)
+      }
+      console.warn(`Download failed, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length})`, url, err)
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+    }
   }
 }

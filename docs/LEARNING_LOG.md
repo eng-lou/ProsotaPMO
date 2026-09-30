@@ -6166,3 +6166,12 @@ stored as 51.3 MB, every file byte-for-byte identical.
 **One shared helper.** Models, textures and HDRs all use
 `lib/fileCache.ts` for local caching and upload compression, instead of
 three copies of the same code.
+
+**Follow-up: retrying dropped downloads.** On the next reload a *different*
+file (Arch) failed with a plain "Network Error": the connection itself was
+cut mid-download. The file changes every time, so it's transient, not a
+bad file. Large downloads now get three attempts (2 s, then 5 s apart).
+Real "not found"/"forbidden" answers aren't retried, because retrying
+can't change them. Tested against a local server that deliberately cuts
+the connection: it succeeds on attempt 3, a 404 fails at once, and a
+permanently dead link gives up after 3 tries.
