@@ -28,3 +28,28 @@ class MaterialPresetResponse(BaseModel):
     textures: list[MaterialPresetTextureResponse] = []
     created_at: datetime
     updated_at: datetime
+
+
+# Direct-to-R2 texture upload (2026-09-30) — textures used to arrive as
+# multipart files through this backend's own request body, which Vercel caps
+# at 4.5MB, so any real high-res map failed to save in production. The
+# browser now PUTs each file to a presigned url from /presign first and
+# create/update only carry the resulting storage keys, same flow as
+# model3d_file.py's own create_file.
+class MaterialPresetTextureUpload(BaseModel):
+    storage_key: str
+    name: str
+
+
+class MaterialPresetCreate(BaseModel):
+    project_id: uuid.UUID
+    name: str
+    textures: dict[MaterialPresetSlot, MaterialPresetTextureUpload] = {}
+
+
+# A slot in neither `textures` nor `cleared_slots` is left untouched, so
+# renaming a preset never re-uploads its existing textures.
+class MaterialPresetUpdate(BaseModel):
+    name: str
+    textures: dict[MaterialPresetSlot, MaterialPresetTextureUpload] = {}
+    cleared_slots: list[MaterialPresetSlot] = []

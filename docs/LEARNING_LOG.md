@@ -6141,3 +6141,28 @@ its endpoint, its tests, and PyYAML/tqdm, which only it used. Scan upload,
 E57→XYZ Convert, Load and Progress Variance all stay. Convert also now
 opts out of the 25 s request limit, since a big E57 legitimately takes
 minutes.
+
+## Presets, HDRs and textured OBJs now save properly (2026-09-30)
+
+**Material presets.** Textures used to upload *through* our own server.
+On Vercel, one request can carry at most 4.5 MB, so saving a preset with
+a real high-res texture would fail in production. It's the same trap P6
+import hit in September. Textures now go straight to storage with a
+one-time signed upload link, and the server only records where they
+landed. Replacing a texture now gives it a new id. That lets the browser
+cache textures by id without ever showing an old one.
+
+**HDR/EXR environments.** These used to vanish on every refresh. Each
+project now keeps one saved environment (new `environment_maps` table).
+Uploading a new one replaces the old one, and Clear deletes it.
+
+**Textured OBJ sets** (OBJ + MTL + dozens of JPGs). The model store holds
+one file per model, so the set is packed into a single "bundle" file: a
+short fixed header, a list of file names and sizes, then the files back
+to back (`fileBundle.ts`). On restore the app spots the header and
+unpacks it. Tested on the real MatterPak export: 66 files, 79.6 MB,
+stored as 51.3 MB, every file byte-for-byte identical.
+
+**One shared helper.** Models, textures and HDRs all use
+`lib/fileCache.ts` for local caching and upload compression, instead of
+three copies of the same code.

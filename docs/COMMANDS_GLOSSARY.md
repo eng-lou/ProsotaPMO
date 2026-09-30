@@ -157,3 +157,6 @@ A browser store on disk for whole files, keyed by URL, which scripts can read an
 
 ### `CompressionStream` / `DecompressionStream` (2026-09-30)
 Built-in browser tools that gzip or un-gzip data as it streams through, with no library needed. `file.stream().pipeThrough(new CompressionStream('gzip'))` compresses a file before upload. A "magic number" is the fixed first few bytes that identify a file format; gzip's is `1f 8b`, which is how a download knows whether to unpack.
+
+### `esbuild file.ts --bundle --platform=node` (2026-09-30)
+Turns a TypeScript test script, plus the real app files it imports, into one plain JavaScript file that Node can run. This let the actual `fileBundle.ts`/`fileCache.ts` code (not a copy) be tested against the real MatterPak files without a browser.

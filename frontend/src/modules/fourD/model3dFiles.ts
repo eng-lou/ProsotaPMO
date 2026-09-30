@@ -1,5 +1,8 @@
 import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
+import {
+  decompressIfGzip, getOrDownloadFile, maybeCompress, pruneCachedFiles, putCachedFile, storedContentType,
+} from '@/lib/fileCache'
 import type { UpAxis } from './upAxis'
 
 export type Model3DKind = 'ifc' | 'mesh'
@@ -68,23 +71,15 @@ export async function listModel3DFiles(projectId: string): Promise<Model3DFile[]
 // this mirrors downloadModel3DFile's own plain-Promise shape) doesn't need
 // to pass one.
 //
-// Compression (2026-09-30, per Maro: "build compression") — models are
-// gzipped in the browser before the PUT, so storage holds and every later
-// download transfers the smaller copy. Measured on real files: IFC 4-5x
-// (MEP-Optimized 126MB -> 30MB), OBJ 83% smaller, FBX 10-30%, GLB anywhere
-// from 1% (texture-heavy site GLBs — embedded JPG/PNG is already
-// compressed) to 41% (geometry-heavy). Because that varies per file, not
-// per format, every model is sampled first (see worthCompressing). Nothing server-side needs to know — downloadModel3DFile
-// recognises gzip by its own 2-byte magic number and unpacks it, and no
-// IFC/OBJ/GLB/FBX file ever starts with those bytes, so every file
-// uploaded before this change still loads unchanged. size_bytes (read back
-// from R2) becomes the stored, compressed size; nothing displays it.
+// Compression + local caching (2026-09-30) — see lib/fileCache.ts. Stored
+// bytes may be gzipped; size_bytes (read back from R2) is the stored size,
+// which nothing displays. IFC always compresses well, so it skips sampling.
 export async function uploadModel3DFile(
   projectId: string, name: string, kind: Model3DKind, sourceUpAxis: UpAxis, file: Blob,
   onProgress?: (percent: number) => void, keepRawAnimation = false,
 ): Promise<Model3DFile> {
-  const stored = await maybeCompress(kind, file)
-  const contentType = stored === file ? (file.type || 'application/octet-stream') : 'application/gzip'
+  const stored = await maybeCompress(file, kind === 'ifc')
+  const contentType = storedContentType(stored, file)
   const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
     '/api/v1/model3d-files/presign', { name, content_type: contentType },
   )
@@ -93,121 +88,27 @@ export async function uploadModel3DFile(
     project_id: projectId, name, kind, source_up_axis: sourceUpAxis,
     storage_key: presigned.storage_key, keep_raw_animation: keepRawAnimation,
   })
-  // Seeds the local model cache (see below) with exactly the bytes now in
-  // storage, so the first reload after an import doesn't download them.
-  void cacheModel3DFile(res.data, stored)
+  // Seeds the local cache with exactly the bytes now in storage, so the
+  // first reload after an import doesn't download them. A model's bytes
+  // never change under the same id (a re-import replaces the row — new id —
+  // see model3d_file.py's create_file), so caching by id is safe.
+  void putCachedFile('model', res.data.project_id, res.data.id, stored)
   return res.data
 }
 
-const gzip = (blob: Blob) => new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob()
-
-// Compresses three 1MB samples (start/middle/end) before committing to the
-// whole file — ~30ms, and it spares a large texture-heavy GLB ~1s per
-// 100MB of compression work that would only save ~1%. IFC is always worth it.
-const SAMPLE_BYTES = 1024 * 1024
-async function worthCompressing(kind: Model3DKind, file: Blob): Promise<boolean> {
-  if (kind === 'ifc' || file.size <= 3 * SAMPLE_BYTES) return true
-  const mid = Math.floor(file.size / 2 - SAMPLE_BYTES / 2)
-  const sample = new Blob([
-    file.slice(0, SAMPLE_BYTES), file.slice(mid, mid + SAMPLE_BYTES), file.slice(file.size - SAMPLE_BYTES),
-  ])
-  return (await gzip(sample)).size < sample.size * 0.9
-}
-
-async function maybeCompress(kind: Model3DKind, file: Blob): Promise<Blob> {
-  if (typeof CompressionStream === 'undefined') return file
-  try {
-    if (!(await worthCompressing(kind, file))) return file
-    const gz = await gzip(file)
-    // Only worth it if it actually saves something meaningful.
-    return gz.size < file.size * 0.9 ? gz : file
-  } catch (err) {
-    console.warn('Model compression failed, uploading uncompressed', err)
-    return file
-  }
-}
-
-async function isGzip(blob: Blob): Promise<boolean> {
-  if (blob.size < 2) return false
-  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer())
-  return head[0] === 0x1f && head[1] === 0x8b
-}
-
-async function decompressIfGzip(blob: Blob): Promise<Blob> {
-  if (!(await isGzip(blob))) return blob
-  return new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).blob()
-}
-
-// Local model cache (2026-09-30, per Maro: "isnt there anyway to speed the
-// download") — every reload used to re-download every model from R2 (~189MB
-// for the NBU clinic set), because the download endpoint redirects to a
-// freshly *signed* URL each time, so the browser's own HTTP cache never
-// matches. A model's bytes never change under the same id (a re-import
-// replaces the row, i.e. a new id — see model3d_file.py's create_file), so
-// this keeps each file in the browser's on-disk Cache Storage keyed by
-// project + id: after the first download (or the upload itself, see
-// uploadModel3DFile) a reload reads from local disk, no network.
-// Every cache call is best-effort — an unavailable/full cache just falls
-// back to the network, never fails the load.
-const MODEL_CACHE_NAME = 'prosota-model-files-v1'
-const cacheKey = (projectId: string, fileId: string) => `/__model-file-cache/${projectId}/${fileId}`
-
-async function openModelCache(): Promise<Cache | null> {
-  try {
-    return typeof caches === 'undefined' ? null : await caches.open(MODEL_CACHE_NAME)
-  } catch {
-    return null
-  }
-}
-
-export async function cacheModel3DFile(file: Pick<Model3DFile, 'id' | 'project_id'>, blob: Blob): Promise<void> {
-  const cache = await openModelCache()
-  try {
-    await cache?.put(cacheKey(file.project_id, file.id), new Response(blob))
-  } catch (err) {
-    console.warn('Could not cache model file locally', err)
-  }
-}
-
+// Cache-first; unpacks gzip on the way out, whether cached or downloaded.
 export async function downloadModel3DFile(
   file: Pick<Model3DFile, 'id' | 'project_id'> & { size_bytes?: number },
 ): Promise<Blob> {
-  const cache = await openModelCache()
-  try {
-    const hit = await cache?.match(cacheKey(file.project_id, file.id))
-    if (hit) {
-      const blob = await hit.blob()
-      // Size check guards against a truncated write (tab closed mid-put).
-      // The cache holds the stored (possibly gzipped) bytes, same as
-      // size_bytes, and is unpacked on the way out like a download is.
-      if (file.size_bytes === undefined || blob.size === file.size_bytes) return await decompressIfGzip(blob)
-      await cache?.delete(cacheKey(file.project_id, file.id))
-    }
-  } catch {
-    // fall through to the network
-  }
-  const blob = await downloadLargeBlob(`/api/v1/model3d-files/${file.id}/download`)
-  void cacheModel3DFile(file, blob)
-  return decompressIfGzip(blob)
+  const stored = await getOrDownloadFile(
+    'model', file.project_id, file.id,
+    () => downloadLargeBlob(`/api/v1/model3d-files/${file.id}/download`), file.size_bytes,
+  )
+  return decompressIfGzip(stored)
 }
 
-// Drops cached copies of this project's files that no longer exist
-// server-side (deleted, or replaced by a re-import under a new id), so the
-// cache doesn't grow forever. Scoped to one project so it never touches
-// another project's still-valid entries.
-export async function pruneModel3DFileCache(projectId: string, keepFileIds: string[]): Promise<void> {
-  const cache = await openModelCache()
-  if (!cache) return
-  try {
-    const keep = new Set(keepFileIds.map(id => cacheKey(projectId, id)))
-    for (const req of await cache.keys()) {
-      const path = new URL(req.url).pathname
-      if (path.startsWith(`/__model-file-cache/${projectId}/`) && !keep.has(path)) await cache.delete(req)
-    }
-  } catch {
-    // best-effort
-  }
-}
+export const pruneModel3DFileCache = (projectId: string, keepFileIds: string[]) =>
+  pruneCachedFiles('model', projectId, keepFileIds)
 
 export async function deleteModel3DFile(fileId: string): Promise<void> {
   await api.delete(`/api/v1/model3d-files/${fileId}`)

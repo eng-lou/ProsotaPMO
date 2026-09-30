@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -10,57 +10,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.material_preset import MaterialPreset
 from app.models.material_preset_texture import MaterialPresetTexture
-from app.schemas.material_preset import MaterialPresetResponse, MaterialPresetSlot
+from app.schemas.material_preset import MaterialPresetResponse, MaterialPresetSlot, MaterialPresetTextureUpload
+from app.schemas.model3d_file import PresignedUpload
 from app.services import object_storage
 
 STORAGE_PREFIX = "material-presets"
 
-# Same defensive cap/chunk size as model3d_file.py's own create_file used to
-# have pre-R2 — kept here since these still arrive as a plain multipart
-# upload through this backend's own request body (small PBR maps, not full
-# IFC models, so no presigned-PUT step for these — see object_storage.py's
-# own upload_bytes).
-MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
-CHUNK_SIZE = 1024 * 1024
 
-
-# Uploads straight to R2 (2026-08-24 fix — the old local-disk write, still
-# on model3d_storage.py's storage_path, hit Vercel's read-only filesystem in
-# production: every preset save with a texture 500'd). Buffers the whole
-# upload in memory first since object_storage has no streaming-PUT, which is
-# fine at this size (Vercel's own 4.5MB request body cap already bounds it
-# tighter than MAX_UPLOAD_BYTES ever would).
-async def _write_upload_to_r2(name: str, upload: UploadFile) -> tuple[str, int]:
+def presign_upload(name: str, content_type: str) -> PresignedUpload:
     storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, name)
-    data = bytearray()
-    while chunk := await upload.read(CHUNK_SIZE):
-        data.extend(chunk)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="File too large")
+    upload_url = object_storage.presigned_put_url(storage_key, content_type)
+    return PresignedUpload(storage_key=storage_key, upload_url=upload_url)
+
+
+# A replaced texture gets a brand-new row (new id), not an in-place update
+# (2026-09-30): the frontend caches texture bytes locally by texture id, so
+# an id must never point at different bytes over its lifetime.
+async def _replace_slot(
+    db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot, upload: MaterialPresetTextureUpload,
+) -> None:
+    # Only keys this feature's own /presign handed out — stops a crafted
+    # request from attaching some other feature's stored object.
+    if not upload.storage_key.startswith(f"{STORAGE_PREFIX}/"):
+        raise HTTPException(status_code=400, detail="Invalid texture storage key")
     try:
-        await run_in_threadpool(object_storage.upload_bytes, storage_key, bytes(data), upload.content_type)
-    except HTTPException:
-        raise
+        size = await run_in_threadpool(object_storage.head_object_size, upload.storage_key)
     except Exception:
-        raise HTTPException(status_code=500, detail="Failed to save uploaded texture")
-    return storage_key, len(data)
-
-
-async def _replace_slot(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot, upload: UploadFile) -> None:
-    existing = (await db.execute(
-        select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id, MaterialPresetTexture.slot == slot)
-    )).scalar_one_or_none()
-    storage_key, size = await _write_upload_to_r2(upload.filename or slot, upload)
-    if existing is not None:
-        await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
-        existing.name = upload.filename or slot
-        existing.storage_filename = storage_key
-        existing.size_bytes = size
-    else:
-        db.add(MaterialPresetTexture(
-            preset_id=preset_id, slot=slot, name=upload.filename or slot,
-            storage_filename=storage_key, size_bytes=size,
-        ))
+        raise HTTPException(
+            status_code=400, detail="Uploaded texture not found in storage — the upload may have failed or expired",
+        ) from None
+    await _clear_slot(db, preset_id, slot)
+    db.add(MaterialPresetTexture(
+        preset_id=preset_id, slot=slot, name=upload.name or slot,
+        storage_filename=upload.storage_key, size_bytes=size,
+    ))
 
 
 async def _clear_slot(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot) -> None:
@@ -70,6 +53,7 @@ async def _clear_slot(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPres
     if existing is not None:
         await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         await db.delete(existing)
+        await db.flush()  # before a replacement row for the same slot is added
 
 
 async def _to_response(db: AsyncSession, row: MaterialPreset) -> MaterialPresetResponse:
@@ -90,7 +74,8 @@ async def list_presets(db: AsyncSession, project_id: uuid.UUID) -> list[Material
 
 
 async def create_preset(
-    db: AsyncSession, project_id: uuid.UUID, name: str, slot_files: dict[MaterialPresetSlot, UploadFile],
+    db: AsyncSession, project_id: uuid.UUID, name: str,
+    slot_files: dict[MaterialPresetSlot, MaterialPresetTextureUpload],
 ) -> MaterialPresetResponse:
     row = MaterialPreset(project_id=project_id, name=name)
     db.add(row)
@@ -104,7 +89,7 @@ async def create_preset(
 
 async def update_preset(
     db: AsyncSession, preset_id: uuid.UUID, name: str,
-    slot_files: dict[MaterialPresetSlot, UploadFile], cleared_slots: list[MaterialPresetSlot],
+    slot_files: dict[MaterialPresetSlot, MaterialPresetTextureUpload], cleared_slots: list[MaterialPresetSlot],
 ) -> MaterialPresetResponse:
     row = await db.get(MaterialPreset, preset_id)
     if row is None:
@@ -135,7 +120,7 @@ async def delete_preset(db: AsyncSession, preset_id: uuid.UUID) -> None:
 
 # Redirects to a presigned R2 GET url, same reasoning as model3d_file.py's
 # own get_download — the frontend's axios GET (responseType: 'blob') follows
-# a 307 transparently, so this needed no frontend change.
+# a 307 transparently.
 async def get_texture_download(db: AsyncSession, preset_id: uuid.UUID, slot: MaterialPresetSlot) -> RedirectResponse:
     row = (await db.execute(
         select(MaterialPresetTexture).where(MaterialPresetTexture.preset_id == preset_id, MaterialPresetTexture.slot == slot)

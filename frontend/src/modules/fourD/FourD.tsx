@@ -15,9 +15,10 @@ import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsagePr
 import { computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, ActualsHistoryItem, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
+import { isBundle, packBundle, unpackBundle } from './fileBundle'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
 import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
-import { loadCustomEnvironment } from './environmentHdr'
+import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, saveEnvironment, type SavedEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
@@ -2693,15 +2694,50 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const setIfcUnitDisplay = (next: IfcUnitDisplay) => { setIfcUnitDisplayState(next); saveIfcUnitDisplay(next) }
   const [customEnvironment, setCustomEnvironment] = useState<{ name: string; url: string } | null>(null)
   const [environmentError, setEnvironmentError] = useState<string | null>(null)
+  // The project's saved environment row (2026-09-30, per Maro — HDRs used
+  // to be session-only), so Clear knows what to delete server-side.
+  const savedEnvironmentRef = useRef<SavedEnvironment | null>(null)
+  useEffect(() => {
+    const projectId = selectedProject?.id
+    setCustomEnvironment(null)
+    savedEnvironmentRef.current = null
+    if (!projectId) return
+    let cancelled = false
+    loadSavedEnvironment(projectId).then(result => {
+      if (cancelled || !result) return
+      savedEnvironmentRef.current = result.saved
+      setCustomEnvironment(result.env)
+    }).catch(err => {
+      if (!cancelled) setEnvironmentError(`Couldn't restore the saved environment: ${sectionBoxErrorMessage(err, 'unknown error')}`)
+    })
+    return () => { cancelled = true }
+  }, [selectedProject?.id])
   const handleUploadEnvironment = async (file: File) => {
     try {
       setEnvironmentError(null)
       setCustomEnvironment(await loadCustomEnvironment(file))
     } catch (err) {
       setEnvironmentError(err instanceof Error ? err.message : 'Failed to load environment file')
+      return
+    }
+    // Shown immediately from the local file above; saved in the background.
+    if (!selectedProject) return
+    try {
+      savedEnvironmentRef.current = await saveEnvironment(selectedProject.id, file)
+    } catch (err) {
+      setEnvironmentError(`Environment is showing but wasn't saved (${sectionBoxErrorMessage(err, 'unknown error')}) — it won't survive a refresh.`)
     }
   }
-  const handleClearEnvironment = () => { setCustomEnvironment(null); setEnvironmentError(null) }
+  const handleClearEnvironment = () => {
+    setCustomEnvironment(null)
+    setEnvironmentError(null)
+    const saved = savedEnvironmentRef.current
+    savedEnvironmentRef.current = null
+    if (saved) {
+      deleteSavedEnvironment(saved).catch(err =>
+        setEnvironmentError(`Couldn't remove the saved environment (${sectionBoxErrorMessage(err, 'unknown error')}) — it may come back on refresh.`))
+    }
+  }
   // Fires from ViewportErrorBoundary when the *active* environment fails to
   // render (2026-07-11 fix) — e.g. a corrupt uploaded .hdr/.exr. Reverts to
   // Viewport3D.tsx's DefaultEnvironment (no HDR) rather than leaving
@@ -4014,13 +4050,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  // Unlike handleImportPointCloud just above, Part A's textured OBJ+MTL+
-  // texture set still has no backend of its own (site_capture.py's
-  // SiteCapture holds a single file — the .xyz point cloud — see that
-  // model's own docstring on why: it's the precision source variance
-  // testing needs, where this decimated, photographic mesh is a quick
-  // visual overlay only) — deliberately still session-only, same "fileId
-  // stays null, won't survive a refresh" fallback path.
+  // Textured OBJ+MTL+texture sets are saved since 2026-09-30 (per Maro —
+  // they used to be session-only): the whole set is packed into one file
+  // (fileBundle.ts) and persisted as an ordinary mesh Model3DFile, so the
+  // restore path below unpacks it and reloads it through loadTexturedObj.
   const handleImportTexturedObj = async (objFile: File, mtlFile: File, textureFiles: File[]) => {
     setImporting(true)
     clearImportErrorsForFile(objFile.name)
@@ -4031,9 +4064,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const id = crypto.randomUUID()
       object.name = name
       object.userData.sceneObjectId = id
-      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: defaultSourceUpAxis('mesh'), object, fileId: null }])
+      const sourceUpAxis = defaultSourceUpAxis('mesh')
+      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setDataTab('3d')
-      addImportError(`Note: "${name}" is a live preview only — Reality Capture storage isn't built yet, so this won't survive a page refresh.`)
+      const bundle = new File([await packBundle([objFile, mtlFile, ...textureFiles])], name)
+      await enqueueUpload(() => persistModelFile(id, bundle, 'mesh', sourceUpAxis, name))
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import textured OBJ')
     } finally {
@@ -4364,7 +4399,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
               id, name: file.name, kind: 'ifc', sourceUpAxis: file.source_up_axis, object: handle.object, fileId: file.id,
             }])
           } else {
-            const object = await loadModel3DFile(restoredFile)
+            // A textured OBJ set is stored as one bundle (see
+            // handleImportTexturedObj); anything else is a plain model file.
+            const object = await (async () => {
+              if (!(await isBundle(restoredFile))) return loadModel3DFile(restoredFile)
+              const parts = await unpackBundle(restoredFile)
+              const obj = parts.find(f => /\.obj$/i.test(f.name))
+              const mtl = parts.find(f => /\.mtl$/i.test(f.name))
+              if (!obj || !mtl) throw new Error('Saved textured OBJ is missing its .obj or .mtl')
+              return loadTexturedObj(obj, mtl, parts.filter(f => f !== obj && f !== mtl))
+            })()
             if (stale()) return
             applyTransform(object, wholeFileTransform)
             // Any embedded clip was already baked into real ElementKeyframe

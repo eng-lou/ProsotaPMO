@@ -104,7 +104,8 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
     await Promise.all(Object.entries(seed).map(async ([slot, value]) => {
       if (!value) return
       config[slot as TextureSlot] = { id: '', slot: slot as TextureSlot, name: value.name }
-      files[slot as TextureSlot] = await (await fetch(value.dataUri)).blob()
+      const blob = await (await fetch(value.dataUri)).blob()
+      files[slot as TextureSlot] = new File([blob], value.name, { type: blob.type })
     }))
     setDraftConfig(config)
     setDraftFiles(files)

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, downloadLargeBlob } from '@/lib/api'
+import { uploadDirectToStorage } from '@/lib/directUpload'
+import { getOrDownloadFile, pruneCachedFiles } from '@/lib/fileCache'
 import { loadTextureFromBlob } from './customTextures'
 import type { CustomTextureSet, TextureSlot } from './customTextures'
 
@@ -37,29 +39,46 @@ export function textureListToConfig(textures: MaterialPresetTexture[]): Material
 
 export const EMPTY_MATERIAL_PRESET_CONFIG: MaterialPresetConfig = {}
 
-// Fetches each present slot's actual image bytes from the new download
-// endpoint (an authenticated blob fetch, same shape model3dFiles.ts's own
-// downloadModel3DFile already uses) and turns each into a live THREE.Texture,
+// Fetches each present slot's actual image bytes (cache-first — a texture
+// id never points at different bytes, see the backend's _replace_slot; no
+// total timeout, an 8K map can legitimately take longer than 25s) and turns
+// each into a live THREE.Texture,
 // same TextureSlotValue shape loadCustomTexture already returns — applying
 // a preset is indistinguishable from a fresh manual upload from this point
 // on, same as before this fix.
 export async function loadPresetAsTextureSet(preset: MaterialPreset): Promise<CustomTextureSet> {
   const result: CustomTextureSet = {}
   await Promise.all(preset.textures.map(async t => {
-    const res = await api.get<Blob>(`/api/v1/material-presets/${preset.id}/textures/${t.slot}`, { responseType: 'blob' })
-    result[t.slot] = await loadTextureFromBlob(res.data, t.slot, t.name)
+    const blob = await getOrDownloadFile(
+      'texture', preset.project_id, t.id,
+      () => downloadLargeBlob(`/api/v1/material-presets/${preset.id}/textures/${t.slot}`),
+    )
+    result[t.slot] = await loadTextureFromBlob(blob, t.slot, t.name)
   }))
   return result
 }
 
-function buildFormData(name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots?: TextureSlot[]): FormData {
-  const form = new FormData()
-  form.append('name', name)
-  if (clearedSlots !== undefined) form.append('cleared_slots', clearedSlots.join(','))
-  for (const [slot, blob] of Object.entries(files)) {
-    if (blob) form.append(slot, blob, slot)
-  }
-  return form
+// Direct-to-R2 texture upload (2026-09-30) — textures used to go up as
+// multipart form fields through our own backend, which Vercel caps at 4.5MB
+// per request, so saving a preset with any real high-res map failed in
+// production. Each texture is now PUT straight to storage (same flow as
+// model3dFiles.ts's uploadModel3DFile) and create/update send only the
+// resulting storage keys. Not gzipped: JPG/PNG are already compressed.
+type TextureUploads = Partial<Record<TextureSlot, { storage_key: string; name: string }>>
+
+async function uploadTextures(files: Partial<Record<TextureSlot, Blob>>): Promise<TextureUploads> {
+  const out: TextureUploads = {}
+  await Promise.all(Object.entries(files).map(async ([slot, blob]) => {
+    if (!blob) return
+    const name = blob instanceof File ? blob.name : slot
+    const contentType = blob.type || 'application/octet-stream'
+    const { data: presigned } = await api.post<{ storage_key: string; upload_url: string }>(
+      '/api/v1/material-presets/presign', { name, content_type: contentType },
+    )
+    await uploadDirectToStorage(presigned.upload_url, blob, contentType)
+    out[slot as TextureSlot] = { storage_key: presigned.storage_key, name }
+  }))
+  return out
 }
 
 // Named, saved, per-project custom material presets (2026-07-09, per Maro:
@@ -80,6 +99,7 @@ export function useMaterialPresets(projectId: string | undefined) {
     try {
       const { data } = await api.get<MaterialPreset[]>('/api/v1/material-presets/', { params: { project_id: projectId } })
       setPresets(data)
+      void pruneCachedFiles('texture', projectId, data.flatMap(p => p.textures.map(t => t.id)))
     } finally {
       setLoading(false)
     }
@@ -90,14 +110,9 @@ export function useMaterialPresets(projectId: string | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  // multipart/form-data, not JSON (2026-07-13 fix) — see this module's own
-  // header. project_id/name arrive as plain form fields alongside up to six
-  // optional texture files, mirroring model3dFiles.ts's own
-  // uploadModel3DFile.
   const create = async (name: string, files: Partial<Record<TextureSlot, Blob>>): Promise<MaterialPreset> => {
-    const form = buildFormData(name, files)
-    form.append('project_id', projectId ?? '')
-    const { data } = await api.post<MaterialPreset>('/api/v1/material-presets/', form)
+    const textures = await uploadTextures(files)
+    const { data } = await api.post<MaterialPreset>('/api/v1/material-presets/', { project_id: projectId, name, textures })
     await load()
     return data
   }
@@ -107,8 +122,8 @@ export function useMaterialPresets(projectId: string | undefined) {
   // untouched server-side — renaming a preset with several large existing
   // textures doesn't re-upload any of them.
   const update = async (presetId: string, name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots: TextureSlot[]) => {
-    const form = buildFormData(name, files, clearedSlots)
-    await api.patch(`/api/v1/material-presets/${presetId}`, form)
+    const textures = await uploadTextures(files)
+    await api.patch(`/api/v1/material-presets/${presetId}`, { name, textures, cleared_slots: clearedSlots })
     await load()
   }
 

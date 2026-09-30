@@ -44,6 +44,7 @@ from app.api.icd_criteria import router as icd_criteria_router
 from app.api.icd_items import router as icd_items_router
 from app.api.fourd_videos import router as fourd_videos_router
 from app.api.gantt_layouts import router as gantt_layouts_router
+from app.api.environment_maps import router as environment_maps_router
 from app.api.material_presets import router as material_presets_router
 from app.api.measurements import router as measurements_router
 from app.api.model3d_files import router as model3d_files_router
@@ -164,6 +165,7 @@ app.include_router(dock_layouts_router, prefix="/api/v1", dependencies=_auth_app
 app.include_router(animation_profiles_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(element_keyframes_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(material_presets_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(environment_maps_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(model3d_files_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(fourd_videos_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(section_boxes_router, prefix="/api/v1", dependencies=_auth_approved)
