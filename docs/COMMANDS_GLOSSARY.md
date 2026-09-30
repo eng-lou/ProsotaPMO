@@ -142,3 +142,6 @@ Re-runs only the tests that failed last time ("last failed"). Used to get the fu
 
 ### `git fetch` + `git log origin/main` (2026-09-29)
 Checks what GitHub actually has, not just the local copy. `git log --oneline -1 origin/main` shows the latest commit on GitHub, which is how "pushed?" gets answered with evidence rather than memory.
+
+### `PerformanceObserver` with `type: 'event'` (2026-09-30)
+Browser code pasted into the page's console that records how long each click takes, split into waiting to start, running the click's code, and waiting for the screen to update. This is the same measurement behind Vercel's INP score, which is how the 4D slowness was traced to the screen update rather than the click's code.

@@ -6050,3 +6050,34 @@ roof only became grass locally because it was mapped by hand, and those
 mappings are saved per browser and per project. Production had none
 yet. The IFC calls the roof "Default Roof" with no material, so it
 can't be matched automatically.
+
+---
+
+## 2026-09-30 — 4D clicks: the viewer stops redrawing when nothing changes
+
+**The problem.** Vercel Speed Insights rated /4d's INP (how long a click
+takes to show its result) at 376 ms, "needs improvement". Measured on
+the hospital model: React's own work per click was under 10 ms, but the
+3D view redrew the unchanged scene every frame at about 72 ms of GPU
+time (shadows about 31 ms, ambient occlusion about 13 ms). Each click's
+repaint waited behind one or two of those frames, so a click took
+200–300 ms to show.
+
+**The fix.** The viewer (and the Baseline comparison pane) now only
+redraws when something changes: mouse, wheel or keyboard input on a
+view, any UI change, the timeline date moving (playback, scrubbing,
+video export), the camera moving, or animated GLB models. Otherwise it
+draws one frame a second as a safety net. Clicks went from 190–470 ms
+to 16–40 ms. This is `IdleRenderDriver.tsx`; the canvases use
+three.js/R3F's "demand" mode.
+
+**Two lessons.**
+- The first diagnosis was wrong. The slow tab was running 22-hour-old
+  code, and I built a fix for "mirrored elements" before counting them.
+  Every real IFC here has zero. That fix was reverted unshipped. Profile
+  on freshly loaded code, and count a data assumption in the real files
+  before building on it.
+- Tiny floating-point noise counts as "movement". The camera controls
+  recompute the camera every frame with about 1e-16 of noise, so an
+  exact "has the camera moved?" check kept the viewer awake forever. The
+  check now uses a small tolerance.

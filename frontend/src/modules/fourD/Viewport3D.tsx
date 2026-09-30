@@ -10,6 +10,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { EffectComposer as EffectComposerImpl } from 'postprocessing'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
+import { IdleRenderDriver, markRenderActivity } from './IdleRenderDriver'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type Axis } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
@@ -2606,9 +2607,9 @@ interface ResolvedTimelineTarget {
   // Mode A's own pickActiveLink/computeAppliedAnimationStateAt result,
   // cached across frames (2026-07-17 perf fix, per Maro: "everything
   // optimised for scale... speed drop when I play the animation from 6
-  // ifcs or navigate"). Viewport3D's Canvas runs frameloop="always"
-  // whenever the 4D tab is merely visible — not just during Play — so
-  // this useFrame loop fires continuously even while the user is just
+  // ifcs or navigate"). Viewport3D's Canvas renders every frame while
+  // anything is changing (see IdleRenderDriver) — not just during Play —
+  // so this useFrame loop fires continuously even while the user is just
   // orbiting a static, paused scene. Before this fix, pickActiveLink (an
   // array copy + full re-sort, each comparison constructing fresh Date
   // objects) and computeAppliedAnimationStateAt ran unconditionally for
@@ -5502,6 +5503,7 @@ export function Viewport3D({
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
     onCaptureBackgroundChange?.(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
+    markRenderActivity()
     requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(doCapture)))
   }
 
@@ -5525,6 +5527,7 @@ export function Viewport3D({
     if (!canvas) return Promise.resolve(null)
     return new Promise(resolve => {
       setHidePathHelpers(true)
+      markRenderActivity()
       requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
         const dataUrl = canvas.toDataURL('image/png')
         setHidePathHelpers(false)
@@ -5601,8 +5604,9 @@ export function Viewport3D({
   // over a fixed real-world durationMs, paced by requestAnimationFrame
   // (performance.now()-based, not frame-count-based, so it still finishes
   // in ~durationMs regardless of the display's actual refresh rate) —
-  // R3F's own default frameloop='always' is already redrawing every real
-  // frame, so nothing here needs to force a render itself.
+  // IdleRenderDriver renders every frame while isExportingVideo (and the
+  // moving timeline date alone would keep it rendering too), so nothing
+  // here needs to force a render itself.
   // fps/durationMs/resolution/HDR background now come from
   // renderCaptureSettings (2026-07-11, per Maro: "implement the others
   // also" — Export Video's own settings, alongside Capture's) instead of
@@ -6180,7 +6184,9 @@ export function Viewport3D({
         )
       })()}
       <Canvas
-        frameloop={active ? 'always' : 'never'}
+        // 'demand' + IdleRenderDriver below (2026-09-30) — see that file's
+        // header: a static scene no longer redraws every frame.
+        frameloop={active ? 'demand' : 'never'}
         shadows={settings.shadows}
         // Supersampling — see the dprMultiplier/dpr computation above (and
         // its own 2026-07-11 fix note) for why this is a real multiplier of
@@ -6239,6 +6245,12 @@ export function Viewport3D({
         }}
       >
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
+        {active && (
+          <IdleRenderDriver
+            dateRef={timelineDateRef}
+            continuous={isExportingVideo || importedObjects.some(o => o.object.animations.length > 0)}
+          />
+        )}
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
         <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} overridden={activeCameraId !== null} />
         <ActiveCameraPose activeCamera={activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />

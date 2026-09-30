@@ -22,6 +22,7 @@ import {
 import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy, disposeClonedBatch } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
+import { IdleRenderDriver } from './IdleRenderDriver'
 import type { RenderMode } from './viewerSettings'
 import {
   AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment, lightingForRenderMode, RealisticEnvironment,
@@ -484,7 +485,9 @@ export function ComparisonViewportPane({
         )}
       </div>
       <Canvas
-        frameloop={active ? 'always' : 'never'}
+        // 'demand' + IdleRenderDriver (2026-09-30) — same as Viewport3D's
+        // own Canvas; see IdleRenderDriver.tsx's header.
+        frameloop={active ? 'demand' : 'never'}
         dpr={dpr}
         // The real, root cause of "no shadow, ever" (2026-09-01) — R3F's
         // own `shadows` prop on <Canvas> is what actually sets
@@ -512,6 +515,12 @@ export function ComparisonViewportPane({
         // anything this read-only pane currently does.
         gl={{ stencil: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
       >
+        {active && (
+          <IdleRenderDriver
+            dateRef={timelineDateRef}
+            continuous={importedObjects.some(o => o.object.animations.length > 0)}
+          />
+        )}
         <CaptureCamera cameraRef={cameraRef} />
         <CaptureCanvas canvasRef={canvasRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} disconnected={config.cameraDisconnected} />
