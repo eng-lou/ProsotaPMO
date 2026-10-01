@@ -566,7 +566,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // 2026-07-17 fix headers for why that invariant used to not hold.
       let elementRef: string | null = null
       let bounds: SectionBoxBounds
-      if (target.kind === 'ifc' && selectedExpressId !== null) {
+      // Selection spanning more than one IFC model (Select All on a
+      // federated set, or a box-select across models — 2026-10-02, per
+      // Maro live) — selectedExpressIds is one flat Set across every model,
+      // but expressIDs are only meaningful within their own file, so the
+      // multi-element branch below would look ALL of them up inside just
+      // `target`, wrapping whatever unrelated elements happened to share
+      // those numbers. Wrap the selected models themselves instead; the box
+      // clips every loaded model anyway (Viewport3D.tsx's Section Box
+      // useFrame), so this is the region that actually matters.
+      const selectedIfcModels = sceneObjects.filter(o => o.kind === 'ifc' && selectedObjectIds.has(o.id))
+      if (selectedIfcModels.length > 1) {
+        const selectedModels = sceneObjects.filter(o => selectedObjectIds.has(o.id) && o.object.visible).map(o => o.object)
+        bounds = computeLocalBoundsForObjects(target.object, selectedModels.length > 0 ? selectedModels : selectedIfcModels.map(o => o.object))
+      } else if (target.kind === 'ifc' && selectedExpressId !== null) {
         const handle = getIfcHandleFor(target.id)
         // ensureMaterialized, not a plain traverse (2026-07-17) — see
         // elementBatching.ts's own header: a repeated-geometry element may

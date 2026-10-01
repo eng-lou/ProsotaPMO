@@ -2290,18 +2290,39 @@ function ModelObjects({
   // there during ordinary orbiting.
   const prevSignatureRef = useRef<Map<string, string>>(new Map())
   useFrame(() => {
+    // Whole-object boxes clip EVERY loaded object, not just the one they're
+    // stored against (2026-10-02, per Maro live: Select All across 5
+    // federated NBU models, + Add, and nothing visibly cut) — the box's
+    // owner only defines which local frame its bounds live in; the cut
+    // itself is a spatial volume, same as Navisworks/Revit section boxes on
+    // a federated model. Previously only the owner's own meshes were
+    // clipped, so with several models loaded the box landed on whichever
+    // one happened to be active (Select All makes that the *last* model)
+    // and every other model sailed straight through it. Element-scoped
+    // boxes stay owner-only — they mean "cut this one element".
+    const ownerMatrices = new Map<string, THREE.Matrix4>()
+    for (const { id, object } of objects) {
+      if (sectionBoxes.some(b => b.sceneObjectId === id)) {
+        object.updateMatrixWorld(true)
+        ownerMatrices.set(id, object.matrixWorld)
+      }
+    }
+    const activeWholeBoxes = sectionBoxes.filter(b => b.active && b.elementExpressId === undefined && ownerMatrices.has(b.sceneObjectId))
+    const wholeSignature = JSON.stringify(activeWholeBoxes.map(b => [b, ownerMatrices.get(b.sceneObjectId)!.elements]))
     const currentIds = new Set(sectionBoxes.map(b => b.sceneObjectId))
+    if (activeWholeBoxes.length > 0) for (const { id } of objects) currentIds.add(id)
     const idsToProcess = new Set([...prevTrackedIds.current, ...currentIds])
     for (const { id, object } of objects) {
       if (!idsToProcess.has(id)) continue
       object.updateMatrixWorld(true)
-      const boxesForObject = sectionBoxes.filter(b => b.sceneObjectId === id && b.active)
-      const signature = JSON.stringify({ boxes: boxesForObject, matrix: object.matrixWorld.elements })
+      const elementBoxesForObject = sectionBoxes.filter(b => b.sceneObjectId === id && b.active && b.elementExpressId !== undefined)
+      const signature = JSON.stringify({ whole: wholeSignature, boxes: elementBoxesForObject, matrix: object.matrixWorld.elements })
       if (prevSignatureRef.current.get(id) === signature) continue
       prevSignatureRef.current.set(id, signature)
       // Whole-object boxes (elementExpressId undefined) apply to every mesh
-      // under this object, computed once against the object's own
-      // matrixWorld. Element-scoped boxes (2026-07-09, per-element scoping)
+      // under this object, computed against their OWNING object's
+      // matrixWorld (which may be a different model — see the header at
+      // the top of this useFrame). Element-scoped boxes (2026-07-09, per-element scoping)
       // apply *only* to the one matching mesh, computed against that
       // mesh's own matrixWorld instead — correctly reflecting both this
       // object's placement and that element's own local transform within
@@ -2311,10 +2332,9 @@ function ModelObjects({
       // of its own elements) — planes from both are simply concatenated,
       // same "layer more than one cut" reasoning as multiple whole-object
       // boxes already have.
-      const wholeObjectPlanes = boxesForObject
-        .filter(b => b.elementExpressId === undefined)
-        .flatMap(b => computeWorldClipPlanes(b.bounds, b.pivotBounds, b.rotation, object.matrixWorld))
-      const elementBoxes = boxesForObject.filter(b => b.elementExpressId !== undefined)
+      const wholeObjectPlanes = activeWholeBoxes
+        .flatMap(b => computeWorldClipPlanes(b.bounds, b.pivotBounds, b.rotation, ownerMatrices.get(b.sceneObjectId)!))
+      const elementBoxes = elementBoxesForObject
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
         let clipPlanes = wholeObjectPlanes
