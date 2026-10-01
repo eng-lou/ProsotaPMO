@@ -1259,7 +1259,19 @@ export function Scheduling() {
     }
     return names
   }, [customFilters, customHighlights])
-  const filterUdfDefinitions = udfDefinitions.filter(d => referencedFilterUdfNames.has(d.name))
+  // Memoized (2026-10-01, per Maro's "Minified React error #185" — maximum
+  // update depth — while navigating Scheduling). As a plain .filter() this
+  // was a new array every render, so getUdfValueByName below was too, so
+  // visibleActivities (which depends on it) was a brand-new array on EVERY
+  // render. Every layout effect keyed on visibleActivities — the grid's and
+  // the Gantt's row-window recomputes — then re-ran on every render instead
+  // of only on real data changes, and any render they themselves caused
+  // (e.g. the window shifting as a scrollbar appears/disappears) fed
+  // straight back into another one until React aborted the loop.
+  const filterUdfDefinitions = useMemo(
+    () => udfDefinitions.filter(d => referencedFilterUdfNames.has(d.name)),
+    [udfDefinitions, referencedFilterUdfNames],
+  )
   const { getValue: getFilterUdfValue } = useUserDefinedFieldValues(filterUdfDefinitions, activities.map(a => a.id))
   const getUdfValueByName = useCallback((activityId: string, name: string): string | null => {
     const def = filterUdfDefinitions.find(d => d.name === name)

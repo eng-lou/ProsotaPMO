@@ -6175,3 +6175,31 @@ Real "not found"/"forbidden" answers aren't retried, because retrying
 can't change them. Tested against a local server that deliberately cuts
 the connection: it succeeds on attempt 3, a 404 fails at once, and a
 permanently dead link gives up after 3 tries.
+
+## Scheduling crash when collapsing WBS: React error #185 (2026-10-01)
+
+**Symptom.** Collapsing WBS rows in Scheduling crashed the page with
+"Minified React error #185", which means "Maximum update depth exceeded".
+A component kept updating itself until React stopped it.
+
+**Finding it.** Production code is minified, so the stack trace only
+gave a file name and character position. Rebuilding the same commit with
+source maps (`vite build --sourcemap`) and checking the code was
+byte-identical to the live file let that position be mapped back to
+`GanttChart.tsx`, inside `Scheduling.tsx`.
+
+**Cause.** One derived list (the UDF definitions that Filters/Highlights
+use) was rebuilt with a plain `.filter()` on every render. Anything that
+depends on a value rebuilt every render also changes every render. That
+chain reached `visibleActivities`, the list both the table and the Gantt
+draw from, so their "which rows are on screen" calculations re-ran on
+every render, not just when data changed. Collapsing WBS shortens the
+list, the browser moves the scroll position, the row window shifts, and
+each of those renders triggered another one.
+
+**Fix.** Wrapped that list in `useMemo`, so it (and everything downstream)
+only changes when its inputs change.
+
+**Lesson.** In React, a value built inline during render (`.filter()`,
+`.map()`, `{...}`) is new every time. If it feeds a `useMemo`/`useEffect`
+dependency list, that memo or effect stops being one.

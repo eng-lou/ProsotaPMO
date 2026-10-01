@@ -160,3 +160,6 @@ Built-in browser tools that gzip or un-gzip data as it streams through, with no 
 
 ### `esbuild file.ts --bundle --platform=node` (2026-09-30)
 Turns a TypeScript test script, plus the real app files it imports, into one plain JavaScript file that Node can run. This let the actual `fileBundle.ts`/`fileCache.ts` code (not a copy) be tested against the real MatterPak files without a browser.
+
+### Reading a minified production error with source maps (2026-10-01)
+`npx vite build --sourcemap` rebuilds the app with ".map" files that link each position in the minified code back to the original file and line. Comparing the rebuilt file with the live one (`curl` it down, then `cmp`) confirms it's the same code. Then `source-map-js`'s `originalPositionFor({line, column})` turns the error's `file.js:1:4707` into a real `GanttChart.tsx` line number.
