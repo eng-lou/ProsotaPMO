@@ -6203,3 +6203,24 @@ only changes when its inputs change.
 **Lesson.** In React, a value built inline during render (`.filter()`,
 `.map()`, `{...}`) is new every time. If it feeds a `useMemo`/`useEffect`
 dependency list, that memo or effect stops being one.
+
+## 2026-10-02 — Section box didn't cut a multi-model (federated) set
+
+**Symptom.** With 5 models loaded (Arch, CON, ELE, HVAC, MEP), Select All
+then + Add drew a section box, but nothing was cut.
+
+**Cause 1.** Each section box is saved against one model, and it only
+clipped that model's own geometry. Select All makes the last-loaded model
+the "active" one, so the box went there and the other four models passed
+straight through it.
+
+**Cause 2.** Select All gathers element IDs from every model into one list.
+But IFC element IDs (expressIDs) are only unique within their own file, so
+looking them all up inside one model matched unrelated elements and gave
+the box a wrong size.
+
+**Fix.** A whole-model box now cuts every loaded model (like Navisworks). A
+box created from a selection spanning several models wraps those models.
+
+**Lesson.** An ID is only meaningful inside the scope that issued it. When a
+selection can span several files, check that before treating IDs as global.
