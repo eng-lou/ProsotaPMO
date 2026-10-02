@@ -386,6 +386,14 @@ export const AmbientOcclusionEffect = lazy(() =>
           <N8AO
             aoRadius={aoScale} intensity={0.8} distanceFalloff={aoScale}
             aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
+            // Half-resolution AO in the live view (2026-10-02, per Maro live:
+            // orbit lag in Realistic mode, which turns AO on) — a quarter of
+            // the pixels for the AO pass, upsampled depth-aware (N8AO's own
+            // default), which is N8AO's recommended real-time setting. Full
+            // resolution only for captures/exports (boostQuality). Not
+            // toggled per-drag: halfRes is a shader define in N8AO, so
+            // flipping it would recompile at the start of every orbit.
+            halfRes={!boostQuality}
           />
           {/* Tone mapping as the composer's last effect (2026-10-02, found
               via Maro's washed-out Realistic screenshots): the composer
@@ -2329,8 +2337,10 @@ function ModelObjects({
     }
     const activeWholeBoxes = sectionBoxes.filter(b => b.active && b.elementExpressId === undefined && ownerMatrices.has(b.sceneObjectId))
     const wholeSignature = JSON.stringify(activeWholeBoxes.map(b => [b, ownerMatrices.get(b.sceneObjectId)!.elements]))
-    const currentIds = new Set(sectionBoxes.map(b => b.sceneObjectId))
-    if (activeWholeBoxes.length > 0) for (const { id } of objects) currentIds.add(id)
+    // Every object, always (2026-10-02 — see SECTION_BOX_IDLE_PLANES): the
+    // per-object signature check below still makes this a no-op on any
+    // frame where nothing changed.
+    const currentIds = new Set(objects.map(o => o.id))
     const idsToProcess = new Set([...prevTrackedIds.current, ...currentIds])
     for (const { id, object } of objects) {
       if (!idsToProcess.has(id)) continue
@@ -2354,6 +2364,7 @@ function ModelObjects({
       // boxes already have.
       const wholeObjectPlanes = activeWholeBoxes
         .flatMap(b => computeWorldClipPlanes(b.bounds, b.pivotBounds, b.rotation, ownerMatrices.get(b.sceneObjectId)!))
+      const padToFixedCount = (planes: THREE.Plane[]) => (planes.length === 0 ? SECTION_BOX_IDLE_PLANES() : planes)
       const elementBoxes = elementBoxesForObject
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return
@@ -2393,7 +2404,7 @@ function ModelObjects({
         const standardMaterial = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
         const materials = Array.isArray(standardMaterial) ? standardMaterial : [standardMaterial]
         materials.forEach(mat => {
-          mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', clipPlanes)
+          mat.clippingPlanes = mergeClipPlanes(mat.clippingPlanes, 'sectionBox', padToFixedCount(clipPlanes))
           // clipShadows (2026-09-01, found live: "i see the shadows of the
           // elements that got clipped") — three.js's shadow pass renders
           // through an auto-generated MeshDepthMaterial that does NOT
@@ -2434,7 +2445,7 @@ function ModelObjects({
         // sections as well") — a section box cut the shaded faces but left
         // the black wireframe sticking out past the cut plane untouched.
         const edges = child.userData.edgesHelper as THREE.LineSegments | undefined
-        if (edges) (edges.material as THREE.LineBasicMaterial).clippingPlanes = mergeClipPlanes((edges.material as THREE.LineBasicMaterial).clippingPlanes, 'sectionBox', clipPlanes)
+        if (edges) (edges.material as THREE.LineBasicMaterial).clippingPlanes = mergeClipPlanes((edges.material as THREE.LineBasicMaterial).clippingPlanes, 'sectionBox', padToFixedCount(clipPlanes))
       })
     }
     prevTrackedIds.current = currentIds
@@ -3055,6 +3066,20 @@ function EmbeddedAnimationLoop({
 // "planes some other owner is managing and I must leave alone" — this makes
 // the two effects' clips compose (both active at once) regardless of which
 // one happens to run first in any given frame, rather than racing.
+// Section Box planes when no box applies (2026-10-02, per Maro live: "a big
+// lag" adding and removing a whole-model section box). three.js bakes the
+// NUMBER of clipping planes into each shader, so going 0 -> 6 planes (add)
+// or 6 -> 0 (remove) forces every affected shader program to recompile —
+// measured in an isolated harness at ~1.2 s for just a dozen realistic-style
+// materials, and Windows' D3D shader compiler makes it worse on real
+// models. Keeping every material at exactly 6 section-box planes at all
+// times (these 6 sit 1e9 units away and never clip anything) means adding,
+// moving or removing a box only changes plane *values*, a uniform update:
+// measured at ~1 ms either way. The 6 extra dot products per fragment are
+// negligible. Fresh instances every call, same reason as
+// computeWorldClipPlanes (Material.clone deep-copies planes).
+const SECTION_BOX_IDLE_PLANES = () => Array.from({ length: 6 }, () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e9))
+
 function mergeClipPlanes(existing: THREE.Plane[] | null, owner: string, ownPlanes: THREE.Plane[]): THREE.Plane[] | null {
   const foreign = (existing ?? []).filter(p => (p as THREE.Plane & { __clipOwner?: string }).__clipOwner !== owner)
   for (const p of ownPlanes) (p as THREE.Plane & { __clipOwner?: string }).__clipOwner = owner
@@ -4419,11 +4444,32 @@ export function ShadowFrustumSync({
   modelRadius: number
   sunRadius: number
 }) {
-  const { camera } = useThree()
+  const { camera, gl } = useThree()
+  // Shadow-map freeze while orbiting (2026-10-02, per Maro live: orbiting
+  // lags in Realistic mode, which turns shadows on). three.js re-renders
+  // the whole scene into the shadow map every frame, but a pure orbit never
+  // changes anything that map depends on — the sun and the geometry stay
+  // put, and this component sizes the shadow frustum off camera *distance*,
+  // which a rotation doesn't change. So while an OrbitControls drag is in
+  // progress and the frustum key below is unchanged, skip the shadow pass;
+  // a zoom (distance changes the key) or releasing the drag resumes it on
+  // the very next frame. Animated shadows during a drag (timeline playing
+  // while orbiting) catch up the instant the drag ends.
+  const draggingRef = useRef(false)
+  const listenedControlsRef = useRef<OrbitControlsImpl | null>(null)
+  const lastShadowKeyRef = useRef('')
+  useEffect(() => () => {
+    gl.shadowMap.autoUpdate = true
+  }, [gl])
   useFrame(() => {
     const light = lightRef.current
     const controls = controlsRef.current
     if (!light || !controls) return
+    if (listenedControlsRef.current !== controls) {
+      listenedControlsRef.current = controls
+      controls.addEventListener('start', () => { draggingRef.current = true })
+      controls.addEventListener('end', () => { draggingRef.current = false })
+    }
     const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 50
     const distance = camera.position.distanceTo(controls.target)
     const visibleRadius = distance * Math.tan((fov / 2) * (Math.PI / 180)) * 2
@@ -4436,6 +4482,11 @@ export function ShadowFrustumSync({
     shadowCam.far = sunRadius + shadowRadius * 2
     shadowCam.updateProjectionMatrix()
     light.shadow.normalBias = shadowRadius * 0.002
+    // toPrecision: an orbit preserves distance only up to float drift in
+    // the last digits, which must not count as "the frustum changed".
+    const shadowKey = `${shadowRadius.toPrecision(5)}|${light.position.toArray().map(v => v.toPrecision(6)).join(',')}|${light.shadow.mapSize.x}`
+    gl.shadowMap.autoUpdate = !(draggingRef.current && shadowKey === lastShadowKeyRef.current)
+    lastShadowKeyRef.current = shadowKey
     // Shadow-map resolution reallocation (checked directly in
     // node_modules/three's own WebGLShadowMap.js) — it only allocates a
     // fresh light.shadow.map when the existing one is null; changing

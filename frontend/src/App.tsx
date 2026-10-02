@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { memo, lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { AccessPendingScreen } from './components/AccessPendingScreen'
@@ -26,7 +26,13 @@ import { ProjectSelector } from './modules/projects/ProjectSelector'
 // always paying to download every *other* route's code too. Every one of
 // these five is a named export, not a default one, hence the same .then()
 // adapter React.lazy needs that FourD's own comment already explains.
-const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: m.FourD })))
+// memo (2026-10-02, measured live on prod): PersistentFourD re-renders on
+// every route change (it reads useLocation), and without memo that
+// re-rendered the entire hidden FourD tree too — adding ~15-90 ms of
+// main-thread work to every navigation click anywhere in the app once 4D
+// had been opened in the tab. FourD's only prop is `active`, so it now
+// re-renders only when that actually flips.
+const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: memo(m.FourD) })))
 const Scheduling = lazy(() => import('./modules/scheduling/Scheduling').then(m => ({ default: m.Scheduling })))
 const Dashboard = lazy(() => import('./modules/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
 const RiskRegister = lazy(() => import('./modules/risks/RiskRegister').then(m => ({ default: m.RiskRegister })))
