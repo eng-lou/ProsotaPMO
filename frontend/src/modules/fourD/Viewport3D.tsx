@@ -50,8 +50,8 @@ import {
   HIDDEN_LINE_BASE_COLOR,
 } from './renderModeMaterials'
 import {
-  applyRealisticToBatch, classIndexForMesh, classReplacesColour, clearRealisticFromBatch, disposeRealisticVariant,
-  getRealisticVariant, releaseRealisticTextureArrayGpu, syncRealisticGlassBatch, syncRealisticVariant,
+  applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
+  getRealisticVariant, realisticInstanceBase, releaseRealisticTextureArrayGpu, syncRealisticGlassBatch, syncRealisticVariant,
   type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
@@ -1407,7 +1407,7 @@ function ModelObjects({
         const elementSelected = isExpressSelected || isExpressAlsoSelected
         const alpha = wantsXray && !elementSelected ? XRAY_FADE_OPACITY : 1
         for (const info of infos) {
-          const baseColor = realisticClasses && classReplacesColour(realisticClasses[info.instanceId]) ? REALISTIC_WHITE : info.color
+          const baseColor = realisticClasses ? realisticInstanceBase(batch.mesh, info.instanceId, info.color, REALISTIC_WHITE) : info.color
           if (lerpAmount > 0) {
             _scratchColor.copy(baseColor).lerp(SELECTED_EMISSIVE, lerpAmount)
             batch.mesh.setColorAt(info.instanceId, _scratchColor)
@@ -1892,16 +1892,22 @@ function ModelObjects({
               // preset on this element/object, or a model material that
               // arrived with its own authored base-colour texture.
               const hasExplicitMaterial = (!!overrides && Object.values(overrides).some(Boolean)) || !!original?.map
+              const realisticInfo = object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
               const realisticClass = hasExplicitMaterial
                 ? 0
-                : classIndexForMesh(child, mat, object.userData.realisticMaterialInfo as RealisticModelInfo | undefined, realisticMapping)
-              if (realisticClass > 0) {
+                : classIndexForMesh(child, mat, realisticInfo, realisticMapping)
+              // A colour override (Realistic Materials panel) alone is
+              // enough to use the realistic variant: with no class it's a
+              // plain material in the chosen colour.
+              const colourOverride = hasExplicitMaterial ? null : colourOverrideForMesh(child, mat, realisticInfo, realisticMapping)
+              if (realisticClass > 0 || colourOverride) {
                 displayMaterials.push(getRealisticVariant(
                   mat, realisticClass, original?.color, settings.realisticGlassTransmission,
                   // This pass forces mat.opacity to the user's own opacity
                   // (see baseOpacity above), so the IFC's glass transparency
                   // has to come from the import-time capture instead.
                   (child.userData.ifcColorAlpha as number | undefined) ?? 1,
+                  colourOverride,
                 ))
               } else {
                 disposeRealisticVariant(mat)
@@ -3110,7 +3116,11 @@ export function TimelinePlayback({
   showVarianceColors = false,
   clashByElementKey = EMPTY_CLASH_MAP,
   showClashColors = false,
+  renderMode,
 }: {
+  // Realistic mode's colour-replacing classes need a white per-instance base
+  // here too (2026-10-02) — see the batch colour write below.
+  renderMode?: string
   dateRef: React.MutableRefObject<Date | null>
   paths: Path[]
   pathFollowers: PathFollower[]
@@ -4226,14 +4236,25 @@ export function TimelinePlayback({
       const nextColorHex = state?.color ?? null
       const clashActive = showClashColors && bv.elementKey ? (clashByElementKey.get(bv.elementKey) ?? false) : false
       const varianceActive = showVarianceColors && bv.cachedVarianceMagnitude > 0
-      const nextColorKey = `${nextColorHex}|${varianceActive ? bv.cachedVarianceMagnitude.toFixed(3) : 0}|${bv.cachedVarianceIsLate}|${clashActive}`
+      const nextColorKey = `${nextColorHex}|${varianceActive ? bv.cachedVarianceMagnitude.toFixed(3) : 0}|${bv.cachedVarianceIsLate}|${clashActive}|${renderMode === 'realistic' ? 'r' : ''}`
       if (bv.lastColorKey !== nextColorKey) {
         if (nextColorHex) {
           _scratchColor.set(nextColorHex)
           for (const { instanceId } of bv.instances) bv.mesh.setColorAt(instanceId, _scratchColor)
         } else {
+          // Realistic mode (2026-10-02, per Maro: a roof remapped to Timber
+          // "goes back to a green for some reason"): an instance whose class
+          // replaces the imported colour (timber/brick/grass/...) must keep
+          // the white base ModelObjects' own batch pass gives it so the
+          // class texture's colour shows — writing the raw IFC colour here
+          // re-tinted the texture with it every time this colour key
+          // changed (activity windows opening/closing, a re-resolve), and
+          // whichever of the two writers ran last won.
+          const realisticClasses = renderMode === 'realistic'
+            ? bv.mesh.userData.realisticActiveClasses as Uint8Array | undefined
+            : undefined
           for (const { instanceId, originalColor } of bv.instances) {
-            _scratchColor.copy(originalColor)
+            _scratchColor.copy(realisticClasses ? realisticInstanceBase(bv.mesh, instanceId, originalColor, REALISTIC_WHITE) : originalColor)
             if (varianceActive) _scratchColor.lerp(bv.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, bv.cachedVarianceMagnitude)
             if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
             bv.mesh.setColorAt(instanceId, _scratchColor)
@@ -6876,6 +6897,7 @@ export function Viewport3D({
             showVarianceColors={settings.showVarianceColors}
             clashByElementKey={clashByElementKey}
             showClashColors={settings.showClashColors}
+            renderMode={settings.renderMode}
           />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
           <PathGizmos

@@ -16,8 +16,8 @@ import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import {
-  applyRealisticToBatch, classIndexForMesh, classReplacesColour, clearRealisticFromBatch, disposeRealisticVariant,
-  getRealisticVariant, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
+  applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
+  getRealisticVariant, realisticInstanceBase, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy, disposeClonedBatch } from './sceneClone'
@@ -136,11 +136,10 @@ const PANE_WHITE = new THREE.Color(1, 1, 1)
 // carries its own colour — same rule as Viewport3D.tsx's
 // applyBatchSelectionColour. Alpha reset to 1 (the primary's Fade
 // Unselected isn't a pane concept).
-function writeClonedBatchColours(batch: BatchState, realisticClasses: Uint8Array | undefined) {
+function writeClonedBatchColours(batch: BatchState, realistic: boolean) {
   for (const infos of batch.byExpressId.values()) {
     for (const info of infos) {
-      const replaces = realisticClasses !== undefined && classReplacesColour(realisticClasses[info.instanceId])
-      batch.mesh.setColorAt(info.instanceId, replaces ? PANE_WHITE : info.color)
+      batch.mesh.setColorAt(info.instanceId, realistic ? realisticInstanceBase(batch.mesh, info.instanceId, info.color, PANE_WHITE) : info.color)
     }
   }
   const colorsTexture = (batch.mesh as unknown as { _colorsTexture: THREE.DataTexture | null })._colorsTexture
@@ -339,7 +338,7 @@ export function ComparisonViewportPane({
             : renderMode === 'hiddenLine' ? getHiddenLineMaterial(batchMat, HIDDEN_LINE_BASE_COLOR, true)
             : batchMat
         }
-        writeClonedBatchColours(batch, renderMode === 'realistic' ? batch.mesh.userData.realisticActiveClasses as Uint8Array | undefined : undefined)
+        writeClonedBatchColours(batch, renderMode === 'realistic')
         const existingEdges = clone.userData.edgesBatch as EdgesBatch | undefined
         if (wantsEdges && !existingEdges) {
           const edgesBatch = buildEdgesBatch(clone)
@@ -363,9 +362,11 @@ export function ComparisonViewportPane({
             // material with its own base-colour texture (an override, or an
             // authored model texture) is shown as-is.
             const realisticClass = mat.map ? 0 : classIndexForMesh(child, mat, realisticInfo, realisticMapping)
-            if (realisticClass > 0) {
+            const colourOverride = mat.map ? null : colourOverrideForMesh(child, mat, realisticInfo, realisticMapping)
+            if (realisticClass > 0 || colourOverride) {
               return getRealisticVariant(
                 mat, realisticClass, undefined, realisticGlassTransmission, (child.userData.ifcColorAlpha as number | undefined) ?? 1,
+                colourOverride,
               )
             }
           }
@@ -611,6 +612,7 @@ export function ComparisonViewportPane({
             paths={paths}
             pathFollowers={pathFollowers}
             dateField={dateField}
+            renderMode={renderMode}
             // Always null (2026-07-22) — this pane is a read-only cloned
             // snapshot with no click/selection interaction of its own, so
             // it can never trigger the live pane's own materialize-on-click

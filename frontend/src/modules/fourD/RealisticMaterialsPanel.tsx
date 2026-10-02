@@ -1,8 +1,35 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import {
-  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, type RealisticEntryModel, type RealisticMapping, type RealisticMaterialEntry,
-  type RealisticMaterialMap,
+  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, withColourOverride,
+  type RealisticEntryModel, type RealisticMapping, type RealisticMaterialEntry, type RealisticMaterialMap,
 } from './realisticMaterials'
+
+// Per-material colour override (2026-10-02, per Maro: "allow me to change
+// material color in general") — a swatch on each row; empty outline = no
+// override (the class/imported colour shows). The picker is anchored at
+// page level so this narrow docked panel can't clip it.
+function OverrideSwatch({ value, onChange, recentColors }: { value: string | null; onChange: (hex: string | null) => void; recentColors: string[] }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLButtonElement>(null)
+  return (
+    <div className="flex items-center gap-0.5 shrink-0">
+      <button
+        ref={ref}
+        onClick={() => { if (!value) onChange(recentColors[0] ?? '#8b6b4a'); setOpen(v => !v) }}
+        title={value ? `Colour override ${value} — click to change` : 'Set a colour for this material'}
+        className={`w-5 h-5 rounded border ${value ? 'border-gray-300 dark:border-prosota-line' : 'border-dashed border-gray-300 dark:border-prosota-line bg-[linear-gradient(135deg,transparent_45%,#d1d5db_45%,#d1d5db_55%,transparent_55%)]'}`}
+        style={value ? { backgroundColor: value } : undefined}
+      />
+      {value && (
+        <button onClick={() => { onChange(null); setOpen(false) }} title="Remove colour override" className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
+      )}
+      {open && value && (
+        <ColorPickerPopover value={value} onChange={onChange} onClose={() => setOpen(false)} anchor={ref.current} recentColors={recentColors} />
+      )}
+    </div>
+  )
+}
 
 // "NBU_MedicalClinic_Eng-MEP-Optimized.ifc" -> "Eng-MEP-Optimized": the part
 // after the last shared-looking prefix separator, extension dropped.
@@ -45,6 +72,7 @@ export function RealisticMaterialsPanel({
     && (!query || e.label.toLowerCase().includes(query) || e.detail.toLowerCase().includes(query)),
   )
 
+  const recentColours = colourOverridesInUse(mapping)
   const setEntry = (key: string, value: RealisticMapping | 'auto') => {
     const next = { ...mapping }
     if (value === 'auto') delete next[key]
@@ -125,6 +153,11 @@ export function RealisticMaterialsPanel({
                   <option value="original">Keep imported look</option>
                   {REALISTIC_CLASSES.map(cls => <option key={cls} value={cls}>{REALISTIC_CLASS_LABELS[cls]}</option>)}
                 </select>
+                <OverrideSwatch
+                  value={colourOverrideHex(entry.key, mapping)}
+                  onChange={hex => onMappingChange(withColourOverride(mapping, entry.key, hex))}
+                  recentColors={recentColours}
+                />
               </div>
             </div>
           )

@@ -322,6 +322,68 @@ export function classIndexForKey(key: string | undefined, info: RealisticModelIn
   return auto ? CLASS_INDEX[auto] : 0
 }
 
+// Per-material colour override (2026-10-02, per Maro: "allow me to change
+// material color in general"). Stored in the same mapping object as the
+// class choices, under "colour:<key>", so it travels everywhere the mapping
+// already does (persistence, staleness checks, the Baseline pane) — nothing
+// iterates the mapping's keys, and class lookups only ever read real keys.
+// When set, it becomes the material's base colour in Realistic mode: it
+// replaces the imported colour outright, and for a textured class (timber,
+// brick, ...) it tints the texture instead of leaving it its own colour.
+const COLOUR_KEY_PREFIX = 'colour:'
+const overrideColourCache = new Map<string, THREE.Color>()
+export function colourOverrideHex(key: string | undefined, mapping: RealisticMaterialMap): string | null {
+  if (key === undefined) return null
+  const hex = (mapping as Record<string, string>)[COLOUR_KEY_PREFIX + key]
+  return typeof hex === 'string' && /^#[0-9a-f]{6}$/i.test(hex) ? hex : null
+}
+export function colourOverrideForKey(key: string | undefined, mapping: RealisticMaterialMap): THREE.Color | null {
+  const hex = colourOverrideHex(key, mapping)
+  if (!hex) return null
+  let colour = overrideColourCache.get(hex)
+  if (!colour) { colour = new THREE.Color(hex); overrideColourCache.set(hex, colour) }
+  return colour
+}
+export function withColourOverride(mapping: RealisticMaterialMap, key: string, hex: string | null): RealisticMaterialMap {
+  const next = { ...mapping } as Record<string, string>
+  if (hex) next[COLOUR_KEY_PREFIX + key] = hex
+  else delete next[COLOUR_KEY_PREFIX + key]
+  return next as RealisticMaterialMap
+}
+// Every colour override in use, for the picker's "recent" swatches.
+export function colourOverridesInUse(mapping: RealisticMaterialMap): string[] {
+  return [...new Set(Object.entries(mapping as Record<string, string>)
+    .filter(([k, v]) => k.startsWith(COLOUR_KEY_PREFIX) && typeof v === 'string')
+    .map(([, v]) => v.toLowerCase()))]
+}
+// The per-instance base colour every batch colour writer uses (ModelObjects'
+// selection pass, the timeline's colour loop, the Baseline pane): the
+// override if any, white under a class whose texture carries its own colour,
+// otherwise the element's imported colour.
+export function realisticInstanceBase(
+  mesh: THREE.BatchedMesh, instanceId: number, imported: THREE.Color, white: THREE.Color,
+): THREE.Color {
+  const override = (mesh.userData.realisticInstanceColours as (THREE.Color | null)[] | undefined)?.[instanceId]
+  if (override) return override
+  const classes = mesh.userData.realisticActiveClasses as Uint8Array | undefined
+  return classes && classReplacesColour(classes[instanceId]) ? white : imported
+}
+
+function meshKey(mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined): string | undefined {
+  const expressID = mesh.userData.expressID as number | undefined
+  if (expressID !== undefined) {
+    const geometryId = mesh.userData.ifcGeometryId as number | undefined
+    return (geometryId !== undefined ? info?.keyByPiece.get(`${expressID}:${geometryId}`) : undefined)
+      ?? info?.keyByExpressId.get(expressID)
+  }
+  return meshMaterialKey(material)
+}
+export function colourOverrideForMesh(
+  mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap,
+): THREE.Color | null {
+  return colourOverrideForKey(meshKey(mesh, material, info), mapping)
+}
+
 // Class for one individual (non-batched) mesh's material.
 export function classIndexForMesh(
   mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap,
@@ -883,7 +945,7 @@ const WHITE = new THREE.Color(1, 1, 1)
 // baseline view").
 export function getRealisticVariant(
   source: THREE.MeshStandardMaterial, classIndex: number, original: THREE.Color | undefined, glassTransmission: boolean,
-  ifcAlpha = 1,
+  ifcAlpha = 1, colourOverride: THREE.Color | null = null,
 ): THREE.Material {
   const kind = classIndex === GLASS_CLASS ? (glassTransmission ? 'glass-t' : 'glass') : 'surface'
   let variant = source.userData.realisticVariant as THREE.Material | undefined
@@ -898,6 +960,7 @@ export function getRealisticVariant(
   }
   variant.userData.realisticClass = classIndex
   variant.userData.realisticIfcAlpha = ifcAlpha
+  variant.userData.realisticOverride = colourOverride
   if (original) variant.userData.realisticOriginal = original
   syncRealisticVariant(source)
   return variant
@@ -911,8 +974,9 @@ export function syncRealisticVariant(source: THREE.MeshStandardMaterial) {
   if (!variant) return
   const classIndex = variant.userData.realisticClass as number
   const original = variant.userData.realisticOriginal as THREE.Color | undefined
+  const override = variant.userData.realisticOverride as THREE.Color | null | undefined
   if (classIndex === GLASS_CLASS) {
-    tintRatio(variant.color, source.color, original, GLASS_TINT)
+    tintRatio(variant.color, source.color, original, override ?? GLASS_TINT)
     const transmission = (variant as THREE.MeshPhysicalMaterial).transmission > 0
     const ifcAlpha = (variant.userData.realisticIfcAlpha as number | undefined) ?? 1
     // min, not product: a Baseline-pane clone's material still carries the
@@ -921,7 +985,8 @@ export function syncRealisticVariant(source: THREE.MeshStandardMaterial) {
     // IFC value, never squared.
     variant.opacity = (transmission ? 1 : GLASS_ALPHA) * Math.min(source.opacity, ifcAlpha)
   } else {
-    if (classReplacesColour(classIndex)) tintRatio(variant.color, source.color, original, WHITE)
+    if (override) tintRatio(variant.color, source.color, original, override)
+    else if (classReplacesColour(classIndex)) tintRatio(variant.color, source.color, original, WHITE)
     else variant.color.copy(source.color)
     variant.opacity = source.opacity
     variant.transparent = source.transparent
@@ -1104,6 +1169,23 @@ export function applyRealisticToBatch(
   // Read by Viewport3D's per-instance colour write: colour-replacing classes
   // get a white base so the texture's own colour shows.
   batch.mesh.userData.realisticActiveClasses = state.classes
+  // Per-instance colour overrides (see colourOverrideForKey) — rebuilt
+  // whenever the mapping object changes, same staleness rule as classes.
+  if (batch.mesh.userData.realisticInstanceColoursMapping !== mapping || batch.mesh.userData.realisticInstanceColoursInfo !== info) {
+    const colours: (THREE.Color | null)[] = []
+    if (info && !suppressed) {
+      for (const [expressID, infos] of batch.byExpressId) {
+        for (const inst of infos) {
+          const key = info.keyByPiece.get(`${expressID}:${inst.ifcGeometryId}`) ?? info.keyByExpressId.get(expressID)
+          const colour = colourOverrideForKey(key, mapping)
+          if (colour) colours[inst.instanceId] = colour
+        }
+      }
+    }
+    batch.mesh.userData.realisticInstanceColours = colours
+    batch.mesh.userData.realisticInstanceColoursMapping = mapping
+    batch.mesh.userData.realisticInstanceColoursInfo = info
+  }
 
   if (state.glass && (state.glass.classes !== state.classes || state.glass.transmission !== glassTransmission)) {
     disposeGlassBatch(state.glass)
@@ -1136,6 +1218,9 @@ export function clearRealisticFromBatch(batch: BatchState) {
     delete batch.mesh.userData.realistic
   }
   delete batch.mesh.userData.realisticActiveClasses
+  delete batch.mesh.userData.realisticInstanceColours
+  delete batch.mesh.userData.realisticInstanceColoursMapping
+  delete batch.mesh.userData.realisticInstanceColoursInfo
   const batchMaterial = batch.mesh.userData.standardMaterial as THREE.Material | undefined
   const variant = batchMaterial?.userData.realisticBatchVariant as THREE.Material | undefined
   if (variant) {
