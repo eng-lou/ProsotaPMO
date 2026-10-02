@@ -4357,13 +4357,16 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
   // drag through untouched, while still re-applying correctly the moment
   // any of those three actually change (activation, Add Keyframe/lens
   // edits, or scrubbing/playing the timeline).
-  const lastAppliedRef = useRef<{ camera: CinematicCamera; keyframes: ElementKeyframe[]; dateMs: number } | null>(null)
+  // `viewCamera` in the cache key (2026-10-02): toggling perspective/
+  // orthographic while looking through a camera swaps R3F's camera, which
+  // must re-apply the shot straight away.
+  const lastAppliedRef = useRef<{ camera: CinematicCamera; keyframes: ElementKeyframe[]; dateMs: number; viewCamera: THREE.Camera } | null>(null)
   useFrame(() => {
     if (!activeCamera) { lastAppliedRef.current = null; return }
     const now = timelineDateRef.current ?? new Date()
     const last = lastAppliedRef.current
-    if (last && last.camera === activeCamera && last.keyframes === elementKeyframes && last.dateMs === now.getTime()) return
-    lastAppliedRef.current = { camera: activeCamera, keyframes: elementKeyframes, dateMs: now.getTime() }
+    if (last && last.camera === activeCamera && last.keyframes === elementKeyframes && last.dateMs === now.getTime() && last.viewCamera === camera) return
+    lastAppliedRef.current = { camera: activeCamera, keyframes: elementKeyframes, dateMs: now.getTime(), viewCamera: camera }
     const resolve = (field: KeyframeField, base: number): number => {
       const track = elementKeyframes
         .filter(k => k.source_kind === 'camera' && k.element_ref === activeCamera.id && k.field === field)
@@ -4389,6 +4392,23 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
       camera.fov = fovFromFocalLength(resolve('focal_length', activeCamera.base_focal_length))
       camera.near = resolve('clip_start', activeCamera.base_clip_start)
       camera.far = resolve('clip_end', activeCamera.base_clip_end)
+      camera.updateProjectionMatrix()
+    } else if (camera instanceof THREE.OrthographicCamera) {
+      // Orthographic view through a camera (2026-10-02, per Maro: "the
+      // orthographic change is not reflected in camera mode"). The shot's
+      // equivalent framing: the height its focal length shows at its own
+      // target in perspective becomes the orthographic visible height, so
+      // keyframed focal length still zooms the shot. Same near = -far as
+      // ProjectionController (zoom never moves the camera).
+      const fov = fovFromFocalLength(resolve('focal_length', activeCamera.base_focal_length))
+      const target = controls?.target ?? new THREE.Vector3(
+        resolve('target_x', activeCamera.base_target_x), resolve('target_y', activeCamera.base_target_y), resolve('target_z', activeCamera.base_target_z),
+      )
+      const distance = Math.max(camera.position.distanceTo(target), 1e-3)
+      const visibleHeight = 2 * distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2)
+      camera.zoom = (camera.top - camera.bottom) / visibleHeight
+      camera.far = resolve('clip_end', activeCamera.base_clip_end)
+      camera.near = -camera.far
       camera.updateProjectionMatrix()
     }
   })
@@ -4422,8 +4442,9 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 // - near = -far on the ortho camera, as Blender's ortho clipping effectively
 //   behaves: zooming in an orthographic view never moves the camera, so
 //   geometry between the camera and the pivot must never be near-clipped.
-// - A Cinematic Camera (activeCameraId) always looks through perspective —
-//   its own focal length only means something there (forcePerspective).
+// - Looking through a Cinematic Camera follows the same setting
+//   (2026-10-02): ActiveCameraPose frames an orthographic view from the
+//   camera's focal length at its own target distance.
 function ProjectionController({ orthographic, controlsRef }: {
   orthographic: boolean
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
@@ -5935,6 +5956,20 @@ export function Viewport3D({
   // (settings.fieldOfView converted to an equivalent starting focal
   // length, so a freshly-created camera looks like whatever's already on
   // screen rather than snapping to an arbitrary 50mm default).
+  // The live view's lens as a camera focal length (2026-10-02): from the
+  // perspective camera's own fov, or — in orthographic — the fov that would
+  // show the same visible height at the orbit target, so a camera created or
+  // keyframed in an ortho view re-frames to what was on screen (the inverse
+  // of ActiveCameraPose's ortho branch).
+  const liveFocalLength = (camera: THREE.Camera, target: THREE.Vector3, fallbackFov: number): number => {
+    if (camera instanceof THREE.PerspectiveCamera) return focalLengthFromFov(camera.fov)
+    if (camera instanceof THREE.OrthographicCamera) {
+      const distance = Math.max(camera.position.distanceTo(target), 1e-3)
+      const visibleHeight = (camera.top - camera.bottom) / camera.zoom
+      return focalLengthFromFov(THREE.MathUtils.radToDeg(2 * Math.atan(visibleHeight / (2 * distance))))
+    }
+    return focalLengthFromFov(fallbackFov)
+  }
   const handleAddCamera = () => {
     const camera = cameraRef.current
     const controls = controlsRef.current
@@ -5942,7 +5977,9 @@ export function Viewport3D({
     onAddCamera({
       base_position_x: camera.position.x, base_position_y: camera.position.y, base_position_z: camera.position.z,
       base_target_x: controls.target.x, base_target_y: controls.target.y, base_target_z: controls.target.z,
-      base_focal_length: focalLengthFromFov(settings.fieldOfView),
+      base_focal_length: camera instanceof THREE.OrthographicCamera
+        ? liveFocalLength(camera, controls.target, settings.fieldOfView)
+        : focalLengthFromFov(settings.fieldOfView),
       base_clip_start: settings.clipStart, base_clip_end: settings.clipEnd,
     })
   }
@@ -5962,7 +5999,7 @@ export function Viewport3D({
     const date = timelineDateRef.current ?? new Date()
     const lens = camera instanceof THREE.PerspectiveCamera
       ? { base_focal_length: focalLengthFromFov(camera.fov), base_clip_start: camera.near, base_clip_end: camera.far }
-      : { base_focal_length: focalLengthFromFov(settings.fieldOfView), base_clip_start: settings.clipStart, base_clip_end: settings.clipEnd }
+      : { base_focal_length: liveFocalLength(camera, controls.target, settings.fieldOfView), base_clip_start: settings.clipStart, base_clip_end: camera instanceof THREE.OrthographicCamera ? camera.far : settings.clipEnd }
     onKeyCameraPose(activeCameraId, date, {
       base_position_x: camera.position.x, base_position_y: camera.position.y, base_position_z: camera.position.z,
       base_target_x: controls.target.x, base_target_y: controls.target.y, base_target_z: controls.target.z,
@@ -7027,7 +7064,7 @@ export function Viewport3D({
             pose when the timeline date itself actually changes, so it
             never fights a live drag at a static date). */}
         <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
-        <ProjectionController orthographic={settings.orthographic && activeCameraId === null} controlsRef={controlsRef} />
+        <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual
