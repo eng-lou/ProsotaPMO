@@ -481,6 +481,7 @@ export interface ExtractedElement {
   // uses these to put elements on a building-wide level by where they
   // actually sit, working out which axis is vertical from the data itself.
   boxMinMetres: [number, number, number]
+  boxMaxMetres: [number, number, number]
   sourceModelId: number
   // Length (columns/beams) or area (slabs/footings/walls), in metres or
   // square metres — a bounding-box approximation off the already-loaded
@@ -696,6 +697,7 @@ export async function extractScheduleElements(
         storeyName: storey?.name ?? 'Unassigned',
         storeyElevation: storey?.elevationMetres ?? null,
         boxMinMetres: [box.min.x * toMetres, box.min.y * toMetres, box.min.z * toMetres],
+        boxMaxMetres: [box.max.x * toMetres, box.max.y * toMetres, box.max.z * toMetres],
         sourceModelId: handle.modelID,
         quantity, quantityUnit, volumeM3,
       })

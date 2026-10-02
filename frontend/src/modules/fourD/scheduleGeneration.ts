@@ -854,6 +854,7 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
 // geometry doesn't line up with the declared elevations closely enough to
 // trust (a misaligned or rotated federated import).
 const MEP_ROUGH_IN_CATEGORIES: ReadonlySet<string> = new Set(['Mechanical Equipment', 'Ductwork', 'Piping', 'Electrical Containment'])
+const FRAME_CATEGORIES: ReadonlySet<ScheduleCategory> = new Set<ScheduleCategory>(['Columns', 'Beams', 'Slabs'])
 const LEVEL_MERGE_TOLERANCE_M = 0.3
 const LEVEL_PLACEMENT_TOLERANCE_M = 0.3
 const GEOMETRY_TRUST_SPREAD_M = 1.0
@@ -905,11 +906,29 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
     if (mad < spread) { spread = mad; axis = a; offset = m }
   }
   const trustGeometry = spread < GEOMETRY_TRUST_SPREAD_M
-  const geometryLevelIndex = (el: ExtractedElement): number => {
-    const elevation = el.boxMinMetres[axis] - offset
+  const levelIndexAtElevation = (elevation: number): number => {
     let index = 0
     for (let i = 0; i < levels.length; i++) if (levels[i].elevation <= elevation + LEVEL_PLACEMENT_TOLERANCE_M) index = i
     return index
+  }
+  const geometryLevelIndex = (el: ExtractedElement): number => levelIndexAtElevation(el.boxMinMetres[axis] - offset)
+  // The floor a frame member FORMS (2026-10-02, per Maro: "you can see the
+  // ground slab formed after" the first-floor steel). Columns rising to a
+  // level, the beams at that level and the slab on top of them are what
+  // create that floor, so they're grouped by their TOP — the ground slab
+  // (top 0.00) with the ground level, the 4.57 m beams/deck/columns with
+  // the 4.57 m level — and CATEGORY_ORDER's Columns -> Beams -> Slabs then
+  // reads as each floor's real frame cycle. Walls, MEP and finishes stay
+  // grouped by their bottom (the floor they stand on).
+  const frameLevelIndex = (el: ExtractedElement): number => {
+    const topIndex = levelIndexAtElevation(el.boxMaxMetres[axis] - offset)
+    if (el.category !== 'Columns') return topIndex
+    // A column belongs to the first floor it holds up — the first level
+    // above its base — not its top: a continuous two-storey column grouped
+    // at its top would make the beams of the floor in between wait for it.
+    const base = el.boxMinMetres[axis] - offset
+    const firstAbove = levels.findIndex(l => l.elevation > base + LEVEL_PLACEMENT_TOLERANCE_M)
+    return firstAbove === -1 ? topIndex : Math.min(firstAbove, topIndex)
   }
 
   // 3. Place every element.
@@ -926,7 +945,9 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
     // after that level's columns). A footing belongs to the level it's
     // poured at, whatever storey the model hangs it on.
     const substructure = el.category === 'Foundation' || el.category === 'Piling'
-    const index = fromDeclared === null ? fromGeometry!
+    const frame = FRAME_CATEGORIES.has(el.category)
+    const index = trustGeometry && frame ? frameLevelIndex(el)
+      : fromDeclared === null ? fromGeometry!
       : fromGeometry === null ? fromDeclared
       : substructure ? fromGeometry
       : Math.max(fromDeclared, fromGeometry)
@@ -1753,6 +1774,12 @@ export function buildStagedSchedule(
   // Each storey's own first MEP rough-in activity (2026-10-02) — see the
   // "slab above" edges added after this loop.
   const firstMepRoughInByStorey: (string | null)[] = []
+  // Below-slab services (2026-10-02): last MEP rough-in activity, first
+  // Slabs activity, and whether the storey holds foundations — see the
+  // substructure branch after this loop.
+  const lastMepRoughInByStorey: (string | null)[] = []
+  const firstSlabsByStorey: (string | null)[] = []
+  const hasFoundationByStorey: boolean[] = []
   storeys.forEach((storey, storeyIndex) => {
     const wbsTempId = `wbs-storey-${storeyIndex}`
     activities.push({
@@ -1774,6 +1801,8 @@ export function buildStagedSchedule(
     let lastNonLateTempId: string | null = null
     let firstLateTempId: string | null = null
     let firstMepRoughInTempId: string | null = null
+    let lastMepRoughInTempId: string | null = null
+    let firstSlabsTempId: string | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
       const phases = resolvePhases(category.name)
@@ -1862,7 +1891,8 @@ export function buildStagedSchedule(
         // phase, if it has one.
         if (!isLate) lastNonLateTempId = tempId
         else if (firstLateTempId === null) firstLateTempId = tempId
-        if (MEP_ROUGH_IN_CATEGORIES.has(category.name)) firstMepRoughInTempId ??= tempId
+        if (MEP_ROUGH_IN_CATEGORIES.has(category.name)) { firstMepRoughInTempId ??= tempId; lastMepRoughInTempId = tempId }
+        if (category.name === 'Slabs') firstSlabsTempId ??= tempId
         if (previousTempId) {
           relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
         }
@@ -1874,6 +1904,9 @@ export function buildStagedSchedule(
       firstTempId, lastTempId: previousTempId,
     })
     firstMepRoughInByStorey.push(firstMepRoughInTempId)
+    lastMepRoughInByStorey.push(lastMepRoughInTempId)
+    firstSlabsByStorey.push(firstSlabsTempId)
+    hasFoundationByStorey.push(storey.categories.some(c => c.name === 'Foundation' || c.name === 'Piling'))
     // Skipped when this storey's own local category order runs Facade
     // before Walls (2026-07-17 fix, per a real "circular dependency"
     // rejection from schedule_bulk_generate.py) — this used to be reachable
@@ -2017,6 +2050,17 @@ export function buildStagedSchedule(
   // work instead, and linking back into that could close a cycle.
   for (let i = 0; i < storeys.length; i++) {
     const mepStart = firstMepRoughInByStorey[i]
+    // Substructure level (holds the foundations): its services run in the
+    // ground UNDER the slab above — measured on the Medical Clinic, 1,292
+    // duct fittings and 110 pipes at -0.3..-0.55 m, between the footings
+    // and the 0.00 m ground slab — so the rule flips: they must be finished
+    // before that slab is poured, not wait for it.
+    if (hasFoundationByStorey[i]) {
+      const mepEnd = lastMepRoughInByStorey[i]
+      const slabAbove = firstSlabsByStorey.slice(i + 1).find(id => id)
+      if (mepEnd && slabAbove) relationships.push({ predecessor_temp_id: mepEnd, successor_temp_id: slabAbove, relationship_type: 'FS', lag_hours: 0 })
+      continue
+    }
     if (!mepStart || !handoffByStorey[i].lastStructuralTempId) continue
     const above = handoffByStorey.slice(i + 1).find(h => h.lastStructuralTempId)
     if (above?.lastStructuralTempId) {
