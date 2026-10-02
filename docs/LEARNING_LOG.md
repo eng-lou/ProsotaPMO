@@ -6337,3 +6337,20 @@ Windows character set unless told otherwise. Using it to rewrite a source
 file garbled every special character in it (dashes, × signs). That was
 caught by an unexpectedly large diff and fully restored, so always check the
 size of a diff before committing.
+
+## 2026-10-02 — Animation profiles: domino effect and better colour input
+
+**Domino / offset.** Each animation profile has a new "Offset (domino)"
+slider. At 0% every element linked to an activity animates together, as
+before. Above 0%, elements take turns in the chosen order (along X, along Y,
+bottom to top, or random, optionally reversed). At 50%, for example, the
+first element animates during the first half of the activity and the last
+during the second half.
+
+**Colours.** Colour from/to now has a hex box (typing "f59" works as
+"#ff5599"). The picker opens over the panel instead of being cut off by it,
+and it shows the colours this project's profiles already use.
+
+**Lesson.** The backend quietly discarded any profile setting it didn't
+recognise. A new option has to be added on both sides, and a test that saves
+and reloads it is what proves that.
