@@ -6354,3 +6354,16 @@ and it shows the colours this project's profiles already use.
 **Lesson.** The backend quietly discarded any profile setting it didn't
 recognise. A new option has to be added on both sides, and a test that saves
 and reloads it is what proves that.
+
+## 2026-10-02 — Capture at a chosen moment; video over a chosen range
+
+**What.** In ⚙ Render/Capture settings: "Capture at" picks the moment an
+image is taken, and "From"/"To" pick the stretch of the timeline a video
+covers. They're typed in whatever unit the Animation Timeline shows (date,
+seconds or frames). Left empty, they behave as before (current position;
+whole schedule).
+
+**How capture stays exact.** Instead of moving the timeline to the chosen
+moment and back, the 3D view is told "pretend it's this moment" just for
+the capture. The timeline never moves, so nothing needs restoring, and it
+works even while the timeline is playing.
