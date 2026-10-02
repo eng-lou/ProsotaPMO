@@ -6487,3 +6487,14 @@ services go in before the ground slab.
 **Result on the real model.** Footings → columns → below-slab services →
 ground slab → next floor's columns → beams → deck → services below that
 deck, and so on up to the roof.
+
+## 2026-10-03 — Partition walls stood before the beams above them
+
+**Cause.** Interior partitions run up to the underside of the floor above,
+so on site they go in after that floor's beams and deck. Only ducts and
+pipes had the "wait for the floor above" rule, so the ground-floor
+partitions were built before the steel above them.
+
+**Fix.** Non-structural partitions now follow the same rule as ceiling
+services. On the real model, the ground-floor partitions start after the
+second-floor deck, and the second-floor partitions after the roof slab.
