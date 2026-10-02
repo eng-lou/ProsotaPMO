@@ -6383,3 +6383,29 @@ track stayed in the timeline. They're now deleted together.
 
 **Lesson.** When something is moving on screen, any code that "reads where
 it is now" can catch it mid-motion. Remember the original value instead.
+
+## 2026-10-02 — Generated schedule put ductwork before the floor above it
+
+**Symptom.** On the Medical Clinic, the generated 4D sequence showed
+ground-floor ductwork hanging in mid-air before the beams and slab above it
+existed.
+
+**Cause.** The generator grouped work by storey *name*. The architectural,
+structural and HVAC files call the ground level "First Floor", but the
+electrical and MEP files call the same level "Level 1". They became two
+separate "storeys", and the MEP one got slotted into the structural
+sequence in the wrong place.
+
+**Fix.** Levels are now built from *elevations* across all files, and every
+element is placed by where it physically sits, never by its storey's name.
+A floor's ducts and pipes also now wait for the structure of the floor
+above, which they hang from. Tested on the real five-file model: ground-floor
+MEP now starts after the slab above it is complete.
+
+**Also today.** Realistic material colours no longer flip back to the
+original colour during playback, materials can be given any colour, and
+orthographic view now works when looking through a camera.
+
+**Lesson.** In a model made of several discipline files, names are each
+author's own choice. Measurements like elevations and positions are what
+the files actually agree on.
