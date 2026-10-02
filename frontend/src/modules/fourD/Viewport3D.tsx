@@ -4372,6 +4372,51 @@ function ProjectionController({ orthographic, controlsRef }: {
   const invalidate = useThree(s => s.invalidate)
   const [perspective] = useState(() => get().camera as THREE.PerspectiveCamera)
   const [ortho] = useState(() => new THREE.OrthographicCamera())
+
+  // Sky/HDR backgrounds in orthographic (2026-10-02, per Maro: "in
+  // orthographic there is some kind of cube in the middle"). three.js draws
+  // a cube-map or equirect scene.background as a 1-unit box centred on the
+  // camera (WebGLBackground's boxMesh) — under perspective that box fills
+  // the view, but an orthographic projection draws it at its true tiny size:
+  // a little sky-coloured square floating in the middle of the scene. A
+  // plain 2D texture background is drawn as a full-screen plane instead,
+  // which works in either projection, so while orthographic any such
+  // background is swapped for a flat sky gradient (Blender shows the world
+  // background flat in ortho too) and put back the moment it's
+  // perspective again. Checked every frame because drei's <Environment>
+  // re-assigns scene.background whenever its own props change. The sky
+  // still lights the scene — only the visible backdrop changes.
+  const scene = useThree(s => s.scene)
+  const [orthoBackdrop] = useState(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 2
+    canvas.height = 256
+    const ctx = canvas.getContext('2d')!
+    const g = ctx.createLinearGradient(0, 0, 0, 256)
+    g.addColorStop(0, '#9fbbd8')
+    g.addColorStop(0.65, '#dfe7ef')
+    g.addColorStop(1, '#f1f3f5')
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, 2, 256)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    return texture
+  })
+  const stashedBackgroundRef = useRef<THREE.Texture | null>(null)
+  useEffect(() => () => orthoBackdrop.dispose(), [orthoBackdrop])
+  useFrame(() => {
+    const background = scene.background
+    if (orthographic) {
+      if (background instanceof THREE.Texture && background !== orthoBackdrop
+        && ((background as THREE.CubeTexture).isCubeTexture || background.mapping !== THREE.UVMapping)) {
+        stashedBackgroundRef.current = background
+        scene.background = orthoBackdrop
+      }
+    } else if (background === orthoBackdrop) {
+      scene.background = stashedBackgroundRef.current
+      stashedBackgroundRef.current = null
+    }
+  })
   useEffect(() => {
     const current = get().camera
     const controls = controlsRef.current
