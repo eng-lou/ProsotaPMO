@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
+import type { BatchState } from './elementBatching'
 
 // Visible ground for Realistic Materials mode (2026-10-02, per Maro,
 // comparing against another BIM viewer's sun-lit still: buildings there sit
@@ -63,28 +64,76 @@ function makeGroundTexture(): THREE.CanvasTexture {
   return texture
 }
 
-// Where the ground should sit, on the world up axis (2026-10-02, per Maro
-// live: "not even the right height" — the building floated well above the
-// ground). The overall scene bounding box's minimum is set by the single
-// lowest thing loaded, and real federated IFCs routinely contain a few
-// stray elements (deep piles, a misplaced family, an annotation) far below
-// the actual building. Taking a low percentile of every visible mesh's own
-// bottom instead lands on the ground floor that most of the model's
-// geometry actually starts from, ignoring a handful of outliers.
+// Where the ground should sit, on the world up axis.
+//
+// 2026-10-02, second pass (per Maro live: the building still floated far
+// above the ground). The first version took a low percentile of each
+// visible *mesh's* bottom — but nearly every IFC element lives inside one
+// shared THREE.BatchedMesh per model (elementBatching.ts), so a 5-model
+// scene gave only a handful of samples, each spanning a whole model, and
+// the "percentile" collapsed back to the single lowest thing loaded.
+//
+// Now: one sample per *element* — each visible batch instance's own world
+// bounding-box bottom, plus every individual (materialized/mirrored) mesh —
+// bucketed into height bins. The ground goes at the lowest bin holding at
+// least ~1% of all elements, i.e. the lowest level where the building
+// genuinely starts, so a few deep piles, a misplaced family or a stray
+// element far below can't drag it down, however far away they are.
 export function computeGroundElevation(objects: THREE.Object3D[], zUp: boolean, fallback: number): number {
   const bottoms: number[] = []
   const box = new THREE.Box3()
+  const matrix = new THREE.Matrix4()
+  const push = (b: THREE.Box3) => { if (!b.isEmpty()) bottoms.push(zUp ? b.min.z : b.min.y) }
   for (const root of objects) {
+    if (!root.visible) continue
     root.updateMatrixWorld(true)
     root.traverseVisible(child => {
-      if (!(child instanceof THREE.Mesh)) return
-      box.makeEmpty().expandByObject(child)
-      if (!box.isEmpty()) bottoms.push(zUp ? box.min.z : box.min.y)
+      if (child instanceof THREE.BatchedMesh) {
+        // The model root holding userData.batch (ifcModel.ts) may sit below
+        // whatever wrapper groups the caller passed in, so walk up from the
+        // batch itself rather than assuming it's `root`.
+        let owner: THREE.Object3D | null = child.parent
+        while (owner && !owner.userData.batch) owner = owner.parent
+        const batch = owner?.userData.batch as BatchState | undefined
+        if (batch && batch.mesh === child) {
+          for (const infos of batch.byExpressId.values()) {
+            for (const { instanceId } of infos) {
+              if (!child.getVisibleAt(instanceId)) continue
+              child.getBoundingBoxAt(child.getGeometryIdAt(instanceId), box)
+              child.getMatrixAt(instanceId, matrix)
+              push(box.applyMatrix4(matrix.premultiply(child.matrixWorld)))
+            }
+          }
+          return
+        }
+        // Any other batch (Realistic mode's glass-only mirror batches) only
+        // duplicates instances already counted above, and its raw geometry
+        // bounding box isn't in instance-placed space anyway.
+        return
+      }
+      if (child instanceof THREE.Mesh) {
+        const geometry = child.geometry as THREE.BufferGeometry
+        if (!geometry.boundingBox) geometry.computeBoundingBox()
+        if (geometry.boundingBox) push(box.copy(geometry.boundingBox).applyMatrix4(child.matrixWorld))
+      }
     })
   }
   if (bottoms.length === 0) return fallback
-  bottoms.sort((a, b) => a - b)
-  return bottoms[Math.floor(bottoms.length * 0.05)]
+  let min = Infinity, max = -Infinity
+  for (const b of bottoms) { if (b < min) min = b; if (b > max) max = b }
+  if (!(max > min)) return min
+  const BINS = 400
+  const binSize = (max - min) / BINS
+  const counts = new Array<number>(BINS + 1).fill(0)
+  const lowest = new Array<number>(BINS + 1).fill(Infinity)
+  for (const b of bottoms) {
+    const i = Math.floor((b - min) / binSize)
+    counts[i]++
+    if (b < lowest[i]) lowest[i] = b
+  }
+  const threshold = Math.max(3, bottoms.length * 0.01)
+  for (let i = 0; i <= BINS; i++) if (counts[i] >= threshold) return lowest[i]
+  return min
 }
 
 export function RealisticGround({ position, rotation, modelRadius }: {

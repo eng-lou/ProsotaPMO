@@ -6545,7 +6545,7 @@ export function Viewport3D({
           {/* Realistic mode gets a visible textured ground instead (see
               RealisticGround.tsx) — unless Site Context's real 3D Tiles
               terrain is on, which is already the ground. */}
-          {settings.renderMode === 'realistic' && !siteContext?.enabled && importedObjects.length > 0 ? (
+          {settings.renderMode === 'realistic' && settings.realisticGround && !siteContext?.enabled && importedObjects.length > 0 ? (
             <RealisticGround position={realisticGroundPosition} rotation={groundRotation} modelRadius={modelBounds.radius} />
           ) : settings.shadows && (
             <mesh position={groundPosition} rotation={groundRotation} receiveShadow>

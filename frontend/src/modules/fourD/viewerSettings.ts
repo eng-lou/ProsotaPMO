@@ -184,6 +184,9 @@ export interface ViewerSettings {
   // frame) instead of the cheap transparent-with-reflections glass. Off by
   // default for the same GPU-cost reason as shadows/AO.
   realisticGlassTransmission: boolean
+  // Realistic Materials mode only: the visible textured ground plane
+  // (RealisticGround.tsx). On by default; toggleable per Maro (2026-10-02).
+  realisticGround: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -209,6 +212,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   tilesErrorTarget: 16,
   tilesCacheSizeMb: 400,
   realisticGlassTransmission: false,
+  realisticGround: true,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

@@ -279,6 +279,16 @@ export function PropertiesPanel({
           title="Procedural sky synced to Sun Azimuth/Elevation, replacing the static HDR — the visible sky, its lighting, and cast shadows all move together with the sun controls. A real, ongoing GPU cost, off by default"
         />
       </Row>
+      {settings.renderMode === 'realistic' && (
+        <Row label="Ground">
+          <input
+            type="checkbox"
+            checked={settings.realisticGround}
+            onChange={e => set('realisticGround', e.target.checked)}
+            title="Textured ground under the model that catches the sun's shadow (Realistic Materials mode)"
+          />
+        </Row>
+      )}
       <Row label="Ambient Occlusion">
         <input
           type="checkbox"
