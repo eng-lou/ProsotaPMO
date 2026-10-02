@@ -32,18 +32,30 @@ export { ensureMaterialized, type BatchInstanceInfo, type BatchState } from './e
 // web-ifc version ever changes) rather than pointed at a CDN, and forced
 // single-threaded (no SharedArrayBuffer/COOP-COEP header requirements this
 // app doesn't set up).
-let apiPromise: Promise<IfcAPI> | null = null
-function getApi(): Promise<IfcAPI> {
-  if (!apiPromise) {
-    apiPromise = (async () => {
-      const api = new IfcAPI()
-      api.SetWasmPath('/wasm-ifc/', true)
-      await api.Init(undefined, true)
-      return api
-    })()
-  }
-  return apiPromise
+//
+// One web-ifc engine PER MODEL, not one shared engine (2026-10-02, per Maro
+// live: importing a Snowdon IFC died with "Cannot enlarge memory ...
+// limit is 4294901760 bytes" / "Aborted(native code called abort())").
+// web-ifc is 32-bit WebAssembly, so a single engine can never address more
+// than 4 GB — a hard architectural ceiling, not a setting. Every model
+// stays open in its engine after load (properties, GUID lookups, spatial
+// tree all query it later), so with one shared engine *every* model loaded
+// this session shared that one 4 GB. A fresh engine per model gives each
+// its own 4 GB, and disposeIfcModel disposes it so the memory is actually
+// released on unload. Loads are still strictly sequential (FourD.tsx's
+// import/restore queues), so this never runs two engines' parses at once.
+async function createApi(): Promise<IfcAPI> {
+  const api = new IfcAPI()
+  api.SetWasmPath('/wasm-ifc/', true)
+  await api.Init(undefined, true)
+  return api
 }
+
+// The app-wide model id (`ifc-${modelID}` keys everywhere in FourD) — each
+// engine numbers its own models from 0, so the engine's id can't double as
+// a session-unique identity any more. Same numbering the shared engine used
+// to produce (0, 1, 2, ... per page load).
+let nextAppModelId = 0
 
 // BatchState/BatchInstanceInfo/ensureMaterialized all live in
 // elementBatching.ts, not here (2026-07-17) — see that file's own header:
@@ -52,7 +64,10 @@ function getApi(): Promise<IfcAPI> {
 // have zero web-ifc dependency of their own, so they moved with it.
 export interface IfcModelHandle {
   api: IfcAPI
+  // Session-unique app id — use for identity/keys only, never pass to `api`.
   modelID: number
+  // This model's id inside its own engine — the one every `api` call takes.
+  ifcModelID: number
   object: THREE.Group
   // Null only if the file had zero placeable geometry at all (2026-07-21 —
   // every element's geometry goes into the shared batch now, unique or
@@ -147,9 +162,15 @@ export function resetRecenterOffset(): void {
 }
 
 export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
-  const api = await getApi()
+  const api = await createApi()
   const buffer = new Uint8Array(await file.arrayBuffer())
-  const modelID = api.OpenModel(buffer)
+  let modelID: number
+  try {
+    modelID = api.OpenModel(buffer)
+  } catch (err) {
+    api.Dispose()
+    throw err
+  }
 
   const group = new THREE.Group()
   group.name = file.name
@@ -471,7 +492,7 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   // hit resolution) reach the batch state from just an Object3D reference,
   // without needing the full IfcModelHandle in scope.
   group.userData.batch = batch
-  return { api, modelID, object: group, batch }
+  return { api, modelID: nextAppModelId++, ifcModelID: modelID, object: group, batch }
 }
 
 // GlobalId -> expressID (2026-07-11) — model_element_link.py's ifc-kind
@@ -491,7 +512,7 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
   // expressID->guid) in one Map, so web-ifc's own type can't narrow which
   // side a given key returns — coerce, since we only ever call this with a
   // guid key.
-  const result = handle.api.GetExpressIdFromGuid(handle.modelID, guid)
+  const result = handle.api.GetExpressIdFromGuid(handle.ifcModelID, guid)
   return result === undefined ? undefined : Number(result)
 }
 
@@ -503,7 +524,7 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
 // off the result — this is a single synchronous web-ifc call, same idiom
 // as getExpressIdFromGuid itself.
 export function getGuidFromExpressId(handle: IfcModelHandle, expressID: number): string | undefined {
-  const result = handle.api.GetGuidFromExpressId(handle.modelID, expressID)
+  const result = handle.api.GetGuidFromExpressId(handle.ifcModelID, expressID)
   return result === undefined ? undefined : String(result)
 }
 
@@ -513,7 +534,7 @@ export function getGuidFromExpressId(handle: IfcModelHandle, expressID: number):
 // GetNameFromTypeCode call getTypeCounts below already uses, just for one
 // specific element instead of every type in the model.
 export function getElementTypeName(handle: IfcModelHandle, expressID: number): string {
-  return handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.modelID, expressID))
+  return handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.ifcModelID, expressID))
 }
 
 // Per-type counts within one already-known set of leaf expressIDs (2026-07-11,
@@ -568,13 +589,15 @@ export function disposeIfcModel(handle: IfcModelHandle) {
   }
   const edgesBatch = handle.object.userData.edgesBatch as EdgesBatch | undefined
   if (edgesBatch) disposeEdgesBatch(edgesBatch)
-  handle.api.CloseModel(handle.modelID)
+  handle.api.CloseModel(handle.ifcModelID)
+  // Releases this model's whole engine (see createApi's header).
+  handle.api.Dispose()
 }
 
 export function getTypeCounts(handle: IfcModelHandle): { typeName: string; count: number }[] {
-  const types = handle.api.GetAllTypesOfModel(handle.modelID)
+  const types = handle.api.GetAllTypesOfModel(handle.ifcModelID)
   return types
-    .map(t => ({ typeName: t.typeName, count: handle.api.GetLineIDsWithType(handle.modelID, t.typeID).size() }))
+    .map(t => ({ typeName: t.typeName, count: handle.api.GetLineIDsWithType(handle.ifcModelID, t.typeID).size() }))
     .filter(t => t.count > 0)
     .sort((a, b) => b.count - a.count)
 }
@@ -586,9 +609,9 @@ export function getTypeCounts(handle: IfcModelHandle): { typeName: string; count
 // idiom this file already uses at loadIfcModel above for flatMeshes/
 // geometries.
 export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): number[] {
-  const match = handle.api.GetAllTypesOfModel(handle.modelID).find(t => t.typeName === typeName)
+  const match = handle.api.GetAllTypesOfModel(handle.ifcModelID).find(t => t.typeName === typeName)
   if (!match) return []
-  const ids = handle.api.GetLineIDsWithType(handle.modelID, match.typeID)
+  const ids = handle.api.GetLineIDsWithType(handle.ifcModelID, match.typeID)
   const out: number[] = []
   for (let i = 0; i < ids.size(); i++) out.push(ids.get(i))
   return out
@@ -627,9 +650,9 @@ export function buildIfcTypeByExpressId(handle: IfcModelHandle): Map<number, str
   const cached = ifcTypeByExpressIdCache.get(handle)
   if (cached) return cached
   const result = new Map<number, string>()
-  const types = handle.api.GetAllTypesOfModel(handle.modelID)
+  const types = handle.api.GetAllTypesOfModel(handle.ifcModelID)
   for (const { typeID, typeName } of types) {
-    const ids = handle.api.GetLineIDsWithType(handle.modelID, typeID)
+    const ids = handle.api.GetLineIDsWithType(handle.ifcModelID, typeID)
     for (let i = 0; i < ids.size(); i++) result.set(ids.get(i), typeName)
   }
   ifcTypeByExpressIdCache.set(handle, result)
@@ -643,7 +666,7 @@ export interface IfcTreeNode {
 }
 
 export async function getSpatialTree(handle: IfcModelHandle): Promise<IfcTreeNode> {
-  return handle.api.properties.getSpatialStructure(handle.modelID, false) as unknown as Promise<IfcTreeNode>
+  return handle.api.properties.getSpatialStructure(handle.ifcModelID, false) as unknown as Promise<IfcTreeNode>
 }
 
 // Bulk element -> storey resolution (2026-07-25 fix, per Maro: "Maximum
@@ -705,9 +728,9 @@ export async function buildElementStoreyMap(
   // parent-chain walk handles that case too, since an IfcSpace is itself
   // aggregated from its storey).
   const containedByExpressId = new Map<number, number>()
-  const containsRelIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELCONTAINEDINSPATIALSTRUCTURE)
+  const containsRelIds = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCRELCONTAINEDINSPATIALSTRUCTURE)
   for (let i = 0; i < containsRelIds.size(); i++) {
-    const rel = handle.api.GetLine(handle.modelID, containsRelIds.get(i), false) as
+    const rel = handle.api.GetLine(handle.ifcModelID, containsRelIds.get(i), false) as
       { RelatingStructure?: { value: number }; RelatedElements?: { value: number }[] }
     const containerId = rel.RelatingStructure?.value
     if (containerId === undefined || !Array.isArray(rel.RelatedElements)) continue
@@ -716,9 +739,9 @@ export async function buildElementStoreyMap(
 
   // child expressID -> its aggregation parent's expressID.
   const parentOfChild = new Map<number, number>()
-  const aggregatesRelIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELAGGREGATES)
+  const aggregatesRelIds = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCRELAGGREGATES)
   for (let i = 0; i < aggregatesRelIds.size(); i++) {
-    const rel = handle.api.GetLine(handle.modelID, aggregatesRelIds.get(i), false) as
+    const rel = handle.api.GetLine(handle.ifcModelID, aggregatesRelIds.get(i), false) as
       { RelatingObject?: { value: number }; RelatedObjects?: { value: number }[] }
     const parentId = rel.RelatingObject?.value
     if (parentId === undefined || !Array.isArray(rel.RelatedObjects)) continue
@@ -791,7 +814,7 @@ const SI_PREFIX_TO_METRES: Record<string, number> = {
 // entry is found — safer than inventing a factor.
 export function getLengthUnitToMetres(handle: IfcModelHandle, projectExpressID: number): number {
   try {
-    const project = handle.api.GetLine(handle.modelID, projectExpressID, true) as {
+    const project = handle.api.GetLine(handle.ifcModelID, projectExpressID, true) as {
       UnitsInContext?: { Units?: Array<Record<string, any>> }
     }
     const units = project?.UnitsInContext?.Units
@@ -822,7 +845,7 @@ export function getModelLengthUnitToMetres(handle: IfcModelHandle): number {
   if (cached !== undefined) return cached
   let factor = 1
   try {
-    const projectIds = handle.api.GetLineIDsWithType(handle.modelID, IFCPROJECT)
+    const projectIds = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCPROJECT)
     if (projectIds.size() > 0) factor = getLengthUnitToMetres(handle, projectIds.get(0))
   } catch {
     factor = 1
@@ -855,7 +878,7 @@ function unwrapIfcValue(v: unknown): string {
 // own first step — deliberately skipping the property-set fetch
 // getElementInfo also does, unneeded here.
 export async function getElementName(handle: IfcModelHandle, expressID: number): Promise<string> {
-  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
+  const props = await handle.api.properties.getItemProperties(handle.ifcModelID, expressID, false)
   return unwrapIfcValue(props.Name)
 }
 
@@ -901,7 +924,7 @@ function getLinesChunked(
   const out: Array<Record<string, unknown> & { expressID: number }> = []
   for (let i = 0; i < expressIds.length; i += GET_LINES_CHUNK_SIZE) {
     const chunk = expressIds.slice(i, i + GET_LINES_CHUNK_SIZE)
-    out.push(...(handle.api.GetLines(handle.modelID, chunk, flatten) as Array<Record<string, unknown> & { expressID: number }>))
+    out.push(...(handle.api.GetLines(handle.ifcModelID, chunk, flatten) as Array<Record<string, unknown> & { expressID: number }>))
   }
   return out
 }
@@ -1076,9 +1099,9 @@ async function buildElementPropertyDataUncached(handle: IfcModelHandle): Promise
   // events can still run between chunks) while it works through them,
   // exactly the same "chunked, not one giant synchronous loop" fix already
   // applied to extractScheduleElements' own per-candidate loop.
-  const relIds = handle.api.GetLineIDsWithType(handle.modelID, IFCRELDEFINESBYPROPERTIES)
+  const relIds = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCRELDEFINESBYPROPERTIES)
   for (let i = 0; i < relIds.size(); i++) {
-    const rel = handle.api.GetLine(handle.modelID, relIds.get(i), false) as
+    const rel = handle.api.GetLine(handle.ifcModelID, relIds.get(i), false) as
       { RelatingPropertyDefinition?: { value: number }; RelatedObjects?: { value: number }[] }
     const psetId = rel.RelatingPropertyDefinition?.value
     if (psetId !== undefined && Array.isArray(rel.RelatedObjects)) {
@@ -1155,7 +1178,7 @@ async function buildElementPropertyDataUncached(handle: IfcModelHandle): Promise
 // property shape). Shown as whatever raw number the file itself stores, not
 // a guessed unit.
 export async function getElementElevation(handle: IfcModelHandle, expressID: number): Promise<string | null> {
-  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
+  const props = await handle.api.properties.getItemProperties(handle.ifcModelID, expressID, false)
   if (props.Elevation === undefined || props.Elevation === null) return null
   const value = unwrapIfcValue(props.Elevation)
   return value === '—' ? null : value
@@ -1178,8 +1201,8 @@ export interface IfcElementInfo {
 }
 
 export async function getElementInfo(handle: IfcModelHandle, expressID: number): Promise<IfcElementInfo> {
-  const props = await handle.api.properties.getItemProperties(handle.modelID, expressID, false)
-  const psets = await handle.api.properties.getPropertySets(handle.modelID, expressID, true, false)
+  const props = await handle.api.properties.getItemProperties(handle.ifcModelID, expressID, false)
+  const psets = await handle.api.properties.getPropertySets(handle.ifcModelID, expressID, true, false)
   return {
     expressID,
     type: typeof props.type === 'number' ? handle.api.GetNameFromTypeCode(props.type) : String(props.type ?? ''),
@@ -1231,7 +1254,7 @@ function refList(value: unknown): number[] {
 }
 
 export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticModelInfo {
-  const { api, modelID } = handle
+  const { api, ifcModelID: modelID } = handle
   const getLine = (id: number): IfcLine | null => {
     try { return api.GetLine(modelID, id, false) as IfcLine } catch { return null }
   }
