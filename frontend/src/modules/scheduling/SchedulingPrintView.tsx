@@ -6,7 +6,7 @@ import { formatDateTime } from './dateTime'
 import { buildBarLabel, CONNECTOR_STUB, GANTT_ROW_HEIGHT, HEADER_HEIGHT, LABEL_GAP } from './GanttChart'
 import { computeTimeMarks, type GanttZoom } from './ganttZoom'
 import { buildCalendarLookup, formatFloatDays, type CalendarLookup } from './durationDisplay'
-import { activityStatus, formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
+import { activityStatus, ALL_COLUMNS, formatDuration, formatMoney, formatRatio, type ColumnKey } from './Scheduling'
 import {
   indicatorOption, isMilestoneType,
   type Activity, type ActivityRelationship, type Calendar, type ResourceAssignment,
@@ -34,6 +34,7 @@ function toTableX(colPct: number, dataWidthPx: number): string {
 }
 
 interface Props {
+  lookups?: PrintLookups
   activities: Activity[]
   relationships: ActivityRelationship[]
   resourceAssignments: ResourceAssignment[]
@@ -314,9 +315,18 @@ interface PrintColumnDef {
   key: ColumnKey
   label: string
   align?: 'right'
-  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle, calendarLookup: CalendarLookup) => string
+  render: (a: Activity, resourceAssignments: ResourceAssignment[], style: GanttStyle, calendarLookup: CalendarLookup, lookups: PrintLookups) => string
   cellClassName?: (a: Activity) => string
 }
+
+// Data the 3D columns need that isn't on the Activity row itself — passed
+// in from Scheduling.tsx, the same maps its own on-screen cells read.
+export interface PrintLookups {
+  elementCountByActivityId: Map<string, number>
+  profileNameById: Map<string, string>
+}
+const EMPTY_LOOKUPS: PrintLookups = { elementCountByActivityId: new Map(), profileNameById: new Map() }
+const pct1 = (v: string | number | null) => (v !== null ? `${Number(v).toFixed(1)}%` : '—')
 
 const NEGATIVE_RED = 'text-red-600 font-semibold'
 const NORMAL_GREY = 'text-gray-600'
@@ -404,12 +414,34 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
     cellClassName: a => a.sub_is_critical ? 'text-orange-600 font-semibold' : NORMAL_GREY,
   },
   { key: 'pct_complete', label: '% Comp', align: 'right', render: a => `${a.pct_complete ?? 0}%` },
+  // Every column the working table can show now has a printed equivalent
+  // (2026-10-02, per Maro: "print view doesnt pick up the column i enabled
+  // in working. e.g 3d profile") — these seven were simply never added here,
+  // so enabling them on screen silently did nothing in print.
+  { key: 'schedule_pct_complete', label: 'Sched % Comp', align: 'right', render: a => pct1(a.schedule_pct_complete) },
+  { key: 'duration_pct_complete', label: 'Dur % Comp', align: 'right', render: a => pct1(a.duration_pct_complete) },
+  { key: 'units_pct_complete', label: 'Units % Comp', align: 'right', render: a => pct1(a.units_pct_complete) },
   { key: 'status', label: 'Status', render: a => activityStatus(a) },
   {
     key: 'resources', label: 'Resources',
     render: (a, resourceAssignments) => resourceAssignments.filter(ra => ra.activity_id === a.id).map(ra => ra.resource_name).join(', ') || '—',
   },
+  {
+    key: 'element_count', label: '3D Elements', align: 'right',
+    render: (a, _r, _s, _c, lookups) => { const n = lookups.elementCountByActivityId.get(a.id) ?? 0; return n > 0 ? n.toLocaleString() : '—' },
+  },
+  {
+    // Print has nothing to click, so "Browse Elements" prints the count of
+    // linked elements it would have opened.
+    key: 'elements', label: 'Elements',
+    render: (a, _r, _s, _c, lookups) => { const n = lookups.elementCountByActivityId.get(a.id) ?? 0; return n > 0 ? `${n.toLocaleString()} linked` : '—' },
+  },
+  {
+    key: 'animation_profile', label: '3D Profile',
+    render: (a, _r, _s, _c, lookups) => (a.animation_profile_id ? lookups.profileNameById.get(a.animation_profile_id) ?? '—' : 'Default'),
+  },
   { key: 'bac', label: 'BAC', align: 'right', render: a => formatMoney(a.bac) },
+  { key: 'bl_budget', label: 'BL Budget', align: 'right', render: a => formatMoney(a.bl_budget) },
   { key: 'pv', label: 'PV', align: 'right', render: a => formatMoney(a.pv) },
   { key: 'ev', label: 'EV', align: 'right', render: a => formatMoney(a.ev) },
   { key: 'ac', label: 'AC', align: 'right', render: a => formatMoney(a.ac) },
@@ -477,7 +509,7 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
 export function SchedulingPrintView({
   activities, relationships, resourceAssignments, calendars, visibleColumns, columnWidths, projectName, letterhead,
   udfDefinitions = [], getUdfValue, udfColumnWidth = UDF_COLUMN_WIDTH, ganttStyle = DEFAULT_GANTT_STYLE, ganttZoom = 'week',
-  highlightedActivityIds = new Set(), dataDate = null, preview = false,
+  highlightedActivityIds = new Set(), dataDate = null, preview = false, lookups = EMPTY_LOOKUPS,
 }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -496,7 +528,11 @@ export function SchedulingPrintView({
     printed_at: printedAt,
   }
 
-  const columns = PRINT_COLUMNS.filter(c => visibleColumns.has(c.key))
+  // Same order as the working table (ALL_COLUMNS), not this file's own list
+  // order — e.g. Status sits right after Dur (d) on screen.
+  const columns = ALL_COLUMNS
+    .map(col => PRINT_COLUMNS.find(c => c.key === col.key))
+    .filter((c): c is PrintColumnDef => !!c && visibleColumns.has(c.key))
   const columnsBeforeActivity = columns.filter(c => c.key === 'code' || c.key === 'wbs')
   const columnsAfterActivity = columns.filter(c => c.key !== 'code' && c.key !== 'wbs')
   // Moved from GanttStyle to ProjectLetterhead (2026-07-07, per Maro — see
@@ -709,7 +745,7 @@ export function SchedulingPrintView({
                     key={c.key} style={dataCellStyle}
                     className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
                   >
-                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup)}
+                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup, lookups)}
                   </td>
                 ))}
                 <td
@@ -729,7 +765,7 @@ export function SchedulingPrintView({
                     key={c.key} style={dataCellStyle}
                     className={`px-1 py-0.5 border-r border-gray-300 whitespace-nowrap text-ellipsis ${c.align === 'right' ? 'text-right' : ''} ${c.cellClassName?.(a) ?? NORMAL_GREY}`}
                   >
-                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup)}
+                    {c.render(a, resourceAssignments, ganttStyle, calendarLookup, lookups)}
                   </td>
                 ))}
                 {udfDefinitions.map(d => {

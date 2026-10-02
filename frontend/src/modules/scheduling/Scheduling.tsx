@@ -219,7 +219,7 @@ export const PRINT_COLUMN_DEFAULTS: Record<ResizableColumnKey, number> = {
   variance: 90, float: 100, critical: 64, free_float: 100, sub_float: 110, sub_critical: 90,
   pct_complete: 70, schedule_pct_complete: 90, duration_pct_complete: 90, units_pct_complete: 90, status: 90, resources: 130,
   bac: 90, bl_budget: 90, pv: 90, ev: 90, ac: 90, cv: 90, sv: 90, cpi: 70, spi: 70, eac: 90, etc: 90,
-  element_count: 70, elements: 130, animation_profile: 110,
+  element_count: 90, elements: 110, animation_profile: 110,
 }
 export const PRINT_UDF_COLUMN_DEFAULT_WIDTH = 90
 
@@ -692,6 +692,11 @@ export function Scheduling() {
   // through every linked element individually.
   const { profiles: animationProfiles } = useAnimationProfiles(selectedProject?.id)
   const profileNameById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p.name])), [animationProfiles])
+  // The print view's 3D columns read these (SchedulingPrintView's PrintLookups).
+  const printLookups = useMemo(() => ({
+    elementCountByActivityId: new Map([...elementLinksByActivityId].map(([id, links]) => [id, links.length])),
+    profileNameById,
+  }), [elementLinksByActivityId, profileNameById])
 
   // True if any ancestor (parent, grandparent, ...) is currently collapsed —
   // walks parent_id against the *full* activity list (not visibleActivities),
@@ -3509,6 +3514,7 @@ export function Scheduling() {
               activities: visibleActivities, relationships, resourceAssignments, calendars,
               visibleColumns, udfDefinitions: visibleUdfDefinitions, getUdfValue,
               ganttStyle, ganttZoom, onGanttZoomChange: handleZoomChange, dataDate: period?.start_date ?? null,
+              lookups: printLookups,
             }}
           />
         </div>
@@ -4304,6 +4310,7 @@ export function Scheduling() {
         ganttZoom={ganttZoom}
         highlightedActivityIds={highlightedActivityIds}
         dataDate={period?.start_date ?? null}
+        lookups={printLookups}
       />
     )}
     {printMounted && printTarget === 'quality' && qualityPrintReport && (
@@ -4364,6 +4371,7 @@ export function Scheduling() {
               ganttZoom={ganttZoom}
               highlightedActivityIds={highlightedActivityIds}
               dataDate={period?.start_date ?? null}
+              lookups={printLookups}
             />
           </div>
         </div>

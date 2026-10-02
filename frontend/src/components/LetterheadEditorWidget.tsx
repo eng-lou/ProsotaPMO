@@ -4,7 +4,7 @@ import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import { defaultLetterhead, EMPTY_ZONE, type LetterheadTokens, type LetterheadZone, type ProjectLetterhead, type TimescaleAnchorMode } from '@/lib/letterhead'
 import { ZOOM_OPTIONS, type GanttZoom } from '@/modules/scheduling/ganttZoom'
 import { ALL_COLUMNS, PRINT_COLUMN_DEFAULTS, PRINT_UDF_COLUMN_DEFAULT_WIDTH, type ColumnKey, type ResizableColumnKey } from '@/modules/scheduling/Scheduling'
-import { SchedulingPrintView } from '@/modules/scheduling/SchedulingPrintView'
+import { SchedulingPrintView, type PrintLookups } from '@/modules/scheduling/SchedulingPrintView'
 import type {
   Activity, ActivityRelationship, Calendar, ResourceAssignment, UserDefinedFieldDefinition, UserDefinedFieldValue,
 } from '@/modules/scheduling/types'
@@ -29,6 +29,7 @@ interface SchedulePreviewData {
   ganttZoom: GanttZoom
   onGanttZoomChange: (zoom: GanttZoom) => void
   dataDate: string | null
+  lookups?: PrintLookups
 }
 
 interface Props {
@@ -331,6 +332,7 @@ export function LetterheadEditorWidget({ letterhead, previewTokens, onSave, onCl
             ganttStyle={schedulePreview.ganttStyle}
             ganttZoom={schedulePreview.ganttZoom}
             dataDate={schedulePreview.dataDate}
+            lookups={schedulePreview.lookups}
           />
         </div>
       </>
