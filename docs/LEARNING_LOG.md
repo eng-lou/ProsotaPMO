@@ -6367,3 +6367,19 @@ whole schedule).
 moment and back, the 3D view is told "pretend it's this moment" just for
 the capture. The timeline never moves, so nothing needs restoring, and it
 works even while the timeline is playing.
+
+## 2026-10-02 — Falling elements that never landed; camera keyframes left behind
+
+**Floating elements.** Elements using "Fall Down Z" stayed hovering above the
+model after their activity finished. Whenever a profile is edited, the 4D
+view re-reads each element's normal resting position. But it was doing that
+while elements were mid-fall, so a raised position got recorded as the
+element's "resting" position and it never came back down. Now an element
+that's already animating keeps its true resting position; only something
+you've genuinely moved gets re-read.
+
+**Camera keyframes.** Deleting a camera didn't delete its keyframes, so its
+track stayed in the timeline. They're now deleted together.
+
+**Lesson.** When something is moving on screen, any code that "reads where
+it is now" can catch it mid-motion. Remember the original value instead.
