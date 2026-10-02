@@ -828,6 +828,101 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
     }))
 }
 
+// Building-wide levels, by elevation and physical position — not by storey
+// name (2026-10-02, per Maro: "dont rely on how its named in the ifc files
+// especially when its a bunch of discipline ifcs"). Measured on the real NBU
+// Medical Clinic set: the architectural/structural/HVAC files call ground
+// "First Floor" and the electrical/MEP files call the same 0.00 m level
+// "Level 1" — groupByStorey kept them as two separate storeys — and the MEP
+// file hangs 1,475 ceiling-level ducts/pipes on its "TOF Footing" storey
+// (-1.00 m), so Generate Schedule put that ductwork on day 124, ahead of the
+// first floor slab on day 160: MEP floating in mid-air on the timeline.
+//
+// 1. Levels: every file's storeys merged by elevation (within
+//    LEVEL_MERGE_TOLERANCE_M), named by what most files call that level.
+// 2. Which world axis is vertical, and the offset between model coordinates
+//    and storey elevations (imports are re-centred), are worked out from the
+//    data: floor-standing elements' box bottoms line up with their declared
+//    storey elevation on exactly one axis.
+// 3. Each element goes on its declared level, moved UP to the level its
+//    geometry actually sits on when that's clearly higher (the ceiling ducts
+//    above) — never down, since a slab or beam is conventionally declared on
+//    the level it supports, a little above its own bottom face. Elements with
+//    no usable storey elevation are placed by geometry alone.
+// Falls back to groupByStorey when no storey has an elevation at all, or the
+// geometry doesn't line up with the declared elevations closely enough to
+// trust (a misaligned or rotated federated import).
+const MEP_ROUGH_IN_CATEGORIES: ReadonlySet<string> = new Set(['Mechanical Equipment', 'Ductwork', 'Piping', 'Electrical Containment'])
+const LEVEL_MERGE_TOLERANCE_M = 0.3
+const LEVEL_PLACEMENT_TOLERANCE_M = 0.3
+const GEOMETRY_TRUST_SPREAD_M = 1.0
+const FLOOR_STANDING: ReadonlySet<ScheduleCategory> = new Set<ScheduleCategory>([
+  'Walls', 'Non-Structural Walls', 'Columns', 'Doors', 'Furnishings', 'Stairs', 'Curtain Walls',
+])
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted.length === 0 ? 0 : sorted[Math.floor(sorted.length / 2)]
+}
+
+export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
+  const seen = new Set<string>()
+  const unique = elements.filter(el => (seen.has(el.globalId) ? false : (seen.add(el.globalId), true)))
+  const declared = unique.filter(el => el.storeyElevation !== null && Number.isFinite(el.storeyElevation))
+  if (declared.length === 0) return groupByStorey(unique)
+
+  // 1. Levels, merged by elevation.
+  interface Level { elevation: number; names: Map<string, { models: Set<number>; count: number }> }
+  const levels: Level[] = []
+  for (const el of [...declared].sort((a, b) => a.storeyElevation! - b.storeyElevation!)) {
+    let level = levels[levels.length - 1]
+    if (!level || el.storeyElevation! - level.elevation > LEVEL_MERGE_TOLERANCE_M) {
+      level = { elevation: el.storeyElevation!, names: new Map() }
+      levels.push(level)
+    }
+    const entry = level.names.get(el.storeyName) ?? { models: new Set<number>(), count: 0 }
+    entry.models.add(el.sourceModelId)
+    entry.count++
+    level.names.set(el.storeyName, entry)
+  }
+  const levelName = (level: Level) => [...level.names].sort((a, b) =>
+    b[1].models.size - a[1].models.size || b[1].count - a[1].count || a[0].localeCompare(b[0]))[0][0]
+  const declaredLevelIndex = (elevation: number) => {
+    let best = 0
+    for (let i = 0; i < levels.length; i++) if (Math.abs(levels[i].elevation - elevation) < Math.abs(levels[best].elevation - elevation)) best = i
+    return best
+  }
+
+  // 2. Vertical axis + datum offset, from floor-standing elements.
+  const calibration = declared.filter(el => FLOOR_STANDING.has(el.category))
+  const sample = calibration.length >= 20 ? calibration : declared
+  let axis = 2, offset = 0, spread = Infinity
+  for (let a = 0; a < 3; a++) {
+    const diffs = sample.map(el => el.boxMinMetres[a] - el.storeyElevation!)
+    const m = median(diffs)
+    const mad = median(diffs.map(d => Math.abs(d - m)))
+    if (mad < spread) { spread = mad; axis = a; offset = m }
+  }
+  const trustGeometry = spread < GEOMETRY_TRUST_SPREAD_M
+  const geometryLevelIndex = (el: ExtractedElement): number => {
+    const elevation = el.boxMinMetres[axis] - offset
+    let index = 0
+    for (let i = 0; i < levels.length; i++) if (levels[i].elevation <= elevation + LEVEL_PLACEMENT_TOLERANCE_M) index = i
+    return index
+  }
+
+  // 3. Place every element.
+  const placed: ExtractedElement[] = unique.map(el => {
+    const hasDeclared = el.storeyElevation !== null && Number.isFinite(el.storeyElevation)
+    if (!hasDeclared && !trustGeometry) return el
+    const fromDeclared = hasDeclared ? declaredLevelIndex(el.storeyElevation!) : null
+    const fromGeometry = trustGeometry ? geometryLevelIndex(el) : null
+    const index = fromDeclared === null ? fromGeometry! : fromGeometry === null ? fromDeclared : Math.max(fromDeclared, fromGeometry)
+    return { ...el, storeyName: levelName(levels[index]), storeyElevation: levels[index].elevation }
+  })
+  return groupByStorey(placed)
+}
+
 // Whole multiples of HOURS_PER_DAY only, never a fractional/.5-hour
 // duration (2026-07-13, per Maro: "i think its because you have some
 // durations in .5 or decimals. dont do that" — whole-day scheduling is
@@ -1643,6 +1738,9 @@ export function buildStagedSchedule(
   // off — nothing ever reads this map in that case).
   const firstOccurrenceByCategory = new Map<string, string>()
 
+  // Each storey's own first MEP rough-in activity (2026-10-02) — see the
+  // "slab above" edges added after this loop.
+  const firstMepRoughInByStorey: (string | null)[] = []
   storeys.forEach((storey, storeyIndex) => {
     const wbsTempId = `wbs-storey-${storeyIndex}`
     activities.push({
@@ -1663,6 +1761,7 @@ export function buildStagedSchedule(
     let lastFacadeTempId: string | null = null
     let lastNonLateTempId: string | null = null
     let firstLateTempId: string | null = null
+    let firstMepRoughInTempId: string | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
       const phases = resolvePhases(category.name)
@@ -1751,6 +1850,7 @@ export function buildStagedSchedule(
         // phase, if it has one.
         if (!isLate) lastNonLateTempId = tempId
         else if (firstLateTempId === null) firstLateTempId = tempId
+        if (MEP_ROUGH_IN_CATEGORIES.has(category.name)) firstMepRoughInTempId ??= tempId
         if (previousTempId) {
           relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
         }
@@ -1761,6 +1861,7 @@ export function buildStagedSchedule(
       firstStructuralTempId, lastStructuralTempId, firstNonFacadeTempId, lastNonFacadeTempId,
       firstTempId, lastTempId: previousTempId,
     })
+    firstMepRoughInByStorey.push(firstMepRoughInTempId)
     // Skipped when this storey's own local category order runs Facade
     // before Walls (2026-07-17 fix, per a real "circular dependency"
     // rejection from schedule_bulk_generate.py) — this used to be reachable
@@ -1895,6 +1996,22 @@ export function buildStagedSchedule(
   // predecessor instead, and every storey's own lastTempId -> Substantial
   // Completion loop below still gives it a successor, so it's never left
   // dangling for DCMA #1/#2 either).
+  // MEP rough-in waits for the slab above (2026-10-02, per Maro: "schedule
+  // logic needs some work" — ducts, pipes and containment hang from the
+  // soffit of the floor above, so a storey's first-fix services can't start
+  // until the next storey up has its own structure in). Only between
+  // storeys that both have real structural work: a storey with no
+  // structure of its own anchors the climb on its non-facade (possibly MEP)
+  // work instead, and linking back into that could close a cycle.
+  for (let i = 0; i < storeys.length; i++) {
+    const mepStart = firstMepRoughInByStorey[i]
+    if (!mepStart || !handoffByStorey[i].lastStructuralTempId) continue
+    const above = handoffByStorey.slice(i + 1).find(h => h.lastStructuralTempId)
+    if (above?.lastStructuralTempId) {
+      relationships.push({ predecessor_temp_id: above.lastStructuralTempId, successor_temp_id: mepStart, relationship_type: 'FS', lag_hours: 0 })
+    }
+  }
+
   const handoffAnchors = handoffByStorey
     .map(h => ({
       firstId: h.firstStructuralTempId ?? h.firstNonFacadeTempId,

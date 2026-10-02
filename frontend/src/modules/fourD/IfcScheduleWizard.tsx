@@ -6,7 +6,7 @@ import { flattenCollectionMemberRefs, type Collection } from './collections'
 import type { IfcModelHandle } from './ifcModel'
 import { extractScheduleElements, type ExtractedElement } from './ifcScheduleExtraction'
 import {
-  buildStagedSchedule, fullScheduleCategoryNames, fullSchedulePhaseRows, groupByStorey,
+  buildStagedSchedule, fullScheduleCategoryNames, fullSchedulePhaseRows, groupByLevel,
   usedCategoryNames, usedPhaseRows, type CategoryRate, type PhaseRow, type ProposedScheduleSummary, type StoreyGroup,
 } from './scheduleGeneration'
 
@@ -168,11 +168,9 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   // extractScheduleElements is always scoped to its own handle.object, and
   // downstream linking always resolves by globalId, never a bare
   // expressID, across every loaded handle — see linkedElements.ts).
-  // groupByStorey then buckets by storeyName string, so same-named storeys
-  // across the two files (e.g. both call it "Level 1") merge into one
-  // group for free; differently-named storeys just land as separate
-  // groups, same "first draft, freely reorganised after" contract this
-  // wizard already has for everything else.
+  // groupByLevel then merges every file's storeys by elevation and places
+  // each element by where it physically sits (2026-10-02) — storey names
+  // are not trusted across discipline files; see its own header.
   const runExtract = async () => {
     if (selectedModels.length === 0) return
     setExtracting(true)
@@ -216,7 +214,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
       const kept = excludedGlobalIds.size > 0 ? found.filter(el => !excludedGlobalIds.has(el.globalId)) : found
       setExcludedCount(found.length - kept.length)
       setElements(kept)
-      const grouped = groupByStorey(kept)
+      const grouped = groupByLevel(kept)
       setStoreys(grouped)
       seedRates(grouped)
       setStep('review')

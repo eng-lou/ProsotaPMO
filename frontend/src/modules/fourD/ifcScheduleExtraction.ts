@@ -474,6 +474,14 @@ export interface ExtractedElement {
   material: StructuralMaterial
   storeyName: string
   storeyElevation: number | null
+  // Physical placement (2026-10-02, per Maro: "dont rely on how its named
+  // in the ifc files especially when its a bunch of discipline ifcs") —
+  // the element's own world bounding-box minimum on each axis, in metres,
+  // plus which loaded model it came from. groupByLevel (scheduleGeneration.ts)
+  // uses these to put elements on a building-wide level by where they
+  // actually sit, working out which axis is vertical from the data itself.
+  boxMinMetres: [number, number, number]
+  sourceModelId: number
   // Length (columns/beams) or area (slabs/footings/walls), in metres or
   // square metres — a bounding-box approximation off the already-loaded
   // mesh, not a certified takeoff. See this module's own plan doc.
@@ -687,6 +695,8 @@ export async function extractScheduleElements(
         material: classifyMaterial(name),
         storeyName: storey?.name ?? 'Unassigned',
         storeyElevation: storey?.elevationMetres ?? null,
+        boxMinMetres: [box.min.x * toMetres, box.min.y * toMetres, box.min.z * toMetres],
+        sourceModelId: handle.modelID,
         quantity, quantityUnit, volumeM3,
       })
     }
