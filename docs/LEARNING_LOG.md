@@ -6243,3 +6243,21 @@ throwaway test page and comparing screenshots, not by guessing.
 
 **Lesson.** For visual tuning, get a real picture before shipping. A
 throwaway test page that needs no login is a quick way to get one.
+
+## 2026-10-02 — "Cannot enlarge memory" when importing a large IFC
+
+**Symptom.** Importing a Snowdon IFC failed with "Aborted(native code called
+abort())"; the console showed "Cannot enlarge memory ... limit is 4294901760
+bytes".
+
+**Cause.** web-ifc (the IFC reader) is compiled to 32-bit WebAssembly, which
+can never use more than 4 GB, the same limit old 32-bit programs had. It isn't
+a setting. The app ran every model through one shared web-ifc engine and kept
+each model open for property lookups, so all loaded models shared that one
+4 GB.
+
+**Fix.** Each model now gets its own engine (its own 4 GB), and that engine
+is thrown away when the model is unloaded, which actually frees its memory.
+
+**Lesson.** A hard platform limit can often be sidestepped by splitting the
+work across separate instances rather than trying to raise the limit itself.
