@@ -6282,3 +6282,18 @@ change. It's now skipped unless 4D itself is being opened or closed.
 
 **Lesson.** Measure first: the section-box cost was invisible in code review
 but obvious in a 20-line timing test.
+
+## 2026-10-02 — Scheduling page froze briefly when opened
+
+**Cause.** A profile (a recording of where the browser spends its time) of
+opening the page showed most of the time going into the *print layout*, a
+hidden copy of the whole schedule that's only used when printing but was being
+built every time the page opened, for every activity. Date formatting was also
+slow because it rebuilt its formatter for every single date shown.
+
+**Fix.** The print layout is now built only at the moment of printing (via
+the Print button or Ctrl+P) and thrown away afterwards. Dates reuse one shared
+formatter. Opening the page now does about 70% less work.
+
+**Lesson.** Hidden isn't free: anything rendered with `display: none` still
+costs the full price to build.
