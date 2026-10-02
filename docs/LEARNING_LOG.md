@@ -6422,3 +6422,23 @@ column order. Checked in the Page Setup preview.
 
 **Lesson.** When two lists have to stay in step, have one follow the other
 rather than keeping two copies, or the second one quietly falls behind.
+
+## 2026-10-02 — Roof turned green after clicking; slow orbit in Realistic mode
+
+**Green roof.** Clicking an element pulls it out of the combined mesh into
+its own. For textured materials like Timber, its displayed colour is the
+texture multiplied by "how much the colour has changed since import". The
+roof's imported colour was pure green (no red, no blue), and the formula
+divided zero by a small number for those channels, giving zero instead of
+"unchanged" and wiping the timber's red and blue. A tiny offset on both
+sides fixes it. Reproduced on the real model and confirmed.
+
+**Orbit speed.** Measured on the real five-file model: each frame draws about
+6 million triangles, three quarters of them from the MEP file. Shadows and
+glass transmission each draw the whole scene again. While you drag, the
+shadow map is already frozen, and now the glass also switches to the simple
+kind until you let go, so dragging draws 6 million triangles instead of 18
+million.
+
+**Also.** Selecting elements now narrows the Realistic Materials list to just
+the materials they use.
