@@ -2897,6 +2897,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // now looks up the *specific* handle for whichever model a given
   // expressID/selection actually belongs to — see getIfcHandleFor below.
   const [ifcHandles, setIfcHandles] = useState<IfcModelHandle[]>([])
+  // Latest handles, readable from the project-switch restore effect below
+  // (which must dispose the previous project's models, not just forget
+  // them — see that effect's own 2026-10-02 note).
+  const ifcHandlesRef = useRef<IfcModelHandle[]>([])
+  ifcHandlesRef.current = ifcHandles
   const getIfcHandleFor = (objectId: string | null | undefined): IfcModelHandle | null =>
     ifcHandles.find(h => `ifc-${h.modelID}` === objectId) ?? null
 
@@ -4278,6 +4283,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // appending the new project's own files on top of the old one's,
       // forever, for the life of the tab). Harmless on a project's first-
       // ever activation too (everything's already empty then).
+      // Grabbed (and the ref emptied) before clearing, so they can be
+      // disposed below — see the dispose loop's own note.
+      const previousHandles = ifcHandlesRef.current
+      ifcHandlesRef.current = []
       setSceneObjects([])
       setIfcHandles([])
       setActiveIfcModelId(null)
@@ -4295,8 +4304,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // switch specifically needs this: without it, a second project's own
       // first file would silently reuse whichever unrelated site
       // coordinates the previous project's own offset happened to be.
-      const { resetRecenterOffset } = await import('./ifcModel')
+      const { resetRecenterOffset, disposeIfcModel } = await import('./ifcModel')
       resetRecenterOffset()
+      // Actually release the previous project's models (2026-10-02, per
+      // Maro live: switching High Rise -> Snowdon -> Medical in one tab
+      // ended in web-ifc "Cannot enlarge memory ... 4294901760 bytes").
+      // The clears above only dropped them from React state; every model
+      // stayed open inside web-ifc (and its GPU buffers alive) for the life
+      // of the tab, so each project switch stacked another project's
+      // models on top. try/catch: a handle whose engine already aborted
+      // (e.g. out of memory) can throw on close — that must never block
+      // the new project's restore.
+      for (const handle of previousHandles) {
+        try { disposeIfcModel(handle) } catch (err) { console.warn('Failed to dispose previous project model', err) }
+      }
       let listFailure: unknown = null
       const [files, transforms] = await Promise.all([
         listModel3DFiles(selectedProject.id).catch(err => { listFailure = err; return [] }),
