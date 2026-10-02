@@ -6442,3 +6442,16 @@ million.
 
 **Also.** Selecting elements now narrows the Realistic Materials list to just
 the materials they use.
+
+## 2026-10-02 — "Simplify while orbiting"
+
+**What.** While you drag to orbit, anything too small to see on screen
+(under about 5 pixels — mostly MEP fittings) is hidden, and comes back the
+moment you let go. Things near the camera stay, so close-up interior views
+keep their detail. It's on by default and can be switched off in 3D View
+Properties → Effects.
+
+**Effect.** On the five-file Medical Clinic, about two thirds of elements
+drop out during a drag at an exterior view, while the building still looks
+complete. Together with the earlier shadow and glass changes, an orbit
+frame now draws roughly 1.5 million triangles instead of 18 million.
