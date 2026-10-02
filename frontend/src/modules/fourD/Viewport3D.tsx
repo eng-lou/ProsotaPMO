@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { RealisticGround } from './RealisticGround'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
 // loaded) package never lands in the main bundle" discipline just below —
@@ -6459,7 +6460,12 @@ export function Viewport3D({
               its lowest point (minus a small relative epsilon, scaled with
               the model instead of a fixed 0.01, to avoid z-fighting with
               the Grid's own lines when both are visible). */}
-          {settings.shadows && (
+          {/* Realistic mode gets a visible textured ground instead (see
+              RealisticGround.tsx) — unless Site Context's real 3D Tiles
+              terrain is on, which is already the ground. */}
+          {settings.renderMode === 'realistic' && !siteContext?.enabled ? (
+            <RealisticGround position={groundPosition} rotation={groundRotation} modelRadius={modelBounds.radius} />
+          ) : settings.shadows && (
             <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
               <planeGeometry args={[groundSize, groundSize]} />
               <shadowMaterial transparent opacity={0.35} />

@@ -166,7 +166,24 @@ export function PropertiesPanel({
       <Row label="Render mode">
         <select
           value={settings.renderMode}
-          onChange={e => set('renderMode', e.target.value as ViewerSettings['renderMode'])}
+          onChange={e => {
+            const renderMode = e.target.value as ViewerSettings['renderMode']
+            // Switching INTO Realistic turns on the lighting that makes it
+            // read as realistic (2026-10-02, per Maro: "I want realistic
+            // lighting too") — sun shadows, the sun-synced sky (unless an
+            // HDR is uploaded; that's the user's chosen sky), contact AO,
+            // and drops the flat white backdrop. A one-time preset, not a
+            // lock: each stays individually toggleable afterwards.
+            if (renderMode === 'realistic' && settings.renderMode !== 'realistic') {
+              onSettingsChange({
+                ...settings, renderMode,
+                shadows: true, ambientOcclusion: true, whiteBackground: false, environmentBackground: true,
+                dynamicSky: environmentName ? settings.dynamicSky : true,
+              })
+            } else {
+              set('renderMode', renderMode)
+            }
+          }}
           className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         >
           <option value="hiddenLine">Hidden Line</option>
