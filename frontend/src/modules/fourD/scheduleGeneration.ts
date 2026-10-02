@@ -847,8 +847,9 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
 // 3. Each element goes on its declared level, moved UP to the level its
 //    geometry actually sits on when that's clearly higher (the ceiling ducts
 //    above) — never down, since a slab or beam is conventionally declared on
-//    the level it supports, a little above its own bottom face. Elements with
-//    no usable storey elevation are placed by geometry alone.
+//    the level it supports, a little above its own bottom face. Exception:
+//    foundations/piling go wherever their geometry is, up or down. Elements
+//    with no usable storey elevation are placed by geometry alone.
 // Falls back to groupByStorey when no storey has an elevation at all, or the
 // geometry doesn't line up with the declared elevations closely enough to
 // trust (a misaligned or rotated federated import).
@@ -917,7 +918,18 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
     if (!hasDeclared && !trustGeometry) return el
     const fromDeclared = hasDeclared ? declaredLevelIndex(el.storeyElevation!) : null
     const fromGeometry = trustGeometry ? geometryLevelIndex(el) : null
-    const index = fromDeclared === null ? fromGeometry! : fromGeometry === null ? fromDeclared : Math.max(fromDeclared, fromGeometry)
+    // Substructure goes where it physically is, up OR down (2026-10-02, per
+    // Maro: "you can see the column footings forming after the columns" —
+    // Revit commonly hosts isolated pad footings on the ground-floor level
+    // (0.00 m) though they're poured at footing level (-1.00 m) with the
+    // strips, so "never move down" left them a level too high, sequenced
+    // after that level's columns). A footing belongs to the level it's
+    // poured at, whatever storey the model hangs it on.
+    const substructure = el.category === 'Foundation' || el.category === 'Piling'
+    const index = fromDeclared === null ? fromGeometry!
+      : fromGeometry === null ? fromDeclared
+      : substructure ? fromGeometry
+      : Math.max(fromDeclared, fromGeometry)
     return { ...el, storeyName: levelName(levels[index]), storeyElevation: levels[index].elevation }
   })
   return groupByStorey(placed)
