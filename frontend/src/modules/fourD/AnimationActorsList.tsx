@@ -637,6 +637,10 @@ export const AnimationActorsList = memo(function AnimationActorsList({
       // see element_keyframe.py's own header on the two) — never a real
       // Camera id, so it must not surface as its own bogus actor row here.
       if (k.source_kind === 'camera' && k.element_ref === '') continue
+      // A camera keyframe whose camera no longer exists (deleted before the
+      // backend started removing keyframes with their camera, 2026-10-02)
+      // has nothing to drive — hide it rather than show a raw-ID track.
+      if (k.source_kind === 'camera' && !cameraById.has(k.element_ref)) continue
       const key = add(k.source_kind, k.element_ref)
       const group = keyframesByActor_.get(key)
       if (group) group.push(k); else keyframesByActor_.set(key, [k])

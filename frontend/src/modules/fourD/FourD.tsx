@@ -1694,6 +1694,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setCameraError(null)
       await deleteCamera(id)
       setCameras(prev => prev.filter(c => c.id !== id))
+      // The backend deletes this camera's keyframes along with it
+      // (2026-10-02) — refetch so the Animation Timeline drops its track
+      // straight away instead of showing it until the next reload.
+      void elementKeyframes.refetch()
       // Deleting the camera you're currently looking through would leave
       // the viewport locked with nothing to keep re-applying its pose —
       // same "can't reference something that no longer exists" guard as
