@@ -6409,3 +6409,16 @@ orthographic view now works when looking through a camera.
 **Lesson.** In a model made of several discipline files, names are each
 author's own choice. Measurements like elevations and positions are what
 the files actually agree on.
+
+## 2026-10-02 — Print didn't include columns turned on in the working view
+
+**Cause.** The printed schedule had its own separate, hand-written list of
+columns. Seven columns added to the working table later (3D Elements, Browse
+Elements, 3D Profile, the three % Complete variants, BL Budget) were never
+added to that list, so turning them on changed the screen but not the print.
+
+**Fix.** All seven now print, and the printout follows the working table's
+column order. Checked in the Page Setup preview.
+
+**Lesson.** When two lists have to stay in step, have one follow the other
+rather than keeping two copies, or the second one quietly falls behind.
