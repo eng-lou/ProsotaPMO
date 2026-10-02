@@ -3278,16 +3278,46 @@ export function TimelinePlayback({
       // window `now` is already inside.
       const nowMsAtResolve = dateRef.current ? dateRef.current.getTime() : null
 
+      // Rest pose carried over from the previous resolve (2026-10-02, per
+      // Maro: elements on a "Fall Down Z" profile stayed hovering above the
+      // model long after their activity finished, after the profile had been
+      // edited). Every resolve used to capture each element's rest pose from
+      // object.position *as it was at that moment* — but this effect re-runs
+      // on any profile/link/activity change while the per-frame loop keeps
+      // animating, so an element caught mid-fall got its raised position
+      // recorded as its new rest pose, permanently offset from then on. Now
+      // an element that was already a target keeps its previous rest pose,
+      // as long as it's still exactly where the animation last put it (rest
+      // + the last applied offset, or rest itself, or it's keyframe-driven);
+      // if something else genuinely moved it since, its current pose is
+      // taken as the new rest pose, same as before.
+      const previousTargets = new Map(targetsRef.current.map(t => [t.object, t]))
+      const restPoseFor = (object: THREE.Object3D) => {
+        const prev = previousTargets.get(object)
+        if (prev) {
+          const offset = prev.cachedState?.positionOffset
+          const animated = offset
+            ? new THREE.Vector3(prev.basePosition.x + offset[0], prev.basePosition.y + offset[1], prev.basePosition.z + offset[2])
+            : prev.basePosition
+          const untouched = Object.keys(prev.keyframeTracks).length > 0
+            || object.position.distanceToSquared(animated) < 1e-10
+            || object.position.distanceToSquared(prev.basePosition) < 1e-10
+          if (untouched) return { position: prev.basePosition.clone(), rotation: prev.baseRotation.clone(), scale: prev.baseScale.clone() }
+        }
+        return { position: object.position.clone(), rotation: object.rotation.clone(), scale: object.scale.clone() }
+      }
+
       const byObject = new Map<THREE.Object3D, ResolvedTimelineTarget>()
       const getOrCreate = (object: THREE.Object3D, elementKey: string | null): ResolvedTimelineTarget => {
         let target = byObject.get(object)
         if (!target) {
           const variance = resolveVarianceTint(elementKey, nowMsAtResolve, varianceByElementKey)
+          const rest = restPoseFor(object)
           target = {
             object, elementKey, links: [],
-            basePosition: object.position.clone(),
-            baseRotation: object.rotation.clone(),
-            baseScale: object.scale.clone(),
+            basePosition: rest.position,
+            baseRotation: rest.rotation,
+            baseScale: rest.scale,
             materials: collectStandardMaterials(object),
             keyframeTracks: {},
             cachedActiveLink: null,
@@ -3646,6 +3676,16 @@ export function TimelinePlayback({
       }
 
       if (!cancelled) {
+        // Anything animated last time but not any more (link removed,
+        // profile switched to one without that transform, ...) goes back to
+        // its rest pose instead of staying wherever the animation last left
+        // it.
+        for (const [object, prev] of previousTargets) {
+          if (byObject.has(object)) continue
+          object.position.copy(prev.basePosition)
+          object.rotation.copy(prev.baseRotation)
+          object.scale.copy(prev.baseScale)
+        }
         targetsRef.current = [...byObject.values()]
         batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
         pathTargetsRef.current = nextPathTargets
