@@ -6297,3 +6297,21 @@ formatter. Opening the page now does about 70% less work.
 
 **Lesson.** Hidden isn't free: anything rendered with `display: none` still
 costs the full price to build.
+
+## 2026-10-02 — Realistic ground still sat far below the building
+
+**Cause.** The ground height was worked out from "the bottom of each mesh",
+but to draw fast the app merges nearly all of a model's elements into one
+big combined mesh. Five models gave only about three samples, each covering
+a whole model, so the result was still just the lowest point of everything
+(deep foundations).
+
+**Fix.** It now looks at every individual element inside those combined
+meshes, groups their bottoms by height, and puts the ground at the lowest
+level where at least 1% of elements start. Tested on two real federated
+models (Hospital and Snowdon): both now sit on the ground at ground-floor
+level. There's also a new "Ground" checkbox to turn it off.
+
+**Lesson.** When an app merges things for speed, any count or statistic
+over "meshes" stops meaning "elements". Check what the data actually looks
+like before trusting a statistic about it.
