@@ -1,5 +1,34 @@
 import { useState } from 'react'
 import { RESOLUTION_PRESETS, type ResolutionPreset, type RenderCaptureSettings } from './renderCaptureSettings'
+import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
+
+// Capture/export timing (2026-10-02, per Maro: "capture at a particular
+// sec/date/frame ... video at a particular start ... to particular
+// finish"). Session-only, not part of the persisted RenderCaptureSettings —
+// these are absolute schedule moments, meaningless in another project.
+export interface CaptureTiming {
+  format: TimelineFormat
+  captureAt: Date | null
+  videoFrom: Date | null
+  videoTo: Date | null
+  onChange: (next: { captureAt: Date | null; videoFrom: Date | null; videoTo: Date | null }) => void
+}
+
+function PointRow({ label, title, children, isSet, onClear, hint }: {
+  label: string; title: string; children: React.ReactNode; isSet: boolean; onClear: () => void; hint: string
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted" title={title}>
+      <span>{label}</span>
+      <div className="flex items-center gap-1">
+        {children}
+        {isSet
+          ? <button onClick={onClear} title="Clear" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
+          : <span className="text-[10px] text-gray-400 dark:text-prosota-muted w-12 text-right">{hint}</span>}
+      </div>
+    </div>
+  )
+}
 
 interface Props {
   settings: RenderCaptureSettings
@@ -16,6 +45,7 @@ interface Props {
   // windows max so i should [see] three titles... if they are actively
   // used."
   comparisonPaneCount: number
+  timing?: CaptureTiming | null
 }
 
 // Small gear-triggered popover for Capture/Export Video's own render
@@ -30,7 +60,7 @@ interface Props {
 // full-screen invisible button behind it (lower z-index than the popover,
 // higher than everything else) catches an outside click to close it,
 // rather than a focus-trap library.
-export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPaneCount }: Props) {
+export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPaneCount, timing }: Props) {
   const [open, setOpen] = useState(false)
   const comparisonPanesOpen = comparisonPaneCount > 0
   const set = <K extends keyof RenderCaptureSettings>(key: K, value: RenderCaptureSettings[K]) =>
@@ -295,8 +325,57 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
               </label>
             </div>
 
+            {timing && (
+              <div className="border-t border-gray-100 dark:border-prosota-line pt-2.5 space-y-2.5">
+                <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Capture Image</div>
+                <PointRow
+                  label="Capture at"
+                  title="Empty = wherever the timeline currently is. Set a point to jump there just for the capture; the timeline returns afterwards. A date means the state at the end of that day."
+                  isSet={timing.captureAt !== null}
+                  onClear={() => timing.onChange({ captureAt: null, videoFrom: timing.videoFrom, videoTo: timing.videoTo })}
+                  hint="current"
+                >
+                  <TimelinePointInput
+                    value={timing.captureAt} format={timing.format} placeholder="current" dayEdge="end"
+                    onChange={v => timing.onChange({ captureAt: v, videoFrom: timing.videoFrom, videoTo: timing.videoTo })}
+                  />
+                </PointRow>
+              </div>
+            )}
+
             <div className="border-t border-gray-100 dark:border-prosota-line pt-2.5 space-y-2.5">
               <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Export Video</div>
+              {timing && (
+                <>
+                  <PointRow
+                    label="From"
+                    title="Where the video starts on the timeline. Empty = schedule start. A date means the start of that day."
+                    isSet={timing.videoFrom !== null}
+                    onClear={() => timing.onChange({ captureAt: timing.captureAt, videoFrom: null, videoTo: timing.videoTo })}
+                    hint="start"
+                  >
+                    <TimelinePointInput
+                      value={timing.videoFrom} format={timing.format} placeholder="start" dayEdge="start"
+                      onChange={v => timing.onChange({ captureAt: timing.captureAt, videoFrom: v, videoTo: timing.videoTo })}
+                    />
+                  </PointRow>
+                  <PointRow
+                    label="To"
+                    title="Where the video ends on the timeline. Empty = schedule finish. A date means the end of that day."
+                    isSet={timing.videoTo !== null}
+                    onClear={() => timing.onChange({ captureAt: timing.captureAt, videoFrom: timing.videoFrom, videoTo: null })}
+                    hint="finish"
+                  >
+                    <TimelinePointInput
+                      value={timing.videoTo} format={timing.format} placeholder="finish" dayEdge="end"
+                      onChange={v => timing.onChange({ captureAt: timing.captureAt, videoFrom: timing.videoFrom, videoTo: v })}
+                    />
+                  </PointRow>
+                  {timing.videoFrom && timing.videoTo && timing.videoTo <= timing.videoFrom && (
+                    <div className="text-[10px] text-red-600 dark:text-red-400">"To" must be after "From".</div>
+                  )}
+                </>
+              )}
               <label className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted">
                 <span>Duration (sec)</span>
                 <input

@@ -4,6 +4,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RealisticGround, computeGroundElevation } from './RealisticGround'
+import type { TimelineFormat } from './TimelinePointInput'
 import { orthoVisibleHeight } from './cameraProjection'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
@@ -757,6 +758,10 @@ interface Props {
   // activities/keyframes yet) just disables the Export Video button.
   scheduleStart: Date | null
   scheduleEnd: Date | null
+  // The Animation Timeline's own unit/speed/fps (2026-10-02), so capture /
+  // export points can be typed in the same seconds/date/frames the
+  // timeline shows. null while there's no timeline range.
+  timelineFormat?: TimelineFormat | null
   // Every currently-loaded IFC model (2026-07-09, per federated/assembly
   // modeling — "allow me to import more than one IFC model... currently
   // loading another replaces what i have") — was a single IfcModelHandle |
@@ -4853,7 +4858,7 @@ export function Viewport3D({
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures, customOpacity, cameraSyncRef,
-  timelineDateRef, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active,
+  timelineDateRef: timelineDateRefProp, timelineSceneObjects, timelineActivities, timelineLinks, timelineProfiles, timelineElementKeyframes, ifcHandles, active, timelineFormat,
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
   cameras, activeCameraId, onAddCamera, onExitCameraView, onKeyCameraPose,
@@ -5290,6 +5295,21 @@ export function Viewport3D({
   // after AO's removal — a fixed dpr during orbit is simply the right
   // behaviour regardless of what originally motivated it.
   const [captureDprMultiplier, setCaptureDprMultiplier] = useState<number | null>(null)
+  // Capture at a chosen timeline point (2026-10-02, per Maro: "i want to
+  // pick then capture"). While captureDateOverrideRef is set, everything in
+  // this viewport that reads the timeline position (playback, overlays,
+  // cameras, gizmos — all via `timelineDateRef` below) sees the override
+  // instead, without touching the Animation Timeline's own position: no
+  // restore step, and a timeline that's playing can't drag the capture off
+  // its point. Writes pass straight through to the real timeline ref, so
+  // Export Video's own per-frame `timelineDateRef.current = now` is
+  // unchanged.
+  const captureDateOverrideRef = useRef<Date | null>(null)
+  const timelineDateRef = useMemo<React.MutableRefObject<Date | null>>(() => ({
+    get current() { return captureDateOverrideRef.current ?? timelineDateRefProp.current },
+    set current(v: Date | null) { timelineDateRefProp.current = v },
+  }), [timelineDateRefProp])
+  const [captureTiming, setCaptureTiming] = useState<{ captureAt: Date | null; videoFrom: Date | null; videoTo: Date | null }>({ captureAt: null, videoFrom: null, videoTo: null })
   const dprMultiplier = captureDprMultiplier ?? 1
   // No flat cap here (2026-08-10 fix — see computeSupersampleMultiplier's
   // own header below for the full "even at highest quality, still blurry"
@@ -5736,6 +5756,7 @@ export function Viewport3D({
         }
       }
       composite.toBlob(blob => {
+        if (captureDateOverrideRef.current) { captureDateOverrideRef.current = null; markRenderActivity() }
         if (!blob) return
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -5751,6 +5772,7 @@ export function Viewport3D({
       }, 'image/png')
     }
     const supersample = computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight)
+    captureDateOverrideRef.current = captureTiming.captureAt
     setCaptureDprMultiplier(supersample)
     onCaptureQualityChange?.(supersample)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
@@ -5872,7 +5894,12 @@ export function Viewport3D({
     if (isExportingVideo || !scheduleStart || !scheduleEnd) return
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
-    const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
+    // Chosen From/To (2026-10-02, per Maro: video "just assumes i want to
+    // capture the sequence from start to finish") — empty ends fall back to
+    // the schedule's own start/finish, exactly the old behaviour.
+    const rangeStart = captureTiming.videoFrom ?? scheduleStart
+    const rangeEnd = captureTiming.videoTo ?? scheduleEnd
+    const totalMs = rangeEnd.getTime() - rangeStart.getTime()
     if (totalMs <= 0) return
     const activeComparisonCanvases = renderCaptureSettings.includeBaseline
       ? comparisonCanvasRefs.map(ref => ref.current)
@@ -5980,7 +6007,7 @@ export function Viewport3D({
       await new Promise<void>(resolve => {
         const step = () => {
           const t = Math.min((performance.now() - startTime) / durationMs, 1)
-          const now = new Date(scheduleStart.getTime() + totalMs * t)
+          const now = new Date(rangeStart.getTime() + totalMs * t)
           timelineDateRef.current = now
           if (compositeCtx) {
             // Recomputed every frame, unlike radialChartIcons above — a
@@ -6395,13 +6422,16 @@ export function Viewport3D({
           title={
             !scheduleStart || !scheduleEnd
               ? 'Export Video — needs at least one scheduled/linked activity to know what date range to play'
-              : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .${renderCaptureSettings.videoFormat} at ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight}, ${renderCaptureSettings.videoFps}fps, of the timeline playing from schedule start to finish (see ⚙ Render/Capture Settings)`
+              : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .${renderCaptureSettings.videoFormat} at ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight}, ${renderCaptureSettings.videoFps}fps, of the timeline playing from ${captureTiming.videoFrom || captureTiming.videoTo ? 'the chosen From to To' : 'schedule start to finish'} (set From/To in ⚙ Render/Capture Settings)`
           }
           className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isExportingVideo ? 'Recording…' : 'Export Video'}
         </button>
-        <RenderCaptureSettingsPopover settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length} />
+        <RenderCaptureSettingsPopover
+          settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length}
+          timing={timelineFormat ? { format: timelineFormat, ...captureTiming, onChange: setCaptureTiming } : null}
+        />
       </div>
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while

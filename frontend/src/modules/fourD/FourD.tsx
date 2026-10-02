@@ -7225,6 +7225,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       timelineElementKeyframes={elementKeyframes.keyframes}
       scheduleStart={timelineRange?.start ?? null}
       scheduleEnd={timelineRange?.end ?? null}
+      timelineFormat={timelineRange ? { scheduleStart: timelineRange.start, timeDisplayMode, speedDaysPerSecond, fps } : null}
       ifcHandles={ifcHandles}
       active={active}
       sectionBoxes={resolvedSectionBoxes}
