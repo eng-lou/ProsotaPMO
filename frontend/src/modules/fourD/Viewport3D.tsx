@@ -6,6 +6,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { RealisticGround, computeGroundElevation } from './RealisticGround'
 import type { TimelineFormat } from './TimelinePointInput'
 import { orthoVisibleHeight } from './cameraProjection'
+import { hideSmallWhileMoving, restoreAfterMoving } from './movingDetail'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
 // loaded) package never lands in the main bundle" discipline just below —
@@ -4219,6 +4220,9 @@ export function TimelinePlayback({
         // already-correct hide, permanently — nothing else ever revisits an
         // orphaned instance once both systems have stopped tracking it.
         if (!bv.expressIdByInstanceId.has(instanceId)) continue
+        // Hidden only for the duration of an orbit drag (movingDetail.ts) —
+        // left alone here; the drag's end restores it.
+        if ((bv.mesh.userData.movingHidden as Set<number> | undefined)?.has(instanceId)) continue
         const baseVisible = baseVisibleByInstanceId?.get(instanceId) ?? true
         const nextVisible = baseVisible && scheduleVisible
         if (bv.mesh.getVisibleAt(instanceId) !== nextVisible) bv.mesh.setVisibleAt(instanceId, nextVisible)
@@ -4449,27 +4453,39 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 // progress (see setRealisticGlassMoving, realisticMaterials.ts) and restores
 // it on release. Listens to the same OrbitControls start/end events
 // ShadowFrustumSync uses for its own shadow-map freeze.
-function MovingQualityDriver({ controlsRef, objects, enabled }: {
+function MovingQualityDriver({ controlsRef, objects, enabled, simplify }: {
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
   objects: ImportedObject[]
   enabled: boolean
+  // "Simplify while orbiting" (movingDetail.ts) — independent of render mode.
+  simplify: boolean
 }) {
   const invalidate = useThree(s => s.invalidate)
+  const get = useThree(s => s.get)
   const objectsRef = useRef(objects)
   objectsRef.current = objects
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  const simplifyRef = useRef(simplify)
+  simplifyRef.current = simplify
   const listenedRef = useRef<OrbitControlsImpl | null>(null)
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls || listenedRef.current === controls) return
     listenedRef.current = controls
     controls.addEventListener('start', () => {
+      if (simplifyRef.current) {
+        const { camera, size } = get()
+        for (const { object } of objectsRef.current) hideSmallWhileMoving(object, camera, size.height)
+      }
       if (!enabledRef.current) return
       for (const { object } of objectsRef.current) setRealisticGlassMoving(object, true)
     })
     controls.addEventListener('end', () => {
-      for (const { object } of objectsRef.current) setRealisticGlassMoving(object, false)
+      for (const { object } of objectsRef.current) {
+        restoreAfterMoving(object)
+        setRealisticGlassMoving(object, false)
+      }
       invalidate()
     })
   })
@@ -7100,7 +7116,7 @@ export function Viewport3D({
             never fights a live drag at a static date). */}
         <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
-        <MovingQualityDriver controlsRef={controlsRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} />
+        <MovingQualityDriver controlsRef={controlsRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual

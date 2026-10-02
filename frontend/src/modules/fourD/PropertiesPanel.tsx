@@ -300,6 +300,14 @@ export function PropertiesPanel({
           />
         </Row>
       )}
+      <Row label="Simplify while orbiting">
+        <input
+          type="checkbox"
+          checked={settings.simplifyWhileOrbiting}
+          onChange={e => set('simplifyWhileOrbiting', e.target.checked)}
+          title="While you drag to orbit, hide elements too small to see (mostly MEP fittings) so the view stays smooth — everything comes back the moment you let go"
+        />
+      </Row>
       <Row label="Ambient Occlusion">
         <input
           type="checkbox"

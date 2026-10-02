@@ -190,6 +190,9 @@ export interface ViewerSettings {
   // Orthographic projection (2026-10-02, per Maro, Blender-style): toggled
   // from 3D View Properties or Numpad 5 / "5" while the viewport has focus.
   orthographic: boolean
+  // Hide elements smaller than a few pixels while an orbit drag is in
+  // progress (movingDetail.ts) — 2026-10-02, per Maro. On by default.
+  simplifyWhileOrbiting: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -217,6 +220,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   realisticGlassTransmission: false,
   realisticGround: true,
   orthographic: false,
+  simplifyWhileOrbiting: true,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'
