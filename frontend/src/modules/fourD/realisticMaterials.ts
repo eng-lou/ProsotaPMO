@@ -284,6 +284,28 @@ export function mergeRealisticEntries(infos: (RealisticModelInfo | undefined)[])
 // Every IFC element (expressID) in one model whose geometry uses this
 // material entry — for the mapping panel's Select button (2026-09-29, per
 // Maro: "i want them selectable... so i can identify accordingly").
+// Every material key used by one element (all of its geometry pieces) —
+// for filtering the Realistic Materials panel to the current selection
+// (2026-10-02). The per-element index is built once per info and cached.
+const keysByExpressIdCache = new WeakMap<RealisticModelInfo, Map<number, Set<string>>>()
+export function keysForExpressId(info: RealisticModelInfo, expressID: number): Set<string> | undefined {
+  let index = keysByExpressIdCache.get(info)
+  if (!index) {
+    index = new Map()
+    for (const [piece, key] of info.keyByPiece) {
+      const id = Number(piece.slice(0, piece.indexOf(':')))
+      let set = index.get(id)
+      if (!set) { set = new Set(); index.set(id, set) }
+      set.add(key)
+    }
+    for (const [id, key] of info.keyByExpressId) {
+      if (!index.has(id)) index.set(id, new Set([key]))
+    }
+    keysByExpressIdCache.set(info, index)
+  }
+  return index.get(expressID)
+}
+
 export function expressIdsForKey(info: RealisticModelInfo, key: string): number[] {
   const ids = new Set<number>()
   for (const [piece, pieceKey] of info.keyByPiece) {
@@ -926,7 +948,16 @@ function tintRatio(target: THREE.Color, current: THREE.Color, original: THREE.Co
   // selection/variance/clash tint applied to the real colour otherwise —
   // re-applied on top of the class's own colour.
   if (!original) { target.copy(base); return }
-  const ratio = (c: number, o: number) => Math.min(4, c / Math.max(o, 0.04))
+  // Offset on both sides (2026-10-02, per Maro: a Timber-mapped roof turned
+  // pure green after being clicked and deselected, until a reload). The old
+  // `c / max(o, 0.04)` gave 0 — not 1 — for any channel that's 0 in the
+  // imported colour: a pure-green IFC colour (0, 0.5, 0) at rest zeroed the
+  // texture's red and blue, leaving it green. With the offset, an unchanged
+  // channel is always exactly 1, and a selection/variance tint still shifts
+  // it (only reached for individual meshes — batched instances take
+  // realisticInstanceBase's white base instead, which is why a reload,
+  // re-batching the element, "fixed" it).
+  const ratio = (c: number, o: number) => Math.min(4, (c + 0.04) / (o + 0.04))
   target.setRGB(base.r * ratio(current.r, original.r), base.g * ratio(current.g, original.g), base.b * ratio(current.b, original.b))
 }
 
@@ -1208,6 +1239,36 @@ export function applyRealisticToBatch(
   variant.clippingPlanes = batchMaterial.clippingPlanes
   variant.clipShadows = batchMaterial.clipShadows
   return variant
+}
+
+// Orbit speed (2026-10-02, per Maro: orbiting in Realistic mode "the speed
+// is disgusting"). Measured on the real five-file NBU Medical Clinic set:
+// one frame draws ~6.0M triangles (the MEP file alone is 4.6M of them), and
+// glass transmission makes three.js draw that whole opaque scene a second
+// time into a texture every frame (+13 ms/frame in the same measurement).
+// While the camera is being dragged, each model's transmissive glass batch
+// swaps to the cheap glass material (one shared, lazily created instance,
+// so its shader compiles once), dropping that extra pass; releasing the
+// drag puts the real refracting glass straight back. Clipping planes are
+// carried across so a section-boxed pane stays cut while moving.
+let movingGlassMaterial: THREE.MeshPhysicalMaterial | null = null
+export function setRealisticGlassMoving(root: THREE.Object3D, moving: boolean) {
+  const batch = root.userData.batch as BatchState | undefined
+  const glass = (batch?.mesh.userData.realistic as BatchRealisticState | undefined)?.glass
+  if (!glass || !glass.transmission) return
+  const mesh = glass.mesh
+  if (moving) {
+    if (mesh.userData.stillGlassMaterial) return
+    movingGlassMaterial ??= createGlassMaterial(true, false)
+    const still = mesh.material as THREE.Material
+    movingGlassMaterial.clippingPlanes = still.clippingPlanes
+    movingGlassMaterial.clipShadows = still.clipShadows
+    mesh.userData.stillGlassMaterial = still
+    mesh.material = movingGlassMaterial
+  } else if (mesh.userData.stillGlassMaterial) {
+    mesh.material = mesh.userData.stillGlassMaterial as THREE.Material
+    delete mesh.userData.stillGlassMaterial
+  }
 }
 
 export function clearRealisticFromBatch(batch: BatchState) {

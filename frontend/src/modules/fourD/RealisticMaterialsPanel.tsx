@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import {
   REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, withColourOverride,
@@ -49,7 +49,11 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
+  selectionKeys = null,
 }: {
+  // Materials used by the current viewport selection (null = nothing
+  // selected). When set, the list narrows to just those (2026-10-02).
+  selectionKeys?: Set<string> | null
   entries: RealisticMaterialEntry[]
   mapping: RealisticMaterialMap
   onMappingChange: (mapping: RealisticMaterialMap) => void
@@ -63,12 +67,18 @@ export function RealisticMaterialsPanel({
   onGlassTransmissionChange: (value: boolean) => void
 }) {
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
+  // "Show all" escape hatch while something is selected — reset whenever
+  // the selection itself changes, so a new pick filters again.
+  const [showAllDespiteSelection, setShowAllDespiteSelection] = useState(false)
+  useEffect(() => { setShowAllDespiteSelection(false) }, [selectionKeys])
+  const filteringToSelection = selectionKeys !== null && !showAllDespiteSelection
   const [search, setSearch] = useState('')
   const needsMapping = (e: RealisticMaterialEntry) => !mapping[e.key] && !e.autoClass
   const unmatchedCount = entries.filter(needsMapping).length
   const query = search.trim().toLowerCase()
   const visible = entries.filter(e =>
-    (!onlyUnmatched || needsMapping(e))
+    (!filteringToSelection || selectionKeys!.has(e.key))
+    && (!onlyUnmatched || needsMapping(e))
     && (!query || e.label.toLowerCase().includes(query) || e.detail.toLowerCase().includes(query)),
   )
 
@@ -109,6 +119,18 @@ export function RealisticMaterialsPanel({
               <input type="checkbox" checked={onlyUnmatched} onChange={e => setOnlyUnmatched(e.target.checked)} />
               Only unmatched ({unmatchedCount})
             </label>
+            {selectionKeys !== null && (
+              <div className="flex items-center gap-1.5 text-[11px] rounded bg-blue-50 dark:bg-prosota-panel2 text-blue-700 dark:text-prosota-azure px-2 py-1">
+                <span className="flex-1">
+                  {filteringToSelection
+                    ? `Showing the ${selectionKeys.size} material${selectionKeys.size === 1 ? '' : 's'} of your selection`
+                    : 'Showing all materials'}
+                </span>
+                <button onClick={() => setShowAllDespiteSelection(v => !v)} className="underline shrink-0">
+                  {filteringToSelection ? 'Show all' : 'Only selection'}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

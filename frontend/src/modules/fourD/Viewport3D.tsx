@@ -51,7 +51,7 @@ import {
 } from './renderModeMaterials'
 import {
   applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
-  getRealisticVariant, realisticInstanceBase, releaseRealisticTextureArrayGpu, syncRealisticGlassBatch, syncRealisticVariant,
+  getRealisticVariant, realisticInstanceBase, releaseRealisticTextureArrayGpu, setRealisticGlassMoving, syncRealisticGlassBatch, syncRealisticVariant,
   type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
@@ -4445,6 +4445,41 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 // - Looking through a Cinematic Camera follows the same setting
 //   (2026-10-02): ActiveCameraPose frames an orthographic view from the
 //   camera's focal length at its own target distance.
+// Drops Realistic mode's glass transmission pass while an orbit drag is in
+// progress (see setRealisticGlassMoving, realisticMaterials.ts) and restores
+// it on release. Listens to the same OrbitControls start/end events
+// ShadowFrustumSync uses for its own shadow-map freeze.
+function MovingQualityDriver({ controlsRef, objects, enabled }: {
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+  objects: ImportedObject[]
+  enabled: boolean
+}) {
+  const invalidate = useThree(s => s.invalidate)
+  const objectsRef = useRef(objects)
+  objectsRef.current = objects
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
+  const listenedRef = useRef<OrbitControlsImpl | null>(null)
+  useFrame(() => {
+    const controls = controlsRef.current
+    if (!controls || listenedRef.current === controls) return
+    listenedRef.current = controls
+    controls.addEventListener('start', () => {
+      if (!enabledRef.current) return
+      for (const { object } of objectsRef.current) setRealisticGlassMoving(object, true)
+    })
+    controls.addEventListener('end', () => {
+      for (const { object } of objectsRef.current) setRealisticGlassMoving(object, false)
+      invalidate()
+    })
+  })
+  // Leaving Realistic mode or turning transmission off mid-drag: restore.
+  useEffect(() => {
+    if (!enabled) for (const { object } of objectsRef.current) setRealisticGlassMoving(object, false)
+  }, [enabled])
+  return null
+}
+
 function ProjectionController({ orthographic, controlsRef }: {
   orthographic: boolean
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
@@ -7065,6 +7100,7 @@ export function Viewport3D({
             never fights a live drag at a static date). */}
         <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
+        <MovingQualityDriver controlsRef={controlsRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual

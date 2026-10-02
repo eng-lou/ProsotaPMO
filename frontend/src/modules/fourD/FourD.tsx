@@ -130,7 +130,7 @@ import { ReloadIfcDialog } from './ReloadIfcDialog'
 import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
 import {
-  entryModelsByKey, expressIdsForKey, extractMeshRealisticInfo, loadRealisticMapping, mergeRealisticEntries,
+  entryModelsByKey, expressIdsForKey, extractMeshRealisticInfo, keysForExpressId, loadRealisticMapping, mergeRealisticEntries,
   saveRealisticMapping, type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
   type RealisticModelInfo,
 } from './realisticMaterials'
@@ -5777,6 +5777,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [settings.renderMode, ifcHandles, sceneObjects])
 
+  // Material keys used by the current selection (2026-10-02, per Maro: "when
+  // i select the element i want to see filter to see the element in the
+  // material mapping ... to prevent clutter/noise"). null = nothing
+  // selected (panel shows everything). Element selections resolve through
+  // each selected model's own per-piece material keys; a whole non-IFC
+  // object contributes every material it has.
+  const selectedRealisticKeys = useMemo<Set<string> | null>(() => {
+    if (settings.renderMode !== 'realistic') return null
+    const ids = new Set(selectedExpressIds)
+    if (selectedExpressId !== null) ids.add(selectedExpressId)
+    if (ids.size === 0 && selectedObjectIds.size === 0) return null
+    const keys = new Set<string>()
+    for (const o of sceneObjects) {
+      if (!selectedObjectIds.has(o.id)) continue
+      const info = o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
+      if (!info) continue
+      if (o.kind === 'ifc' && ids.size > 0) {
+        for (const id of ids) for (const key of keysForExpressId(info, id) ?? []) keys.add(key)
+      } else {
+        for (const key of info.entries.keys()) keys.add(key)
+      }
+    }
+    return keys
+    // realisticInfoVersion: re-run once material info has been extracted.
+  }, [settings.renderMode, selectedExpressId, selectedExpressIds, selectedObjectIds, sceneObjects, realisticInfoVersion])
+
   // Realistic Materials' own dock panel (2026-09-29, per Maro: mapping +
   // glass were "a bit compressed" inside 3D View Properties — "give them
   // their own widget panel that pops only... when realistic materials are
@@ -6804,6 +6830,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <RealisticMaterialsPanel
           entries={realisticEntries} mapping={realisticMapping} onMappingChange={setRealisticMapping}
           analysing={realisticAnalysing} entryModels={realisticEntryModels} onSelectEntry={handleSelectRealisticEntry}
+          selectionKeys={selectedRealisticKeys}
           glassTransmission={settings.realisticGlassTransmission}
           onGlassTransmissionChange={value => setSettings({ ...settings, realisticGlassTransmission: value })}
         />
