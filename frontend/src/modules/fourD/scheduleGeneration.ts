@@ -854,6 +854,12 @@ export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
 // geometry doesn't line up with the declared elevations closely enough to
 // trust (a misaligned or rotated federated import).
 const MEP_ROUGH_IN_CATEGORIES: ReadonlySet<string> = new Set(['Mechanical Equipment', 'Ductwork', 'Piping', 'Electrical Containment'])
+// Work that runs up to (or hangs from) the underside of the floor above, so
+// it waits for that floor's structure: MEP rough-in, plus full-height
+// non-structural partitions (2026-10-02, per Maro: "seems the walls formed
+// before the beams" — the Medical Clinic's 656 ground-floor partitions were
+// standing before the 4.57 m beams/deck they're built up to).
+const WAITS_FOR_FLOOR_ABOVE: ReadonlySet<string> = new Set([...MEP_ROUGH_IN_CATEGORIES, 'Non-Structural Walls'])
 const FRAME_CATEGORIES: ReadonlySet<ScheduleCategory> = new Set<ScheduleCategory>(['Columns', 'Beams', 'Slabs'])
 const LEVEL_MERGE_TOLERANCE_M = 0.3
 const LEVEL_PLACEMENT_TOLERANCE_M = 0.3
@@ -1771,9 +1777,9 @@ export function buildStagedSchedule(
   // off — nothing ever reads this map in that case).
   const firstOccurrenceByCategory = new Map<string, string>()
 
-  // Each storey's own first MEP rough-in activity (2026-10-02) — see the
-  // "slab above" edges added after this loop.
-  const firstMepRoughInByStorey: (string | null)[] = []
+  // Each storey's first activity that waits for the floor above
+  // (WAITS_FOR_FLOOR_ABOVE) — see the "slab above" edges after this loop.
+  const firstWaitsAboveByStorey: (string | null)[] = []
   // Below-slab services (2026-10-02): last MEP rough-in activity, first
   // Slabs activity, and whether the storey holds foundations — see the
   // substructure branch after this loop.
@@ -1800,8 +1806,8 @@ export function buildStagedSchedule(
     let lastFacadeTempId: string | null = null
     let lastNonLateTempId: string | null = null
     let firstLateTempId: string | null = null
-    let firstMepRoughInTempId: string | null = null
     let lastMepRoughInTempId: string | null = null
+    let firstWaitsAboveTempId: string | null = null
     let firstSlabsTempId: string | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
@@ -1891,7 +1897,8 @@ export function buildStagedSchedule(
         // phase, if it has one.
         if (!isLate) lastNonLateTempId = tempId
         else if (firstLateTempId === null) firstLateTempId = tempId
-        if (MEP_ROUGH_IN_CATEGORIES.has(category.name)) { firstMepRoughInTempId ??= tempId; lastMepRoughInTempId = tempId }
+        if (MEP_ROUGH_IN_CATEGORIES.has(category.name)) lastMepRoughInTempId = tempId
+        if (WAITS_FOR_FLOOR_ABOVE.has(category.name)) firstWaitsAboveTempId ??= tempId
         if (category.name === 'Slabs') firstSlabsTempId ??= tempId
         if (previousTempId) {
           relationships.push({ predecessor_temp_id: previousTempId, successor_temp_id: tempId, relationship_type: 'FS', lag_hours: 0 })
@@ -1903,7 +1910,7 @@ export function buildStagedSchedule(
       firstStructuralTempId, lastStructuralTempId, firstNonFacadeTempId, lastNonFacadeTempId,
       firstTempId, lastTempId: previousTempId,
     })
-    firstMepRoughInByStorey.push(firstMepRoughInTempId)
+    firstWaitsAboveByStorey.push(firstWaitsAboveTempId)
     lastMepRoughInByStorey.push(lastMepRoughInTempId)
     firstSlabsByStorey.push(firstSlabsTempId)
     hasFoundationByStorey.push(storey.categories.some(c => c.name === 'Foundation' || c.name === 'Piling'))
@@ -2049,7 +2056,7 @@ export function buildStagedSchedule(
   // structure of its own anchors the climb on its non-facade (possibly MEP)
   // work instead, and linking back into that could close a cycle.
   for (let i = 0; i < storeys.length; i++) {
-    const mepStart = firstMepRoughInByStorey[i]
+    const mepStart = firstWaitsAboveByStorey[i]
     // Substructure level (holds the foundations): its services run in the
     // ground UNDER the slab above — measured on the Medical Clinic, 1,292
     // duct fittings and 110 pipes at -0.3..-0.55 m, between the footings
