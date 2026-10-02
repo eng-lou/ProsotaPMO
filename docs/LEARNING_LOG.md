@@ -6455,3 +6455,15 @@ Properties → Effects.
 drop out during a drag at an exterior view, while the building still looks
 complete. Together with the earlier shadow and glass changes, an orbit
 frame now draws roughly 1.5 million triangles instead of 18 million.
+
+## 2026-10-02 — Pad footings formed after their columns
+
+**Cause.** The Medical Clinic model hangs its 38 pad footings on the
+"First Floor" storey (0.00 m) even though they're physically down at footing
+level (−1.00 m) with the strip footings. The new level logic only ever moved
+elements *up* to where they physically sit, never down, so these footings
+were scheduled with the first floor, after the footing-level columns.
+
+**Fix.** Foundations and piling now always go to the level they physically
+sit at, up or down. On the real model, all 96 footings now come first, with
+the columns after them.
