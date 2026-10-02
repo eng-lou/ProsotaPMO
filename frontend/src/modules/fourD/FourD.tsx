@@ -2698,6 +2698,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // --- Import 3D / Import IFC + viewport state ---
   const [settings, setSettingsState] = useState<ViewerSettings>(loadViewerSettings)
   const setSettings = (next: ViewerSettings) => { setSettingsState(next); saveViewerSettings(next) }
+  // Numpad 5 toggles perspective/orthographic, same key as Blender
+  // (2026-10-02, per Maro). Only while 4D is the visible screen, and never
+  // while typing into a field.
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Numpad5' || e.ctrlKey || e.metaKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return
+      e.preventDefault()
+      setSettingsState(prev => {
+        const next = { ...prev, orthographic: !prev.orthographic }
+        saveViewerSettings(next)
+        return next
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active])
   // Auto/ft/m preference for IFC storey elevations (IfcDataPanel) and
   // Location fields (TransformPanel) — owned here, not by either panel
   // (2026-07-11, per Maro: "rewire units"), so both stay in sync live

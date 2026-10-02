@@ -203,6 +203,17 @@ export function PropertiesPanel({
           </button>
         </Row>
       )}
+      <Row label="Projection">
+        <select
+          value={settings.orthographic ? 'ortho' : 'persp'}
+          onChange={e => set('orthographic', e.target.value === 'ortho')}
+          title="Perspective or orthographic view — Numpad 5 toggles it, like Blender"
+          className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
+        >
+          <option value="persp">Perspective</option>
+          <option value="ortho">Orthographic</option>
+        </select>
+      </Row>
       <Row label="Up Axis">
         <select
           value={settings.upAxis}

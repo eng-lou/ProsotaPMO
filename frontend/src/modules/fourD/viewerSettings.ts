@@ -187,6 +187,9 @@ export interface ViewerSettings {
   // Realistic Materials mode only: the visible textured ground plane
   // (RealisticGround.tsx). On by default; toggleable per Maro (2026-10-02).
   realisticGround: boolean
+  // Orthographic projection (2026-10-02, per Maro, Blender-style): toggled
+  // from 3D View Properties or Numpad 5 / "5" while the viewport has focus.
+  orthographic: boolean
 }
 
 export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
@@ -213,6 +216,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   tilesCacheSizeMb: 400,
   realisticGlassTransmission: false,
   realisticGround: true,
+  orthographic: false,
 }
 
 const STORAGE_KEY = 'prosota_4d_viewer_settings'

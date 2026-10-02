@@ -1,9 +1,10 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RealisticGround, computeGroundElevation } from './RealisticGround'
+import { orthoVisibleHeight } from './cameraProjection'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
 // loaded) package never lands in the main bundle" discipline just below —
@@ -312,11 +313,14 @@ export interface ResolvedSectionBox {
 export const AmbientOcclusionEffect = lazy(() =>
   Promise.all([import('@react-three/postprocessing'), import('postprocessing')]).then(([{ EffectComposer, N8AO, ToneMapping }, { ToneMappingMode }]) => ({
     default: ({ enabled, boostQuality, modelRadius }: { enabled: boolean; boostQuality: boolean; modelRadius: number }) => {
-      const { gl } = useThree()
+      const { gl, camera } = useThree()
+      // `camera` in deps (2026-10-02, orthographic toggle): the composer is
+      // rebuilt whenever R3F's camera changes, and its constructor forces
+      // NoToneMapping again even while disabled — re-assert after a swap.
       useEffect(() => {
         gl.toneMapping = enabled ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping
         if (!enabled) gl.autoClear = true
-      }, [enabled, gl])
+      }, [enabled, gl, camera])
       // No capture-time override of `enabled` (2026-08-31, per Maro: a
       // capture must show exactly the render settings/effects currently
       // live, not a silently-different version of them) — a previous
@@ -4278,6 +4282,82 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 // cameraRef already served; the renderer's own <canvas> element
 // (gl.domElement) is what handleCaptureImage below actually reads pixels
 // from.
+// Orthographic / perspective projection (2026-10-02, per Maro: "I want an
+// orthographic view ... similar to how Blender does it"). Blender keeps the
+// same view direction, pivot and apparent size when you toggle (Numpad 5);
+// this does the same:
+// - Two long-lived cameras: the Canvas's own default PerspectiveCamera and
+//   one OrthographicCamera. Toggling copies the pose across and makes the
+//   other one R3F's default camera (`set({ camera })`), so raycasting,
+//   captures, the AO composer and 3D Tiles all follow automatically.
+// - Apparent size is preserved: perspective -> ortho sets zoom so the
+//   visible height at the orbit pivot is unchanged; ortho -> perspective
+//   moves the camera to the distance that shows that same height.
+// - OrbitControls is never rebuilt (see StableOrbitControls below) — its
+//   `object` is simply repointed, so the orbit pivot survives the toggle.
+// - near = -far on the ortho camera, as Blender's ortho clipping effectively
+//   behaves: zooming in an orthographic view never moves the camera, so
+//   geometry between the camera and the pivot must never be near-clipped.
+// - A Cinematic Camera (activeCameraId) always looks through perspective —
+//   its own focal length only means something there (forcePerspective).
+function ProjectionController({ orthographic, controlsRef }: {
+  orthographic: boolean
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+}) {
+  const get = useThree(s => s.get)
+  const set = useThree(s => s.set)
+  const invalidate = useThree(s => s.invalidate)
+  const [perspective] = useState(() => get().camera as THREE.PerspectiveCamera)
+  const [ortho] = useState(() => new THREE.OrthographicCamera())
+  useEffect(() => {
+    const current = get().camera
+    const controls = controlsRef.current
+    const target = controls ? controls.target.clone() : new THREE.Vector3()
+    const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2)
+    const { width, height } = get().size
+    if (orthographic && current !== ortho) {
+      const distance = Math.max(perspective.position.distanceTo(target), 1e-3)
+      ortho.position.copy(perspective.position)
+      ortho.quaternion.copy(perspective.quaternion)
+      ortho.up.copy(perspective.up)
+      ortho.left = -width / 2
+      ortho.right = width / 2
+      ortho.top = height / 2
+      ortho.bottom = -height / 2
+      ortho.zoom = height / (2 * distance * tanHalfFov)
+      ortho.far = perspective.far
+      ortho.near = -perspective.far
+      ortho.updateProjectionMatrix()
+      set({ camera: ortho })
+      if (controls) { controls.object = ortho; controls.update() }
+    } else if (!orthographic && current === ortho) {
+      const visibleHeight = (ortho.top - ortho.bottom) / ortho.zoom
+      const distance = visibleHeight / (2 * tanHalfFov)
+      const direction = ortho.position.clone().sub(target)
+      if (direction.lengthSq() === 0) direction.set(0, -1, 0)
+      perspective.position.copy(target).addScaledVector(direction.normalize(), distance)
+      perspective.quaternion.copy(ortho.quaternion)
+      perspective.up.copy(ortho.up)
+      perspective.updateProjectionMatrix()
+      set({ camera: perspective })
+      if (controls) { controls.object = perspective; controls.update() }
+    }
+    invalidate()
+  }, [orthographic, get, set, invalidate, perspective, ortho, controlsRef])
+  return null
+}
+
+// drei's OrbitControls rebuilds its whole controls instance whenever R3F's
+// default camera changes (useMemo keyed on the camera), which would reset
+// the orbit pivot on every projection toggle. Pinning `camera` to the
+// Canvas's original perspective camera keeps one instance for the life of
+// the viewport; ProjectionController repoints `controls.object` instead.
+const StableOrbitControls = forwardRef<OrbitControlsImpl, React.ComponentProps<typeof OrbitControls>>((props, ref) => {
+  const get = useThree(s => s.get)
+  const [initialCamera] = useState(() => get().camera)
+  return <OrbitControls ref={ref} {...props} camera={initialCamera} />
+})
+
 function CameraCapture({ cameraRef, rendererRef }: {
   cameraRef: React.MutableRefObject<THREE.Camera | null>
   rendererRef: React.MutableRefObject<THREE.WebGLRenderer | null>
@@ -4472,7 +4552,11 @@ export function ShadowFrustumSync({
     }
     const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 50
     const distance = camera.position.distanceTo(controls.target)
-    const visibleRadius = distance * Math.tan((fov / 2) * (Math.PI / 180)) * 2
+    // Orthographic: zooming changes camera.zoom, not distance — size the
+    // shadow frustum off what's actually visible instead.
+    const visibleRadius = camera instanceof THREE.OrthographicCamera
+      ? orthoVisibleHeight(camera)
+      : distance * Math.tan((fov / 2) * (Math.PI / 180)) * 2
     const shadowRadius = THREE.MathUtils.clamp(visibleRadius, 10, modelRadius)
     const shadowCam = light.shadow.camera
     shadowCam.left = -shadowRadius * 2
@@ -5299,6 +5383,11 @@ export function Viewport3D({
     if (direction.lengthSq() === 0) direction.set(1, 1, 1)
     direction.normalize().multiplyScalar(distance)
     camera.position.copy(center).add(direction)
+    // Orthographic: framing is zoom, not distance — fit the same sphere.
+    if (camera instanceof THREE.OrthographicCamera) {
+      camera.zoom = (camera.top - camera.bottom) / (2 * radius)
+      camera.updateProjectionMatrix()
+    }
     controls.target.copy(center)
     controls.update()
   }
@@ -6742,7 +6831,8 @@ export function Viewport3D({
             (ActiveCameraPose below only re-asserts a resolved keyframed
             pose when the timeline date itself actually changes, so it
             never fights a live drag at a static date). */}
-        <OrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
+        <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
+        <ProjectionController orthographic={settings.orthographic && activeCameraId === null} controlsRef={controlsRef} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual

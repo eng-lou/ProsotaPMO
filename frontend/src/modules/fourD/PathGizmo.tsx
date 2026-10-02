@@ -7,6 +7,7 @@ import type { Path, PathPoint } from './paths'
 import type { UpAxis } from './upAxis'
 import { computeRevealProgress } from './timelinePlayback'
 import type { ExportLabelRegistry } from './exportLabels'
+import { effectiveViewDistance } from './cameraProjection'
 
 // Handles keep this fixed neutral color regardless of the route's own
 // `path.color` (2026-07-29) — only the line/arrow/label pick up the
@@ -362,7 +363,7 @@ function PathGizmo({
         if (arrowRef.current) arrowRef.current.visible = true
       }
       if (arrowRef.current && arrowTransform) {
-        const distance = camera.position.distanceTo(arrowTransform.position)
+        const distance = effectiveViewDistance(camera, arrowTransform.position)
         arrowRef.current.scale.setScalar(Math.max(1, distance / ARROW_REFERENCE_DISTANCE))
       }
       return
@@ -390,7 +391,7 @@ function PathGizmo({
       if (tip) {
         arrowRef.current.position.copy(tip.position)
         arrowRef.current.quaternion.copy(tip.quaternion)
-        const distance = camera.position.distanceTo(tip.position)
+        const distance = effectiveViewDistance(camera, tip.position)
         arrowRef.current.scale.setScalar(Math.max(1, distance / ARROW_REFERENCE_DISTANCE))
       }
     }

@@ -17,6 +17,7 @@ import { computeAppliedAnimationStateAt, computeRevealProgress, interpolateKeyfr
 // arc-length-sampling logic a third time.
 import { densifyBorderForReveal, sliceRevealVectors } from './zoneGeometry'
 import type { UpAxis } from './upAxis'
+import { effectiveViewDistance } from './cameraProjection'
 
 const ICON_GLYPH: Record<AnnotationIcon, string> = { pin: '📍', flag: '🚩', comment: '💬', warning: '⚠️' }
 
@@ -314,7 +315,7 @@ export function AnnotationMarker({
     // groupRef.current.position is already world space too (this marker
     // has no parent group of its own, unlike an imported model's up-axis-
     // correction wrapper), so no local/world conversion needed here.
-    const distance = camera.position.distanceTo(groupRef.current.position)
+    const distance = effectiveViewDistance(camera, groupRef.current.position)
     const withinDistance =
       (annotation.hide_closer_than === null || distance >= annotation.hide_closer_than) &&
       (annotation.hide_farther_than === null || distance <= annotation.hide_farther_than)
