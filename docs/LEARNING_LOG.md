@@ -6224,3 +6224,22 @@ box created from a selection spanning several models wraps those models.
 
 **Lesson.** An ID is only meaningful inside the scope that issued it. When a
 selection can span several files, check that before treating IDs as global.
+
+## 2026-10-02 — Realistic mode looked washed out ("negligible difference")
+
+**Symptom.** After adding sun, sky and AO to Realistic mode, the building
+still rendered pale, bluish and flat compared with a reference render.
+
+**Cause.** Two things. (1) The Ambient Occlusion post-processing chain turns
+off the renderer's tone mapping (the step that squeezes very bright light
+values into what a screen can show) and never applied its own, so anything
+brighter than "white" just clipped to white. (2) The sky's light was so
+strong that its blue fill swamped every material colour.
+
+**Fix.** Added tone mapping back as the last post-processing step, and turned
+the sky light down (0.4) while strengthening the sun (3.5). Values were
+chosen by rendering a stand-in building with the real components in a small
+throwaway test page and comparing screenshots, not by guessing.
+
+**Lesson.** For visual tuning, get a real picture before shipping. A
+throwaway test page that needs no login is a quick way to get one.
