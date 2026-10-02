@@ -567,6 +567,7 @@ export function ComparisonViewportPane({
             // after capture, never a rotated <Sky> itself).
             <Environment
               resolution={256} frames={Infinity} far={2000}
+              environmentIntensity={lightingForRenderMode(renderMode).environment}
               background={showEnvironmentBackground}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
@@ -578,6 +579,7 @@ export function ComparisonViewportPane({
           ) : (
             <Environment
               files={environmentUrl}
+              environmentIntensity={lightingForRenderMode(renderMode).environment}
               background={showEnvironmentBackground}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}

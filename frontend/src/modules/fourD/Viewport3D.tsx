@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { RealisticGround } from './RealisticGround'
+import { RealisticGround, computeGroundElevation } from './RealisticGround'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 // Type-only, mirrors IfcModelHandle's own "type-only so the real (lazy-
 // loaded) package never lands in the main bundle" discipline just below —
@@ -310,7 +310,7 @@ export interface ResolvedSectionBox {
 // too (confirmed, not assumed) — an accepted, pre-existing trade-off,
 // not something newly introduced by sharing this component a second time.
 export const AmbientOcclusionEffect = lazy(() =>
-  import('@react-three/postprocessing').then(({ EffectComposer, N8AO }) => ({
+  Promise.all([import('@react-three/postprocessing'), import('postprocessing')]).then(([{ EffectComposer, N8AO, ToneMapping }, { ToneMappingMode }]) => ({
     default: ({ enabled, boostQuality, modelRadius }: { enabled: boolean; boostQuality: boolean; modelRadius: number }) => {
       const { gl } = useThree()
       useEffect(() => {
@@ -387,6 +387,14 @@ export const AmbientOcclusionEffect = lazy(() =>
             aoRadius={aoScale} intensity={0.8} distanceFalloff={aoScale}
             aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
           />
+          {/* Tone mapping as the composer's last effect (2026-10-02, found
+              via Maro's washed-out Realistic screenshots): the composer
+              forces gl.toneMapping = NoToneMapping (its own source, line
+              ~119) and renders into a HalfFloat buffer, so without this
+              effect any radiance above 1.0 (a bright sky env + strong sun)
+              was simply clipped — everything AO-on rendered flat, pale and
+              blown out. Same ACES curve the renderer uses with AO off. */}
+          <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
         </EffectComposer>
       )
     },
@@ -480,12 +488,15 @@ export function RealisticEnvironment({ zUp }: { zUp: boolean }) {
     const target = pmrem.fromScene(skyScene, 0)
     const previous = scene.environment
     const previousRotation = scene.environmentRotation.clone()
+    const previousIntensity = scene.environmentIntensity
     scene.environment = target.texture
     scene.environmentRotation.set(zUp ? Math.PI / 2 : 0, 0, 0)
+    scene.environmentIntensity = lightingForRenderMode('realistic').environment
     return () => {
       if (scene.environment === target.texture) {
         scene.environment = previous
         scene.environmentRotation.copy(previousRotation)
+        scene.environmentIntensity = previousIntensity
       }
       target.dispose()
       geometry.dispose()
@@ -500,10 +511,18 @@ export function RealisticEnvironment({ zUp }: { zUp: boolean }) {
 // strong flat ambient term, which washes out exactly the roughness/metal/
 // bump differences that mode adds. Less ambient, a stronger warm sun, and
 // the sky environment above doing the fill instead.
-export function lightingForRenderMode(renderMode: string): { ambient: number; sun: number; sunColor: string } {
+//
+// Re-balanced 2026-10-02 (per Maro, against a sun-lit reference render:
+// ours read pale, blue and flat) — tuned side by side in an isolated
+// harness with the real sky/AO/ground components: at full strength the sky
+// environment's blue fill swamped every material (dark grey cladding read
+// light blue, brick read pink, shadows blue). Sky light at 0.4, a stronger
+// sun and no flat ambient gives true material colours, a warm sunlit side
+// and neutral, darker shade — the balance the reference has.
+export function lightingForRenderMode(renderMode: string): { ambient: number; sun: number; sunColor: string; environment: number } {
   return renderMode === 'realistic'
-    ? { ambient: 0.15, sun: 2.4, sunColor: '#fff4e6' }
-    : { ambient: 0.6, sun: 1, sunColor: '#ffffff' }
+    ? { ambient: 0, sun: 3.5, sunColor: '#fff4e6', environment: 0.4 }
+    : { ambient: 0.6, sun: 1, sunColor: '#ffffff', environment: 1 }
 }
 
 export interface ModelBounds {
@@ -4904,6 +4923,16 @@ export function Viewport3D({
     ? [modelBounds.center[0], modelBounds.center[1], modelBounds.min[2] - groundEpsilon]
     : [modelBounds.center[0], modelBounds.min[1] - groundEpsilon, modelBounds.center[2]]
   const groundRotation: [number, number, number] = zUp ? [0, 0, 0] : [-Math.PI / 2, 0, 0]
+  // Realistic mode's visible ground sits where the model's geometry
+  // actually starts, not under its single lowest stray element — see
+  // computeGroundElevation's own header.
+  const realisticGroundPosition = useMemo<[number, number, number]>(() => {
+    if (settings.renderMode !== 'realistic') return groundPosition
+    const fallback = zUp ? modelBounds.min[2] : modelBounds.min[1]
+    const elevation = computeGroundElevation(importedObjects.map(o => o.object), zUp, fallback) - groundEpsilon
+    return zUp ? [modelBounds.center[0], modelBounds.center[1], elevation] : [modelBounds.center[0], elevation, modelBounds.center[2]]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.renderMode, importedObjects, transformTick, modelBounds, zUp])
 
   // Box-select (2026-07-08, per Maro: "select box in viewport", modelled on
   // Blender's B-key marquee) — a toggleable mode rather than always-on,
@@ -6375,6 +6404,7 @@ export function Viewport3D({
                changes the sampled lighting. */
             <Environment
               resolution={256} frames={Infinity} far={2000}
+              environmentIntensity={lightingForRenderMode(settings.renderMode).environment}
               background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
               backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
@@ -6394,6 +6424,7 @@ export function Viewport3D({
                   this — same +90-about-X correction as everything else Y-up. */}
               <Environment
                 files={environmentUrl}
+                environmentIntensity={lightingForRenderMode(settings.renderMode).environment}
                 background={showWhiteBackground ? false : (captureBackgroundOverride ?? settings.environmentBackground)}
                 backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
                 environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
@@ -6464,7 +6495,7 @@ export function Viewport3D({
               RealisticGround.tsx) — unless Site Context's real 3D Tiles
               terrain is on, which is already the ground. */}
           {settings.renderMode === 'realistic' && !siteContext?.enabled ? (
-            <RealisticGround position={groundPosition} rotation={groundRotation} modelRadius={modelBounds.radius} />
+            <RealisticGround position={realisticGroundPosition} rotation={groundRotation} modelRadius={modelBounds.radius} />
           ) : settings.shadows && (
             <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
               <planeGeometry args={[groundSize, groundSize]} />
