@@ -163,3 +163,21 @@ Turns a TypeScript test script, plus the real app files it imports, into one pla
 
 ### Reading a minified production error with source maps (2026-10-01)
 `npx vite build --sourcemap` rebuilds the app with ".map" files that link each position in the minified code back to the original file and line. Comparing the rebuilt file with the live one (`curl` it down, then `cmp`) confirms it's the same code. Then `source-map-js`'s `originalPositionFor({line, column})` turns the error's `file.js:1:4707` into a real `GanttChart.tsx` line number.
+
+### Measuring freezes with a "heartbeat" (2026-10-02)
+A tiny loop (using `MessageChannel`) runs over and over on the page's main thread and notes any gap longer than 50 ms. Each gap is a moment the page was frozen and couldn't respond to a click. Used to measure navigation lag on the live site from a background browser tab, where the browser's normal timing tools report nothing.
+
+### Profiling with the browser's built-in profiler (2026-10-02)
+Starting the local dev server with an extra `Document-Policy: js-profiling` header lets the page run `new Profiler(...)`, which records which functions use the most time. That showed the Scheduling page spending most of its opening time building a hidden print view.
+
+### Throwaway test pages (2026-10-02)
+A small `harness-*.html` page plus a `src/__harness*.ts(x)` file, served by the local Vite dev server, runs the app's real code (for example the IFC loader, the schedule generator or the lighting components) without logging in. Used today to tune lighting, check ground heights, measure shader recompiles and test the schedule generator on the real Medical Clinic files. Always deleted afterwards and never committed.
+
+### Attaching a file to the page from code (2026-10-02)
+`DataTransfer` builds a file list in the page itself, which can be assigned to an `<input type="file">` followed by a `change` event. This imports a model exactly as the Import button would, without a file dialog, and gets around the browser tool's 10 MB upload limit.
+
+### Counting what the graphics card draws (2026-10-02)
+three.js's `renderer.info.render.triangles` and `.calls` count the triangles and draw calls in a frame. Counting these is reliable even in a background tab, where frame timings are not. It showed the Medical Clinic drawing 6 million triangles a frame (4.6 million from the MEP file) and confirmed each speed-up.
+
+### `git diff --stat` as a safety check (2026-10-02)
+Shows how many lines changed in each file. A file that suddenly showed ~1,800 changed lines when only ~100 were edited revealed that a PowerShell command had garbled the file's special characters. It was caught and restored before committing. Edit files with the editor or Python, not PowerShell's `Get-Content`/`Set-Content`.

@@ -11,6 +11,7 @@ Built by [Prosota Ltd](https://prosota.com), founded by Louis Oghenemaro (Maro) 
 - **Cost Plan** — derived from the schedule: fixed and percentage-based cost elements, real computed Earned Value Management (CV, CPI, SPI, EAC, ETC), configurable variance thresholds, rate cards, commitments.
 - **Analysis** — schedule-focused risk and quality: a Risk Register (threat/opportunity split, inherent/residual heat-matrices, mitigation tracking, EMV) alongside DCMA schedule-quality checks and baseline comparison.
 - **ICD Tracker** — Issues, Changes, and Decisions in one integrated change-control tracker, with real approval workflows and audit trails.
+- **4D / BIM** — federated IFC models (plus GLB/OBJ/FBX) linked to schedule activities and played back on a timeline: Generate Schedule builds a sequenced programme straight from multiple discipline IFCs (levels merged by elevation and geometry, never by storey name); reusable animation profiles (fall, pop, grow, colour/opacity, domino offsets); section boxes, cinematic cameras, perspective/orthographic views; a Realistic Materials render mode with sun/sky lighting, shadows, AO and per-material mapping/colour; image capture and video export at chosen timeline points.
 - Every capability cross-links back to the Activities that drive it — a risk can point at the cost line and the schedule activity it actually threatens, not live in its own silo.
 
 ## Tech stack
