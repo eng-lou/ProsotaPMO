@@ -6261,3 +6261,24 @@ is thrown away when the model is unloaded, which actually frees its memory.
 
 **Lesson.** A hard platform limit can often be sidestepped by splitting the
 work across separate instances rather than trying to raise the limit itself.
+
+## 2026-10-02 — Lag adding/removing a section box, orbiting, and navigating
+
+**Section box.** three.js builds a separate compiled shader (the small GPU
+program that colours each pixel) for each *number* of clipping planes. Going
+from no box (0 planes) to a box (6 planes) forced every material's shader to
+be rebuilt, which took over a second in a test. Now every material always
+carries 6 planes. When there's no box they sit a billion units away and cut
+nothing, so adding or removing a box only moves planes and never rebuilds
+shaders (about 1 ms).
+
+**Orbiting.** Shadows were being redrawn every frame while orbiting, even
+though turning the camera can't change them. They're now frozen during a drag
+(and redrawn on zoom or release). Ambient Occlusion now runs at half
+resolution in the live view.
+
+**Navigating.** The hidden 4D screen was being fully redrawn on every page
+change. It's now skipped unless 4D itself is being opened or closed.
+
+**Lesson.** Measure first: the section-box cost was invisible in code review
+but obvious in a 20-line timing test.
