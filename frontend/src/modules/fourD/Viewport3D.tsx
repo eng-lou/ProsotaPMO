@@ -13,7 +13,7 @@ import type { EffectComposer as EffectComposerImpl } from 'postprocessing'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
 import { IdleRenderDriver, markRenderActivity } from './IdleRenderDriver'
-import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type Axis } from './animationProfiles'
+import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig, type Axis } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
 // TimelinePlayback's resolution effect below, so web-ifc's real weight
@@ -3322,6 +3322,15 @@ export function TimelinePlayback({
       // uses for its own bulk per-element WASM reads, just without a
       // visible progress bar here since this always resolves in the
       // background rather than inside a wizard step.
+      // Domino/offset groups (2026-10-02, per Maro — see
+      // AnimationProfileConfig.stagger): one group per activity + profile,
+      // one entry per link (= one element), with every ResolvedTimelineLink
+      // object that link produced (an element can resolve to several pieces
+      // or models — they share one slot) plus its world-space centre to sort
+      // by. Only collected for profiles with stagger > 0.
+      const staggerGroups = new Map<string, { config: AnimationProfileConfig; entries: { links: ResolvedTimelineLink[]; center: THREE.Vector3 }[] }>()
+      const staggerBox = new THREE.Box3()
+      const staggerMatrix = new THREE.Matrix4()
       for (let linkIndex = 0; linkIndex < links.length; linkIndex++) {
         if (linkIndex > 0 && linkIndex % 200 === 0) {
           await new Promise(resolve => setTimeout(resolve, 0))
@@ -3358,6 +3367,9 @@ export function TimelinePlayback({
         const profileId = link.animation_profile_id ?? activity.animation_profile_id
         const profile = profileId ? profileById.get(profileId)?.config : DEFAULT_ANIMATION_CONFIG
         if (!profile) continue
+        const staggering = (profile.stagger ?? 0) > 0
+        const createdLinks: ResolvedTimelineLink[] = []
+        let staggerCenter: THREE.Vector3 | null = null
 
         // One link can resolve to *several* mesh pieces (see
         // getExpressIdIndex's own header above) — every piece gets the
@@ -3484,7 +3496,16 @@ export function TimelinePlayback({
                   ) as Set<number>
                   for (const { instanceId } of batchInfo.instances) timelineControlledInstanceIds.add(instanceId)
                 }
-                bvTarget.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
+                const bvLink: ResolvedTimelineLink = { activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
+                bvTarget.links.push(bvLink)
+                createdLinks.push(bvLink)
+                if (staggering && !staggerCenter && batchInfo.instances.length > 0) {
+                  const instanceId = batchInfo.instances[0].instanceId
+                  batchInfo.mesh.getBoundingBoxAt(batchInfo.mesh.getGeometryIdAt(instanceId), staggerBox)
+                  batchInfo.mesh.getMatrixAt(instanceId, staggerMatrix)
+                  batchInfo.mesh.updateMatrixWorld(true)
+                  staggerCenter = staggerBox.applyMatrix4(staggerMatrix.premultiply(batchInfo.mesh.matrixWorld)).getCenter(new THREE.Vector3())
+                }
                 continue
               }
             }
@@ -3509,7 +3530,14 @@ export function TimelinePlayback({
 
         for (const { object, elementKey } of resolved) {
           const target = getOrCreate(object, elementKey)
-          target.links.push({ activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis })
+          const targetLink: ResolvedTimelineLink = { activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
+          target.links.push(targetLink)
+          createdLinks.push(targetLink)
+          if (staggering && !staggerCenter) {
+            object.updateMatrixWorld(true)
+            staggerBox.setFromObject(object)
+            if (!staggerBox.isEmpty()) staggerCenter = staggerBox.getCenter(new THREE.Vector3())
+          }
           // Tells ModelObjects' own per-mesh effect to back off `.visible`
           // for this mesh (2026-07-22 fix, per Maro — see that effect's own
           // `timelineControlled` check for the full story: while an element
@@ -3519,6 +3547,36 @@ export function TimelinePlayback({
           object.userData.timelineControlled = true
           object.traverse(child => { child.userData.timelineControlled = true })
         }
+
+        if (staggering && staggerCenter && createdLinks.length > 0) {
+          const groupKey = `${link.activity_id}|${profileId ?? 'default'}`
+          let group = staggerGroups.get(groupKey)
+          if (!group) { group = { config: profile, entries: [] }; staggerGroups.set(groupKey, group) }
+          group.entries.push({ links: createdLinks, center: staggerCenter })
+        }
+      }
+
+      // Assign each element its slot (0..1) in its group's order. "Along X /
+      // Along Y" are the two horizontal world axes and "vertical" is
+      // whichever world axis is up for this view; "random" is a fixed
+      // shuffle (seeded by position, so it's stable across reloads).
+      const upIndex = upAxis === 'z' ? 2 : 1
+      const secondHorizontalIndex = upAxis === 'z' ? 1 : 2
+      for (const { config, entries } of staggerGroups.values()) {
+        const order = config.stagger_order ?? 'along_x'
+        const keyOf = (c: THREE.Vector3) => {
+          const v = c.toArray()
+          if (order === 'vertical') return v[upIndex]
+          if (order === 'along_y') return v[secondHorizontalIndex]
+          if (order === 'random') { const h = Math.sin(v[0] * 12.9898 + v[1] * 78.233 + v[2] * 37.719) * 43758.5453; return h - Math.floor(h) }
+          return v[0]
+        }
+        const sorted = entries.map(e => ({ e, k: keyOf(e.center) })).sort((a, b) => a.k - b.k)
+        if (config.stagger_reverse) sorted.reverse()
+        const last = Math.max(1, sorted.length - 1)
+        sorted.forEach(({ e }, rank) => {
+          for (const l of e.links) l.staggerFraction = sorted.length > 1 ? rank / last : 0
+        })
       }
 
       // Mode B — manual keyframes, entirely independent of the above: any

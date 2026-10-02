@@ -68,3 +68,29 @@ async def test_delete_profile(client: AsyncClient, project: Project):
 async def test_delete_unknown_profile_404s(client: AsyncClient, project: Project):
     resp = await client.delete(f"/api/v1/animation-profiles/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+async def test_stagger_fields_round_trip_and_default(client: AsyncClient, project: Project):
+    # Domino/offset (2026-10-02): the schema used to drop unknown config keys
+    # silently, so these must be real fields or the UI's setting is lost on save.
+    resp = await client.post("/api/v1/animation-profiles/", json={
+        "project_id": str(project.id), "name": "Domino Fall",
+        "config": {"transform_kind": "fall", "stagger": 0.5, "stagger_order": "vertical", "stagger_reverse": True},
+    })
+    assert resp.status_code == 201, resp.text
+    config = resp.json()["config"]
+    assert config["stagger"] == 0.5
+    assert config["stagger_order"] == "vertical"
+    assert config["stagger_reverse"] is True
+
+    bare = (await client.post("/api/v1/animation-profiles/", json={"project_id": str(project.id), "name": "Bare2"})).json()["config"]
+    assert bare["stagger"] == 0.0
+    assert bare["stagger_order"] == "along_x"
+    assert bare["stagger_reverse"] is False
+
+
+async def test_stagger_out_of_range_rejected(client: AsyncClient, project: Project):
+    resp = await client.post("/api/v1/animation-profiles/", json={
+        "project_id": str(project.id), "name": "Too Much", "config": {"stagger": 1.0},
+    })
+    assert resp.status_code == 422

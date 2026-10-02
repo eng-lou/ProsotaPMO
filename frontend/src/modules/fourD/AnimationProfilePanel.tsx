@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadJson, readJsonFile } from '@/lib/exportImport'
 import { AnimationProfileEditor } from './AnimationProfileEditor'
@@ -74,6 +74,21 @@ export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, o
     }
   }
 
+  // Colours this project's saved profiles already use, most recently
+  // edited first (2026-10-02, per Maro: "see the recent colors used on
+  // project when i try to edit and change color on a different profile").
+  const recentColors = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const p of [...profiles].sort((a, b) => b.updated_at.localeCompare(a.updated_at))) {
+      for (const c of [p.config.color_from, p.config.color_to]) {
+        const hex = c?.toLowerCase()
+        if (hex && !seen.has(hex)) { seen.add(hex); out.push(hex) }
+      }
+    }
+    return out.slice(0, 16)
+  }, [profiles])
+
   return (
     <div className="flex-1 overflow-y-auto p-2">
       {draft ? (
@@ -83,6 +98,7 @@ export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, o
           onSave={save}
           onCancel={() => setDraft(null)}
           saveLabel={draft.id ? 'Update Profile' : 'Save Profile'}
+          recentColors={recentColors}
         />
       ) : (
         <>

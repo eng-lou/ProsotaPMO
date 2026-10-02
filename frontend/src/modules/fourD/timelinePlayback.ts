@@ -23,6 +23,10 @@ export interface ResolvedTimelineLink {
   finishMs: number
   profile: AnimationProfileConfig
   axis: Axis
+  // 0..1 position of this link's element within its activity+profile group,
+  // in the profile's stagger_order — only set when profile.stagger > 0
+  // (Viewport3D.tsx's link-resolution pass assigns it once per resolve).
+  staggerFraction?: number
 }
 
 // Rewritten (2026-07-21, per Maro: "the animation timeline is still
@@ -304,7 +308,7 @@ function lerpColor(fromHex: string, toHex: string, t: number): string {
 // exactly as often as pickActiveLink does, same hot per-frame path, same
 // six-combined-discipline-file scale.
 export function computeAppliedAnimationStateAt(
-  link: Pick<ResolvedTimelineLink, 'startMs' | 'finishMs' | 'profile'>,
+  link: Pick<ResolvedTimelineLink, 'startMs' | 'finishMs' | 'profile' | 'staggerFraction'>,
   now: Date,
   // 2026-07-26 fix, per Maro: "the animation profiles axises are not
   // aligned to up axis... if im on z up, the animation profiles seem fixed
@@ -348,6 +352,17 @@ export function computeAppliedAnimationStateAt(
     const windowDays = profile.duration_frames ?? 1
     const windowStart = finish - windowDays * DAY_MS
     rawProgress = nowMs <= windowStart ? 1 : nowMs >= finish ? 0 : 1 - (nowMs - windowStart) / (finish - windowStart)
+  }
+
+  // Domino/offset (2026-10-02) — see AnimationProfileConfig.stagger. Remaps
+  // the shared window progress into this element's own later, shorter slot.
+  // Done on "forward" progress (0 = not started, 1 = done) so on_finish's
+  // inverted rawProgress staggers the same way round as the others.
+  const stagger = Math.min(profile.stagger ?? 0, 0.95)
+  if (stagger > 0 && link.staggerFraction !== undefined) {
+    const forward = profile.trigger === 'on_finish' ? 1 - rawProgress : rawProgress
+    const shifted = clamp01((forward - stagger * link.staggerFraction) / (1 - stagger))
+    rawProgress = profile.trigger === 'on_finish' ? 1 - shifted : shifted
   }
 
   const eased = applyEasing(rawProgress, profile.interpolation)

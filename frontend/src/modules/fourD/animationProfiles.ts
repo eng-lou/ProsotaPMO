@@ -6,6 +6,8 @@ export type Axis = 'x' | 'y' | 'z'
 export type Direction = 1 | -1
 export type Trigger = 'on_start' | 'on_finish' | 'over_duration'
 export type Interpolation = 'linear' | 'ease_in' | 'ease_out' | 'ease_in_out' | 'bounce'
+// Domino/offset ordering (2026-10-02) — see AnimationProfileConfig.stagger.
+export type StaggerOrder = 'along_x' | 'along_y' | 'vertical' | 'random'
 
 // Mirrors backend app/schemas/animation_profile.py:AnimationProfileConfig
 // exactly.
@@ -23,6 +25,18 @@ export interface AnimationProfileConfig {
   color_to: string | null
   interpolation: Interpolation
   duration_frames: number | null
+  // Domino/offset effect (2026-10-02, per Maro: "these 58 elements ... all
+  // fall at exactly the same time. i want an offset/domino effect option for
+  // each profile"). 0 = every element linked to the activity animates
+  // together (the old behaviour). >0 = elements take turns: each element's
+  // own animation starts at `stagger * (its position in the order)` of the
+  // way through the window and lasts the remaining `1 - stagger` of it, so
+  // at 0.5 the first element animates over the first half of the activity
+  // and the last over the second half. Capped at 0.95. Optional so configs
+  // saved before this existed read as 0.
+  stagger?: number
+  stagger_order?: StaggerOrder
+  stagger_reverse?: boolean
 }
 
 export const DEFAULT_ANIMATION_CONFIG: AnimationProfileConfig = {
@@ -39,6 +53,9 @@ export const DEFAULT_ANIMATION_CONFIG: AnimationProfileConfig = {
   color_to: null,
   interpolation: 'linear',
   duration_frames: null,
+  stagger: 0,
+  stagger_order: 'along_x',
+  stagger_reverse: false,
 }
 
 export interface AnimationProfile {

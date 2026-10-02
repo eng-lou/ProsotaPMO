@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { ColorPickerPopover } from '@/components/ColorPickerPopover'
-import type { AnimationProfileConfig, Axis, Direction, Interpolation, Trigger, TransformKind } from './animationProfiles'
+import { useEffect, useRef, useState } from 'react'
+import { ColorPickerPopover, normalizeHex } from '@/components/ColorPickerPopover'
+import type { AnimationProfileConfig, Axis, Direction, Interpolation, StaggerOrder, Trigger, TransformKind } from './animationProfiles'
 
 interface Props {
   name: string
@@ -8,6 +8,9 @@ interface Props {
   onSave: (name: string, config: AnimationProfileConfig) => void
   onCancel: () => void
   saveLabel: string
+  // Colours already used by this project's saved profiles, most recent
+  // first (AnimationProfilePanel.tsx) — offered as swatches in the picker.
+  recentColors?: string[]
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -19,29 +22,61 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-function ColorField({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+// Swatch + hex box + picker (2026-10-02, per Maro: "allow me to add a
+// hexcode for the colour from/to. expand to fit so can use the color picker
+// well ... see the recent colors used on project"). The picker is anchored
+// to the swatch and rendered at page level (ColorPickerPopover's `anchor`),
+// so the narrow, scrolling profiles panel can no longer clip it.
+function ColorField({ value, onChange, recentColors }: { value: string | null; onChange: (v: string | null) => void; recentColors?: string[] }) {
   const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(value ?? '')
+  const swatchRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { setDraft(value ?? '') }, [value])
+  const commitDraft = () => {
+    if (draft.trim() === '') return
+    const hex = normalizeHex(draft)
+    if (hex) onChange(hex)
+    else setDraft(value ?? '')
+  }
   return (
-    <div className="flex items-center gap-1 relative">
+    <div className="flex items-center gap-1">
       {value ? (
         <>
           <button
+            ref={swatchRef}
             onClick={() => setOpen(v => !v)}
-            title={value}
-            className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line"
+            title="Pick colour"
+            className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line shrink-0"
             style={{ backgroundColor: value }}
           />
-          <button onClick={() => onChange(null)} title="Don't touch colour" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs">✕</button>
+          <input
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDraft() } }}
+            spellCheck={false}
+            aria-label="Hex colour"
+            className="w-[4.75rem] text-xs font-mono border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
+          />
+          <button onClick={() => { onChange(null); setOpen(false) }} title="Don't touch colour" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 text-xs">✕</button>
         </>
       ) : (
-        <button onClick={() => onChange('#ef4444')} className="text-xs text-gray-400 dark:text-prosota-muted border border-dashed border-gray-300 dark:border-prosota-line rounded px-1.5 py-0.5">
+        <button
+          ref={swatchRef}
+          onClick={() => { onChange(recentColors?.[0] ?? '#ef4444'); setOpen(true) }}
+          className="text-xs text-gray-400 dark:text-prosota-muted border border-dashed border-gray-300 dark:border-prosota-line rounded px-1.5 py-0.5"
+        >
           None
         </button>
       )}
       {open && value && (
-        <div className="absolute z-50 top-full left-0 mt-1">
-          <ColorPickerPopover value={value} onChange={onChange} onClose={() => setOpen(false)} />
-        </div>
+        <ColorPickerPopover
+          value={value}
+          onChange={onChange}
+          onClose={() => setOpen(false)}
+          anchor={swatchRef.current}
+          recentColors={recentColors}
+        />
       )}
     </div>
   )
@@ -58,7 +93,7 @@ const NEEDS_TWIST: TransformKind[] = ['pop', 'spiral']
 // ongoing idea folded in as an optional colour transition here). No live
 // preview — this only edits the saved recipe; seeing it play out is the
 // timeline playback engine's job once that exists.
-export function AnimationProfileEditor({ name: initialName, config: initialConfig, onSave, onCancel, saveLabel }: Props) {
+export function AnimationProfileEditor({ name: initialName, config: initialConfig, onSave, onCancel, saveLabel, recentColors }: Props) {
   const [name, setName] = useState(initialName)
   const [config, setConfig] = useState(initialConfig)
   useEffect(() => { setName(initialName); setConfig(initialConfig) }, [initialName, initialConfig])
@@ -141,10 +176,10 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
         <input type="number" min={0} max={1} step={0.1} value={config.opacity_to} onChange={e => set('opacity_to', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right" />
       </Row>
       <Row label="Colour from">
-        <ColorField value={config.color_from} onChange={v => set('color_from', v)} />
+        <ColorField value={config.color_from} onChange={v => set('color_from', v)} recentColors={recentColors} />
       </Row>
       <Row label="Colour to">
-        <ColorField value={config.color_to} onChange={v => set('color_to', v)} />
+        <ColorField value={config.color_to} onChange={v => set('color_to', v)} recentColors={recentColors} />
       </Row>
 
       <Row label="Interpolation">
@@ -163,6 +198,36 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
           className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
         />
       </Row>
+
+      {/* Domino / offset (2026-10-02, per Maro) — see
+          AnimationProfileConfig.stagger for the exact timing. */}
+      <Row label="Offset (domino)">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="range" min={0} max={95} step={5}
+            value={Math.round((config.stagger ?? 0) * 100)}
+            onChange={e => set('stagger', Number(e.target.value) / 100)}
+            title="0% = all elements animate together. Higher = elements take turns across the activity, like dominoes."
+            className="w-24"
+          />
+          <span className="text-xs text-gray-500 dark:text-prosota-muted w-8 text-right">{Math.round((config.stagger ?? 0) * 100)}%</span>
+        </div>
+      </Row>
+      {(config.stagger ?? 0) > 0 && (
+        <>
+          <Row label="Order">
+            <select value={config.stagger_order ?? 'along_x'} onChange={e => set('stagger_order', e.target.value as StaggerOrder)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
+              <option value="along_x">Along X</option>
+              <option value="along_y">Along Y</option>
+              <option value="vertical">Bottom to top</option>
+              <option value="random">Random</option>
+            </select>
+          </Row>
+          <Row label="Reverse order">
+            <input type="checkbox" checked={config.stagger_reverse ?? false} onChange={e => set('stagger_reverse', e.target.checked)} />
+          </Row>
+        </>
+      )}
 
       <div className="flex items-center gap-1.5 pt-1">
         <button

@@ -26,6 +26,9 @@ DEFAULT_CONFIG = {
     "color_to": None,
     "interpolation": "linear",
     "duration_frames": None,
+    "stagger": 0.0,
+    "stagger_order": "along_x",
+    "stagger_reverse": False,
 }
 
 

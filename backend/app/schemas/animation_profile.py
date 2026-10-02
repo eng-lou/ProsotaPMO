@@ -53,6 +53,12 @@ class AnimationProfileConfig(BaseModel):
     # task duration (e.g. a quick 12-frame "pop" even on a 30-day task).
     duration_frames: float | None = None
 
+    # Domino/offset effect (2026-10-02) — see the frontend's
+    # AnimationProfileConfig.stagger for the exact semantics.
+    stagger: float = Field(default=0.0, ge=0, le=0.95)
+    stagger_order: Literal["along_x", "along_y", "vertical", "random"] = "along_x"
+    stagger_reverse: bool = False
+
 
 class AnimationProfileCreate(BaseModel):
     project_id: uuid.UUID

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // Plain HSV <-> hex conversions — no dependency, this is the entire reason
 // this component exists: the native <input type="color"> dialog on Windows/
@@ -78,8 +79,40 @@ function trackDrag(el: HTMLElement, onMove: (x: number, y: number) => void) {
   return update
 }
 
-export function ColorPickerPopover({ value, onChange, onClose }: { value: string; onChange: (hex: string) => void; onClose: () => void }) {
+// Accepts "#rgb", "rgb", "#rrggbb" or "rrggbb"; returns normalized
+// lowercase "#rrggbb", or null if it isn't a valid hex colour.
+export function normalizeHex(input: string): string | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(input.trim())
+  if (!m) return null
+  const h = m[1].length === 3 ? m[1].split('').map(c => c + c).join('') : m[1]
+  return `#${h.toLowerCase()}`
+}
+
+// `anchor` (2026-10-02, per Maro: the picker was clipped inside the narrow
+// Animation Profiles panel — "expand to fit so can use the color picker
+// well"): when given, the popover renders into document.body at fixed
+// coordinates next to that element, flipping above it if there isn't room
+// below and clamped inside the window, so no scrolling/overflow container
+// can cut it off. Without it, the original in-place absolute positioning is
+// unchanged for existing callers. `recentColors` adds a clickable swatch
+// row; a hex box is always shown.
+export function ColorPickerPopover({ value, onChange, onClose, anchor, recentColors }: {
+  value: string
+  onChange: (hex: string) => void
+  onClose: () => void
+  anchor?: HTMLElement | null
+  recentColors?: string[]
+}) {
   const [hsv, setHsv] = useState(() => hexToHsv(value))
+  const [hexDraft, setHexDraft] = useState(value)
+  const [fixedPos, setFixedPos] = useState<{ top: number; left: number } | null>(null)
+  // Keep the square/hue in sync when the value changes from outside (typing
+  // a hex code, clicking a recent swatch).
+  useEffect(() => {
+    if (hsvToHex(hsv.h, hsv.s, hsv.v) !== value.toLowerCase()) setHsv(hexToHsv(value))
+    setHexDraft(value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
   const squareRef = useRef<HTMLDivElement>(null)
   const hueRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -123,12 +156,41 @@ export function ColorPickerPopover({ value, onChange, onClose }: { value: string
     update(e.clientX, e.clientY)
   }
 
+  useLayoutEffect(() => {
+    if (!anchor) return
+    const place = () => {
+      const a = anchor.getBoundingClientRect()
+      const el = popoverRef.current
+      const w = el?.offsetWidth ?? 208
+      const h = el?.offsetHeight ?? 260
+      const margin = 8
+      let top = a.bottom + 4
+      if (top + h > window.innerHeight - margin) top = Math.max(margin, a.top - h - 4)
+      const left = Math.min(Math.max(margin, a.right - w), window.innerWidth - w - margin)
+      setFixedPos({ top, left })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [anchor])
+
+  const commitHexDraft = () => {
+    const hex = normalizeHex(hexDraft)
+    if (hex) onChange(hex)
+    else setHexDraft(value)
+  }
+
   const pureHue = hsvToHex(hsv.h, 1, 1)
 
-  return (
+  const popover = (
     <div
       ref={popoverRef}
-      className="absolute z-50 top-full left-0 mt-1 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-48"
+      className={`${anchor ? 'fixed z-[1000]' : 'absolute z-50 top-full left-0 mt-1'} bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-52`}
+      style={anchor ? { top: fixedPos?.top ?? -9999, left: fixedPos?.left ?? -9999 } : undefined}
     >
       <div
         ref={squareRef}
@@ -155,6 +217,35 @@ export function ColorPickerPopover({ value, onChange, onClose }: { value: string
           style={{ left: `${(hsv.h / 360) * 100}%`, marginLeft: -3 }}
         />
       </div>
+      <div className="flex items-center gap-1.5 mt-2">
+        <span className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line shrink-0" style={{ backgroundColor: value }} />
+        <input
+          value={hexDraft}
+          onChange={e => setHexDraft(e.target.value)}
+          onBlur={commitHexDraft}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitHexDraft() } }}
+          spellCheck={false}
+          aria-label="Hex colour"
+          className="flex-1 min-w-0 text-xs font-mono border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
+        />
+      </div>
+      {recentColors && recentColors.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[10px] text-gray-400 dark:text-prosota-muted mb-1">Recent in this project</div>
+          <div className="flex flex-wrap gap-1">
+            {recentColors.map(c => (
+              <button
+                key={c}
+                onClick={() => onChange(c)}
+                title={c}
+                className={`w-5 h-5 rounded border ${c === value.toLowerCase() ? 'border-gray-900 dark:border-prosota-paper ring-1 ring-gray-900 dark:ring-prosota-paper' : 'border-gray-300 dark:border-prosota-line'}`}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
+  return anchor ? createPortal(popover, document.body) : popover
 }
