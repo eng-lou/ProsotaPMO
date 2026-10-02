@@ -6467,3 +6467,23 @@ were scheduled with the first floor, after the footing-level columns.
 **Fix.** Foundations and piling now always go to the level they physically
 sit at, up or down. On the real model, all 96 footings now come first, with
 the columns after them.
+
+## 2026-10-02 — Ground slab poured after the steel frame above it
+
+**Cause.** The steel beams at 4.57 m were grouped with the ground level
+(the level they stand above), so "First Floor — Slabs", the ground slab,
+came after them.
+
+**Fix.** Frame members now belong to the floor they *form*: beams and slabs
+by their top, columns by the first floor above their base. Walls, services
+and finishes still belong to the floor they stand on. Each floor now builds
+as columns → beams → slab, and the ground slab sits with the ground level.
+
+**Follow-on.** That exposed one more case: the services *under* the ground
+slab were waiting for the slab above them, the rule meant for ceiling
+ducts. On the foundation level that rule is now reversed, so below-slab
+services go in before the ground slab.
+
+**Result on the real model.** Footings → columns → below-slab services →
+ground slab → next floor's columns → beams → deck → services below that
+deck, and so on up to the roof.
