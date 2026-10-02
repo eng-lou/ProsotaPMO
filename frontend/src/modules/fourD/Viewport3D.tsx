@@ -4977,13 +4977,18 @@ export function Viewport3D({
   // Realistic mode's visible ground sits where the model's geometry
   // actually starts, not under its single lowest stray element — see
   // computeGroundElevation's own header.
+  // Used by BOTH the visible Realistic ground and the invisible shadow
+  // catcher (2026-10-02, per Maro: with Ground switched off, a stray shadow
+  // still floated far below the building — the catcher was still sitting
+  // at modelBounds.min, the single lowest element).
+  const needsGroundElevation = settings.shadows || (settings.renderMode === 'realistic' && settings.realisticGround)
   const realisticGroundPosition = useMemo<[number, number, number]>(() => {
-    if (settings.renderMode !== 'realistic') return groundPosition
+    if (!needsGroundElevation) return groundPosition
     const fallback = zUp ? modelBounds.min[2] : modelBounds.min[1]
     const elevation = computeGroundElevation(importedObjects.map(o => o.object), zUp, fallback) - groundEpsilon
     return zUp ? [modelBounds.center[0], modelBounds.center[1], elevation] : [modelBounds.center[0], elevation, modelBounds.center[2]]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.renderMode, importedObjects, transformTick, modelBounds, zUp])
+  }, [needsGroundElevation, importedObjects, transformTick, modelBounds, zUp])
 
   // Box-select (2026-07-08, per Maro: "select box in viewport", modelled on
   // Blender's B-key marquee) — a toggleable mode rather than always-on,
@@ -6547,8 +6552,10 @@ export function Viewport3D({
               terrain is on, which is already the ground. */}
           {settings.renderMode === 'realistic' && settings.realisticGround && !siteContext?.enabled && importedObjects.length > 0 ? (
             <RealisticGround position={realisticGroundPosition} rotation={groundRotation} modelRadius={modelBounds.radius} />
-          ) : settings.shadows && (
-            <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
+          ) : settings.shadows && !(settings.renderMode === 'realistic' && !settings.realisticGround) && (
+            // Ground switched off in Realistic mode means no floor at all —
+            // not even this invisible shadow catcher.
+            <mesh position={realisticGroundPosition} rotation={groundRotation} receiveShadow>
               <planeGeometry args={[groundSize, groundSize]} />
               <shadowMaterial transparent opacity={0.35} />
             </mesh>
