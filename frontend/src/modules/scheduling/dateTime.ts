@@ -6,15 +6,23 @@
 // showTime defaults true (existing behaviour everywhere it was already
 // called) — callers that have a GanttStyle in scope pass its
 // show_time_of_day toggle explicitly instead (2026-07-05, per Maro).
+// Cached formatters (2026-10-02 perf fix — profiled as a top cost of
+// opening the Scheduling page): Date.toLocaleDateString/TimeString with an
+// options object construct a brand-new Intl.DateTimeFormat on every call,
+// which is expensive, and this runs for every date cell on the page.
+// Reusing one formatter per format gives byte-identical output.
+const DATE_PART_FORMAT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+const TIME_PART_FORMAT = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+
 export function formatDateTime(iso: string | null, showTime = true): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
   // year included (2026-07-04, per Maro) — a schedule routinely spans more
   // than one calendar year, and "22 Jun" is genuinely ambiguous without it.
-  const datePart = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const datePart = DATE_PART_FORMAT.format(d)
   if (!showTime) return datePart
-  const timePart = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+  const timePart = TIME_PART_FORMAT.format(d)
   return `${datePart} ${timePart}`
 }
 

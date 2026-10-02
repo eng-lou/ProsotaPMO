@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useProject } from '@/lib/ProjectContext'
@@ -1178,6 +1178,26 @@ export function Scheduling() {
   // something to render without lifting that widget's whole state up here.
   const [printTarget, setPrintTarget] = useState<'schedule' | 'quality'>('schedule')
   const [printTrigger, setPrintTrigger] = useState(0)
+  // Print views are only mounted while actually printing (2026-10-02, per
+  // Maro: "fix the scheduling freezes" — profiling the Scheduling page's
+  // open showed SchedulingPrintView, an un-windowed render of EVERY visible
+  // activity with full date formatting, as the single biggest cost of
+  // opening the page, despite being display:none until someone prints).
+  // The Print buttons set this before calling window.print(); a browser-
+  // initiated print (Ctrl+P / menu) mounts it in `beforeprint` via
+  // flushSync, which commits the DOM synchronously before the browser lays
+  // out the printed page. Unmounted again on `afterprint`.
+  const [printMounted, setPrintMounted] = useState(false)
+  useEffect(() => {
+    const before = () => flushSync(() => setPrintMounted(true))
+    const after = () => setPrintMounted(false)
+    window.addEventListener('beforeprint', before)
+    window.addEventListener('afterprint', after)
+    return () => {
+      window.removeEventListener('beforeprint', before)
+      window.removeEventListener('afterprint', after)
+    }
+  }, [])
   const [qualityPrintReport, setQualityPrintReport] = useState<QualityReport | null>(null)
   const [qualityPrintRunName, setQualityPrintRunName] = useState<string | undefined>(undefined)
 
@@ -1191,10 +1211,12 @@ export function Scheduling() {
 
   const printSchedule = () => {
     setPrintTarget('schedule')
+    setPrintMounted(true)
     setPrintTrigger(t => t + 1)
   }
   const printQuality = () => {
     setPrintTarget('quality')
+    setPrintMounted(true)
     setPrintTrigger(t => t + 1)
   }
   const [rescheduleWidgetOpen, setRescheduleWidgetOpen] = useState(false)
@@ -2873,7 +2895,7 @@ export function Scheduling() {
                 }}
                 onSave={saveLetterhead}
                 onClose={() => setResourcesPageSetupOpen(false)}
-                onPrint={() => setResourcesPrintTrigger(t => t + 1)}
+                onPrint={() => { setPrintMounted(true); setResourcesPrintTrigger(t => t + 1) }}
               />
               <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-4">
                 <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">Print Options</div>
@@ -2936,7 +2958,7 @@ export function Scheduling() {
                   </button>
                 </div>
                 <button
-                  onClick={() => setResourcesPrintTrigger(t => t + 1)}
+                  onClick={() => { setPrintMounted(true); setResourcesPrintTrigger(t => t + 1) }}
                   className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80"
                 >
                   🖨️ Print selected table(s)
@@ -4256,7 +4278,7 @@ export function Scheduling() {
         page") — .no-print's display:none hides all descendants regardless
         of their own class, so these three must sit outside it, same as
         SchedulingPrintView/SchedulingQualityPrintView already do. */}
-    {activeTab === 'resources' && (
+    {printMounted && activeTab === 'resources' && (
       <ResourcesPrintView
         tables={resourcesPageSetupTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
@@ -4265,7 +4287,7 @@ export function Scheduling() {
         unit={resourcesUnit} dataDate={period?.start_date ?? null} actualsHistory={actualsHistory}
       />
     )}
-    {printTarget === 'schedule' && activeTab === 'schedule' && (
+    {printMounted && printTarget === 'schedule' && activeTab === 'schedule' && (
       <SchedulingPrintView
         activities={visibleActivities}
         relationships={relationships}
@@ -4284,7 +4306,7 @@ export function Scheduling() {
         dataDate={period?.start_date ?? null}
       />
     )}
-    {printTarget === 'quality' && qualityPrintReport && (
+    {printMounted && printTarget === 'quality' && qualityPrintReport && (
       <SchedulingQualityPrintView
         report={qualityPrintReport}
         projectName={selectedProject.name}
