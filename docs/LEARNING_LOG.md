@@ -6315,3 +6315,25 @@ level. There's also a new "Ground" checkbox to turn it off.
 **Lesson.** When an app merges things for speed, any count or statistic
 over "meshes" stops meaning "elements". Check what the data actually looks
 like before trusting a statistic about it.
+
+## 2026-10-02 — Orthographic view (Blender-style)
+
+**What.** 3D View Properties → Projection now offers Perspective or
+Orthographic, and Numpad 5 toggles between them like Blender. Orthographic
+removes perspective: parallel lines stay parallel and sizes don't shrink with
+distance, which is how plans, sections and elevations are drawn.
+
+**How it stays smooth.** When you switch, the view keeps the same direction,
+the same orbit pivot and the same apparent size, so nothing jumps. In
+orthographic, zooming changes a "zoom" value instead of moving the camera,
+so things that sized themselves by camera distance (markers, path arrows,
+shadows) now use an equivalent distance instead.
+
+**Glossary.** *Orthographic projection*: a view with no perspective, where an
+object's size on screen doesn't depend on how far away it is.
+
+**Lesson (tooling).** Windows PowerShell 5.1 reads files using the old
+Windows character set unless told otherwise. Using it to rewrite a source
+file garbled every special character in it (dashes, × signs). That was
+caught by an unexpectedly large diff and fully restored, so always check the
+size of a diff before committing.
