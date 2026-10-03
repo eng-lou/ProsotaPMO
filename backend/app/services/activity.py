@@ -823,6 +823,17 @@ async def update_activity(
     old_code = activity.code
     amend_relationships = updates.pop("amend_relationships", False)
 
+    # A rendering profile cannot change schedule dates, hierarchy or costs.
+    # Bulk profile edits must not run competing full-period CPM passes.
+    if set(updates) == {"animation_profile_id"}:
+        profile_id = updates["animation_profile_id"]
+        if profile_id is not None:
+            await _validate_animation_profile_in_project(db, profile_id, activity.project_id)
+        activity.animation_profile_id = profile_id
+        await db.commit()
+        await _attach_evm_fields(db, [activity])
+        return activity
+
     # Changing activity_type to (or between) start_milestone/finish_milestone
     # can leave existing *incoming* relationships invalid — e.g. a Finish
     # Milestone's FS predecessor no longer makes sense once it becomes a

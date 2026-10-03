@@ -351,6 +351,10 @@ export function removeElementsFromModel(rootObject: THREE.Object3D, expressIDs: 
 // THREE.LineSegments would make, just reached through the "isMesh" branch
 // instead of the "isLine" one.
 const EDGES_LINE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x1f2937, wireframe: true })
+// InstancedMesh has no per-instance visibility, so a hidden element's
+// outline is collapsed to a point (zero scale) instead.
+const HIDDEN_EDGES_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0)
+const _edgesMatrix = new THREE.Matrix4()
 const EDGES_THRESHOLD_ANGLE = 15
 
 export interface EdgesBatchEntry {
@@ -365,6 +369,9 @@ export interface EdgesBatchEntry {
   // place, then shrinking count by one, an O(1) removal with no rebuild.
   localIndexByInstanceId: Map<number, number>
   instanceIdByLocalIndex: Map<number, number>
+  // Whether each local instance's outline is currently drawn — mirrors its
+  // element's batch visibility (syncEdgesBatch). Indexed by local index.
+  shown: boolean[]
 }
 export interface EdgesBatch {
   entries: Map<number, EdgesBatchEntry>
@@ -376,21 +383,21 @@ export interface EdgesBatch {
 // there, rather than incremental sync, is the right cost/complexity trade:
 // those are deliberate, relatively rare user actions, unlike the
 // materialize-on-click path above, which genuinely needs to stay O(1).
-// Only ever includes instances THREE.BatchedMesh.getVisibleAt already says
-// are on screen right now (isolate/hide's own real, live verdict — see
-// ModelObjects' own batched-visibility block, Viewport3D.tsx) — an
-// isolated-out or hidden element gets no edges overlay instance at all,
-// rather than one that then has to be hidden by some other means
-// InstancedMesh doesn't cheaply support per-instance anyway.
+// Includes every instance; syncEdgesBatch (below) collapses the outline of
+// any element its batch currently hides — see that function's header.
 export function buildEdgesBatch(rootObject: THREE.Object3D): EdgesBatch {
   const batch = rootObject.userData.batch as BatchState | undefined
   const entries = new Map<number, EdgesBatchEntry>()
   if (!batch) return { entries }
 
   const instancesByGeometryId = new Map<number, BatchInstanceInfo[]>()
+  // Every instance, not only the ones visible right now (2026-10-03, per
+  // Maro: edges of elements not built yet at the timeline's start still
+  // showed). Outlines used to be built once from whatever was visible when
+  // Edges was switched on and never followed the timeline afterwards;
+  // syncEdgesBatch now shows/hides each outline with its element every frame.
   for (const infos of batch.byExpressId.values()) {
     for (const info of infos) {
-      if (!batch.mesh.getVisibleAt(info.instanceId)) continue
       const arr = instancesByGeometryId.get(info.geometryId)
       if (arr) arr.push(info); else instancesByGeometryId.set(info.geometryId, [info])
     }
@@ -424,13 +431,17 @@ export function buildEdgesBatch(rootObject: THREE.Object3D): EdgesBatch {
     mesh.frustumCulled = false
     const localIndexByInstanceId = new Map<number, number>()
     const instanceIdByLocalIndex = new Map<number, number>()
+    const shown: boolean[] = []
     infos.forEach((info, i) => {
-      mesh.setMatrixAt(i, info.matrix)
+      const visible = batch.mesh.getVisibleAt(info.instanceId)
+      if (visible) batch.mesh.getMatrixAt(info.instanceId, _edgesMatrix)
+      mesh.setMatrixAt(i, visible ? _edgesMatrix : HIDDEN_EDGES_MATRIX)
+      shown.push(visible)
       localIndexByInstanceId.set(info.instanceId, i)
       instanceIdByLocalIndex.set(i, info.instanceId)
     })
     mesh.instanceMatrix.needsUpdate = true
-    entries.set(geometryId, { mesh, localIndexByInstanceId, instanceIdByLocalIndex })
+    entries.set(geometryId, { mesh, localIndexByInstanceId, instanceIdByLocalIndex, shown })
   }
   return { entries }
 }
@@ -460,10 +471,12 @@ function removeFromEdgesBatch(rootObject: THREE.Object3D, info: BatchInstanceInf
     const tempMatrix = new THREE.Matrix4()
     entry.mesh.getMatrixAt(lastIndex, tempMatrix)
     entry.mesh.setMatrixAt(localIndex, tempMatrix)
+    entry.shown[localIndex] = entry.shown[lastIndex]
     entry.localIndexByInstanceId.set(lastInstanceId, localIndex)
     entry.instanceIdByLocalIndex.set(localIndex, lastInstanceId)
   }
   entry.mesh.count = lastIndex
+  entry.shown.length = lastIndex
   entry.mesh.instanceMatrix.needsUpdate = true
   entry.localIndexByInstanceId.delete(info.instanceId)
   entry.instanceIdByLocalIndex.delete(lastIndex)
@@ -516,9 +529,37 @@ export function setBatchedInstanceMatrix(
   const edgesBatch = rootObject.userData.edgesBatch as EdgesBatch | undefined
   const entry = edgesBatch?.entries.get(geometryId)
   const localIndex = entry?.localIndexByInstanceId.get(instanceId)
-  if (entry && localIndex !== undefined) {
+  // A hidden element's outline stays collapsed; syncEdgesBatch copies the
+  // current matrix across when it's shown again.
+  if (entry && localIndex !== undefined && entry.shown[localIndex]) {
     entry.mesh.setMatrixAt(localIndex, matrix)
     entry.mesh.instanceMatrix.needsUpdate = true
+  }
+}
+
+// Shows/hides each batched element's outline with the element itself —
+// timeline playback, Hide/Isolate, scopes and "Simplify while orbiting" all
+// change batch visibility after the outlines are built. Called every frame
+// by the main view and the comparison views; only flips are written.
+export function syncEdgesBatch(rootObject: THREE.Object3D): void {
+  const batch = rootObject.userData.batch as BatchState | undefined
+  const edgesBatch = rootObject.userData.edgesBatch as EdgesBatch | undefined
+  if (!batch || !edgesBatch) return
+  const drawInfo = (batch.mesh as THREE.BatchedMesh & { _drawInfo: { visible: boolean; active: boolean }[] })._drawInfo
+  for (const entry of edgesBatch.entries.values()) {
+    let changed = false
+    for (let i = 0; i < entry.mesh.count; i++) {
+      const instanceId = entry.instanceIdByLocalIndex.get(i)
+      if (instanceId === undefined) continue
+      const info = drawInfo[instanceId]
+      const visible = !!info && info.active && info.visible
+      if (visible === entry.shown[i]) continue
+      if (visible) batch.mesh.getMatrixAt(instanceId, _edgesMatrix)
+      entry.mesh.setMatrixAt(i, visible ? _edgesMatrix : HIDDEN_EDGES_MATRIX)
+      entry.shown[i] = visible
+      changed = true
+    }
+    if (changed) entry.mesh.instanceMatrix.needsUpdate = true
   }
 }
 

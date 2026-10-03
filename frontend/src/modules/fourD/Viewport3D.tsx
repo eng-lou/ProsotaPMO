@@ -39,7 +39,7 @@ import { applyGizmoDragAsPivotEdit } from './elementPivot'
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
 import {
-  buildEdgesBatch, disposeEdgesBatch, ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds, setBatchedInstanceMatrix,
+  buildEdgesBatch, disposeEdgesBatch, ensureMaterialized, syncEdgesBatch, getBatchedInstanceInfo, getExpressIdWorldBounds, setBatchedInstanceMatrix,
   getMaterializedMeshes, type BatchState, type EdgesBatch,
 } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
@@ -2307,7 +2307,10 @@ function ModelObjects({
   // Realistic mode's glass-only batches mirror their main batch's
   // per-instance visibility/colour/clipping every frame — see
   // syncRealisticGlassBatch's own header.
+  // Batched Edges outlines follow their elements' visibility too (see
+  // syncEdgesBatch, elementBatching.ts).
   useFrame(() => {
+    for (const { object } of objects) syncEdgesBatch(object)
     if (settings.renderMode !== 'realistic') return
     for (const { object } of objects) {
       const batch = object.userData.batch as BatchState | undefined
@@ -4373,6 +4376,11 @@ export function TimelinePlayback({
     // so there's no manual-edit-vs-playback fight to guard against here —
     // always safe to re-apply, last, unconditionally.
     for (const target of pathTargetsRef.current) applyPathFollow(target, now, upAxis)
+
+    // The layer sync in ModelObjects/comparison panes can run before this
+    // callback. Reconcile after playback too, so a single demanded/exported
+    // frame never draws the previous date's outlines.
+    for (const { object } of sceneObjects) syncEdgesBatch(object)
 
     if (activeObjectId) onTick()
   })

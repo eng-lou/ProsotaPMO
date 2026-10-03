@@ -11,7 +11,7 @@ import { RadialChartHud } from './RadialChartHud'
 import type { RadialChart } from './radialCharts'
 import { TimelineStripHud } from './TimelineStripHud'
 import type { TimelineStrip } from './timelineStrips'
-import { buildEdgesBatch, disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
+import { buildEdgesBatch, disposeEdgesBatch, syncEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
 import type { ElementKeyframe } from './elementKeyframes'
 import type { IfcModelHandle } from './ifcModel'
 import type { ResolvedIsolationTarget } from './linkedElements'
@@ -209,6 +209,9 @@ function PaneClipping() {
 // elements; any re-render (the Shadows toggle) synced exactly once.
 function RealisticGlassSync({ clones, enabled }: { clones: Map<THREE.Object3D, THREE.Object3D>; enabled: boolean }) {
   useFrame(() => {
+    // Batched Edges outlines follow their elements' visibility in every
+    // render mode (syncEdgesBatch, elementBatching.ts).
+    for (const clone of clones.values()) syncEdgesBatch(clone)
     if (!enabled) return
     for (const clone of clones.values()) {
       const batch = clone.userData.batch as BatchState | undefined

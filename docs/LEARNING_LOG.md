@@ -6709,3 +6709,33 @@ iterator and copied once. Found by testing each layer live: turning off
 shadow casting didn't remove the marks, hiding the glass layer did, and
 1,551 glass instances were out of sync. Lesson: never pass `.values()` /
 `.entries()` as a prop to something that loops every frame. Pass the Map.
+
+## 2026-10-03 — Edges follow playback; bulk profiles and faster unlinking
+
+Continued the unfinished Claude Code changes locally. Batched outlines now
+follow element visibility in the main and comparison views, including when
+scrubbing back before construction. They retain the live animation position
+when shown again. Playback also syncs outlines after updating visibility so
+a single demanded/exported frame cannot retain the previous date's edges.
+
+The Activity Table now supports Shift-click ranges, Ctrl/Cmd-click additions,
+Select visible, and a footer that applies a saved profile (or Default) to all
+selected non-summary activities. Existing element-level overrides still win.
+Saves use bounded concurrency and one schedule refresh, reporting partial
+failures. Checking the backend revealed that even profile-only edits ran a
+full CPM recalculation. A narrow save path now skips that unnecessary work
+while preserving the live-period and same-project profile checks.
+
+Bulk Activity Link now lists only assignments belonging to the selected
+elements, with counts and an Unlink button per activity, plus Unlink all.
+Selection lookup handles stale responses and loading/errors; unlinking is
+guarded against repeated clicks, uses bounded concurrency, and retains failed
+assignments so they can be retried.
+
+Validation: TypeScript and the production build passed; two real-three.js
+regression tests covered outline hiding/reappearing, animation transforms,
+materialization and removal; four backend unit tests covered profile saves,
+clearing, cross-project rejection and baseline protection. A temporary browser
+harness using synthetic data passed five interaction checks for range selection,
+bulk profiles, assignment counts and unlink actions. No production data was
+changed. These changes have not been committed or deployed in this session.

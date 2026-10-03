@@ -460,37 +460,43 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setLinkError(err instanceof Error ? err.message : 'Failed to link the selected elements to the activity')
     }
   }
-  const handleBulkUnlinkSelectedFromActivity = async (activityId: string) => {
-    const handle = getIfcHandleFor(activeIfcModelId)
-    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
-    if (drafts.length === 0) return
-    const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
-    // Scoped to this one activity, not "every link this selection has to
-    // any activity" — mirrors Collections' own Remove Selected being
-    // scoped to one collection, and matches Maro's own "unassign to an
-    // activity" framing (a specific activity, chosen the same picker way
-    // as the link side).
-    const toRemove = modelElementLinks.filter(l => l.activity_id === activityId && draftKeys.has(`${l.source_kind}::${l.element_ref}`))
-    if (toRemove.length === 0) return
+  const [unlinkingSelection, setUnlinkingSelection] = useState(false)
+  const unlinkingSelectionRef = useRef(false)
+  const handleBulkUnlinkSelectedFromActivity = async (activityId: string | null) => {
+    if (unlinkingSelectionRef.current) return
+    unlinkingSelectionRef.current = true
+    setUnlinkingSelection(true)
     setLinkError(null)
-    const removedIds = new Set<string>()
-    for (const link of toRemove) {
-      try {
-        await deleteModelElementLink(link.id)
-        removedIds.add(link.id)
-      } catch (err) {
-        // 404 = already gone (e.g. a second click on Unlink Selected before
-        // the first round of deletes finished — 38 sequential requests take
-        // a real, noticeable few seconds, a plausible window to click
-        // again) — same benign-no-op treatment as the single-element
-        // unlink above, and still counts as "removed" here so the local
-        // list actually converges instead of hanging onto a row the server
-        // no longer has.
-        if (axios.isAxiosError(err) && err.response?.status === 404) { removedIds.add(link.id); continue }
-        setLinkError(err instanceof Error ? err.message : 'Failed to unlink some elements from the activity')
+    try {
+      const handle = getIfcHandleFor(activeIfcModelId)
+      const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+      if (drafts.length === 0) return
+      const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
+      // null explicitly means all assignments, still limited to this selection.
+      const toRemove = modelElementLinks.filter(l => (activityId === null || l.activity_id === activityId) && draftKeys.has(`${l.source_kind}::${l.element_ref}`))
+      if (toRemove.length === 0) return
+      setLinkError(null)
+      const removedIds = new Set<string>()
+      // Bound concurrency so a large selection doesn't flood the API.
+      for (let offset = 0; offset < toRemove.length; offset += 8) {
+        await Promise.all(toRemove.slice(offset, offset + 8).map(async link => {
+          try {
+            await deleteModelElementLink(link.id)
+            removedIds.add(link.id)
+          } catch (err) {
+            // Already deleted is the desired state; retain only real failures.
+            if (axios.isAxiosError(err) && err.response?.status === 404) { removedIds.add(link.id); return }
+            setLinkError(err instanceof Error ? err.message : 'Failed to unlink some elements from the activity')
+          }
+        }))
       }
+      if (removedIds.size > 0) setModelElementLinks(prev => prev.filter(l => !removedIds.has(l.id)))
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not resolve the selected elements.')
+    } finally {
+      unlinkingSelectionRef.current = false
+      setUnlinkingSelection(false)
     }
-    if (removedIds.size > 0) setModelElementLinks(prev => prev.filter(l => !removedIds.has(l.id)))
   }
 
   // Section Box (2026-07-09, per Maro's Blender "Section Box" plugin
@@ -3714,6 +3720,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // superset containing activeObjectId whenever activeObjectId is set — see
   // handleSelectObject below for how they're kept in sync.
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
+  const [selectionLinkState, setSelectionLinkState] = useState<{
+    objects: Set<string>; elements: Set<number>; model: string | null;
+    scene: SceneObject[]; keys: Set<string>; error?: string;
+  } | null>(null)
+  useEffect(() => {
+    if (!dataPanelOpen) return
+    let cancelled = false
+    resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, getIfcHandleFor(activeIfcModelId))
+      .then(drafts => {
+        if (!cancelled) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
+          scene: sceneObjects, keys: new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`)) })
+      }).catch(() => {
+        if (!cancelled) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
+          scene: sceneObjects, keys: new Set(), error: 'Could not load assignments. Reselect the elements to retry.' })
+      })
+    return () => { cancelled = true }
+  }, [selectedObjectIds, selectedExpressIds, activeIfcModelId, sceneObjects, ifcHandles, dataPanelOpen])
+  const selectionLinksReady = selectionLinkState !== null && selectionLinkState.objects === selectedObjectIds
+    && selectionLinkState.elements === selectedExpressIds && selectionLinkState.model === activeIfcModelId
+    && selectionLinkState.scene === sceneObjects
+  const selectedElementLinks = useMemo(() => selectionLinksReady
+    ? modelElementLinks.filter(l => selectionLinkState!.keys.has(`${l.source_kind}::${l.element_ref}`))
+    : [], [selectionLinksReady, selectionLinkState, modelElementLinks])
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
   // Local/Global (2026-07-22) — see TransformPanel.tsx's own Props header
   // for space's doc comment. Defaults to 'world' since that's three.js's
@@ -5493,6 +5522,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // change can cascade through CPM to *other* activities' own start/finish
   // too, which only a real refetch picks up correctly.
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
+  const handleApplyScheduleProfiles = async (ids: string[], profileId: string | null) => {
+    const selectedIds = new Set(ids)
+    const targets = activities.filter(a => selectedIds.has(a.id) && a.activity_type !== 'wbs_summary' && a.animation_profile_id !== profileId)
+    let failed = 0
+    for (let offset = 0; offset < targets.length; offset += 8) {
+      const results = await Promise.allSettled(targets.slice(offset, offset + 8).map(a =>
+        api.patch(`/api/v1/activities/${a.id}`, { animation_profile_id: profileId })))
+      failed += results.filter(r => r.status === 'rejected').length
+    }
+    await refreshSchedule()
+    if (failed) throw new Error(`${failed} of ${targets.length} profile changes failed. Successful changes were saved; retry to finish.`)
+  }
   const handleUpdateScheduleWindowActivity = async (activityId: string, field: ScheduleWindowEditableField, value: string) => {
     let payload: Record<string, unknown>
     if (field === 'duration_days') {
@@ -6612,6 +6653,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             modelElementLinks={modelElementLinks}
             subscribeFocusDate={subscribeTimelineFocus}
             onUpdateActivity={handleUpdateScheduleWindowActivity}
+            onSelectActivities={setSelectedActivityIds}
+            onApplyProfile={handleApplyScheduleProfiles}
           />
         )
       case 'gantt':
@@ -7918,6 +7961,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onUnlinkElement={handleUnlinkElement}
           onBulkLinkSelected={handleBulkLinkSelectedToActivity}
           onBulkUnlinkSelected={handleBulkUnlinkSelectedFromActivity}
+          selectedElementLinks={selectedElementLinks}
+          selectionLinksLoading={!selectionLinksReady}
+          selectionLinksError={selectionLinksReady ? selectionLinkState?.error : undefined}
+          unlinkingSelection={unlinkingSelection}
           onAssignProfile={handleAssignProfile}
         />
       </div>

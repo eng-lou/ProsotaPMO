@@ -61,7 +61,11 @@ interface Props {
   // action (2026-08-30, per Maro: "why cant i set the profile at the same
   // time") — ignored by Unlink, which has no use for one.
   onBulkLinkSelected: (activityId: string, profileId: string | null) => void
-  onBulkUnlinkSelected: (activityId: string) => void
+  onBulkUnlinkSelected: (activityId: string | null) => Promise<void>
+  selectedElementLinks: ModelElementLink[]
+  selectionLinksLoading: boolean
+  selectionLinksError?: string
+  unlinkingSelection: boolean
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
 
@@ -95,10 +99,13 @@ export function DataPanel({
   meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
   onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
+  selectedElementLinks, selectionLinksLoading, selectionLinksError, unlinkingSelection,
 }: Props) {
   const [bulkActivityId, setBulkActivityId] = useState('')
   const [bulkProfileId, setBulkProfileId] = useState('')
   const isBulkSelection = selectedExpressIds.size + selectedObjectIds.size > 1
+  const linkedActivityCounts = new Map<string, number>()
+  for (const link of selectedElementLinks) linkedActivityCounts.set(link.activity_id, (linkedActivityCounts.get(link.activity_id) ?? 0) + 1)
 
   if (!open) {
     return (
@@ -151,7 +158,7 @@ export function DataPanel({
         <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
       {isBulkSelection && (
-        <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-1.5 shrink-0">
+        <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-1.5 shrink-0 max-h-[50%] overflow-y-auto">
           <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
             Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
           </div>
@@ -167,7 +174,7 @@ export function DataPanel({
               value={bulkProfileId}
               onChange={e => setBulkProfileId(e.target.value)}
               className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
-              title="Animation profile Link Selected sets on every new link — ignored by Unlink Selected"
+              title="Animation profile Link Selected sets on every new link"
             >
               <option value="">Default (no animation profile)</option>
               {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -176,20 +183,29 @@ export function DataPanel({
           <div className="flex gap-1.5">
             <button
               onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId, bulkProfileId || null)}
-              disabled={!bulkActivityId}
+              disabled={!bulkActivityId || unlinkingSelection}
               title="Link every currently selected element to the chosen activity, with the profile above already set"
               className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
             >
               Link Selected
             </button>
-            <button
-              onClick={() => bulkActivityId && onBulkUnlinkSelected(bulkActivityId)}
-              disabled={!bulkActivityId}
-              title="Unlink every currently selected element from the chosen activity"
-              className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              Unlink Selected
-            </button>
+          </div>
+          <div className="pt-2 border-t border-gray-200 dark:border-prosota-line space-y-1">
+            <div className="text-[11px] font-semibold">Selected elements are assigned to</div>
+            {selectionLinksLoading ? <p className="text-[11px]" role="status">Loading assignments…</p>
+              : selectionLinksError ? <p className="text-[11px] text-red-600" role="alert">{selectionLinksError}</p>
+              : linkedActivityCounts.size === 0 ? <p className="text-[11px] text-gray-500">No linked activities.</p>
+              : <>
+                {[...linkedActivityCounts].map(([id, count]) => {
+                  const activity = activities.find(a => a.id === id)
+                  const label = activity ? `${activity.code}: ${activity.task_name}` : 'Activity outside this schedule'
+                  return <div key={id} className="flex items-center gap-1 text-[11px]">
+                    <span className="flex-1 min-w-0 truncate" title={`${label} (${count} selected elements)`}>{label} ({count})</span>
+                    <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(id)} aria-label={`Unlink selected elements from ${label}`} className="text-red-600 border rounded px-1.5 py-1 disabled:opacity-40">Unlink</button>
+                  </div>
+                })}
+                <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(null)} title="Remove all activity assignments from the selected elements only" className="text-[11px] text-red-600 border rounded px-2 py-1 disabled:opacity-40">{unlinkingSelection ? 'Unlinking…' : `Unlink all (${selectedElementLinks.length} assignments)`}</button>
+              </>}
           </div>
         </div>
       )}
