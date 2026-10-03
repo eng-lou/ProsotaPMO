@@ -4061,7 +4061,15 @@ export function TimelinePlayback({
         // racing, regardless of which effect happens to run first.
         let growClipPlane: THREE.Plane | null = null
         if (state.growProgress !== null && activeLink) {
-          if (!target.worldBBox) target.worldBBox = new THREE.Box3().setFromObject(target.object)
+          if (!target.worldBBox) {
+            // Parents first (2026-10-03): setFromObject only refreshes the
+            // object's own matrixWorld from its parent's cached one, and a
+            // comparison view's freshly cloned model has never rendered, so
+            // on its first frame that cached parent matrix is still identity
+            // and the box (cached for good) lands away from the element.
+            target.object.updateWorldMatrix(true, false)
+            target.worldBBox = new THREE.Box3().setFromObject(target.object)
+          }
           const axisVec = growAxisWorldVector(activeLink.profile.axis, upAxis)
           const minC = target.worldBBox.min.dot(axisVec)
           const maxC = target.worldBBox.max.dot(axisVec)

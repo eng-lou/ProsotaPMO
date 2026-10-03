@@ -6575,3 +6575,14 @@ material. So while a comparison view draws, it temporarily swaps those
 planes for harmless ones and puts them back straight after. That way the
 main view keeps its Section Box and the comparison views stay uncut, as
 before.
+
+**Follow-up: checking Grow live.** Maro still saw the slab fading in whole
+in the First Floor view. Checking production directly showed the deployed
+code working: the view's cutting planes and opacity matched the main view's
+exactly, element by element, and the view drew the partly grown slab. Most
+likely Maro's tab had loaded before Vercel finished deploying. One real
+weakness did turn up: Grow measures the element's box once and keeps it, and
+on a comparison view's very first frame the copied model's parent positions
+aren't calculated yet. If the playhead is already inside a Grow window at
+that moment, the box can land in the wrong place for good. The measurement
+now updates the parents first.
