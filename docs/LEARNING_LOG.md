@@ -6533,3 +6533,23 @@ position inside it is shifted instead. Rotating, scaling and growing
 profiles still need separate meshes. One small visual difference: like the
 Default profile, batched elements appear at their start instead of fading
 in gradually.
+
+## 2026-10-03 — Isolate fixed across models; comparison views independent
+
+**Isolate across models.** Isolate stored element numbers without their
+file, and numbers repeat across discipline IFCs. Isolating a structural
+element and an architectural one also showed whatever architectural element
+shared the structural number. Isolate now stores "file + number" everywhere,
+including saved views (older saved views are converted when opened). Tested
+live: isolating two activities across two models showed exactly their 320
+elements, and none of the 111 colliding numbers leaked.
+
+**Comparison views ignore the main view's Isolate.** The views copied the
+main view's visibility, including Isolate, so isolating one wall emptied
+the Footing view. Each view now starts from the full model (minus Hide) and
+applies only its own collection or scope. To focus a comparison view, use a
+Collection.
+
+**Less lag while orbiting.** Comparison views now also hide tiny elements
+and use the cheap glass while the main view is being orbited, as the main
+view already did.
