@@ -1580,8 +1580,12 @@ function ModelObjects({
           child.geometry = baseGeometry
         }
 
+        // A model outside the isolated set is out whole (2026-10-03) —
+        // isolatedExpressIds holds bare expressIDs, which repeat across
+        // federated IFC files, so without this check the same-numbered,
+        // unrelated elements of every other loaded model showed too.
         const isolatedOut = isolateMode && (
-          isolatingSubElements ? !isolatedExpressIds.has(child.userData.expressID) : !isObjectIsolated
+          !isObjectIsolated || (isolatingSubElements && !isolatedExpressIds.has(child.userData.expressID))
         )
         // Hide always wins over isolate, unconditionally ANDed in — same
         // shape as FourD.tsx's own object-level visibility check
@@ -2069,7 +2073,7 @@ function ModelObjects({
         const timelineControlledInstanceIds = batch.mesh.userData.timelineControlledInstanceIds as Set<number> | undefined
         for (const [expressID, infos] of batch.byExpressId) {
           const isolatedOut = isolateMode && (
-            isolatingSubElements ? !isolatedExpressIds.has(expressID) : !isObjectIsolated
+            !isObjectIsolated || (isolatingSubElements && !isolatedExpressIds.has(expressID))
           )
           const elementKey = kind === 'ifc' ? `${id}::${expressID}` : null
           const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)

@@ -150,7 +150,7 @@ export function applyPaneIsolationVisibility(
     if (batch) {
       const baseVisibleByInstanceId = (batch.mesh.userData.batchBaseVisibleByInstanceId ??= new Map<number, boolean>()) as Map<number, boolean>
       for (const [expressID, infos] of batch.byExpressId) {
-        const shown = isolation.expressIds.has(expressID)
+        const shown = isolation.expressKeys.has(`${id}::${expressID}`)
         for (const info of infos) {
           baseVisibleByInstanceId.set(info.instanceId, shown)
           batch.mesh.setVisibleAt(info.instanceId, shown)
@@ -159,7 +159,12 @@ export function applyPaneIsolationVisibility(
     }
     object.traverse(child => {
       if (child instanceof THREE.Mesh && child.userData.expressID !== undefined) {
-        const shown = isolation.expressIds.has(child.userData.expressID)
+        // Keyed by model + expressID (2026-10-03, per Maro: WBS/UDF-scoped
+        // panes "meant to be exclusive" showed elements from other scopes)
+        // — expressIDs are only unique within one IFC file, so with
+        // federated discipline models a bare expressID set matched the
+        // same-numbered, unrelated elements in every other loaded model.
+        const shown = isolation.expressKeys.has(`${id}::${child.userData.expressID}`)
         child.visible = shown
         // The real fix (2026-09-01, per Maro: isolation resolved correctly
         // — confirmed live via diagnostic logging, 756/3706 real elements
