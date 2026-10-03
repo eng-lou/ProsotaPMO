@@ -6516,3 +6516,20 @@ setting: the main view or comparison View 1–3. Timeline Strips are now a
 list instead of one per project, so each view can have its own strip and
 scope. Exports draw every widget inside its own view. A database migration
 was needed and has been run on production.
+
+## 2026-10-03 — Fall Down Z took minutes to start animating
+
+**Symptom.** After putting Fall Down Z on several large activities, every
+element showed at every date for a long time, and again after each reload.
+
+**Cause.** The model draws most elements through one shared "batch", which
+is cheap. A profile that moves elements pulled each one out into its own
+mesh, which is expensive: thousands of them on the Ductwork activities, in
+Realistic mode, and again inside every comparison view. Until that finished,
+the timeline hadn't set anything up, so nothing was hidden.
+
+**Fix.** Falling or sliding elements now stay in the batch, and their
+position inside it is shifted instead. Rotating, scaling and growing
+profiles still need separate meshes. One small visual difference: like the
+Default profile, batched elements appear at their start instead of fading
+in gradually.
