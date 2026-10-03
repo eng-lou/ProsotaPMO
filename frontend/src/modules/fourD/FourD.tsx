@@ -50,6 +50,7 @@ import { regenerateSplitTargets } from './elementSplitTargets'
 import { SplitByLevelPanel } from './SplitByLevelPanel'
 import { listElementTransforms, saveElementTransform, type ElementTransform } from './elementTransforms'
 import { resolveSelectionToMemberRefs } from './collectionResolvers'
+import { selectedAssignmentKeys } from './selectedAssignmentKeys'
 import { useAnimationProfiles } from './animationProfiles'
 import { useElementKeyframes, type ElementKeyframe, type KeyframeField } from './elementKeyframes'
 import { DockLayoutMenu } from './DockLayoutMenu'
@@ -3722,24 +3723,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
   const [selectionLinkState, setSelectionLinkState] = useState<{
     objects: Set<string>; elements: Set<number>; model: string | null;
-    scene: SceneObject[]; keys: Set<string>; error?: string;
+    scene: SceneObject[]; links: ModelElementLink[]; keys: Set<string>; error?: string;
   } | null>(null)
   useEffect(() => {
     if (!dataPanelOpen) return
-    let cancelled = false
-    resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, getIfcHandleFor(activeIfcModelId))
-      .then(drafts => {
-        if (!cancelled) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
-          scene: sceneObjects, keys: new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`)) })
+    const controller = new AbortController()
+    selectedAssignmentKeys(modelElementLinks, selectedObjectIds, selectedExpressIds, sceneObjects, getIfcHandleFor(activeIfcModelId), controller.signal)
+      .then(keys => {
+        if (!controller.signal.aborted) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
+          scene: sceneObjects, links: modelElementLinks, keys })
       }).catch(() => {
-        if (!cancelled) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
-          scene: sceneObjects, keys: new Set(), error: 'Could not load assignments. Reselect the elements to retry.' })
+        if (!controller.signal.aborted) setSelectionLinkState({ objects: selectedObjectIds, elements: selectedExpressIds, model: activeIfcModelId,
+          scene: sceneObjects, links: modelElementLinks, keys: new Set(), error: 'Could not load assignments. Reselect the elements to retry.' })
       })
-    return () => { cancelled = true }
-  }, [selectedObjectIds, selectedExpressIds, activeIfcModelId, sceneObjects, ifcHandles, dataPanelOpen])
+    return () => controller.abort()
+  }, [selectedObjectIds, selectedExpressIds, activeIfcModelId, sceneObjects, ifcHandles, dataPanelOpen, modelElementLinks])
   const selectionLinksReady = selectionLinkState !== null && selectionLinkState.objects === selectedObjectIds
     && selectionLinkState.elements === selectedExpressIds && selectionLinkState.model === activeIfcModelId
-    && selectionLinkState.scene === sceneObjects
+    && selectionLinkState.scene === sceneObjects && selectionLinkState.links === modelElementLinks
   const selectedElementLinks = useMemo(() => selectionLinksReady
     ? modelElementLinks.filter(l => selectionLinkState!.keys.has(`${l.source_kind}::${l.element_ref}`))
     : [], [selectionLinksReady, selectionLinkState, modelElementLinks])
