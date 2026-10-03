@@ -6660,3 +6660,20 @@ comparison views at the same zoom (through the zoom sharing added just
 before), including the HDR backdrop fix. They also use the main view's
 "stable" orbit controls, so switching projection doesn't reset where they
 orbit around.
+
+**Follow-up: the real cause, fast export restored, Cancel added.** Maro's
+console showed the actual problem: `glRenderbufferStorageMultisample:
+Texture total allocation size is too large`, then every draw failing. The
+main view is narrow and tall, so boosting it for a 4096-wide export made it
+about 4,100 × 5,400 pixels. The effects buffer for that (8 samples, 8 bytes
+per pixel) is about 1.4 GB in one piece, which the graphics card refused, so
+the main view drew nothing. It reappeared when opening the console shrank it.
+That almost certainly explains the original "MP4 missing the animation /
+wrong background" too: the main view was empty in the video. The
+frame-by-frame rewrite had been a misdiagnosis. WebM exports were fine and
+fast, so real-time recording wasn't the problem. Lesson: get the console
+evidence before rebuilding something (this was already in memory, and I
+skipped it). The boost is now also capped at a 4K frame's worth of pixels.
+The fast real-time export is the default again. Frame-by-frame stays as an
+opt-in "Render every frame (slower)" setting. A Cancel button stops either
+kind of export and discards it.

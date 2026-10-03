@@ -104,6 +104,13 @@ export interface RenderCaptureSettings {
   // browser's MediaRecorder can't do mp4 (Firefox, notably, as of this
   // writing) — see that function's own isTypeSupported check.
   videoFormat: 'mp4' | 'webm'
+  // Frame-by-frame video render (2026-10-03): off = the fast real-time
+  // recording (finishes in the clip's own length, skips frames when the
+  // scene can't keep up); on = every frame drawn and encoded at its exact
+  // time (never skips, but takes as long as the frames take — minutes for
+  // a long, heavy clip). Off by default, per Maro: the slow path wasn't
+  // worth it as the default.
+  videoEveryFrame: boolean
   // Include Baseline (2026-07-24, per Maro: "an option to include the
   // baseline 3d while capturing still and video. so side by side") —
   // composites the Baseline (planned) pane's own canvas alongside the
@@ -185,6 +192,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   videoDurationSec: 8,
   videoFps: 30,
   videoFormat: 'mp4',
+  videoEveryFrame: false,
   includeBaseline: false,
   includeGanttChart: false,
   includeActivityTable: false,

@@ -2809,6 +2809,12 @@ interface ResolvedBatchVisibilityTarget {
 }
 
 const DEG_TO_RAD = Math.PI / 180
+// Most pixels a 3D canvas may be boosted to for a capture/export — see
+// computeSupersampleMultiplier.
+const MAX_CAPTURE_BUFFER_PIXELS = 3840 * 2160
+// Thrown out of a video export when Cancel is pressed — caught in
+// handleExportVideo, which then skips the download.
+const EXPORT_CANCELLED = Symbol('export cancelled')
 // Below this, an element counts as "animation-hidden" for both rendering
 // and click-through purposes (2026-07-15, per Maro: "if elements are
 // hidden due to the animation... it still selects it" — three.js's
@@ -5487,6 +5493,10 @@ export function Viewport3D({
   const [isExportingVideo, setIsExportingVideo] = useState(false)
   // Share of frames rendered so far during an offline video export (0-1).
   const [exportProgress, setExportProgress] = useState<number | null>(null)
+  // Cancel Export (2026-10-03, per Maro: a long render could only be
+  // stopped by reloading the page). Checked once per frame by both export
+  // paths; the partial video is discarded, nothing is downloaded.
+  const exportCancelRef = useRef(false)
   const [isEnhancingCapture, setIsEnhancingCapture] = useState(false)
   // WebGL context loss failsafe (2026-08-31, per Maro: "we need failsafes
   // in case of next time" — a real, hours-long debugging session today
@@ -5932,7 +5942,18 @@ export function Viewport3D({
       maxTextureSize / (cssWidth * baseDpr),
       maxTextureSize / (cssHeight * baseDpr),
     ))
-    return Math.min(neededMultiplier, gpuMultiplierCeiling)
+    // Total-size ceiling too (2026-10-03, per Maro: the main view went blank
+    // during a highest-resolution export; the console showed
+    // "glRenderbufferStorageMultisample: Texture total allocation size is too
+    // large" and then every draw failing on a zero-size framebuffer). A
+    // narrow, tall main view sized against a 4096-wide output came out
+    // ~4,100 x 5,400 px — inside MAX_TEXTURE_SIZE on each axis, but the
+    // effect composer's multisampled buffer (8 samples, half-float) for
+    // that is ~1.4 GB in one allocation, which the GPU refused. It rendered
+    // again once the view shrank to ~10M px. Capped at a 4K frame's worth of
+    // pixels (~0.5 GB for that buffer).
+    const pixelBudgetCeiling = Math.max(1, Math.sqrt(MAX_CAPTURE_BUFFER_PIXELS / (cssWidth * baseDpr * cssHeight * baseDpr)))
+    return Math.min(neededMultiplier, gpuMultiplierCeiling, pixelBudgetCeiling)
   }
 
   // Tile Cutout (2026-09-02) — recomputed only when the selected cutout
@@ -6249,6 +6270,7 @@ export function Viewport3D({
   // durationMs rather than reading back a single frame.
   const handleExportVideo = async () => {
     if (isExportingVideo || !scheduleStart || !scheduleEnd) return
+    exportCancelRef.current = false
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
     // Chosen From/To (2026-10-02, per Maro: video "just assumes i want to
@@ -6411,6 +6433,10 @@ export function Viewport3D({
         setOfflineExportActive(true)
         try {
           for (let frame = 0; frame < frameCount; frame++) {
+            if (exportCancelRef.current) {
+              await output.cancel()
+              throw EXPORT_CANCELLED
+            }
             const now = new Date(rangeStart.getTime() + totalMs * (frame / (frameCount - 1)))
             timelineDateRef.current = now
             // The first frame is usually a long jump from wherever the
@@ -6448,17 +6474,28 @@ export function Viewport3D({
         const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
         recorder.start()
         const startTime = performance.now()
+        let lastPercent = -1
         await new Promise<void>(resolve => {
           const step = () => {
+            if (exportCancelRef.current) { resolve(); return }
             const t = Math.min((performance.now() - startTime) / durationMs, 1)
             const now = new Date(rangeStart.getTime() + totalMs * t)
             timelineDateRef.current = now
             composeAt(now)
+            // Whole percentages only — a state update re-renders this whole
+            // component, which shouldn't happen every recorded frame.
+            const percent = Math.floor(t * 100)
+            if (percent !== lastPercent) { lastPercent = percent; setExportProgress(t) }
             if (t >= 1) { resolve(); return }
             requestAnimationFrame(step)
           }
           requestAnimationFrame(step)
         })
+        if (exportCancelRef.current) {
+          recorder.stop()
+          await stopped
+          throw EXPORT_CANCELLED
+        }
         // Let captureStream flush its last sampled frame(s) before stopping.
         await new Promise(resolve => setTimeout(resolve, 300))
         recorder.stop()
@@ -6466,7 +6503,8 @@ export function Viewport3D({
         return { blob: new Blob(chunks, { type: useMp4 ? 'video/mp4' : 'video/webm' }), extension: useMp4 ? 'mp4' : 'webm' }
       }
 
-      const { blob, extension: fileExtension } = (await renderOffline()) ?? (await recordRealtime())
+      // Real-time by default (fast); frame-by-frame only when asked for.
+      const { blob, extension: fileExtension } = (renderCaptureSettings.videoEveryFrame ? await renderOffline() : null) ?? (await recordRealtime())
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -6474,6 +6512,8 @@ export function Viewport3D({
       a.click()
       URL.revokeObjectURL(url)
       onExportVideo?.(blob, renderCaptureSettings.videoDurationSec)
+    } catch (err) {
+      if (err !== EXPORT_CANCELLED) throw err
     } finally {
       setIsExportingVideo(false)
       setExportProgress(null)
@@ -6856,6 +6896,15 @@ export function Viewport3D({
         >
           {isExportingVideo ? (exportProgress !== null ? `Rendering ${Math.round(exportProgress * 100)}%` : 'Rendering…') : 'Export Video'}
         </button>
+        {isExportingVideo && (
+          <button
+            onClick={() => { exportCancelRef.current = true }}
+            title="Stop the export now — the partial video is discarded"
+            className="text-xs px-2 py-1 rounded-md border border-red-300 dark:border-red-500/50 bg-white/90 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-prosota-panel2 shadow-sm"
+          >
+            ✕ Cancel
+          </button>
+        )}
         <RenderCaptureSettingsPopover
           settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length}
           timing={timelineFormat ? { format: timelineFormat, ...captureTiming, onChange: setCaptureTiming } : null}

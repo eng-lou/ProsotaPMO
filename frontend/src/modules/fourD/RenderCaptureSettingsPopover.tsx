@@ -440,6 +440,17 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
                   <option value="webm">WebM</option>
                 </select>
               </label>
+              <label
+                className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted"
+                title="Draws and encodes every single frame at its exact time, so nothing is ever skipped — but it takes as long as the frames take to draw (minutes for a long clip at high resolution). Off: records in real time, finishing in the clip's own length."
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.videoEveryFrame}
+                  onChange={e => set('videoEveryFrame', e.target.checked)}
+                />
+                Render every frame (slower)
+              </label>
             </div>
           </div>
         </>,
