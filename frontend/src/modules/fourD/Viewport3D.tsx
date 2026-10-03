@@ -39,7 +39,7 @@ import { applyGizmoDragAsPivotEdit } from './elementPivot'
 // bundle regression the IfcModelHandle type-only import above exists to
 // avoid.
 import {
-  buildEdgesBatch, disposeEdgesBatch, ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds,
+  buildEdgesBatch, disposeEdgesBatch, ensureMaterialized, getBatchedInstanceInfo, getExpressIdWorldBounds, setBatchedInstanceMatrix,
   getMaterializedMeshes, type BatchState, type EdgesBatch,
 } from './elementBatching'
 import { attachPreservingWorldTransform, detachToSceneRoot } from './elementRigging'
@@ -997,6 +997,17 @@ const REALISTIC_WHITE = new THREE.Color(1, 1, 1)
 // avoids allocating a fresh THREE.Color per material per frame just to
 // compare a candidate colour against what's already applied.
 const _scratchColor = new THREE.Color()
+const _scratchMatrix = new THREE.Matrix4()
+const _scratchTranslation = new THREE.Matrix4()
+// Profiles a still-batched element can play without being pulled out of the
+// shared BatchedMesh (2026-10-03, per Maro: Fall Down Z on large activities
+// took minutes to start animating, again after every reload — each element
+// was materialized into its own mesh, and every comparison view repeated
+// that on its own copy). Visibility/colour ('none') always could; a pure
+// translation ('translate'/'fall' — positionOffset only, see
+// computeAppliedAnimationStateAt) is now an instance-matrix offset. Rotation,
+// scale, grow and per-element opacity fades still need a real mesh.
+const BATCHABLE_TRANSFORM_KINDS: ReadonlySet<string> = new Set(['none', 'translate', 'fall'])
 // Reused every frame by TimelinePlayback's own transform diff below
 // (2026-07-21 perf fix) — see that diff's own header for why.
 const _scratchPosition = new THREE.Vector3()
@@ -2730,7 +2741,16 @@ interface ResolvedBatchVisibilityTarget {
   // read time. All instances here share one elementKey/variance entry
   // (getBatchedInstanceInfo's own header — they're the same expressID's
   // several batched geometry pieces, never several different elements).
-  instances: { instanceId: number; originalColor: THREE.Color }[]
+  // restMatrix/geometryId (2026-10-03): translate/fall profiles move the
+  // instance in place (BATCHABLE_TRANSFORM_KINDS) — offset applied to the
+  // element's own stored rest matrix, never to whatever it last showed.
+  instances: { instanceId: number; geometryId: number; originalColor: THREE.Color; restMatrix: THREE.Matrix4 }[]
+  // The model group the batch lives in — setBatchedInstanceMatrix also
+  // moves the element's Edges instance, which hangs off this group.
+  root: THREE.Object3D
+  // Last position offset written to these instances ("x,y,z"), so an
+  // unchanged offset isn't rewritten every frame. undefined = never written.
+  lastOffsetKey: string | undefined
   elementKey: string | null
   cachedVarianceMagnitude: number
   cachedVarianceIsLate: boolean
@@ -3475,16 +3495,18 @@ export function TimelinePlayback({
 
             // Batched-visibility fast path (2026-07-21, per Maro — see
             // ResolvedBatchVisibilityTarget's own header) — tried *before*
-            // getMaterializedMeshes below, and only for transform_kind
-            // 'none' (pure opacity/colour, the profile every schedule-
-            // generated link actually uses by default — confirmed by
-            // tracing DEFAULT_ANIMATION_CONFIG). getBatchedInstanceInfo
+            // getMaterializedMeshes below, for transform_kind 'none' (pure
+            // opacity/colour, the profile every schedule-generated link
+            // uses by default — confirmed by tracing
+            // DEFAULT_ANIMATION_CONFIG) and, since 2026-10-03, the pure
+            // translations 'translate'/'fall' (BATCHABLE_TRANSFORM_KINDS —
+            // moved via the instance matrix). getBatchedInstanceInfo
             // returns null (not eligible) for anything already individual —
             // never batched to begin with, or already materialized for some
             // other reason (a manual edit, a previous non-'none' profile,
             // Select All, ...) — in which case this falls through to the
             // normal materializing path exactly as before, unchanged.
-            if (profile.transform_kind === 'none') {
+            if (BATCHABLE_TRANSFORM_KINDS.has(profile.transform_kind)) {
               const batchInfo = getBatchedInstanceInfo(handle.object, expressId)
               if (batchInfo) {
                 const key = `${batchInfo.mesh.uuid}:${expressId}`
@@ -3511,10 +3533,13 @@ export function TimelinePlayback({
                   const variance = resolveVarianceTint(elementKey, nowMsAtResolve, varianceByElementKey)
                   const originalInstances = batchInfo.instances.map(inst => ({
                     instanceId: inst.instanceId,
+                    geometryId: inst.geometryId,
                     originalColor: inst.baseColor,
+                    restMatrix: inst.restMatrix,
                   }))
                   bvTarget = {
                     mesh: batchInfo.mesh, instances: originalInstances, links: [],
+                    root: handle.object, lastOffsetKey: undefined,
                     elementKey,
                     cachedVarianceMagnitude: variance.magnitude,
                     cachedVarianceIsLate: variance.isLate,
@@ -3555,7 +3580,7 @@ export function TimelinePlayback({
                 if (staggering && !staggerCenter && batchInfo.instances.length > 0) {
                   const instanceId = batchInfo.instances[0].instanceId
                   batchInfo.mesh.getBoundingBoxAt(batchInfo.mesh.getGeometryIdAt(instanceId), staggerBox)
-                  batchInfo.mesh.getMatrixAt(instanceId, staggerMatrix)
+                  staggerMatrix.copy(batchInfo.instances[0].restMatrix)
                   batchInfo.mesh.updateMatrixWorld(true)
                   staggerCenter = staggerBox.applyMatrix4(staggerMatrix.premultiply(batchInfo.mesh.matrixWorld)).getCenter(new THREE.Vector3())
                 }
@@ -3703,6 +3728,16 @@ export function TimelinePlayback({
           object.position.copy(prev.basePosition)
           object.rotation.copy(prev.baseRotation)
           object.scale.copy(prev.baseScale)
+        }
+        // Same for batched instances a translate/fall profile moved: back to
+        // their rest matrix; any still on such a profile are re-offset by
+        // the per-frame loop (their new targets start unwritten).
+        for (const bv of batchVisibilityTargetsRef.current) {
+          if (!bv.lastOffsetKey || bv.lastOffsetKey === '0,0,0') continue
+          for (const inst of bv.instances) {
+            if (bv.expressIdByInstanceId.has(inst.instanceId)) setBatchedInstanceMatrix(bv.root, bv.mesh, inst.instanceId, inst.geometryId, inst.restMatrix)
+          }
+          bv.lastOffsetKey = undefined
         }
         targetsRef.current = [...byObject.values()]
         batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
@@ -4233,6 +4268,22 @@ export function TimelinePlayback({
         const baseVisible = baseVisibleByInstanceId?.get(instanceId) ?? true
         const nextVisible = baseVisible && scheduleVisible
         if (bv.mesh.getVisibleAt(instanceId) !== nextVisible) bv.mesh.setVisibleAt(instanceId, nextVisible)
+      }
+      // Translate/fall (2026-10-03) — the element's rest matrix shifted by
+      // the profile's offset, written only when the offset changes. The
+      // offset is in the model group's space, the same space an individual
+      // element mesh's own `position` (and so the non-batched path's
+      // basePosition + positionOffset) lives in.
+      const offset = state?.positionOffset
+      const offsetKey = offset ? `${offset[0]},${offset[1]},${offset[2]}` : '0,0,0'
+      if (bv.lastOffsetKey !== offsetKey) {
+        for (const inst of bv.instances) {
+          if (!bv.expressIdByInstanceId.has(inst.instanceId)) continue
+          _scratchMatrix.copy(inst.restMatrix)
+          if (offset) _scratchMatrix.premultiply(_scratchTranslation.makeTranslation(offset[0], offset[1], offset[2]))
+          setBatchedInstanceMatrix(bv.root, bv.mesh, inst.instanceId, inst.geometryId, _scratchMatrix)
+        }
+        bv.lastOffsetKey = offsetKey
       }
       // null once the profile's own colour window has passed (see
       // computeAppliedAnimationStateAt's own header) — restores each

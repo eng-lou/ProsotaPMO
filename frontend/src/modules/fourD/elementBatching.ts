@@ -475,7 +475,7 @@ function removeFromEdgesBatch(rootObject: THREE.Object3D, info: BatchInstanceInf
 // caller falls back to the existing full-materialization path unchanged.
 export function getBatchedInstanceInfo(
   rootObject: THREE.Object3D, expressID: number,
-): { mesh: THREE.BatchedMesh; instances: { instanceId: number; baseColor: THREE.Color }[] } | null {
+): { mesh: THREE.BatchedMesh; instances: { instanceId: number; geometryId: number; baseColor: THREE.Color; restMatrix: THREE.Matrix4 }[] } | null {
   const materialized = getMeshIndex(rootObject).get(expressID)
   if (materialized && materialized.length > 0) return null
 
@@ -483,7 +483,31 @@ export function getBatchedInstanceInfo(
   const infos = batch?.byExpressId.get(expressID)
   if (!batch || !infos || infos.length === 0) return null
 
-  return { mesh: batch.mesh, instances: infos.map(info => ({ instanceId: info.instanceId, baseColor: info.color })) }
+  return {
+    mesh: batch.mesh,
+    instances: infos.map(info => ({ instanceId: info.instanceId, geometryId: info.geometryId, baseColor: info.color, restMatrix: info.matrix })),
+  }
+}
+
+// Moves one still-batched instance (2026-10-03, per Maro: Fall Down Z on
+// the Medical Clinic's big activities took minutes to start animating, and
+// again after every reload) — the timeline's translate/fall profiles now
+// offset the instance in place instead of pulling every element out into
+// its own mesh. Writes the main batch and, when Edges has been built, the
+// element's edges instance too, so its outline moves with it. `matrix` is
+// in the model group's space (rest matrix with the offset applied), the
+// same space an individual element mesh's own position lives in.
+export function setBatchedInstanceMatrix(
+  rootObject: THREE.Object3D, mesh: THREE.BatchedMesh, instanceId: number, geometryId: number, matrix: THREE.Matrix4,
+): void {
+  mesh.setMatrixAt(instanceId, matrix)
+  const edgesBatch = rootObject.userData.edgesBatch as EdgesBatch | undefined
+  const entry = edgesBatch?.entries.get(geometryId)
+  const localIndex = entry?.localIndexByInstanceId.get(instanceId)
+  if (entry && localIndex !== undefined) {
+    entry.mesh.setMatrixAt(localIndex, matrix)
+    entry.mesh.instanceMatrix.needsUpdate = true
+  }
 }
 
 // For schedule extraction (ifcScheduleExtraction.ts) — 2026-07-21 perf fix,

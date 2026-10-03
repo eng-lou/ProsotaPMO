@@ -1064,6 +1064,7 @@ type BatchedMeshInternals = THREE.BatchedMesh & {
   _maxInstanceCount: number
   _drawInfo: { visible: boolean; active: boolean }[]
   _colorsTexture: THREE.DataTexture | null
+  _matricesTexture: THREE.DataTexture
 }
 
 function computeBatchClasses(batch: BatchState, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap, suppressed: boolean): Uint8Array {
@@ -1132,8 +1133,9 @@ function disposeGlassBatch(glass: GlassBatchState) {
 
 // Per frame: the glass batch mirrors the main batch's per-instance
 // visibility (Isolate/Hide/timeline/materialize), colour + alpha (selection
-// tint, Fade Unselected) and clipping, so none of those code paths need to
-// know it exists.
+// tint, Fade Unselected), matrix (the timeline's translate/fall profiles
+// move batched instances in place, 2026-10-03) and clipping, so none of
+// those code paths need to know it exists.
 export function syncRealisticGlassBatch(batch: BatchState) {
   const glass = (batch.mesh.userData.realistic as BatchRealisticState | undefined)?.glass
   if (!glass) return
@@ -1142,13 +1144,24 @@ export function syncRealisticGlassBatch(batch: BatchState) {
   const mainColors = main._colorsTexture?.image.data as Float32Array | undefined
   const glassColorsTexture = glassMesh._colorsTexture
   const glassColors = glassColorsTexture?.image.data as Float32Array | undefined
+  const mainMatrices = main._matricesTexture.image.data as Float32Array
+  const glassMatricesTexture = glassMesh._matricesTexture
+  const glassMatrices = glassMatricesTexture.image.data as Float32Array
   let colorsChanged = false
+  let matricesChanged = false
   for (let k = 0; k < glass.mainIds.length; k++) {
     const mainId = glass.mainIds[k]
     const glassId = glass.glassIds[k]
     const info = main._drawInfo[mainId]
     const visible = !!info && info.active && info.visible
     if (glassMesh._drawInfo[glassId].visible !== visible) glassMesh.setVisibleAt(glassId, visible)
+    if (visible) {
+      const a = mainId * 16
+      const b = glassId * 16
+      for (let c = 0; c < 16; c++) {
+        if (glassMatrices[b + c] !== mainMatrices[a + c]) { glassMatrices[b + c] = mainMatrices[a + c]; matricesChanged = true }
+      }
+    }
     if (mainColors && glassColors) {
       const a = mainId * 4
       const b = glassId * 4
@@ -1159,6 +1172,7 @@ export function syncRealisticGlassBatch(batch: BatchState) {
     }
   }
   if (colorsChanged && glassColorsTexture) glassColorsTexture.needsUpdate = true
+  if (matricesChanged) glassMatricesTexture.needsUpdate = true
   const mainMaterial = (Array.isArray(main.material) ? main.material[0] : main.material) as THREE.Material
   const glassMaterial = glassMesh.material as THREE.Material
   glassMaterial.clippingPlanes = mainMaterial.clippingPlanes
