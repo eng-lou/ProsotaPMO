@@ -123,8 +123,8 @@ export function activitiesForPaneDates(activities: Activity[], baseline: boolean
 // THREE.Mesh tagged with `userData.expressID` (see that file's own
 // header), which is exactly what makes per-sub-element isolation possible
 // on a clone at all — no BatchedMesh.setVisibleAt()-style API needed here,
-// just a plain `.visible` walk. `null` isolation (baseline mode) leaves
-// everything untouched. Every real resolver this module calls
+// just a plain `.visible` walk. `null` isolation (baseline mode) shows the
+// whole model (minus Hide). Every real resolver this module calls
 // (resolveElementRefsToTargets/resolveActivityLinksToIsolationTargets)
 // always pairs an ifc-kind objectId with at least one matching expressId
 // when anything in that model actually resolved — so "this model's own
@@ -133,33 +133,52 @@ export function activitiesForPaneDates(activities: Activity[], baseline: boolean
 export function applyPaneIsolationVisibility(
   clonedImportedObjects: { id: string; kind: 'ifc' | 'mesh'; object: THREE.Object3D }[],
   isolation: ResolvedIsolationTarget | null,
+  hiddenElementKeys: Set<string>,
 ): void {
-  if (!isolation) return
+  // Rebuilt from scratch every time (2026-10-03, per Maro: "the isolate in
+  // the main view should be limited to the main view... if i wanted to
+  // isolate elements for baseline comparisons i can use collection") — a
+  // clone copies whatever per-element visibility the primary viewport had
+  // at clone time, including its Isolate, so a Baseline-mode pane (no
+  // isolation of its own) used to keep the main view's isolate baked in,
+  // and a scoped pane kept it for anything outside its own pass. Now every
+  // element starts shown, minus the main view's Hide (hiddenElementKeys —
+  // a deliberate hide, unlike Isolate's temporary focus) and split-away
+  // originals, then this pane's own collection/scope narrows it.
   for (const { id, kind, object } of clonedImportedObjects) {
     if (kind === 'mesh') {
       // Same baseVisible convention as the 'ifc' branch below — see that
       // branch's own comment for the real "why" (2026-09-01 fix).
-      const shown = isolation.objectIds.has(id)
+      const shown = isolation ? isolation.objectIds.has(id) : true
       object.visible = shown
       object.userData.baseVisible = shown
       continue
     }
-    if (!isolation.objectIds.has(id)) {
+    if (isolation && !isolation.objectIds.has(id)) {
       object.visible = false
       object.userData.baseVisible = false
       continue
     }
     object.visible = true
     object.userData.baseVisible = true
+    // Keyed by model + expressID (2026-10-03, per Maro: WBS/UDF-scoped
+    // panes "meant to be exclusive" showed elements from other scopes) —
+    // expressIDs are only unique within one IFC file, so with federated
+    // discipline models a bare expressID set matched the same-numbered,
+    // unrelated elements in every other loaded model.
+    const elementShown = (expressID: number) => {
+      const key = `${id}::${expressID}`
+      return (!isolation || isolation.expressKeys.has(key)) && !hiddenElementKeys.has(key)
+    }
     // The cloned batch (sceneClone.ts, 2026-09-29): per-instance
     // visibility, recorded in the same batchBaseVisibleByInstanceId map the
     // primary viewport keeps, so TimelinePlayback's batch fast path ANDs
-    // its schedule verdict with this isolation instead of overwriting it.
+    // its schedule verdict with this instead of overwriting it.
     const batch = object.userData.batch as BatchState | undefined
     if (batch) {
       const baseVisibleByInstanceId = (batch.mesh.userData.batchBaseVisibleByInstanceId ??= new Map<number, boolean>()) as Map<number, boolean>
       for (const [expressID, infos] of batch.byExpressId) {
-        const shown = isolation.expressKeys.has(`${id}::${expressID}`)
+        const shown = elementShown(expressID)
         for (const info of infos) {
           baseVisibleByInstanceId.set(info.instanceId, shown)
           batch.mesh.setVisibleAt(info.instanceId, shown)
@@ -168,35 +187,14 @@ export function applyPaneIsolationVisibility(
     }
     object.traverse(child => {
       if (child instanceof THREE.Mesh && child.userData.expressID !== undefined) {
-        // Keyed by model + expressID (2026-10-03, per Maro: WBS/UDF-scoped
-        // panes "meant to be exclusive" showed elements from other scopes)
-        // — expressIDs are only unique within one IFC file, so with
-        // federated discipline models a bare expressID set matched the
-        // same-numbered, unrelated elements in every other loaded model.
-        const shown = isolation.expressKeys.has(`${id}::${child.userData.expressID}`)
+        const shown = elementShown(child.userData.expressID) && !child.userData.isSplitAway
         child.visible = shown
-        // The real fix (2026-09-01, per Maro: isolation resolved correctly
-        // — confirmed live via diagnostic logging, 756/3706 real elements
-        // matched, and this mutation genuinely did run — yet nothing ever
-        // showed on screen) — TimelinePlayback (mounted in this same pane,
-        // just below) runs a real per-*frame* pass over every schedule-
-        // linked mesh: `mesh.visible = (mesh.userData.baseVisible ?? true)
-        // && state.opacity > ANIMATION_VISIBILITY_EPSILON` (Viewport3D.tsx,
-        // its own comment: "Every frame, so leaving the 'before start'
-        // pose... reliably re-hides a mesh some other effect had last set
-        // visible"). That convention exists specifically so the *primary*
-        // viewport's own Isolate mode survives TimelinePlayback's
-        // continuous overwrite — Viewport3D.tsx's ModelObjects effect
-        // caches its own isolate-aware verdict into this exact
-        // `userData.baseVisible` field, which is the only reason Isolate
-        // and the Animation Timeline coexist there at all. This pane's own
-        // isolation effect never adopted that same convention — it set
-        // `.visible` directly and nothing else, so on the very next
-        // animation frame TimelinePlayback read `baseVisible ?? true`
-        // (never set, always the `true` fallback) and stomped every
-        // schedule-linked mesh straight back to fully visible, forever,
-        // even though this function's own mutation was — and always
-        // had been — completely correct in isolation.
+        // TimelinePlayback (mounted in this same pane) re-derives every
+        // schedule-linked mesh's `.visible` per frame as
+        // `(userData.baseVisible ?? true) && opacity > epsilon` — so this
+        // verdict has to live in baseVisible too, or the next frame shows
+        // the mesh again regardless (the 2026-09-01 "isolation resolved
+        // correctly but nothing showed" fix).
         child.userData.baseVisible = shown
       }
     })

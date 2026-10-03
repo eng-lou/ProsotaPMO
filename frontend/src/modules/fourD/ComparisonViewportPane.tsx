@@ -88,6 +88,9 @@ interface Props {
   // filtering) — see comparisonPane.ts's own applyPaneIsolationVisibility
   // header for exactly how a non-null target gets applied post-clone.
   isolation: ResolvedIsolationTarget | null
+  // The main view's Hide (`${objectId}::${expressID}` keys) — a pane honours
+  // Hide but never the main view's Isolate (see applyPaneIsolationVisibility).
+  hiddenElementKeys: Set<string>
   // Was hardcoded "baseline" — now follows the pane's own content mode:
   // 'live' for collection/scope modes (current dates, matching the main
   // viewport — same 'live' literal TimelinePlayback's own dateField prop
@@ -194,7 +197,7 @@ export function ComparisonViewportPane({
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, showEdges, ambientOcclusion, dynamicSky, showGrid,
-  active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
+  active, isolation, hiddenElementKeys, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
 }: Props) {
   const zUp = upAxis === 'z'
@@ -450,9 +453,9 @@ export function ComparisonViewportPane({
   // own current `visible`, not anything isolation-aware), so this has to
   // re-run after every re-clone, not just once.
   useEffect(() => {
-    applyPaneIsolationVisibility(clonedImportedObjects, isolation)
+    applyPaneIsolationVisibility(clonedImportedObjects, isolation, hiddenElementKeys)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clonesByOriginal, isolation])
+  }, [clonesByOriginal, isolation, hiddenElementKeys])
 
   const collectionOptions = useMemo(() => [...collections].sort((a, b) => a.name.localeCompare(b.name)), [collections])
 

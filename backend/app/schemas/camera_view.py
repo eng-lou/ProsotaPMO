@@ -25,6 +25,10 @@ class CameraViewportState(BaseModel):
 
     isolate_mode: bool
     isolated_object_ids: list[str] = []
+    # `${objectId}::${expressID}` keys (2026-10-03) — expressIDs repeat
+    # across federated IFC files. isolated_express_ids/isolated_ifc_model_id
+    # remain for views saved before then (the frontend converts them).
+    isolated_element_keys: list[str] = []
     isolated_express_ids: list[int] = []
     isolated_ifc_model_id: str | None = None
     hidden_ids: list[str] = []

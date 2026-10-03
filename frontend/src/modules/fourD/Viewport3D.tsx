@@ -81,6 +81,7 @@ import type { Zone, ZonePoint } from './zones'
 import { RadialChartHud } from './RadialChartHud'
 import { loadRadialChartIcons, type RadialChart } from './radialCharts'
 import { prepareExportHuds } from './exportHuds'
+import { modelsWithElementKeys } from './linkedElements'
 import { TimelineStripHud } from './TimelineStripHud'
 import type { TimelineStrip } from './timelineStrips'
 import type { PathFollower } from './pathFollowers'
@@ -668,15 +669,15 @@ interface Props {
   // hid something.
   isolateMode: boolean
   // Frozen snapshot of what was selected the moment Isolate switched on
-  // (2026-07-09 fix) — see FourD.tsx's own isolatedObjectIds/isolatedExpressIds
+  // (2026-07-09 fix) — see FourD.tsx's own isolatedObjectIds/isolatedElementKeys
   // state comment and ModelObjects' matching prop comment for the full story.
   isolatedObjectIds: Set<string>
-  isolatedExpressIds: Set<number>
+  isolatedElementKeys: Set<string>
   // Hide-by-sub-element (2026-07-11, for Collections) — an IFC sub-element
   // hidden independent of isolate mode, e.g. one door hidden out of a
   // Collection while the rest of its model stays visible. Composite
   // `${objectId}::${expressID}` keys, NOT a flat Set<number> the way
-  // isolatedExpressIds/selectedExpressIds are — expressIDs are only unique
+  // isolatedElementKeys/selectedExpressIds are — expressIDs are only unique
   // within one loaded IFC model, so a flat set would collide across two
   // federated models sharing the same expressID number (a real, pre-
   // existing gap in those two, not worth propagating into a new one).
@@ -1133,7 +1134,7 @@ function computeTintedColor(
 function ModelObjects({
   objects, settings, selectedExpressId, selectedExpressIds, selectedObjectIds, onSelect, onSelectObject, customTextures,
   customOpacity,
-  boxSelectMode, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, sectionBoxes,
+  boxSelectMode, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, sectionBoxes,
   varianceByElementKey, clashByElementKey, elementParents, materializeVersion, realisticMapping, realisticInfoVersion,
 }: {
   objects: ImportedObject[]; settings: ViewerSettings; selectedExpressId: number | null
@@ -1163,10 +1164,10 @@ function ModelObjects({
   // from the live selectedObjectIds/selectedExpressIds above (still used
   // for the selection *tint*, which should keep reacting to clicks
   // normally even while isolating) so a later click can't silently swap out
-  // what's isolated. See FourD.tsx's own isolatedObjectIds/isolatedExpressIds
+  // what's isolated. See FourD.tsx's own isolatedObjectIds/isolatedElementKeys
   // state comment for the full story.
   isolatedObjectIds: Set<string>
-  isolatedExpressIds: Set<number>
+  isolatedElementKeys: Set<string>
   // See Viewport3D's own top-level Props doc comment on hiddenExpressIds —
   // same composite-key set, threaded straight through.
   hiddenExpressIds: Set<string>
@@ -1309,7 +1310,7 @@ function ModelObjects({
     const heavyDeps = [
       objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
       settings.showClashColors, settings.shadows, settings.xrayUnselected, hasSelection, upAxis, customTextures,
-      customOpacity, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, varianceByElementKey, clashByElementKey,
+      customOpacity, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, varianceByElementKey, clashByElementKey,
       materializeVersion, settings.realisticGlassTransmission, realisticMapping, realisticInfoVersion,
     ]
     const heavyChanged = heavyDepsRef.current === null
@@ -1319,7 +1320,7 @@ function ModelObjects({
 
     const edgesDeps = [
       settings.showFaces, settings.showEdges, settings.renderMode, isolateMode, isolatedObjectIds,
-      isolatedExpressIds, hiddenExpressIds,
+      isolatedElementKeys, hiddenExpressIds,
     ]
     const edgesChanged = edgesDepsRef.current === null
       || edgesDeps.length !== edgesDepsRef.current.length
@@ -1451,6 +1452,7 @@ function ModelObjects({
     }
 
     let remainingSubdivisionBudget = MAX_TOTAL_SUBDIVIDED_TRIANGLES
+    const isolatedModelsWithElements = modelsWithElementKeys(isolatedElementKeys)
     for (const { id, kind, object } of objects) {
       const isObjectSelected = selectedObjectIds.has(id)
       const isObjectIsolated = isolatedObjectIds.has(id)
@@ -1459,7 +1461,10 @@ function ModelObjects({
       // with nothing more specific picked shows every sub-element of that
       // object instead (see this component's own isolateMode doc comment
       // above).
-      const isolatingSubElements = isolateMode && kind === 'ifc' && isolatedExpressIds.size > 0
+      // Per model (2026-10-03): this model is isolated down to specific
+      // elements only if it has element keys of its own; an isolated model
+      // with none (a whole-object selection) shows whole.
+      const isolatingSubElements = isolateMode && kind === 'ifc' && isolatedModelsWithElements.has(id)
       // Skip this whole object's traversal outright on a selection-only
       // pass if neither it nor anything specific within it changed
       // selection membership — the cheapest possible skip, before even
@@ -1471,12 +1476,12 @@ function ModelObjects({
         // The shared BatchedMesh itself (2026-07-21 fix, per Maro: "not
         // selecting and not isolating, i dont see the highlight color
         // change" — reproduced live: per-instance visibility was correct
-        // (visibleCount matched isolatedExpressIds exactly) but nothing
+        // (visibleCount matched isolatedElementKeys exactly) but nothing
         // rendered because THREE.BatchedMesh extends THREE.Mesh, so this
         // traverse — meant only for real, individual IFC element meshes —
         // was also walking straight into the batch mesh itself. It has no
         // userData.expressID of its own, so the generic per-mesh formula
-        // below (isolatedOut checks isolatedExpressIds.has(expressID),
+        // below (isolatedOut checks isolatedElementKeys.has(expressID),
         // undefined never matches) always decided it "isn't part of the
         // isolated set" and set the *entire batch's* own top-level
         // `.visible = false` — hiding every still-batched element
@@ -1594,12 +1599,11 @@ function ModelObjects({
           child.geometry = baseGeometry
         }
 
-        // A model outside the isolated set is out whole (2026-10-03) —
-        // isolatedExpressIds holds bare expressIDs, which repeat across
-        // federated IFC files, so without this check the same-numbered,
-        // unrelated elements of every other loaded model showed too.
+        // Keyed by model + expressID (2026-10-03) — expressIDs repeat
+        // across federated IFC files, so a bare number would also isolate
+        // the same-numbered, unrelated element in every other model.
         const isolatedOut = isolateMode && (
-          !isObjectIsolated || (isolatingSubElements && !isolatedExpressIds.has(child.userData.expressID))
+          !isObjectIsolated || (isolatingSubElements && !isolatedElementKeys.has(`${id}::${child.userData.expressID}`))
         )
         // Hide always wins over isolate, unconditionally ANDed in — same
         // shape as FourD.tsx's own object-level visibility check
@@ -2055,7 +2059,7 @@ function ModelObjects({
       if (batch && heavyChanged) {
         // Diagnosed 2026-07-21, per Maro: "still not isolating" even for a
         // selection dominated by ordinary walls, confirmed (via a since-
-        // removed console diagnostic — isolatedExpressIds matched 14/14
+        // removed console diagnostic — isolatedElementKeys matched 14/14
         // batch keys, so the IDs were never the problem) not to be a
         // selection/matching bug at all. The real cause: this block and
         // TimelinePlayback's own batched-visibility fast path (Viewport3D.tsx,
@@ -2087,7 +2091,7 @@ function ModelObjects({
         const timelineControlledInstanceIds = batch.mesh.userData.timelineControlledInstanceIds as Set<number> | undefined
         for (const [expressID, infos] of batch.byExpressId) {
           const isolatedOut = isolateMode && (
-            !isObjectIsolated || (isolatingSubElements && !isolatedExpressIds.has(expressID))
+            !isObjectIsolated || (isolatingSubElements && !isolatedElementKeys.has(`${id}::${expressID}`))
           )
           const elementKey = kind === 'ifc' ? `${id}::${expressID}` : null
           const isChildHidden = elementKey !== null && hiddenExpressIds.has(elementKey)
@@ -5090,7 +5094,7 @@ function ClippingSetup() {
 
 export function Viewport3D({
   settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedExpressIds, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
+  onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentUrl, onEnvironmentError, customTextures, customOpacity, cameraSyncRef,
@@ -6990,7 +6994,7 @@ export function Viewport3D({
             boxSelectMode={boxSelectMode}
             isolateMode={isolateMode}
             isolatedObjectIds={isolatedObjectIds}
-            isolatedExpressIds={isolatedExpressIds}
+            isolatedElementKeys={isolatedElementKeys}
             hiddenExpressIds={hiddenExpressIds}
             sectionBoxes={sectionBoxes}
             varianceByElementKey={varianceByElementKey}

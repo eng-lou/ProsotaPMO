@@ -38,6 +38,7 @@ async def test_create_camera_view_with_viewport_state_and_thumbnail(client: Asyn
     viewport_state = {
         "isolate_mode": True,
         "isolated_object_ids": ["ifc-0"],
+        "isolated_element_keys": ["ifc-0::101", "ifc-1::102"],
         "isolated_express_ids": [101, 102],
         "isolated_ifc_model_id": "ifc-0",
         "hidden_ids": [],
@@ -58,7 +59,7 @@ async def test_update_camera_view_viewport_state(client: AsyncClient, project: P
     assert created["viewport_state"] is None
 
     viewport_state = {
-        "isolate_mode": False, "isolated_object_ids": [], "isolated_express_ids": [],
+        "isolate_mode": False, "isolated_object_ids": [], "isolated_element_keys": [], "isolated_express_ids": [],
         "isolated_ifc_model_id": None, "hidden_ids": ["mesh-1"], "hidden_express_ids": [], "show_clash_colors": False,
     }
     resp = await client.patch(f"/api/v1/camera-views/{created['id']}", json={"viewport_state": viewport_state})
@@ -95,3 +96,18 @@ async def test_delete_camera_view(client: AsyncClient, project: Project):
 async def test_delete_unknown_camera_view_404s(client: AsyncClient, project: Project):
     resp = await client.delete(f"/api/v1/camera-views/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+async def test_legacy_viewport_state_without_element_keys_still_loads(client: AsyncClient, project: Project):
+    # Views saved before 2026-10-03 have only bare isolated_express_ids; they
+    # must still validate, with isolated_element_keys defaulting to empty
+    # (the frontend converts the legacy numbers on restore).
+    legacy = {
+        "isolate_mode": True, "isolated_object_ids": ["ifc-0"], "isolated_express_ids": [7],
+        "isolated_ifc_model_id": "ifc-0", "hidden_ids": [], "hidden_express_ids": [], "show_clash_colors": False,
+    }
+    resp = await client.post("/api/v1/camera-views/", json=_view_payload(str(project.id), viewport_state=legacy))
+    assert resp.status_code == 201, resp.text
+    state = resp.json()["viewport_state"]
+    assert state["isolated_element_keys"] == []
+    assert state["isolated_express_ids"] == [7]

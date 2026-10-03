@@ -205,6 +205,8 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null, cloned: { 
   // per-piece classes and glass opacity (realisticMaterials.ts).
   if (object.userData.ifcGeometryId !== undefined) clone.userData.ifcGeometryId = object.userData.ifcGeometryId
   if (object.userData.ifcColorAlpha !== undefined) clone.userData.ifcColorAlpha = object.userData.ifcColorAlpha
+  // A split-by-level original stays hidden in panes too (its slices show).
+  if (object.userData.isSplitAway) clone.userData.isSplitAway = true
 
   for (const child of object.children) {
     // Display-only companions the primary viewport builds on top of its

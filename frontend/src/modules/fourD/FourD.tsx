@@ -22,7 +22,7 @@ import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, sa
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
-import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds } from './linkedElements'
+import { parseElementKey, resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds, selectionToElementKeys } from './linkedElements'
 import { LinkedActivitiesWidget } from './LinkedActivitiesWidget'
 import { assignAnimationProfile, createModelElementLink, createModelElementLinksBulk, deleteModelElementLink, listModelElementLinks, type ModelElementLink, type ModelElementLinkSourceKind } from './modelElementLinks'
 import {
@@ -35,7 +35,7 @@ import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
 import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
-import { createCameraView, deleteCameraView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
+import { createCameraView, deleteCameraView, isolatedKeysFromSavedView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { createCamera, deleteCamera, listCameras, updateCamera, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { uploadFourDVideo } from './fourDVideos'
 import { CameraViewPanel } from './CameraViewPanel'
@@ -955,10 +955,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const handleIsolateCollection = async (collectionId: string) => {
     const refs = flattenCollectionMemberRefs(collectionId, collections)
-    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     if (objectIds.size === 0) return
     setIsolatedObjectIds(objectIds)
-    setIsolatedExpressIds(expressIds)
+    setIsolatedElementKeys(expressKeys)
     setIsolateMode(true)
   }
 
@@ -1589,7 +1589,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // viewport_state (2026-07-20, per Maro: "capture not just orbit angle but
   // contextual visibility as well") — the same 5 pieces of state
   // handleShowAll (below) already clears together, plus which IFC model
-  // isolatedExpressIds is scoped to and whether clash colors were on.
+  // was active and whether clash colors were on.
   // Annotations aren't captured — they're project-wide persistent markers,
   // unaffected by which camera view is active (see CameraViewportState's
   // own docstring, backend/app/schemas/camera_view.py).
@@ -1602,7 +1602,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         viewport_state: {
           isolate_mode: isolateMode,
           isolated_object_ids: [...isolatedObjectIds],
-          isolated_express_ids: [...isolatedExpressIds],
+          isolated_element_keys: [...isolatedElementKeys],
+          isolated_express_ids: [],
           isolated_ifc_model_id: activeIfcModelId,
           hidden_ids: [...hiddenIds],
           hidden_express_ids: [...hiddenExpressIds],
@@ -1621,7 +1622,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (vs) {
       setIsolateMode(vs.isolate_mode)
       setIsolatedObjectIds(new Set(vs.isolated_object_ids))
-      setIsolatedExpressIds(new Set(vs.isolated_express_ids))
+      setIsolatedElementKeys(isolatedKeysFromSavedView(vs))
       setActiveIfcModelId(vs.isolated_ifc_model_id)
       setHiddenIds(new Set(vs.hidden_ids))
       setHiddenExpressIds(new Set(vs.hidden_express_ids))
@@ -2890,7 +2891,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   // Hide-by-sub-element (2026-07-11, for Collections) — see Viewport3D.tsx's
   // own Props doc comment on why this is a composite-key Set<string>, not a
-  // flat Set<number> the way isolatedExpressIds/selectedExpressIds are.
+  // flat Set<number> the way selectedExpressIds is.
   const [hiddenExpressIds, setHiddenExpressIds] = useState<Set<string>>(new Set())
   // Isolate Selected / Show All (2026-07-08, per Maro: "isolate selected,
   // show view focus on selected, show all") — a temporary overlay on top of
@@ -2900,7 +2901,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // express). Show All clears both together — the universal "just show me
   // everything" escape hatch, regardless of which of the two hid something.
   //
-  // isolatedObjectIds/isolatedExpressIds (2026-07-09 fix, per Maro: "if i
+  // isolatedObjectIds/isolatedElementKeys (2026-07-09 fix, per Maro: "if i
   // click a random position where an element that's hidden is. it reveals
   // and isolates that one instead. I dont want that... I only want the
   // element or elements that I selected") — a *frozen snapshot* of
@@ -2917,7 +2918,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // changes when Isolate is explicitly toggled again or Show All is used.
   const [isolateMode, setIsolateMode] = useState(false)
   const [isolatedObjectIds, setIsolatedObjectIds] = useState<Set<string>>(new Set())
-  const [isolatedExpressIds, setIsolatedExpressIds] = useState<Set<number>>(new Set())
+  // `${objectId}::${expressID}` keys (2026-10-03, was a bare expressID
+  // Set) — expressIDs repeat across federated IFC files, so a bare number
+  // also isolated the same-numbered element of every other isolated model.
+  // An isolated model with no keys of its own is isolated whole.
+  const [isolatedElementKeys, setIsolatedElementKeys] = useState<Set<string>>(new Set())
   const [dataTab, setDataTab] = useState<DataPanelTab>('ifc')
   // Federated/assembly modeling (2026-07-09, per Maro: "allow me to import
   // more than one IFC model or 3d model. so I can start building an
@@ -4329,7 +4334,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setActiveObjectId(null)
       setSelectedObjectIds(new Set())
       setHiddenExpressIds(new Set())
-      setIsolatedExpressIds(new Set())
+      setIsolatedElementKeys(new Set())
       setUnloadedElementsByFileId(new Map())
       brokenModelObjectIdsRef.current.clear()
       // Reset first (2026-07-19), before any model for this (possibly new)
@@ -4626,18 +4631,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // whole model(s)" (2026-07-15, per Maro: "same with select all", same
     // fix as box-select's own element-level rework above — Isolate already
     // hides everything else, so "all" and "the isolated subset" mean the
-    // same thing on screen). isolatedExpressIds is implicitly scoped to
-    // whichever one IFC model was active when Isolate was switched on (see
-    // isolatedExpressIds' own declaration comment) — activeIfcModelId is
-    // that same model.
-    if (isolateMode && isolatedExpressIds.size > 0 && activeIfcModelId) {
-      const expressIds = [...isolatedExpressIds]
+    // same thing on screen). The isolated element keys carry their own
+    // models (2026-10-03); the selection itself is still bare expressIDs.
+    if (isolateMode && isolatedElementKeys.size > 0) {
+      const parsed = [...isolatedElementKeys].map(parseElementKey).filter((p): p is { objectId: string; expressId: number } => p !== null)
+      const expressIds = [...new Set(parsed.map(p => p.expressId))]
+      const models = [...new Set(parsed.map(p => p.objectId))]
       setSelectedExpressIds(new Set(expressIds))
       // Only a genuine single-element result gets a "primary" element
       // (2026-07-17 fix — see handleBoxSelect's own header for why).
       setSelectedExpressId(expressIds.length === 1 ? expressIds[0] : null)
-      setSelectedObjectIds(new Set([...isolatedObjectIds, activeIfcModelId]))
-      setActiveObjectId(activeIfcModelId)
+      setSelectedObjectIds(new Set([...isolatedObjectIds, ...models]))
+      const primaryModel = models.length === 1 ? models[0] : (activeIfcModelId && models.includes(activeIfcModelId) ? activeIfcModelId : models[0])
+      if (primaryModel) {
+        setActiveObjectId(primaryModel)
+        setActiveIfcModelId(primaryModel)
+      }
       return
     }
     // Viewport3D.tsx resolves every visible whole object AND every visible
@@ -4934,8 +4943,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // bookkeeping cleanup Deselect All-adjacent flows already do for expressIDs
   // that no longer resolve to anything — hiddenExpressIds is keyed by the
   // composite `${objectId}::${expressID}` (Hide Selected's own convention
-  // above), isolatedExpressIds is a bare expressID Set (same "implicitly
-  // scoped to the one active IFC model" assumption Isolate itself relies on).
+  // above), and isolatedElementKeys uses the same composite key.
   const performUnloadElements = async (objectId: string, expressIds: number[]) => {
     const handle = getIfcHandleFor(objectId)
     if (!handle) return
@@ -4955,10 +4963,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       removedKeys.forEach(key => next.delete(key))
       return next
     })
-    setIsolatedExpressIds(prev => {
-      if (![...removedSet].some(id => prev.has(id))) return prev
+    setIsolatedElementKeys(prev => {
+      if (![...removedKeys].some(key => prev.has(key))) return prev
       const next = new Set(prev)
-      removedSet.forEach(id => next.delete(id))
+      removedKeys.forEach(key => next.delete(key))
       return next
     })
 
@@ -5168,7 +5176,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // can't just keep reading the live selection afterward.
       if (turningOn) {
         setIsolatedObjectIds(new Set(selectedObjectIds))
-        setIsolatedExpressIds(new Set(selectedExpressIds))
+        setIsolatedElementKeys(selectionToElementKeys(
+          selectedExpressIds, selectedObjectIds,
+          new Set(ifcHandles.map(h => `ifc-${h.modelID}`)),
+          (objectId, expressId) => { const h = getIfcHandleFor(objectId); return !!h && hasGeometry(h.object, expressId) },
+        ))
       }
       return turningOn
     })
@@ -5176,7 +5188,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleShowAll = () => {
     setIsolateMode(false)
     setIsolatedObjectIds(new Set())
-    setIsolatedExpressIds(new Set())
+    setIsolatedElementKeys(new Set())
     setHiddenIds(new Set())
     setHiddenExpressIds(new Set())
   }
@@ -5194,12 +5206,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (selectedActivityIds.size === 0) return
     setIsolatingLinked(true)
     try {
-      const { objectIds, expressIds } = await resolveActivityLinksToIsolationTargets(
+      const { objectIds, expressKeys } = await resolveActivityLinksToIsolationTargets(
         selectedActivityIds, modelElementLinks, sceneObjects, ifcHandles,
       )
       if (objectIds.size === 0) return
       setIsolatedObjectIds(objectIds)
-      setIsolatedExpressIds(expressIds)
+      setIsolatedElementKeys(expressKeys)
       setIsolateMode(true)
     } finally {
       setIsolatingLinked(false)
@@ -5216,10 +5228,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   useEffect(() => {
     if (!isolateMode || isolatedObjectIds.size === 0) { setIsolatedLinkedActivityIds(new Set()); return }
     let cancelled = false
-    resolveIsolationTargetsToActivityIds(isolatedObjectIds, isolatedExpressIds, modelElementLinks, sceneObjects, ifcHandles)
+    resolveIsolationTargetsToActivityIds(isolatedObjectIds, isolatedElementKeys, modelElementLinks, sceneObjects, ifcHandles)
       .then(ids => { if (!cancelled) setIsolatedLinkedActivityIds(ids) })
     return () => { cancelled = true }
-  }, [isolateMode, isolatedObjectIds, isolatedExpressIds, modelElementLinks, sceneObjects, ifcHandles])
+  }, [isolateMode, isolatedObjectIds, isolatedElementKeys, modelElementLinks, sceneObjects, ifcHandles])
 
   // Manual per-model texture override (2026-07-11, per Maro: "if I cant get
   // this natively, allow me to import textures per model") — see
@@ -5731,6 +5743,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id) && (!isolateMode || isolatedObjectIds.has(o.id)),
   })), [sceneObjects, hiddenIds, isolateMode, isolatedObjectIds])
+  // Comparison views (2026-10-03, per Maro: "the isolate in the main view
+  // should be limited to the main view") — same objects, Hide honoured,
+  // the main view's Isolate ignored; a view filters itself by its own
+  // collection/scope instead.
+  const paneObjects: ImportedObject[] = useMemo(() => sceneObjects.map(o => ({
+    id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
+    visible: !hiddenIds.has(o.id),
+  })), [sceneObjects, hiddenIds])
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
 
@@ -6778,7 +6798,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return (
       <ComparisonViewportPane
         key={index}
-        importedObjects={viewportObjects}
+        importedObjects={paneObjects}
         transformTick={transformTick}
         timelineSceneObjects={sceneObjects}
         ifcHandles={ifcHandles}
@@ -6813,6 +6833,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         pathFollowers={pathFollowers}
         active={active}
         isolation={config.contentMode === 'baseline' ? null : paneIsolations[index]}
+        hiddenElementKeys={hiddenExpressIds}
         dateField={config.contentMode === 'baseline' ? 'baseline' : 'live'}
         config={config}
         onConfigChange={next => updatePaneConfig(index, next)}
@@ -7239,7 +7260,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onFilterApply={handleFilterApply}
       isolateMode={isolateMode}
       isolatedObjectIds={isolatedObjectIds}
-      isolatedExpressIds={isolatedExpressIds}
+      isolatedElementKeys={isolatedElementKeys}
       hiddenExpressIds={hiddenExpressIds}
       onToggleIsolate={handleToggleIsolate}
       onShowAll={handleShowAll}
@@ -7361,7 +7382,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // (linkedElements.ts, already imported above) verbatim — the exact same
   // activity-id -> objectIds/expressIds resolver "Isolate Linked Elements"
   // already uses — then drive the same selectedObjectIds/selectedExpressIds
-  // or isolatedObjectIds/isolatedExpressIds/isolateMode state a manual
+  // or isolatedObjectIds/isolatedElementKeys/isolateMode state a manual
   // click already would (checked directly against this file's own
   // declarations, not assumed). color_by_criteria is scoped to the two
   // real modes this app has (showVarianceColors/showClashColors on
@@ -7397,7 +7418,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
       if (isolate) {
         setIsolatedObjectIds(targets.objectIds)
-        setIsolatedExpressIds(targets.expressIds)
+        setIsolatedElementKeys(targets.expressKeys)
         setIsolateMode(true)
       } else {
         setSelectedObjectIds(targets.objectIds)

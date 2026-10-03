@@ -13,6 +13,10 @@ import { api } from '@/lib/api'
 export interface CameraViewportState {
   isolate_mode: boolean
   isolated_object_ids: string[]
+  // `${objectId}::${expressID}` keys (2026-10-03). Views saved before that
+  // only have isolated_express_ids — bare numbers scoped to
+  // isolated_ifc_model_id — and are converted by isolatedKeysFromSavedView.
+  isolated_element_keys?: string[]
   isolated_express_ids: number[]
   isolated_ifc_model_id: string | null
   hidden_ids: string[]
@@ -67,4 +71,19 @@ export async function updateCameraView(
 
 export async function deleteCameraView(id: string): Promise<void> {
   await api.delete(`/api/v1/camera-views/${id}`)
+}
+
+// The isolated element keys a saved view restores. Older views stored bare
+// expressIDs belonging to the IFC model that was active when they were
+// saved (isolated_ifc_model_id); with no recorded model, they're given to
+// every isolated IFC model, which is what those views showed at the time.
+export function isolatedKeysFromSavedView(vs: CameraViewportState): Set<string> {
+  if (vs.isolated_element_keys && vs.isolated_element_keys.length > 0) return new Set(vs.isolated_element_keys)
+  if (vs.isolated_express_ids.length === 0) return new Set()
+  const owners = vs.isolated_ifc_model_id
+    ? [vs.isolated_ifc_model_id]
+    : vs.isolated_object_ids.filter(id => id.startsWith('ifc-'))
+  const keys = new Set<string>()
+  for (const owner of owners) for (const id of vs.isolated_express_ids) keys.add(`${owner}::${id}`)
+  return keys
 }

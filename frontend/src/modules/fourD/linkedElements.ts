@@ -46,6 +46,54 @@ async function resolveInAnyHandle(
   return null
 }
 
+// A federated IFC element's identity (2026-10-03): `${objectId}::${expressId}`.
+// expressIDs are only unique inside one IFC file, so any set of isolated/
+// hidden elements must carry the model too — a bare number matches the
+// same-numbered, unrelated element in every other loaded model.
+export function elementKey(objectId: string, expressId: number): string {
+  return `${objectId}::${expressId}`
+}
+
+export function parseElementKey(key: string): { objectId: string; expressId: number } | null {
+  const at = key.lastIndexOf('::')
+  if (at < 0) return null
+  const expressId = Number(key.slice(at + 2))
+  return Number.isFinite(expressId) ? { objectId: key.slice(0, at), expressId } : null
+}
+
+// The models that have at least one element key in `keys` — a model that's
+// isolated but has none is isolated whole.
+export function modelsWithElementKeys(keys: Iterable<string>): Set<string> {
+  const models = new Set<string>()
+  for (const key of keys) {
+    const parsed = parseElementKey(key)
+    if (parsed) models.add(parsed.objectId)
+  }
+  return models
+}
+
+// Turns the live selection (still bare expressIDs + the selected model ids)
+// into element keys, for Isolate Selected's snapshot. Each number goes to
+// the selected IFC model(s) that actually contain it; with one IFC model
+// selected — the usual case — that's simply that model. Only a selection
+// spanning several models that share a number stays ambiguous, because the
+// selection itself doesn't record which model each number came from.
+export function selectionToElementKeys(
+  expressIds: Iterable<number>,
+  selectedObjectIds: Iterable<string>,
+  ifcObjectIds: Set<string>,
+  hasElement: (objectId: string, expressId: number) => boolean,
+): Set<string> {
+  const models = [...selectedObjectIds].filter(id => ifcObjectIds.has(id))
+  const keys = new Set<string>()
+  for (const expressId of expressIds) {
+    const owners = models.length === 1 ? models : models.filter(m => hasElement(m, expressId))
+    for (const m of owners) keys.add(elementKey(m, expressId))
+  }
+  return keys
+}
+
+
 // "Isolate Linked Elements" — activities -> elements (2026-07-09, per Maro:
 // "if i click on an activity or activities, i can click to isolate/filter
 // the elements assigned to those activities alone"). Mirrors Viewport3D.tsx's
@@ -147,21 +195,22 @@ export async function resolveActivityLinksToIsolationTargets(
 // nothing isolated has any link at all — the caller (LinkedActivitiesWidget.tsx)
 // renders nothing in that case, per that same instruction.
 //
-// A whole-model isolation (isolatedExpressIds empty, just that model's own
-// object id isolated) counts *every* ifc-kind link belonging to that
+// A whole-model isolation (that model's own object id isolated, with no
+// element keys of its own) counts *every* ifc-kind link belonging to that
 // *specific* model as isolated — matches the same "whole object vs specific
 // sub-elements" branching Viewport3D.tsx's own isolate visibility logic
 // already uses. With multiple models loaded, only the isolated one(s)
 // count — a link into a *different*, non-isolated model never matches.
 export async function resolveIsolationTargetsToActivityIds(
   isolatedObjectIds: Set<string>,
-  isolatedExpressIds: Set<number>,
+  isolatedElementKeys: Set<string>,
   links: ModelElementLink[],
   sceneObjects: LinkableSceneObject[],
   ifcHandles: IfcModelHandle[],
 ): Promise<Set<string>> {
   const activityIds = new Set<string>()
   if (isolatedObjectIds.size === 0) return activityIds
+  const modelsWithElements = modelsWithElementKeys(isolatedElementKeys)
 
   const needsIfc = links.some(l => l.source_kind === 'ifc') && ifcHandles.length > 0
   const ifcModel = needsIfc ? await import('./ifcModel') : null
@@ -178,16 +227,16 @@ export async function resolveIsolationTargetsToActivityIds(
         const expressId = getSplitExpressId(handle, link.element_ref)
         if (expressId === undefined) continue
         const modelObjectId = `ifc-${handle.modelID}`
-        const wholeModelIsolated = isolatedObjectIds.has(modelObjectId) && isolatedExpressIds.size === 0
-        if (wholeModelIsolated || isolatedExpressIds.has(expressId)) activityIds.add(link.activity_id)
+        const wholeModelIsolated = isolatedObjectIds.has(modelObjectId) && !modelsWithElements.has(modelObjectId)
+        if (wholeModelIsolated || isolatedElementKeys.has(elementKey(modelObjectId, expressId))) activityIds.add(link.activity_id)
         break
       }
     } else if (ifcModel) {
       const resolved = await resolveInAnyHandle(ifcHandles, link.element_ref, ifcModel)
       if (!resolved) continue
       const modelObjectId = `ifc-${resolved.handle.modelID}`
-      const wholeModelIsolated = isolatedObjectIds.has(modelObjectId) && isolatedExpressIds.size === 0
-      if (wholeModelIsolated || isolatedExpressIds.has(resolved.expressId)) activityIds.add(link.activity_id)
+      const wholeModelIsolated = isolatedObjectIds.has(modelObjectId) && !modelsWithElements.has(modelObjectId)
+      if (wholeModelIsolated || isolatedElementKeys.has(elementKey(modelObjectId, resolved.expressId))) activityIds.add(link.activity_id)
     }
   }
   return activityIds
