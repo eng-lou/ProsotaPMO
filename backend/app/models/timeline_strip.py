@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,14 +37,21 @@ class TimelineStrip(Base, TimestampMixin):
 
     scope_mode/udf_field_definition_id/udf_value/wbs_node_activity_id are
     the exact same shape as RadialChart's own scope fields (see that
-    model's own docstring) — shared concept, two independent rows."""
+    model's own docstring) — shared concept, two independent rows.
+
+    No longer a singleton (2026-10-03, per Maro: timeline strips "per
+    baseline views", choosing several strips over one shared one) — a
+    project can hold any number, each with its own viewport_slot, scope and
+    style, so a Footing comparison view can carry a strip spanning only the
+    footing dates. Same list CRUD shape as RadialChart now."""
 
     __tablename__ = "timeline_strips"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="Timeline Strip")
     visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position_x_pct: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
     position_y_pct: Mapped[float] = mapped_column(Float, nullable=False, default=90.0)
@@ -63,3 +70,6 @@ class TimelineStrip(Base, TimestampMixin):
     wbs_node_activity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
     )
+    # Which viewport this strip sits in — None = the main 4D viewport,
+    # 0..2 = that comparison-view slot. Same field as RadialChart's own.
+    viewport_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)

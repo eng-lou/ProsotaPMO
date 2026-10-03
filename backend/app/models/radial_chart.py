@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -91,3 +91,8 @@ class RadialChart(Base, TimestampMixin):
     # single-field-covers-both-labels convention this row's own text_color
     # already established.
     font_size: Mapped[float] = mapped_column(Float, nullable=False, default=14.0)
+    # Which viewport this HUD sits in (2026-10-03, per Maro: "allow me add
+    # radial charts/timeline strips per baseline views") — None = the main
+    # 4D viewport, 0..2 = that comparison-view slot (frontend
+    # ComparisonViewportPane's own pane index).
+    viewport_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)

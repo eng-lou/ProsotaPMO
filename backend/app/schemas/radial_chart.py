@@ -24,6 +24,7 @@ class RadialChartBase(BaseModel):
     scope_mode: str = Field(default="all", max_length=10)
     wbs_node_activity_id: uuid.UUID | None = None
     font_size: float = Field(default=14.0, gt=0)
+    viewport_slot: int | None = Field(default=None, ge=0, le=2)
 
 
 class RadialChartCreate(RadialChartBase):
@@ -48,6 +49,7 @@ class RadialChartUpdate(BaseModel):
     scope_mode: str | None = Field(default=None, max_length=10)
     wbs_node_activity_id: uuid.UUID | None = None
     font_size: float | None = Field(default=None, gt=0)
+    viewport_slot: int | None = Field(default=None, ge=0, le=2)
 
 
 class RadialChartResponse(RadialChartBase):

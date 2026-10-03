@@ -1,16 +1,20 @@
 import { useState } from 'react'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { RadialChart, RadialChartCenterMode } from './radialCharts'
+import { HudViewportSelect } from './HudViewportSelect'
 import { ScopeFilterFields } from './ScopeFilterFields'
 import type { ScopeFilter } from './scheduleScope'
 
 type RadialChartStylePatch = Partial<Pick<RadialChart,
-  'radius_px' | 'thickness_px' | 'border_color' | 'track_color' | 'progress_color' | 'fill_color' | 'text_color' | 'font_size' | 'center_mode'
+  'radius_px' | 'thickness_px' | 'border_color' | 'track_color' | 'progress_color' | 'fill_color' | 'text_color' | 'font_size' | 'center_mode' | 'viewport_slot'
 >>
 
 interface Props {
   charts: RadialChart[]
   error: string | null
+  // How many comparison views are open right now — labels the "Show in"
+  // picker (HudViewportSelect.tsx).
+  openViewCount: number
   udfDefinitions: UserDefinedFieldDefinition[]
   activities: Activity[]
   getUdfValue: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined
@@ -35,9 +39,10 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 }
 
 function Item({
-  chart, activities, udfDefinitions, getUdfValue, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateScope, onUploadIcon,
+  chart, openViewCount, activities, udfDefinitions, getUdfValue, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateScope, onUploadIcon,
 }: {
   chart: RadialChart
+  openViewCount: number
   activities: Activity[]
   udfDefinitions: UserDefinedFieldDefinition[]
   getUdfValue: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined
@@ -83,6 +88,7 @@ function Item({
         <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
       <p className="text-[11px] text-gray-400 dark:text-prosota-muted">Drag the ring itself in the 3D viewport to reposition it.</p>
+      <HudViewportSelect value={chart.viewport_slot} openViewCount={openViewCount} onChange={slot => onUpdateStyle({ viewport_slot: slot })} />
       <div className="bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
         <ScopeFilterFields
           scope={chart}
@@ -165,7 +171,7 @@ function Item({
 // repositioned by dragging the live ring itself in the viewport (see
 // RadialChartHud.tsx), not by anything in this panel.
 export function RadialChartsPanel({
-  charts, error, udfDefinitions, activities, getUdfValue,
+  charts, error, openViewCount, udfDefinitions, activities, getUdfValue,
   onCreate, onRename, onToggleVisible, onDelete, onUpdateStyle, onUpdateScope, onUploadIcon,
 }: Props) {
   return (
@@ -187,6 +193,7 @@ export function RadialChartsPanel({
             <Item
               key={chart.id}
               chart={chart}
+              openViewCount={openViewCount}
               activities={activities}
               udfDefinitions={udfDefinitions}
               getUdfValue={getUdfValue}

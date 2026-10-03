@@ -32,6 +32,9 @@ export interface RadialChart extends ScopeFilter {
   font_size: number
   center_mode: RadialChartCenterMode
   icon_storage_filename: string | null
+  // Which viewport the ring sits in — null = the main 4D viewport, 0..2 =
+  // that comparison view (see HudViewportSelect.tsx).
+  viewport_slot: number | null
   created_at: string
   updated_at: string
 }
@@ -83,6 +86,7 @@ export async function updateRadialChart(id: string, data: Partial<{
   udf_field_definition_id: string | null
   udf_value: string | null
   wbs_node_activity_id: string | null
+  viewport_slot: number | null
 }>): Promise<RadialChart> {
   const res = await api.patch<RadialChart>(`/api/v1/radial-charts/${id}`, data)
   return res.data

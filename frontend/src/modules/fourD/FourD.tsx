@@ -89,7 +89,7 @@ import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialCha
 import { RadialChartsPanel } from './RadialChartsPanel'
 import { resolveScopeActivityIds, type ScopeFilter } from './scheduleScope'
 import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib/userDefinedFields'
-import { getTimelineStrip, saveTimelineStrip, type TimelineStrip } from './timelineStrips'
+import { createTimelineStrip, deleteTimelineStrip, listTimelineStrips, updateTimelineStrip, type TimelineStrip, type TimelineStripPatch } from './timelineStrips'
 import { TimelineStripPanel } from './TimelineStripPanel'
 import { getSiteContext, saveSiteContext, getTilesApiKey, saveTilesApiKey, type SiteContext } from './siteContext'
 import { SiteContextPanel } from './SiteContextPanel'
@@ -1301,45 +1301,56 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return map
   }, [radialCharts, activities, activityUdfValues.getValue])
 
-  // Timeline Strip (2026-08-03, per Maro's own Synchro-style reference
-  // screenshot) — a genuine singleton, unlike Radial Charts above: one GET/
-  // PUT pair, no create/delete/list (see timeline_strip.py's own
-  // docstring). null until the initial GET resolves; getTimelineStrip
-  // always returns a full object with real defaults even when nothing's
-  // been saved yet, so there's no separate "not configured" state to
-  // handle beyond the brief pre-fetch null.
-  const [timelineStrip, setTimelineStrip] = useState<TimelineStrip | null>(null)
+  // Timeline Strips (2026-08-03, per Maro's own Synchro-style reference
+  // screenshot) — a list since 2026-10-03 (per Maro: strips "per baseline
+  // views"), same create/PATCH/delete shape as Radial Charts above; each
+  // strip's viewport_slot puts it in the main view or a comparison view.
+  const [timelineStrips, setTimelineStrips] = useState<TimelineStrip[]>([])
   const [timelineStripError, setTimelineStripError] = useState<string | null>(null)
   useEffect(() => {
     if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
-    getTimelineStrip(selectedProject.id).then(s => { if (!cancelled) setTimelineStrip(s) })
+    listTimelineStrips(selectedProject.id).then(s => { if (!cancelled) setTimelineStrips(s) })
     return () => { cancelled = true }
   }, [selectedProject, hasEverBeenActive])
 
-  // PUT upserts the whole row (no partial-update endpoint — see
-  // timelineStrips.ts's own header), so every caller here merges its patch
-  // onto the current in-memory strip before saving, rather than sending a
-  // sparse body the way Radial Chart/Zone's own PATCH handlers do.
-  const handleUpdateTimelineStrip = async (patch: Partial<Omit<TimelineStrip, 'id' | 'project_id' | 'created_at' | 'updated_at'>>) => {
-    if (!timelineStrip || !selectedProject) return
-    const { id: _id, created_at: _created_at, updated_at: _updated_at, ...current } = timelineStrip
+  const handleCreateTimelineStrip = async () => {
+    if (!selectedProject) return
     try {
       setTimelineStripError(null)
-      const updated = await saveTimelineStrip({ ...current, project_id: selectedProject.id, ...patch })
-      setTimelineStrip(updated)
+      const strip = await createTimelineStrip({ project_id: selectedProject.id })
+      setTimelineStrips(prev => [...prev, strip])
+    } catch (err) {
+      setTimelineStripError(pathErrorMessage(err, 'Failed to create timeline strip'))
+    }
+  }
+  const handleUpdateTimelineStrip = async (id: string, patch: TimelineStripPatch) => {
+    try {
+      setTimelineStripError(null)
+      const updated = await updateTimelineStrip(id, patch)
+      setTimelineStrips(prev => prev.map(s => (s.id === id ? updated : s)))
     } catch (err) {
       setTimelineStripError(pathErrorMessage(err, 'Failed to update timeline strip'))
     }
   }
-  const handleUpdateTimelineStripScope = (scope: ScopeFilter) => handleUpdateTimelineStrip(scope)
-  const handleCommitTimelineStripPosition = (positionXPct: number, positionYPct: number) => {
-    handleUpdateTimelineStrip({ position_x_pct: positionXPct, position_y_pct: positionYPct })
+  const handleDeleteTimelineStrip = async (id: string) => {
+    try {
+      setTimelineStripError(null)
+      await deleteTimelineStrip(id)
+      setTimelineStrips(prev => prev.filter(s => s.id !== id))
+    } catch (err) {
+      setTimelineStripError(pathErrorMessage(err, 'Failed to delete timeline strip'))
+    }
   }
-  const timelineStripMatchingIds = useMemo(
-    () => (timelineStrip ? resolveScopeActivityIds(activities, timelineStrip, activityUdfValues.getValue) : new Set<string>()),
-    [timelineStrip, activities, activityUdfValues.getValue],
-  )
+  const handleUpdateTimelineStripScope = (id: string, scope: ScopeFilter) => handleUpdateTimelineStrip(id, scope)
+  const handleCommitTimelineStripPosition = (id: string, positionXPct: number, positionYPct: number) => {
+    handleUpdateTimelineStrip(id, { position_x_pct: positionXPct, position_y_pct: positionYPct })
+  }
+  const timelineStripMatchingIds = useMemo(() => {
+    const map = new Map<string, Set<string>>()
+    for (const strip of timelineStrips) map.set(strip.id, resolveScopeActivityIds(activities, strip, activityUdfValues.getValue))
+    return map
+  }, [timelineStrips, activities, activityUdfValues.getValue])
 
   // Site Context (2026-08-19, per Maro) — Google Photorealistic 3D Tiles
   // embedded directly in the main viewport (SiteTilesLayer.tsx); a
@@ -6809,6 +6820,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         collections={collections}
         udfDefinitions={activityUdfDefinitions.definitions}
         getUdfValue={activityUdfValues.getValue}
+        radialCharts={radialCharts.filter(c => c.viewport_slot === index)}
+        radialChartMatchingIds={radialChartMatchingIds}
+        onCommitRadialChartPosition={handleCommitRadialChartPosition}
+        timelineStrips={timelineStrips.filter(s => s.viewport_slot === index)}
+        timelineStripMatchingIds={timelineStripMatchingIds}
+        onCommitTimelineStripPosition={handleCommitTimelineStripPosition}
       />
     )
   }
@@ -7017,6 +7034,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <RadialChartsPanel
           charts={radialCharts}
           error={radialChartError}
+          openViewCount={paneConfigs.length}
           udfDefinitions={activityUdfDefinitions.definitions}
           activities={activities}
           getUdfValue={activityUdfValues.getValue}
@@ -7031,17 +7049,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       ),
     })
   }
-  if (timelineStripPanelOpen && timelineStrip) {
+  if (timelineStripPanelOpen) {
     dockablePanels.push({
-      id: 'timeline-strip', label: 'Timeline Strip', dock: timelineStripPanelDock,
+      id: 'timeline-strip', label: 'Timeline Strips', dock: timelineStripPanelDock,
       onToggleDock: toggleTimelineStripPanelDock, onClose: toggleTimelineStripPanel,
       content: (
         <TimelineStripPanel
-          strip={timelineStrip}
+          strips={timelineStrips}
           error={timelineStripError}
+          openViewCount={paneConfigs.length}
           udfDefinitions={activityUdfDefinitions.definitions}
           activities={activities}
           getUdfValue={activityUdfValues.getValue}
+          onCreate={handleCreateTimelineStrip}
+          onDelete={handleDeleteTimelineStrip}
           onUpdate={handleUpdateTimelineStrip}
           onUpdateScope={handleUpdateTimelineStripScope}
         />
@@ -7291,8 +7312,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       radialCharts={radialCharts}
       radialChartMatchingIds={radialChartMatchingIds}
       onCommitRadialChartPosition={handleCommitRadialChartPosition}
-      timelineStrip={timelineStrip}
+      timelineStrips={timelineStrips}
       timelineStripMatchingIds={timelineStripMatchingIds}
+      comparisonPaneBaseline={paneConfigs.map(c => c.contentMode === 'baseline')}
       onCommitTimelineStripPosition={handleCommitTimelineStripPosition}
       annotations={resolvedAnnotations}
       addingAnnotationKind={addingAnnotationKind}
@@ -7609,13 +7631,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         </button>
         <button
           onClick={toggleTimelineStripPanel}
-          disabled={!timelineStrip}
-          title="A draggable year/month timeline HUD strip with a live playhead"
+          title="Draggable year/month timeline HUD strips with a live playhead, in the main view or any comparison view"
           className={`text-xs px-2.5 py-1 rounded-md border font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
             timelineStripPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
-          Timeline Strip
+          Timeline Strips
         </button>
         <button
           onClick={toggleSiteContextPanel}

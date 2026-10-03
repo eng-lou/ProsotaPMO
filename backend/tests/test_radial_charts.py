@@ -181,3 +181,20 @@ async def test_delete_radial_chart(client: AsyncClient, project: Project):
 async def test_delete_unknown_chart_404s(client: AsyncClient, project: Project):
     resp = await client.delete(f"/api/v1/radial-charts/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+async def test_viewport_slot_defaults_to_main_and_round_trips(client: AsyncClient, project: Project):
+    created = await client.post("/api/v1/radial-charts/", json={"project_id": str(project.id)})
+    assert created.status_code == 201, created.text
+    chart = created.json()
+    assert chart["viewport_slot"] is None
+
+    moved = await client.patch(f"/api/v1/radial-charts/{chart['id']}", json={"viewport_slot": 2})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["viewport_slot"] == 2
+
+    back = await client.patch(f"/api/v1/radial-charts/{chart['id']}", json={"viewport_slot": None})
+    assert back.json()["viewport_slot"] is None
+
+    bad = await client.patch(f"/api/v1/radial-charts/{chart['id']}", json={"viewport_slot": 3})
+    assert bad.status_code == 422

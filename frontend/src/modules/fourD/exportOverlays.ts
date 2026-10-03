@@ -4,6 +4,7 @@ import type { AnimationProfile } from './animationProfiles'
 import type { ExportLabel, ExportLabelRegistry } from './exportLabels'
 import type { RadialChart } from './radialCharts'
 import type { TimelineStrip } from './timelineStrips'
+import type { ExportTimelineStrip } from './exportHuds'
 import { MONTH_LETTERS, type MonthCell, type YearGroup } from './TimelineStripHud'
 
 // Export Content overlays for Capture/Export Video (2026-07-25, per Maro's
@@ -1048,16 +1049,14 @@ export interface ComposeExportFrameOptions {
   radialCharts: RadialChart[]
   radialChartProgress: Map<string, number>
   radialChartIcons: Map<string, HTMLImageElement>
-  // Timeline Strip (2026-08-03) — cells/yearGroups are computed once by the
-  // caller per capture (the matched-activity set doesn't change mid-
-  // recording); timelineStripPlayheadIndex is recomputed every frame for
-  // video (it depends on `now`, same split Radial Chart's own progress
-  // recompute already uses).
+  // Timeline Strips (2026-08-03; a list since 2026-10-03) — cells/
+  // yearGroups are computed once by the caller per capture (the matched-
+  // activity set doesn't change mid-recording); each playheadIndex is
+  // recomputed every frame for video (it depends on `now`, same split
+  // Radial Chart's own progress recompute already uses). Already filtered
+  // to visible strips whose view is part of this export (exportHuds.ts).
   includeTimelineStrip: boolean
-  timelineStrip: TimelineStrip | null
-  timelineStripCells: MonthCell[]
-  timelineStripYearGroups: YearGroup[]
-  timelineStripPlayheadIndex: number
+  timelineStrips: ExportTimelineStrip[]
 }
 
 // Cover-fit (2026-07-25, for the explicit-output-resolution rework above) —
@@ -1254,21 +1253,30 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   if (opts.includeDateOverlay) {
     drawDateOverlay(ctx, mv.x + padding, mv.y + padding, opts.now, opts.scheduleStart, opts.scale)
   }
-  // Positions stay relative to the main 3D view's own rect, not the full
+  // Positions stay relative to the widget's own view rect, not the full
   // canvas (2026-07-31) — same behaviour whether or not Gantt/Table bands
-  // are also included, matching what's actually on screen live.
+  // are also included, matching what's actually on screen live. Since
+  // 2026-10-03 that's the main view or, per viewport_slot, a comparison
+  // view's own rect.
+  const viewRect = (slot: number | null): Rect | undefined => (slot === null ? mv : layout.comparisonViewRects[slot])
   if (opts.includeRadialCharts) {
     for (const chart of opts.radialCharts) {
-      const xPx = mv.x + (chart.position_x_pct / 100) * mv.width
-      const yPx = mv.y + (chart.position_y_pct / 100) * mv.height
+      const rect = viewRect(chart.viewport_slot)
+      if (!rect) continue
+      const xPx = rect.x + (chart.position_x_pct / 100) * rect.width
+      const yPx = rect.y + (chart.position_y_pct / 100) * rect.height
       const progress = opts.radialChartProgress.get(chart.id) ?? 0
       const icon = opts.radialChartIcons.get(chart.id) ?? null
       drawRadialChart(ctx, xPx, yPx, chart, progress, icon, opts.scale)
     }
   }
-  if (opts.includeTimelineStrip && opts.timelineStrip && opts.timelineStrip.visible) {
-    const xPx = mv.x + (opts.timelineStrip.position_x_pct / 100) * mv.width
-    const yPx = mv.y + (opts.timelineStrip.position_y_pct / 100) * mv.height
-    drawTimelineStrip(ctx, xPx, yPx, opts.timelineStrip, opts.timelineStripCells, opts.timelineStripYearGroups, opts.timelineStripPlayheadIndex, opts.scale)
+  if (opts.includeTimelineStrip) {
+    for (const { strip, cells, yearGroups, playheadIndex } of opts.timelineStrips) {
+      const rect = viewRect(strip.viewport_slot)
+      if (!rect) continue
+      const xPx = rect.x + (strip.position_x_pct / 100) * rect.width
+      const yPx = rect.y + (strip.position_y_pct / 100) * rect.height
+      drawTimelineStrip(ctx, xPx, yPx, strip, cells, yearGroups, playheadIndex, opts.scale)
+    }
   }
 }

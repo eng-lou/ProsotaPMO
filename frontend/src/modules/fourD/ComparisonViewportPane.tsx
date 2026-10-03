@@ -6,7 +6,11 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { Collection } from './collections'
-import { applyPaneIsolationVisibility, type PaneConfig, type PaneContentMode } from './comparisonPane'
+import { activitiesForPaneDates, applyPaneIsolationVisibility, type PaneConfig, type PaneContentMode } from './comparisonPane'
+import { RadialChartHud } from './RadialChartHud'
+import type { RadialChart } from './radialCharts'
+import { TimelineStripHud } from './TimelineStripHud'
+import type { TimelineStrip } from './timelineStrips'
 import { buildEdgesBatch, disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
 import type { ElementKeyframe } from './elementKeyframes'
 import type { IfcModelHandle } from './ifcModel'
@@ -99,6 +103,16 @@ interface Props {
   collections: Collection[]
   udfDefinitions: UserDefinedFieldDefinition[]
   getUdfValue: (fieldDefinitionId: string, recordId: string) => UserDefinedFieldValue | undefined
+  // HUD widgets placed in THIS view (2026-10-03, per Maro: "allow me add
+  // radial charts/timeline strips per baseline views") — already filtered
+  // to this pane's slot by FourD.tsx; same components and drag-to-place as
+  // the main viewport's, positioned relative to this pane's own rect.
+  radialCharts: RadialChart[]
+  radialChartMatchingIds: Map<string, Set<string>>
+  onCommitRadialChartPosition: (chartId: string, positionXPct: number, positionYPct: number) => void
+  timelineStrips: TimelineStrip[]
+  timelineStripMatchingIds: Map<string, Set<string>>
+  onCommitTimelineStripPosition: (stripId: string, positionXPct: number, positionYPct: number) => void
 }
 
 // Mirrors Viewport3D.tsx's own private CameraCapture — this pane's camera
@@ -181,8 +195,11 @@ export function ComparisonViewportPane({
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
+  radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
 }: Props) {
   const zUp = upAxis === 'z'
+  const containerRef = useRef<HTMLDivElement>(null)
+  const hudActivities = useMemo(() => activitiesForPaneDates(activities, dateField === 'baseline'), [activities, dateField])
   const cameraRef = useRef<THREE.Camera | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   // Populated by the directionalLight's own `ref` below — ShadowFrustumSync
@@ -440,7 +457,7 @@ export function ComparisonViewportPane({
   const collectionOptions = useMemo(() => [...collections].sort((a, b) => a.name.localeCompare(b.name)), [collections])
 
   return (
-    <div className="relative flex-1 min-h-0">
+    <div ref={containerRef} className="relative flex-1 min-h-0">
       <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 max-w-[calc(100%-1rem)]">
         <div className="flex items-center gap-1 text-xs font-medium bg-white/90 border border-gray-300 dark:border-prosota-line rounded px-1.5 py-1 text-gray-600 dark:text-prosota-muted">
           <select
@@ -641,6 +658,28 @@ export function ComparisonViewportPane({
           </Suspense>
         )}
       </Canvas>
+      {radialCharts.map(chart => (
+        <RadialChartHud
+          key={chart.id}
+          chart={chart}
+          activities={hudActivities}
+          matchingIds={radialChartMatchingIds.get(chart.id) ?? new Set()}
+          timelineDateRef={timelineDateRef}
+          containerRef={containerRef}
+          onCommitPosition={onCommitRadialChartPosition}
+        />
+      ))}
+      {timelineStrips.map(strip => (
+        <TimelineStripHud
+          key={strip.id}
+          strip={strip}
+          activities={hudActivities}
+          matchingIds={timelineStripMatchingIds.get(strip.id) ?? new Set()}
+          timelineDateRef={timelineDateRef}
+          containerRef={containerRef}
+          onCommitPosition={onCommitTimelineStripPosition}
+        />
+      ))}
     </div>
   )
 }

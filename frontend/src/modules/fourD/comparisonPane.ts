@@ -108,6 +108,15 @@ export function useResolvedPaneIsolation(
   return resolved
 }
 
+// The Activities a pane's HUD widgets (Radial Charts / Timeline Strips,
+// 2026-10-03) read progress and date ranges from — a Baseline view plays
+// the planned bl_start/bl_finish dates, so its rings and strips do too;
+// every other view uses the live dates, same as the main viewport.
+export function activitiesForPaneDates(activities: Activity[], baseline: boolean): Activity[] {
+  if (!baseline) return activities
+  return activities.map(a => ({ ...a, start: a.bl_start ?? null, finish: a.bl_finish ?? null }))
+}
+
 // Applied AFTER cloning (2026-08-03) — cloneSceneHierarchy (sceneClone.ts)
 // has no filter param, it clones everything unconditionally, and it
 // expands any still-batched IFC instance into its own individual plain

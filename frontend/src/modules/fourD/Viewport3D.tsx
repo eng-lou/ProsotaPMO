@@ -25,7 +25,7 @@ import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileC
 import type { IfcModelHandle } from './ifcModel'
 import { getSplitExpressId } from './elementSplitTargets'
 import type { ModelElementLink } from './modelElementLinks'
-import { computeAppliedAnimationStateAt, computeScheduleRange, interpolateKeyframeTrack, pickActiveLink, type AppliedAnimationState, type ResolvedTimelineLink } from './timelinePlayback'
+import { computeAppliedAnimationStateAt, interpolateKeyframeTrack, pickActiveLink, type AppliedAnimationState, type ResolvedTimelineLink } from './timelinePlayback'
 import type { ElementKeyframe, KeyframeField } from './elementKeyframes'
 import type { ViewerSettings } from './viewerSettings'
 import type { GizmoMode, GizmoSpace } from './TransformPanel'
@@ -80,8 +80,8 @@ import { ZoneGizmos } from './ZoneGizmo'
 import type { Zone, ZonePoint } from './zones'
 import { RadialChartHud } from './RadialChartHud'
 import { loadRadialChartIcons, type RadialChart } from './radialCharts'
-import { computeRadialChartProgress } from './radialChartProgress'
-import { TimelineStripHud, buildMonthCells, groupByYear, type MonthCell } from './TimelineStripHud'
+import { prepareExportHuds } from './exportHuds'
+import { TimelineStripHud } from './TimelineStripHud'
 import type { TimelineStrip } from './timelineStrips'
 import type { PathFollower } from './pathFollowers'
 import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
@@ -879,14 +879,17 @@ interface Props {
   radialCharts: RadialChart[]
   radialChartMatchingIds: Map<string, Set<string>>
   onCommitRadialChartPosition: (chartId: string, positionXPct: number, positionYPct: number) => void
-  // Timeline Strip (2026-08-03, per Maro's own Synchro-style reference
-  // screenshot) — same screen-space HUD spirit as Radial Chart just above,
-  // but a genuine singleton (null until the initial GET resolves — see
-  // timeline_strip.py's own docstring for why this is a "one row per
-  // project" resource, not a creatable list).
-  timelineStrip: TimelineStrip | null
-  timelineStripMatchingIds: Set<string>
-  onCommitTimelineStripPosition: (positionXPct: number, positionYPct: number) => void
+  // Timeline Strips (2026-08-03, per Maro's own Synchro-style reference
+  // screenshot) — same screen-space HUD spirit as Radial Chart just above;
+  // a list since 2026-10-03. Both lists hold EVERY widget: this viewport
+  // draws only the main-view ones (viewport_slot null) live, while Capture/
+  // Export Video draws each into its own view's rect (exportHuds.ts).
+  timelineStrips: TimelineStrip[]
+  timelineStripMatchingIds: Map<string, Set<string>>
+  onCommitTimelineStripPosition: (stripId: string, positionXPct: number, positionYPct: number) => void
+  // Per open comparison view: does it play the baseline (planned) dates —
+  // its HUD widgets' progress follows the same dates in exports.
+  comparisonPaneBaseline: boolean[]
   // Annotations — Placemark/Comment (2026-07-12, per Maro's Navisworks
   // reference screenshot). Reuses timelineDateRef/timelineActivities/
   // timelineLinks/timelineProfiles/timelineElementKeyframes above rather
@@ -5049,7 +5052,7 @@ export function Viewport3D({
   paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
   zones, zoneAnimWindows, addingPointsForZoneId, onZoneDragMove, onZoneDragEnd, onAddZonePoint,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition,
-  timelineStrip, timelineStripMatchingIds, onCommitTimelineStripPosition,
+  timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition, comparisonPaneBaseline,
   annotations, addingAnnotationKind, onPlaceAnnotation, selectedAnnotationId, onSelectAnnotation, onAnnotationDragMove, onAnnotationDragEnd,
   onAnnotationLeaderDragStart, onAnnotationLeaderDragMove, onAnnotationLeaderDragEnd, annotationAnimWindows,
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
@@ -5800,21 +5803,17 @@ export function Viewport3D({
     // index aligned with its own rect rather than compacting around gaps.
     const comparisonPaneCount = activeComparisonCanvases.length
     const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, includeTimelineStrip, resolutionWidth, resolutionHeight } = renderCaptureSettings
-    // Radial Progress Charts (2026-07-31) — icons need an actual network
-    // fetch (loadRadialChartIcons), so this is resolved up front, before the
-    // triple-rAF/doCapture below, rather than inside that synchronous path.
-    const visibleRadialCharts = includeRadialCharts ? radialCharts.filter(c => c.visible) : []
+    // Radial Charts / Timeline Strips (2026-07-31 / 2026-08-03; per view
+    // since 2026-10-03) — which widgets this export draws, and in which
+    // view, is settled once up front (exportHuds.ts). Icons need an actual
+    // network fetch (loadRadialChartIcons), so they're resolved here too,
+    // before the triple-rAF/doCapture below.
+    const exportHuds = prepareExportHuds({
+      radialCharts, radialChartMatchingIds, timelineStrips, timelineStripMatchingIds, activities: timelineActivities,
+      includeRadialCharts, includeTimelineStrip, comparisonViewCount: comparisonPaneCount, comparisonViewIsBaseline: comparisonPaneBaseline,
+    })
+    const visibleRadialCharts = exportHuds.radialCharts
     const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
-    // Timeline Strip (2026-08-03) — cells/yearGroups computed once here
-    // (the matched-activity set doesn't change mid-capture); playheadIndex
-    // is recomputed per frame below/in the video loop since it depends on
-    // `now`, same split as radialChartProgress above.
-    const timelineStripDomain = timelineStrip ? computeScheduleRange(timelineActivities.filter(a => timelineStripMatchingIds.has(a.id))) : null
-    const timelineStripCells: MonthCell[] = timelineStripDomain ? buildMonthCells(timelineStripDomain.start, timelineStripDomain.end) : []
-    const timelineStripYearGroups = groupByYear(timelineStripCells)
-    const playheadIndexFor = (date: Date | null) => (date && timelineStripCells.length > 0
-      ? timelineStripCells.findIndex(c => c.year === date.getFullYear() && c.month === date.getMonth())
-      : -1)
     const doCapture = async () => {
       // Computed fresh here, not from any outer const (2026-07-25 fix, per
       // Maro: "at 4x resolution it needs scale adjustments" — the same
@@ -5900,9 +5899,7 @@ export function Viewport3D({
       composite.height = layout.totalHeight
       const ctx = composite.getContext('2d')
       if (ctx) {
-        const radialChartProgress = new Map(visibleRadialCharts.map(c => [
-          c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), timelineDateRef.current ?? new Date()),
-        ]))
+        const radialChartProgress = exportHuds.radialChartProgressAt(timelineDateRef.current ?? new Date())
         composeExportFrame(ctx, layout, {
           mainCanvas: mainSource, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
@@ -5912,8 +5909,7 @@ export function Viewport3D({
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
           camera: cameraRef.current, exportLabels: exportLabelsRef.current,
           includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
-          includeTimelineStrip, timelineStrip, timelineStripCells, timelineStripYearGroups,
-          timelineStripPlayheadIndex: playheadIndexFor(timelineDateRef.current),
+          includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(timelineDateRef.current),
         })
         // AI Concept Render label (2026-09-02, per Maro's own chosen
         // option: "clearly labeled" was the explicit condition for
@@ -6104,14 +6100,12 @@ export function Viewport3D({
       : []
     const comparisonPaneCount = activeComparisonCanvases.length
     const { includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay, includeCostProfile, includeRadialCharts, includeTimelineStrip, resolutionWidth, resolutionHeight } = renderCaptureSettings
-    const visibleRadialCharts = includeRadialCharts ? radialCharts.filter(c => c.visible) : []
+    const exportHuds = prepareExportHuds({
+      radialCharts, radialChartMatchingIds, timelineStrips, timelineStripMatchingIds, activities: timelineActivities,
+      includeRadialCharts, includeTimelineStrip, comparisonViewCount: comparisonPaneCount, comparisonViewIsBaseline: comparisonPaneBaseline,
+    })
+    const visibleRadialCharts = exportHuds.radialCharts
     const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
-    const timelineStripDomain = timelineStrip ? computeScheduleRange(timelineActivities.filter(a => timelineStripMatchingIds.has(a.id))) : null
-    const timelineStripCells: MonthCell[] = timelineStripDomain ? buildMonthCells(timelineStripDomain.start, timelineStripDomain.end) : []
-    const timelineStripYearGroups = groupByYear(timelineStripCells)
-    const timelineStripPlayheadIndexFor = (date: Date) => (timelineStripCells.length > 0
-      ? timelineStripCells.findIndex(c => c.year === date.getFullYear() && c.month === date.getMonth())
-      : -1)
 
     setIsExportingVideo(true)
     setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
@@ -6211,9 +6205,7 @@ export function Viewport3D({
             // Recomputed every frame, unlike radialChartIcons above — a
             // chart's own progress is a function of `now`, which is exactly
             // what's advancing across this recording (2026-07-31).
-            const radialChartProgress = new Map(visibleRadialCharts.map(c => [
-              c.id, computeRadialChartProgress(timelineActivities, radialChartMatchingIds.get(c.id) ?? new Set(), now),
-            ]))
+            const radialChartProgress = exportHuds.radialChartProgressAt(now)
             composeExportFrame(compositeCtx, layout, {
               mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
               activities: timelineActivities, profiles: timelineProfiles,
@@ -6223,8 +6215,7 @@ export function Viewport3D({
               includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
               camera: cameraRef.current, exportLabels: exportLabelsRef.current,
               includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
-              includeTimelineStrip, timelineStrip, timelineStripCells, timelineStripYearGroups,
-              timelineStripPlayheadIndex: timelineStripPlayheadIndexFor(now),
+              includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(now),
             })
           }
           if (t >= 1) { resolve(); return }
@@ -7195,7 +7186,7 @@ export function Viewport3D({
           onKeyframe={handleKeyCameraPose}
         />
       )}
-      {radialCharts.map(chart => (
+      {radialCharts.filter(chart => chart.viewport_slot === null).map(chart => (
         <RadialChartHud
           key={chart.id}
           chart={chart}
@@ -7206,16 +7197,17 @@ export function Viewport3D({
           onCommitPosition={onCommitRadialChartPosition}
         />
       ))}
-      {timelineStrip && (
+      {timelineStrips.filter(strip => strip.viewport_slot === null).map(strip => (
         <TimelineStripHud
-          strip={timelineStrip}
+          key={strip.id}
+          strip={strip}
           activities={timelineActivities}
-          matchingIds={timelineStripMatchingIds}
+          matchingIds={timelineStripMatchingIds.get(strip.id) ?? new Set()}
           timelineDateRef={timelineDateRef}
           containerRef={containerRef}
           onCommitPosition={onCommitTimelineStripPosition}
         />
-      )}
+      ))}
       {/* Selection count info box (2026-07-09, per Maro: "an info box
           somewhere small in the right corner which tells me how many
           objects I'm selecting") — object count is selectedObjectIds

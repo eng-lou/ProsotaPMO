@@ -12,7 +12,7 @@ interface Props {
   // RadialChartHud.tsx's matching prop for the full rationale.
   timelineDateRef: React.MutableRefObject<Date | null>
   containerRef: React.RefObject<HTMLDivElement>
-  onCommitPosition: (positionXPct: number, positionYPct: number) => void
+  onCommitPosition: (id: string, positionXPct: number, positionYPct: number) => void
 }
 
 // Exported (2026-08-03) so exportOverlays.ts's own drawTimelineStrip can
@@ -112,7 +112,7 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
       isDraggingRef.current = false
       const xPct = Math.min(100, Math.max(0, ((upEvent.clientX - rect.left) / rect.width) * 100))
       const yPct = Math.min(100, Math.max(0, ((upEvent.clientY - rect.top) / rect.height) * 100))
-      onCommitPosition(xPct, yPct)
+      onCommitPosition(strip.id, xPct, yPct)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
