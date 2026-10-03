@@ -317,6 +317,7 @@ export function ComparisonViewportPane({
   // DefaultEnvironment's header in Viewport3D.tsx).
   const showWhiteBackground = (captureBackgroundOverride === null && whiteBackground)
     || (!dynamicSky && !environmentUrl)
+    || !(captureBackgroundOverride ?? environmentBackground)
   const solidBackgroundColor = captureBackgroundOverride === null && whiteBackground ? backgroundColor : '#ffffff'
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
   // center-offset sun position + explicit target (2026-08-22, mirrors

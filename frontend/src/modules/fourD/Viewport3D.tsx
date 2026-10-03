@@ -5678,8 +5678,14 @@ export function Viewport3D({
   // No custom HDR loaded (and no Real-Time Sky) means there's no sky image
   // to show at all (DefaultEnvironment only lights the scene), so the
   // backdrop is always white there, captures included.
+  // Nothing else to show either (2026-10-03, per Maro: with Real-Time Sky,
+  // Solid Background and the HDR's "Show as background" all off, the main
+  // view showed a pale gradient and the comparison views black — "when none
+  // is checked" should be the plain white default): an HDR that isn't shown
+  // as the background leaves the backdrop solid too.
   const showWhiteBackground = (captureBackgroundOverride === null && settings.whiteBackground)
     || (!settings.dynamicSky && !environmentUrl)
+    || !(captureBackgroundOverride ?? settings.environmentBackground)
   // Solid Background's chosen colour when that's what's showing; white when
   // the backdrop is only solid because there's no sky to show.
   const solidBackgroundColor = captureBackgroundOverride === null && settings.whiteBackground ? settings.backgroundColor : '#ffffff'

@@ -6610,3 +6610,10 @@ its old name, so existing settings carry over.
 **Materials panel no longer pops up.** Switching to Realistic Materials used
 to open the materials panel every time. It now opens only from "Open panel"
 in 3D View Properties.
+
+**Follow-up: the "nothing ticked" backdrop.** With Real-Time Sky, Solid
+Background and the HDR's "Show as background" all off, nothing was drawn
+behind the model. The main view showed a pale gradient from the page behind
+the canvas, and the comparison views showed black. Now an HDR that isn't
+shown as the background falls back to the solid colour too, which is white
+unless one has been picked, the same as having no HDR loaded at all.
