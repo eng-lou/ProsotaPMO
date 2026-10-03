@@ -6498,3 +6498,21 @@ partitions were built before the steel above them.
 **Fix.** Non-structural partitions now follow the same rule as ceiling
 services. On the real model, the ground-floor partitions start after the
 second-floor deck, and the second-floor partitions after the roof slab.
+
+## 2026-10-03 — Comparison views weren't exclusive; HUDs per view
+
+**Bug.** A comparison view scoped to the "Footing" WBS still showed most of
+the building. Each IFC element is identified by a number that is only
+unique *inside its own file*. With five discipline files loaded, the
+footing numbers also matched unrelated walls, ducts and pipes in the other
+four files. The fix is to match on *file + number*. The main viewport's
+Isolate had the same weakness across files and is guarded too.
+
+**Lesson.** In a federated model, an element ID without its file is
+ambiguous. Any set of element IDs must carry the model it came from.
+
+**Feature.** Radial Charts and Timeline Strips each get a "Show in"
+setting: the main view or comparison View 1–3. Timeline Strips are now a
+list instead of one per project, so each view can have its own strip and
+scope. Exports draw every widget inside its own view. A database migration
+was needed and has been run on production.
