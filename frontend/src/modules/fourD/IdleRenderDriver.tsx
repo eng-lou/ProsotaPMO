@@ -44,6 +44,24 @@ function matricesNearlyEqual(a: THREE.Matrix4, b: THREE.Matrix4) {
 }
 
 let externalActivityAt = 0
+
+// Offline video export (2026-10-03, per Maro: exported MP4s "not picking up
+// the animation"). Export used to record in real time, so at a heavy
+// resolution with comparison views most of the timeline was skipped. It now
+// steps the timeline frame by frame and asks every live 3D view to draw
+// right then (renderAllViewsNow), encoding each composed frame at its exact
+// timestamp. While that runs, the idle loop below stops invalidating, so no
+// view draws the same frame twice in between. Each mounted driver registers
+// its own canvas — the main view and every active comparison view.
+const viewRenderers = new Set<(timestamp: number) => void>()
+let offlineExportActive = false
+export function setOfflineExportActive(active: boolean) {
+  offlineExportActive = active
+}
+export function renderAllViewsNow() {
+  const timestamp = performance.now()
+  for (const render of viewRenderers) render(timestamp)
+}
 export function markRenderActivity() {
   externalActivityAt = performance.now()
 }
@@ -53,6 +71,12 @@ export function IdleRenderDriver({ dateRef, continuous }: {
   continuous: boolean
 }) {
   const invalidate = useThree(s => s.invalidate)
+  const advance = useThree(s => s.advance)
+  useEffect(() => {
+    const render = (timestamp: number) => advance(timestamp, true)
+    viewRenderers.add(render)
+    return () => { viewRenderers.delete(render) }
+  }, [advance])
   const camera = useThree(s => s.camera)
   const lastActivityRef = useRef(performance.now())
   const continuousRef = useRef(continuous)
@@ -98,6 +122,10 @@ export function IdleRenderDriver({ dateRef, continuous }: {
       if (!matricesNearlyEqual(camera.matrixWorld, lastCameraMatrix)) {
         lastCameraMatrix.copy(camera.matrixWorld)
         lastActivityRef.current = now
+      }
+      if (offlineExportActive) {
+        raf = requestAnimationFrame(tick)
+        return
       }
       const lastActivity = Math.max(lastActivityRef.current, externalActivityAt)
       if (continuousRef.current || now - lastActivity < ACTIVE_MS) {

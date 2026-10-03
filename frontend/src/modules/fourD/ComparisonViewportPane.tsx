@@ -318,7 +318,7 @@ export function ComparisonViewportPane({
   const showWhiteBackground = (captureBackgroundOverride === null && whiteBackground)
     || (!dynamicSky && !environmentUrl)
     || !(captureBackgroundOverride ?? environmentBackground)
-  const solidBackgroundColor = captureBackgroundOverride === null && whiteBackground ? backgroundColor : '#ffffff'
+  const solidBackgroundColor = whiteBackground ? backgroundColor : '#ffffff'
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
   // center-offset sun position + explicit target (2026-08-22, mirrors
   // Viewport3D.tsx's own fix — see computeModelBounds's header there for
@@ -647,7 +647,7 @@ export function ComparisonViewportPane({
         <CaptureCamera cameraRef={cameraRef} />
         <PaneClipping />
         <CaptureCanvas canvasRef={canvasRef} />
-        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} disconnected={config.cameraDisconnected} />
+        <CameraSync syncRef={cameraSyncRef} controlsRef={controlsRef} fieldOfView={fieldOfView} disconnected={config.cameraDisconnected} />
         <ambientLight intensity={lightingForRenderMode(renderMode).ambient} />
         {/* Settings-driven sun light (2026-07-25), replacing this pane's old
             fixed directionalLight — mirrors Viewport3D.tsx's own

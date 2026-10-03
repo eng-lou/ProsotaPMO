@@ -6617,3 +6617,37 @@ behind the model. The main view showed a pale gradient from the page behind
 the canvas, and the comparison views showed black. Now an HDR that isn't
 shown as the background falls back to the solid colour too, which is white
 unless one has been picked, the same as having no HDR loaded at all.
+
+## 2026-10-03 — Offline video export, camera sync in orthographic, settings menu
+
+**Export video now renders offline.** Exported MP4s often missed the
+animation. Export used to record in real time: the timeline moved by the
+clock while each frame took as long as it took. At 4096 wide with three
+Realistic comparison views, a frame takes far longer than a video frame
+lasts, so most of the timeline was never drawn, and a window in the
+background stopped drawing altogether. Export now works like Blender's
+render: for each frame it sets the date, asks every 3D view to draw right
+then, composes the frame, and hands it to the browser's built-in video
+encoder (WebCodecs) at its exact timestamp. The small library Mediabunny
+writes the MP4/WebM file. The video's length and smoothness no longer depend
+on how fast the PC renders. The button shows "Rendering 42%". A test page
+confirmed it: 60 frames encoded into an exactly 2.000 s MP4, a moving box
+visibly moved across the decoded frames, and it worked in a background tab.
+That test also showed this browser's H.264 encoder stops below 7680×2160, so
+a very wide side-by-side MP4 is scaled down to the largest size it can
+encode instead of quietly becoming a WebM. Browsers without WebCodecs still
+use the old real-time recorder. Exports now also use the chosen Solid
+Background colour.
+
+**Comparison views follow orthographic zoom.** Two problems. In orthographic,
+zoom changes the camera's zoom setting, not its distance, and only position
+and target were shared, so the comparison views never zoomed. And the sync
+code held on to whichever camera existed when it started, so after switching
+to orthographic it kept publishing the old, unmoving perspective camera. Now
+it always reads the live camera. Orthographic zoom is shared as the matching
+perspective distance and converted back when an orthographic view receives
+it.
+
+**Export settings no longer clipped.** The ⚙ menu now sits at page level
+under the gear, stays inside the window and scrolls if it's taller than the
+space available.

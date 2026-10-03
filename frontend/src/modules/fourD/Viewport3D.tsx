@@ -14,7 +14,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { EffectComposer as EffectComposerImpl } from 'postprocessing'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
-import { IdleRenderDriver, markRenderActivity } from './IdleRenderDriver'
+import { IdleRenderDriver, markRenderActivity, renderAllViewsNow, setOfflineExportActive } from './IdleRenderDriver'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig, type Axis } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
@@ -4764,12 +4764,44 @@ export interface CameraSyncState {
 // forever. Set for the sole duration of the one synchronous update() call
 // that applies an incoming change; handleChange ignores 'change' events
 // that fire while it's set.
+// Poses travel as perspective position + target (2026-10-03, per Maro:
+// orbiting/zooming the main view "isnt as responsive" in the comparison
+// views). An orthographic main view zooms by changing camera.zoom, never
+// its distance, so its zoom was never shared at all; an orthographic pose
+// is published as the perspective position that frames the same visible
+// height (ProjectionController's own conversion), and converted back to a
+// zoom when an orthographic camera receives one. The camera is always read
+// live (OrbitControls' own `object`, R3F's current camera): the projection
+// toggle swaps cameras without re-rendering this component, and the old
+// closure kept publishing the swapped-out, no-longer-moving camera.
+function perspectiveEquivalentPosition(camera: THREE.Camera, target: THREE.Vector3, fieldOfView: number): [number, number, number] {
+  if (!(camera instanceof THREE.OrthographicCamera)) return camera.position.toArray() as [number, number, number]
+  const visibleHeight = (camera.top - camera.bottom) / camera.zoom
+  const distance = visibleHeight / (2 * Math.tan(THREE.MathUtils.degToRad(fieldOfView) / 2))
+  const direction = camera.position.clone().sub(target)
+  if (direction.lengthSq() === 0) direction.set(0, -1, 0)
+  return target.clone().addScaledVector(direction.normalize(), distance).toArray() as [number, number, number]
+}
+
+function applySyncedPose(camera: THREE.Camera, controls: OrbitControlsImpl, shared: CameraSyncState, fieldOfView: number) {
+  camera.position.fromArray(shared.position)
+  controls.target.fromArray(shared.target)
+  if (camera instanceof THREE.OrthographicCamera) {
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1e-3)
+    camera.zoom = (camera.top - camera.bottom) / (2 * distance * Math.tan(THREE.MathUtils.degToRad(fieldOfView) / 2))
+    camera.updateProjectionMatrix()
+  }
+  controls.update()
+}
+
 export function CameraSync({
-  syncRef, cameraRef, controlsRef, disconnected = false,
+  syncRef, controlsRef, fieldOfView, disconnected = false,
 }: {
   syncRef: React.MutableRefObject<CameraSyncState | null>
-  cameraRef: React.MutableRefObject<THREE.Camera | null>
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+  // The view's Field of View setting — the perspective angle an
+  // orthographic pose is converted through (see the header above).
+  fieldOfView: number
   // Per-pane disconnect/reconnect (2026-08-03, per Maro: multi-viewport
   // Compare Baseline — "shared by default, ability to disconnect and
   // change or reconnect") — while true, this instance neither publishes
@@ -4784,18 +4816,20 @@ export function CameraSync({
   // version in the same effect, for exactly that reason).
   disconnected?: boolean
 }) {
+  const get = useThree(s => s.get)
   const lastAppliedVersion = useRef(0)
   const applyingRef = useRef(false)
+  const fieldOfViewRef = useRef(fieldOfView)
+  fieldOfViewRef.current = fieldOfView
 
   useEffect(() => {
     const controls = controlsRef.current
-    const camera = cameraRef.current
-    if (!controls || !camera) return
+    if (!controls) return
     const handleChange = () => {
       if (applyingRef.current || disconnected) return
       const nextVersion = (syncRef.current?.version ?? 0) + 1
       syncRef.current = {
-        position: camera.position.toArray() as [number, number, number],
+        position: perspectiveEquivalentPosition(controls.object, controls.target, fieldOfViewRef.current),
         target: controls.target.toArray() as [number, number, number],
         version: nextVersion,
         moving: syncRef.current?.moving,
@@ -4805,7 +4839,7 @@ export function CameraSync({
     controls.addEventListener('change', handleChange)
     return () => controls.removeEventListener('change', handleChange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlsRef.current, cameraRef.current, disconnected])
+  }, [controlsRef.current, disconnected])
 
   // Reconnect snap — see `disconnected`'s own header above. Deliberately a
   // separate effect from the publish one above (that one only needs to
@@ -4816,12 +4850,9 @@ export function CameraSync({
     if (disconnected) return
     const shared = syncRef.current
     const controls = controlsRef.current
-    const camera = cameraRef.current
-    if (!shared || !controls || !camera) return
+    if (!shared || !controls) return
     applyingRef.current = true
-    camera.position.fromArray(shared.position)
-    controls.target.fromArray(shared.target)
-    controls.update()
+    applySyncedPose(get().camera, controls, shared, fieldOfViewRef.current)
     applyingRef.current = false
     lastAppliedVersion.current = shared.version
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4831,12 +4862,9 @@ export function CameraSync({
     if (disconnected) return
     const shared = syncRef.current
     const controls = controlsRef.current
-    const camera = cameraRef.current
-    if (!shared || !controls || !camera || shared.version <= lastAppliedVersion.current) return
+    if (!shared || !controls || shared.version <= lastAppliedVersion.current) return
     applyingRef.current = true
-    camera.position.fromArray(shared.position)
-    controls.target.fromArray(shared.target)
-    controls.update()
+    applySyncedPose(get().camera, controls, shared, fieldOfViewRef.current)
     applyingRef.current = false
     lastAppliedVersion.current = shared.version
   })
@@ -5455,6 +5483,8 @@ export function Viewport3D({
   const [boxSelectMode, setBoxSelectMode] = useState(false)
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
+  // Share of frames rendered so far during an offline video export (0-1).
+  const [exportProgress, setExportProgress] = useState<number | null>(null)
   const [isEnhancingCapture, setIsEnhancingCapture] = useState(false)
   // WebGL context loss failsafe (2026-08-31, per Maro: "we need failsafes
   // in case of next time" — a real, hours-long debugging session today
@@ -5686,9 +5716,10 @@ export function Viewport3D({
   const showWhiteBackground = (captureBackgroundOverride === null && settings.whiteBackground)
     || (!settings.dynamicSky && !environmentUrl)
     || !(captureBackgroundOverride ?? settings.environmentBackground)
-  // Solid Background's chosen colour when that's what's showing; white when
-  // the backdrop is only solid because there's no sky to show.
-  const solidBackgroundColor = captureBackgroundOverride === null && settings.whiteBackground ? settings.backgroundColor : '#ffffff'
+  // Solid Background's chosen colour whenever it's ticked — exports included
+  // (2026-10-03, per Maro: exported video didn't have "the right
+  // background"); white when it isn't.
+  const solidBackgroundColor = settings.whiteBackground ? settings.backgroundColor : '#ffffff'
   // Path/Zone drag handles (PathGizmo.tsx/ZoneGizmo.tsx) are pure live-
   // editing chrome, not part of the model — forced off for the duration of
   // a capture/still-export the same way captureBackgroundOverride forces
@@ -6279,86 +6310,161 @@ export function Viewport3D({
           exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
         },
       )
+      // Even dimensions: H.264 encodes in 2x2 chroma blocks and rejects odd
+      // sizes; dropping at most one pixel row/column is invisible.
       const composite = document.createElement('canvas')
-      composite.width = layout.totalWidth
-      composite.height = layout.totalHeight
+      composite.width = Math.max(2, Math.floor(layout.totalWidth / 2) * 2)
+      composite.height = Math.max(2, Math.floor(layout.totalHeight / 2) * 2)
       const compositeCtx = composite.getContext('2d')
-      const recordCanvas = composite
-      const stream = (recordCanvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
-      // MP4 export (2026-07-25, per Maro: "can we get an mp4 rendering
-      // option") — Chrome can record straight to H.264/mp4 via
-      // MediaRecorder with zero new dependencies, confirmed live via
-      // MediaRecorder.isTypeSupported; avc1.42E01E is H.264 Baseline
-      // Profile, the most broadly compatible encode (PowerPoint, phones,
-      // most social platforms) rather than whatever profile a bare
-      // "video/mp4" would pick. Falls back to webm if the running
-      // browser's MediaRecorder can't do mp4 at all (Firefox, as of this
-      // writing) rather than throwing — same defensive pattern as picking
-      // vp9 vs vp8 below for webm itself.
+      const composeAt = (now: Date) => {
+        if (!compositeCtx) return
+        // Recomputed every frame, unlike radialChartIcons above — a chart's
+        // own progress is a function of `now`, which is exactly what's
+        // advancing across this recording (2026-07-31).
+        const radialChartProgress = exportHuds.radialChartProgressAt(now)
+        composeExportFrame(compositeCtx, layout, {
+          mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
+          activities: timelineActivities, profiles: timelineProfiles,
+          now, scheduleStart, scheduleEnd,
+          scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
+          mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
+          includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+          camera: cameraRef.current, exportLabels: exportLabelsRef.current,
+          includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
+          includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(now),
+        })
+      }
       const wantsMp4 = renderCaptureSettings.videoFormat === 'mp4'
-      const mp4MimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t))
-      const useMp4 = wantsMp4 && !!mp4MimeType
-      const mimeType = useMp4
-        ? mp4MimeType!
-        : ['video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) ?? 'video/webm'
-      const fileExtension = useMp4 ? 'mp4' : 'webm'
       // Explicit bitrate (2026-08-10 fix, per Maro: exported video "not
       // blender levels, not even eevee... still very low level" — visible
       // sky-gradient banding and blocky macroblocking in an actual exported
-      // clip, independent of and on top of computeSupersampleMultiplier's
-      // own render-buffer-undersizing bug fixed just above). Left unset,
-      // MediaRecorder falls back to the browser's own default bitrate
-      // heuristic, tuned for "good enough for a web call," not an export
-      // meant to read as high quality. 0.2 bits per output pixel per frame
-      // sits comfortably in high-quality H.264 encoder-preset territory (vs.
-      // typical real-time/streaming defaults closer to 0.05-0.1), floored
-      // so a tiny 720p export isn't starved and ceilinged so a huge custom
-      // resolution doesn't request a bitrate no browser would actually
-      // honor anyway.
-      const videoBitsPerSecond = Math.round(Math.min(
+      // clip). Left unset, encoders fall back to a "good enough for a web
+      // call" default. 0.2 bits per output pixel per frame sits comfortably
+      // in high-quality H.264 preset territory, floored so a tiny 720p
+      // export isn't starved and ceilinged so a huge custom resolution
+      // doesn't request a bitrate no encoder would honour anyway.
+      const bitrateFor = (width: number, height: number) => Math.round(Math.min(
         100_000_000,
-        Math.max(2_000_000, resolutionWidth * resolutionHeight * fps * 0.2),
+        Math.max(2_000_000, width * height * fps * 0.2),
       ))
-      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond })
-      const chunks: Blob[] = []
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
-      const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
+      const videoBitsPerSecond = bitrateFor(composite.width, composite.height)
 
-      recorder.start()
-      const startTime = performance.now()
-      await new Promise<void>(resolve => {
-        const step = () => {
-          const t = Math.min((performance.now() - startTime) / durationMs, 1)
-          const now = new Date(rangeStart.getTime() + totalMs * t)
-          timelineDateRef.current = now
-          if (compositeCtx) {
-            // Recomputed every frame, unlike radialChartIcons above — a
-            // chart's own progress is a function of `now`, which is exactly
-            // what's advancing across this recording (2026-07-31).
-            const radialChartProgress = exportHuds.radialChartProgressAt(now)
-            composeExportFrame(compositeCtx, layout, {
-              mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
-              activities: timelineActivities, profiles: timelineProfiles,
-              now, scheduleStart, scheduleEnd,
-              scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
-              mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
-              includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
-              camera: cameraRef.current, exportLabels: exportLabelsRef.current,
-              includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
-              includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(now),
-            })
-          }
-          if (t >= 1) { resolve(); return }
-          requestAnimationFrame(step)
+      // Offline render (2026-10-03, per Maro: exported MP4s "not picking up
+      // the animation"). Recording in real time meant the timeline moved by
+      // the wall clock while each frame took as long as it took — at 4K
+      // with three Realistic comparison views, well over a video frame — so
+      // most of the timeline was never drawn, and a backgrounded window
+      // paused drawing altogether. Now every frame is drawn on demand
+      // (renderAllViewsNow, IdleRenderDriver.tsx) at its exact point in the
+      // From/To range, composed, and encoded at its exact timestamp with
+      // the browser's own encoder (WebCodecs, via mediabunny for the
+      // MP4/WebM container): the video is the requested length and
+      // smoothness however slowly the frames render. Returns null when this
+      // browser can't encode either format, falling back to the old
+      // real-time recorder below.
+      const renderOffline = async (): Promise<{ blob: Blob; extension: string } | null> => {
+        if (typeof VideoEncoder === 'undefined') return null
+        const { Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, CanvasSource, canEncodeVideo } = await import('mediabunny')
+        // H.264 tops out below some side-by-side export sizes (this
+        // browser's encoder took 4096x2304 but not 7680x2160 in testing),
+        // so an MP4 too big to encode is scaled down to the largest size
+        // that is, rather than silently turning into a WebM.
+        const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
+        const fitWithin = (maxWidth: number, maxHeight: number): [number, number] => {
+          const scale = Math.min(1, maxWidth / composite.width, maxHeight / composite.height)
+          return [even(composite.width * scale), even(composite.height * scale)]
         }
-        requestAnimationFrame(step)
-      })
-      // Let captureStream flush its last sampled frame(s) before stopping.
-      await new Promise(resolve => setTimeout(resolve, 300))
-      recorder.stop()
-      await stopped
+        const fullSize: [number, number] = [composite.width, composite.height]
+        const formats: { codec: 'avc' | 'vp9'; extension: 'mp4' | 'webm'; sizes: [number, number][] }[] = [
+          { codec: 'avc', extension: 'mp4', sizes: [fullSize, fitWithin(4096, 2304), fitWithin(3840, 2160), fitWithin(1920, 1080)] },
+          { codec: 'vp9', extension: 'webm', sizes: [fullSize] },
+        ]
+        if (!wantsMp4) formats.reverse()
+        let chosen: { codec: 'avc' | 'vp9'; extension: 'mp4' | 'webm'; width: number; height: number } | null = null
+        for (const format of formats) {
+          for (const [width, height] of format.sizes) {
+            if (await canEncodeVideo(format.codec, { width, height, bitrate: bitrateFor(width, height) })) {
+              chosen = { codec: format.codec, extension: format.extension, width, height }
+              break
+            }
+          }
+          if (chosen) break
+        }
+        if (!chosen) return null
+        const scaled = chosen.width !== composite.width || chosen.height !== composite.height
+        const encodeCanvas = scaled ? document.createElement('canvas') : composite
+        encodeCanvas.width = chosen.width
+        encodeCanvas.height = chosen.height
+        const encodeCtx = scaled ? encodeCanvas.getContext('2d') : null
+        if (encodeCtx) encodeCtx.imageSmoothingQuality = 'high'
+        const target = new BufferTarget()
+        const output = new Output({
+          format: chosen.extension === 'mp4' ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(),
+          target,
+        })
+        const source = new CanvasSource(encodeCanvas, { codec: chosen.codec, bitrate: bitrateFor(chosen.width, chosen.height), keyFrameInterval: 2 })
+        output.addVideoTrack(source, { frameRate: fps })
+        await output.start()
+        const frameCount = Math.max(2, Math.round((durationMs / 1000) * fps))
+        setOfflineExportActive(true)
+        try {
+          for (let frame = 0; frame < frameCount; frame++) {
+            const now = new Date(rangeStart.getTime() + totalMs * (frame / (frameCount - 1)))
+            timelineDateRef.current = now
+            // The first frame is usually a long jump from wherever the
+            // playhead was, and playback spreads big material changes over a
+            // few frames (its needsUpdate budget) — settle before encoding.
+            const passes = frame === 0 ? 8 : 1
+            for (let pass = 0; pass < passes; pass++) renderAllViewsNow()
+            composeAt(now)
+            encodeCtx?.drawImage(composite, 0, 0, chosen.width, chosen.height)
+            await source.add(frame / fps, 1 / fps)
+            if (frame % 3 === 0) setExportProgress(frame / frameCount)
+          }
+          await output.finalize()
+        } finally {
+          setOfflineExportActive(false)
+        }
+        if (!target.buffer) return null
+        return { blob: new Blob([target.buffer], { type: output.format.mimeType }), extension: chosen.extension }
+      }
 
-      const blob = new Blob(chunks, { type: useMp4 ? 'video/mp4' : 'video/webm' })
+      // Real-time recording — the original path, kept only for browsers
+      // without WebCodecs. Chrome can record straight to H.264/mp4 via
+      // MediaRecorder (2026-07-25, per Maro: "can we get an mp4 rendering
+      // option"); falls back to webm where it can't.
+      const recordRealtime = async (): Promise<{ blob: Blob; extension: string }> => {
+        const stream = (composite as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(fps)
+        const mp4MimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t))
+        const useMp4 = wantsMp4 && !!mp4MimeType
+        const mimeType = useMp4
+          ? mp4MimeType!
+          : ['video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) ?? 'video/webm'
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond })
+        const chunks: Blob[] = []
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
+        const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
+        recorder.start()
+        const startTime = performance.now()
+        await new Promise<void>(resolve => {
+          const step = () => {
+            const t = Math.min((performance.now() - startTime) / durationMs, 1)
+            const now = new Date(rangeStart.getTime() + totalMs * t)
+            timelineDateRef.current = now
+            composeAt(now)
+            if (t >= 1) { resolve(); return }
+            requestAnimationFrame(step)
+          }
+          requestAnimationFrame(step)
+        })
+        // Let captureStream flush its last sampled frame(s) before stopping.
+        await new Promise(resolve => setTimeout(resolve, 300))
+        recorder.stop()
+        await stopped
+        return { blob: new Blob(chunks, { type: useMp4 ? 'video/mp4' : 'video/webm' }), extension: useMp4 ? 'mp4' : 'webm' }
+      }
+
+      const { blob, extension: fileExtension } = (await renderOffline()) ?? (await recordRealtime())
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -6368,6 +6474,7 @@ export function Viewport3D({
       onExportVideo?.(blob, renderCaptureSettings.videoDurationSec)
     } finally {
       setIsExportingVideo(false)
+      setExportProgress(null)
       setCaptureDprMultiplier(null)
       onCaptureQualityChange?.(null)
       setCaptureBackgroundOverride(null)
@@ -6745,7 +6852,7 @@ export function Viewport3D({
           }
           className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {isExportingVideo ? 'Recording…' : 'Export Video'}
+          {isExportingVideo ? (exportProgress !== null ? `Rendering ${Math.round(exportProgress * 100)}%` : 'Rendering…') : 'Export Video'}
         </button>
         <RenderCaptureSettingsPopover
           settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length}
@@ -6853,7 +6960,7 @@ export function Viewport3D({
             continuous={isExportingVideo || importedObjects.some(o => o.object.animations.length > 0)}
           />
         )}
-        <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} />
+        <CameraSync syncRef={cameraSyncRef} controlsRef={controlsRef} fieldOfView={settings.fieldOfView} />
         <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} overridden={activeCameraId !== null} />
         <ActiveCameraPose activeCamera={activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />
         {cameras.filter(c => c.id !== activeCameraId).map(c => <CameraGizmo key={c.id} camera={c} />)}

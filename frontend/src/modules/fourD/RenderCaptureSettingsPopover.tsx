@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { RESOLUTION_PRESETS, type ResolutionPreset, type RenderCaptureSettings } from './renderCaptureSettings'
 import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
 
@@ -71,9 +72,34 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
     onChange({ ...settings, comparisonViewTitles: next })
   }
 
+  // Rendered at page level, anchored under the gear (2026-10-03, per Maro:
+  // the settings were cut off by the main viewport's right edge — the
+  // viewport clips anything overflowing it). Kept inside the window, and
+  // scrolls when taller than the space below the gear.
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const rect = buttonRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const width = 224
+      const top = rect.bottom + 4
+      setPosition({
+        top,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        maxHeight: Math.max(160, window.innerHeight - top - 8),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open])
+
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setOpen(v => !v)}
         title="Render / Capture Settings"
         className={`text-xs px-2 py-1 rounded-md border shadow-sm ${
@@ -82,15 +108,17 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
       >
         ⚙
       </button>
-      {open && (
+      {open && position && createPortal(
         <>
           <button
-            className="fixed inset-0 z-10 cursor-default"
+            className="fixed inset-0 z-[60] cursor-default"
             onClick={() => setOpen(false)}
             tabIndex={-1}
             aria-label="Close render/capture settings"
           />
-          <div className="absolute top-full left-0 mt-1 z-20 w-56 bg-white dark:bg-prosota-panel border border-gray-300 dark:border-prosota-line rounded-md shadow-lg p-2.5 space-y-2.5">
+          <div
+            style={{ top: position.top, left: position.left, maxHeight: position.maxHeight }}
+            className="fixed z-[61] w-56 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-300 dark:border-prosota-line rounded-md shadow-lg p-2.5 space-y-2.5">
             <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Render / Capture</div>
 
             <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted" title="Overrides the live viewport's own HDR Background setting just for a capture/export, then reverts">
@@ -414,7 +442,8 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
               </label>
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   )
