@@ -6553,3 +6553,25 @@ Collection.
 **Less lag while orbiting.** Comparison views now also hide tiny elements
 and use the cheap glass while the main view is being orbited, as the main
 view already did.
+
+## 2026-10-03 — Grow in comparison views; scoped views leaking a slab
+
+**A slab showing in the wrong scoped view.** A First Floor slab with a Grow
+profile appeared in the view scoped to the Second Floor. Grow can't run on
+an element still inside the shared batch, so playback pulls it out into its
+own mesh. In a comparison view that happened after the view's scope had
+already hidden the element. The new mesh didn't keep the "hidden" setting,
+and playback treats "no setting" as "shown". Now an element pulled out of
+the batch keeps whatever hide/isolate/scope setting it had there.
+
+**Grow not playing in comparison views.** Grow works by sliding a cut-off
+(clipping) plane across the element. three.js ignores clipping planes
+unless the renderer has a setting switched on. The main view always had it
+on; the comparison views never did, so Grow elements just showed whole.
+Fall worked because it moves the element instead of cutting it. Comparison
+views now switch the setting on. Some elements share their material with
+the main view, though, and the main view's Section Box planes live on that
+material. So while a comparison view draws, it temporarily swaps those
+planes for harmless ones and puts them back straight after. That way the
+main view keeps its Section Box and the comparison views stay uncut, as
+before.

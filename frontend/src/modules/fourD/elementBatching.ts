@@ -241,6 +241,18 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
     mesh.userData.ifcGeometryId = info.ifcGeometryId
     mesh.userData.ifcColorAlpha = info.colorAlpha
     finalizeIndividualMesh(mesh, expressID, info.matrix, rootObject)
+    // Carries the instance's isolate/hide/scope verdict over to the new mesh
+    // (2026-10-03, per Maro: a Grow-profiled First Floor slab showed in a
+    // comparison view scoped to the Second Floor). Grow isn't batchable, so
+    // TimelinePlayback materializes the element — in a comparison view that
+    // happens on the view's own clone, after applyPaneIsolationVisibility
+    // already hid the instance, and the new mesh had no baseVisible, which
+    // TimelinePlayback reads as "shown".
+    const baseVisible = (batch.mesh.userData.batchBaseVisibleByInstanceId as Map<number, boolean> | undefined)?.get(info.instanceId)
+    if (baseVisible === false) {
+      mesh.userData.baseVisible = false
+      mesh.visible = false
+    }
     batch.expressIdByInstanceId.delete(info.instanceId)
     firstMesh = firstMesh ?? mesh
   }

@@ -133,6 +133,61 @@ function CaptureCamera({ cameraRef }: { cameraRef: React.MutableRefObject<THREE.
   return null
 }
 
+// Clip planes in this view (2026-10-03, per Maro: Grow profiles played in
+// the main view but not the comparison views, while Fall played in all).
+// Grow is a moving clip plane (TimelinePlayback), and three.js ignores
+// every material's clippingPlanes unless the renderer's own
+// localClippingEnabled is on — the main view sets it (Viewport3D.tsx's
+// ClippingSetup), this canvas never did, so every Grow element simply
+// showed whole.
+//
+// Turning it on exposes one thing this view must not inherit: an element
+// the main view had already pulled out of its batch before this view
+// cloned is cloned onto the SAME material (sceneClone.ts), and the main
+// view's Section Box planes sit on that material. For the duration of this
+// view's own render (scene.onBeforeRender/onAfterRender, which wrap the
+// shadow and AO passes too) those planes are swapped for never-clipping
+// stand-ins of the same count, so the shader isn't recompiled, and put
+// back straight after, so the main view keeps its box.
+const IDLE_PLANE_CONSTANT = 1e9
+function PaneClipping() {
+  const { gl, scene } = useThree()
+  useEffect(() => {
+    gl.localClippingEnabled = true
+    const isSectionBoxPlane = (p: THREE.Plane) => (p as THREE.Plane & { __clipOwner?: string }).__clipOwner === 'sectionBox'
+      && p.constant !== IDLE_PLANE_CONSTANT
+    const strippedByOriginal = new WeakMap<THREE.Plane[], THREE.Plane[]>()
+    const swapped: { material: THREE.Material; original: THREE.Plane[] }[] = []
+    const strip = (material: THREE.Material) => {
+      const original = material.clippingPlanes
+      if (!original || !original.some(isSectionBoxPlane)) return
+      let stripped = strippedByOriginal.get(original)
+      if (!stripped) {
+        stripped = original.map(p => (isSectionBoxPlane(p) ? new THREE.Plane(new THREE.Vector3(0, 0, 1), IDLE_PLANE_CONSTANT) : p))
+        strippedByOriginal.set(original, stripped)
+      }
+      material.clippingPlanes = stripped
+      swapped.push({ material, original })
+    }
+    scene.onBeforeRender = () => {
+      scene.traverseVisible(child => {
+        if (!(child instanceof THREE.Mesh)) return
+        if (Array.isArray(child.material)) child.material.forEach(strip)
+        else strip(child.material)
+      })
+    }
+    scene.onAfterRender = () => {
+      for (const { material, original } of swapped) material.clippingPlanes = original
+      swapped.length = 0
+    }
+    return () => {
+      scene.onBeforeRender = () => {}
+      scene.onAfterRender = () => {}
+    }
+  }, [gl, scene])
+  return null
+}
+
 // Same idiom as CaptureCamera just above, for this pane's own real WebGL
 // canvas element (2026-07-24) — see canvasRef's own header.
 // Realistic Materials mode: each cloned batch's glass-only companion
@@ -586,6 +641,7 @@ export function ComparisonViewportPane({
           />
         )}
         <CaptureCamera cameraRef={cameraRef} />
+        <PaneClipping />
         <CaptureCanvas canvasRef={canvasRef} />
         <CameraSync syncRef={cameraSyncRef} cameraRef={cameraRef} controlsRef={controlsRef} disconnected={config.cameraDisconnected} />
         <ambientLight intensity={lightingForRenderMode(renderMode).ambient} />
