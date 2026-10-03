@@ -6651,3 +6651,12 @@ it.
 **Export settings no longer clipped.** The ⚙ menu now sits at page level
 under the gear, stays inside the window and scrolls if it's taller than the
 space available.
+
+**Follow-up: comparison views go orthographic too.** The comparison views
+were always perspective, because only the main view had the code that
+switches projection. They now mount the same switcher and take the main
+view's Projection setting. An orthographic main view gives orthographic
+comparison views at the same zoom (through the zoom sharing added just
+before), including the HDR backdrop fix. They also use the main view's
+"stable" orbit controls, so switching projection doesn't reset where they
+orbit around.

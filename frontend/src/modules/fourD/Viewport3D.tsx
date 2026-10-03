@@ -4582,7 +4582,9 @@ function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify 
   return null
 }
 
-function ProjectionController({ orthographic, controlsRef }: {
+// Exported (2026-10-03) — comparison views mount their own, so they follow
+// the main view's Projection setting (ComparisonViewportPane.tsx).
+export function ProjectionController({ orthographic, controlsRef }: {
   orthographic: boolean
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
 }) {
@@ -4715,7 +4717,7 @@ function ProjectionController({ orthographic, controlsRef }: {
 // the orbit pivot on every projection toggle. Pinning `camera` to the
 // Canvas's original perspective camera keeps one instance for the life of
 // the viewport; ProjectionController repoints `controls.object` instead.
-const StableOrbitControls = forwardRef<OrbitControlsImpl, React.ComponentProps<typeof OrbitControls>>((props, ref) => {
+export const StableOrbitControls = forwardRef<OrbitControlsImpl, React.ComponentProps<typeof OrbitControls>>((props, ref) => {
   const get = useThree(s => s.get)
   const [initialCamera] = useState(() => get().camera)
   return <OrbitControls ref={ref} {...props} camera={initialCamera} />

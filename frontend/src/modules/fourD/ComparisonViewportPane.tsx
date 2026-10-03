@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Environment, Grid, OrbitControls, Sky } from '@react-three/drei'
+import { Environment, Grid, Sky } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Activity, UserDefinedFieldDefinition, UserDefinedFieldValue } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
@@ -30,8 +30,8 @@ import { axisCorrectionRotation, type UpAxis } from './upAxis'
 import { IdleRenderDriver } from './IdleRenderDriver'
 import type { RenderMode } from './viewerSettings'
 import {
-  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment, lightingForRenderMode, RealisticEnvironment,
-  ShadowFrustumSync, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
+  AmbientOcclusionEffect, CameraSync, computeModelBounds, computeSunPosition, DefaultEnvironment, lightingForRenderMode, ProjectionController, RealisticEnvironment,
+  ShadowFrustumSync, StableOrbitControls, TimelinePlayback, type CameraSyncState, type ImportedObject, type TimelineSceneObject,
 } from './Viewport3D'
 
 interface Props {
@@ -58,6 +58,12 @@ interface Props {
   environmentUrl: string | null
   environmentBackground: boolean
   whiteBackground: boolean
+  // The main view's Projection setting (2026-10-03, per Maro: comparison
+  // views stayed perspective while the main view was orthographic) —
+  // followed here with the main view's own ProjectionController, so an
+  // orthographic main view gives orthographic comparison views at the same
+  // zoom (CameraSync shares ortho zoom), HDR backdrop included.
+  orthographic: boolean
   // Solid Background's colour (viewerSettings.ts), same as the main view.
   backgroundColor: string
   shadows: boolean
@@ -295,7 +301,7 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 export function ComparisonViewportPane({
   importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
-  environmentUrl, environmentBackground, whiteBackground, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
+  environmentUrl, environmentBackground, whiteBackground, orthographic, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, hiddenElementKeys, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
@@ -760,7 +766,11 @@ export function ComparisonViewportPane({
             </group>
           )}
         </Suspense>
-        <OrbitControls ref={controlsRef} makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
+        {/* Stable across projection toggles — see StableOrbitControls in
+            Viewport3D.tsx (drei rebuilds plain OrbitControls whenever the
+            default camera changes, resetting the orbit pivot). */}
+        <StableOrbitControls ref={controlsRef} makeDefault up={[0, zUp ? 0 : 1, zUp ? 1 : 0]} />
+        <ProjectionController orthographic={orthographic} controlsRef={controlsRef} />
         {mountAmbientOcclusion && (
           <Suspense fallback={null}>
             {/* boostQuality always false (2026-09-01) — that flag only ever

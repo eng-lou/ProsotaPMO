@@ -6806,6 +6806,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         environmentUrl={customEnvironment?.url ?? null}
         environmentBackground={settings.environmentBackground}
         whiteBackground={settings.whiteBackground}
+        orthographic={settings.orthographic}
         backgroundColor={settings.backgroundColor}
         shadows={settings.shadows}
         sunAzimuth={settings.sunAzimuth}
