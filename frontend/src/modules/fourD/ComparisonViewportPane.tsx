@@ -201,10 +201,16 @@ function PaneClipping() {
 // Realistic Materials mode: each cloned batch's glass-only companion
 // mirrors the clone's own per-instance visibility/colour/clipping every
 // frame, same as the primary viewport's (realisticMaterials.ts).
-function RealisticGlassSync({ clones, enabled }: { clones: Iterable<THREE.Object3D>; enabled: boolean }) {
+// Takes the Map itself, not `.values()` (2026-10-03, per Maro: comparison
+// views showed faint "shadows" of not-yet-built elements until Shadows was
+// toggled). `.values()` is a one-shot iterator: the first frame drained it
+// and every later frame synced nothing, so glass instances kept whatever
+// visibility they had at the last React render while the timeline hid their
+// elements; any re-render (the Shadows toggle) synced exactly once.
+function RealisticGlassSync({ clones, enabled }: { clones: Map<THREE.Object3D, THREE.Object3D>; enabled: boolean }) {
   useFrame(() => {
     if (!enabled) return
-    for (const clone of clones) {
+    for (const clone of clones.values()) {
       const batch = clone.userData.batch as BatchState | undefined
       if (batch) syncRealisticGlassBatch(batch)
     }
@@ -686,7 +692,7 @@ export function ComparisonViewportPane({
           shadow-camera-near={0.5}
         />
         <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
-        <RealisticGlassSync clones={clonesByOriginal.values()} enabled={renderMode === 'realistic'} />
+        <RealisticGlassSync clones={clonesByOriginal} enabled={renderMode === 'realistic'} />
         <PaneMovingDriver
           syncRef={cameraSyncRef}
           clones={clonesByOriginal}

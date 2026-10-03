@@ -6677,3 +6677,35 @@ skipped it). The boost is now also capped at a 4K frame's worth of pixels.
 The fast real-time export is the default again. Frame-by-frame stays as an
 opt-in "Render every frame (slower)" setting. A Cancel button stops either
 kind of export and discards it.
+
+## 2026-10-03 — Export measured properly; the "ghost shadows" were glass
+
+**Measuring instead of guessing.** I reproduced Maro's export in a separate
+tab with his exact settings and timed the drawing directly. All four views
+together take about 90 ms a frame at normal size and about 180 ms at export
+size, before the export's extra quality. That's about 5 frames a second, so a
+real-time 60 fps recording repeats each frame about 12 times (stills, jumps,
+missing animation), and the first frames were empty because nothing had
+drawn yet at the new size. Fixes:
+- Every view now draws on demand right before each recorded frame, in both
+  modes, exactly once, at that frame's date.
+- Every view draws a few times at the first date before recording starts,
+  so no dark opening frames.
+- Each view is boosted only as far as its own slot in the video needs. The
+  comparison views were being boosted by the main view's factor, computed
+  against the full 4096 width.
+- A "Draft quality (faster)" option skips the export's extra AO and shadow
+  quality.
+- The button shows the time left.
+
+**The ghost shadows were glass.** In Realistic mode, glass and transparent
+elements live in a separate "glass" layer that copies the main layer's
+visibility every frame. In the comparison views that copy was handed
+`clonesByOriginal.values()`, which is a one-shot iterator: the first frame
+used it up and every frame after copied nothing. So windows and light
+fittings stayed faintly visible after the timeline hid them, which looked
+like shadows. Toggling Shadows re-rendered the view, created a fresh
+iterator and copied once. Found by testing each layer live: turning off
+shadow casting didn't remove the marks, hiding the glass layer did, and
+1,551 glass instances were out of sync. Lesson: never pass `.values()` /
+`.entries()` as a prop to something that loops every frame. Pass the Map.

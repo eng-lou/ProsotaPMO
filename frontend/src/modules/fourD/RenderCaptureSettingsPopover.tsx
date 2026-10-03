@@ -451,6 +451,17 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
                 />
                 Render every frame (slower)
               </label>
+              <label
+                className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted"
+                title="Same resolution, but without the export-only quality boost (extra ambient-occlusion samples, bigger shadow maps) — the 3D views look exactly as they do live. Much faster to render; good for checking timing and camera before a final export."
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.videoDraft}
+                  onChange={e => set('videoDraft', e.target.checked)}
+                />
+                Draft quality (faster)
+              </label>
             </div>
           </div>
         </>,

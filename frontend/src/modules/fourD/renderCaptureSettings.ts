@@ -111,6 +111,10 @@ export interface RenderCaptureSettings {
   // a long, heavy clip). Off by default, per Maro: the slow path wasn't
   // worth it as the default.
   videoEveryFrame: boolean
+  // Draft quality for video (2026-10-03, per Maro: long exports): keeps
+  // the output resolution but skips the export-only quality boost (more
+  // AO samples, bigger shadow maps) — the views look as they do live.
+  videoDraft: boolean
   // Include Baseline (2026-07-24, per Maro: "an option to include the
   // baseline 3d while capturing still and video. so side by side") —
   // composites the Baseline (planned) pane's own canvas alongside the
@@ -193,6 +197,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   videoFps: 30,
   videoFormat: 'mp4',
   videoEveryFrame: false,
+  videoDraft: false,
   includeBaseline: false,
   includeGanttChart: false,
   includeActivityTable: false,

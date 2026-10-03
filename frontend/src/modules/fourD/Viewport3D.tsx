@@ -2809,6 +2809,16 @@ interface ResolvedBatchVisibilityTarget {
 }
 
 const DEG_TO_RAD = Math.PI / 180
+// Export Video's in-progress label: percentage plus a time-remaining
+// estimate from the pace so far (shown once there's enough to go on).
+function exportButtonLabel(progress: number | null, startedAt: number | null): string {
+  if (progress === null) return 'Rendering…'
+  const percent = `Rendering ${Math.round(progress * 100)}%`
+  if (startedAt === null || progress < 0.02) return percent
+  const remainingSec = Math.round(((performance.now() - startedAt) / 1000) * (1 - progress) / progress)
+  const remaining = remainingSec >= 60 ? `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s` : `${remainingSec}s`
+  return `${percent} · ~${remaining} left`
+}
 // Most pixels a 3D canvas may be boosted to for a capture/export — see
 // computeSupersampleMultiplier.
 const MAX_CAPTURE_BUFFER_PIXELS = 3840 * 2160
@@ -5493,6 +5503,11 @@ export function Viewport3D({
   const [isExportingVideo, setIsExportingVideo] = useState(false)
   // Share of frames rendered so far during an offline video export (0-1).
   const [exportProgress, setExportProgress] = useState<number | null>(null)
+  // When the current export's recording began (performance.now()), for the
+  // time-remaining estimate on the button.
+  const exportStartedAtRef = useRef<number | null>(null)
+  // A Draft-quality video export is running — see highQuality.
+  const [captureDraft, setCaptureDraft] = useState(false)
   // Cancel Export (2026-10-03, per Maro: a long render could only be
   // stopped by reloading the page). Checked once per frame by both export
   // paths; the partial video is discarded, nothing is downloaded.
@@ -5670,7 +5685,9 @@ export function Viewport3D({
   // (boostQuality) or while a capture/export is actively forcing
   // captureDprMultiplier, so a forced capture always gets the full quality
   // treatment (shadows included), not just the extra resolution.
-  const highQuality = boostQuality || captureDprMultiplier !== null
+  // Draft-quality video exports skip the capture boost (videoDraft,
+  // renderCaptureSettings.ts) — the views render as they do live.
+  const highQuality = captureDprMultiplier !== null ? !captureDraft : boostQuality
   // Shadow-map texel density (2026-08-31, per Maro's own report: shadows
   // "disappeared" once a second, much larger IFC model — e.g. a site-
   // context import — joined the scene). The shadow-camera frustum below
@@ -6292,9 +6309,29 @@ export function Viewport3D({
     const visibleRadialCharts = exportHuds.radialCharts
     const radialChartIcons = visibleRadialCharts.length > 0 ? await loadRadialChartIcons(visibleRadialCharts) : new Map<string, HTMLImageElement>()
 
+    const overlayScale = resolutionHeight / 1080
+    const layout = computeExportLayout(
+      resolutionWidth, resolutionHeight,
+      overlayScale, {
+        includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
+        exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
+      },
+    )
+
     setIsExportingVideo(true)
-    setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
-    onCaptureQualityChange?.(computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight))
+    setCaptureDraft(renderCaptureSettings.videoDraft)
+    // Each view boosted only as far as its own slot in the video needs
+    // (2026-10-03, measured on Maro's 4096x2160 export with three comparison
+    // views: all four boosted by the main view's factor took ~180 ms a frame
+    // before the quality boost — the comparison views' slots are far smaller
+    // than the full output the factor was computed against). Comparison views
+    // that aren't in the video aren't boosted at all.
+    setCaptureDprMultiplier(computeSupersampleMultiplier(canvas, layout.mainViewRect.width, layout.mainViewRect.height))
+    const comparisonCanvas = activeComparisonCanvases.find(c => c)
+    const comparisonRect = layout.comparisonViewRects[0]
+    onCaptureQualityChange?.(comparisonCanvas && comparisonRect
+      ? computeSupersampleMultiplier(comparisonCanvas, comparisonRect.width, comparisonRect.height)
+      : null)
     setCaptureBackgroundOverride(renderCaptureSettings.showHdrBackground)
     onCaptureBackgroundChange?.(renderCaptureSettings.showHdrBackground)
     setHidePathHelpers(true)
@@ -6306,6 +6343,16 @@ export function Viewport3D({
       await new Promise<void>(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
       })
+      // From here every view is drawn on demand (renderAllViewsNow) right
+      // before each frame is composed, in both export modes, and the idle
+      // loop stops drawing on its own — one draw per recorded frame, always
+      // showing that frame's date. Drawn a few times at the first date
+      // before recording (2026-10-03, per Maro: WebM exports opened on dark,
+      // empty frames — the views hadn't drawn at export size yet, and at
+      // heavy settings three waited frames weren't enough).
+      setOfflineExportActive(true)
+      timelineDateRef.current = rangeStart
+      for (let pass = 0; pass < 8; pass++) renderAllViewsNow()
 
       const fps = renderCaptureSettings.videoFps
       const durationMs = renderCaptureSettings.videoDurationSec * 1000
@@ -6326,14 +6373,6 @@ export function Viewport3D({
       // is one continuous async call from the moment the button was
       // clicked, so an outer const computed before the boost took effect
       // would still be stale here.
-      const overlayScale = resolutionHeight / 1080
-      const layout = computeExportLayout(
-        resolutionWidth, resolutionHeight,
-        overlayScale, {
-          includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
-          exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
-        },
-      )
       // Even dimensions: H.264 encodes in 2x2 chroma blocks and rejects odd
       // sizes; dropping at most one pixel row/column is invisible.
       const composite = document.createElement('canvas')
@@ -6430,6 +6469,7 @@ export function Viewport3D({
         output.addVideoTrack(source, { frameRate: fps })
         await output.start()
         const frameCount = Math.max(2, Math.round((durationMs / 1000) * fps))
+        exportStartedAtRef.current = performance.now()
         setOfflineExportActive(true)
         try {
           for (let frame = 0; frame < frameCount; frame++) {
@@ -6474,6 +6514,7 @@ export function Viewport3D({
         const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
         recorder.start()
         const startTime = performance.now()
+        exportStartedAtRef.current = startTime
         let lastPercent = -1
         await new Promise<void>(resolve => {
           const step = () => {
@@ -6481,6 +6522,7 @@ export function Viewport3D({
             const t = Math.min((performance.now() - startTime) / durationMs, 1)
             const now = new Date(rangeStart.getTime() + totalMs * t)
             timelineDateRef.current = now
+            renderAllViewsNow()
             composeAt(now)
             // Whole percentages only — a state update re-renders this whole
             // component, which shouldn't happen every recorded frame.
@@ -6515,8 +6557,11 @@ export function Viewport3D({
     } catch (err) {
       if (err !== EXPORT_CANCELLED) throw err
     } finally {
+      setOfflineExportActive(false)
       setIsExportingVideo(false)
       setExportProgress(null)
+      setCaptureDraft(false)
+      exportStartedAtRef.current = null
       setCaptureDprMultiplier(null)
       onCaptureQualityChange?.(null)
       setCaptureBackgroundOverride(null)
@@ -6894,7 +6939,7 @@ export function Viewport3D({
           }
           className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {isExportingVideo ? (exportProgress !== null ? `Rendering ${Math.round(exportProgress * 100)}%` : 'Rendering…') : 'Export Video'}
+          {isExportingVideo ? exportButtonLabel(exportProgress, exportStartedAtRef.current) : 'Export Video'}
         </button>
         {isExportingVideo && (
           <button
