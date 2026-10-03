@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { sharedGet } from '@/lib/sharedGet'
 
 // Trend-across-baselines charts (2026-09-03, per Maro: "Do a trend chart for
 // Risk EMV, do for CPI, SPI, Cost EAC, Issues, Changes and Decisions Status
@@ -20,7 +20,7 @@ export interface RiskEmvTrendPoint {
 }
 
 export async function getRiskEmvTrend(periodId: string): Promise<RiskEmvTrendPoint[]> {
-  const { data } = await api.get<{ points: RiskEmvTrendPoint[] }>('/api/v1/dashboard/risk-emv-trend', {
+  const { data } = await sharedGet<{ points: RiskEmvTrendPoint[] }>('/api/v1/dashboard/risk-emv-trend', {
     params: { period_id: periodId },
   })
   return data.points
@@ -36,7 +36,7 @@ export interface CostPerformanceTrendPoint {
 }
 
 export async function getCostPerformanceTrend(periodId: string): Promise<CostPerformanceTrendPoint[]> {
-  const { data } = await api.get<{ points: CostPerformanceTrendPoint[] }>('/api/v1/dashboard/cost-performance-trend', {
+  const { data } = await sharedGet<{ points: CostPerformanceTrendPoint[] }>('/api/v1/dashboard/cost-performance-trend', {
     params: { period_id: periodId },
   })
   return data.points
@@ -50,7 +50,7 @@ export interface SpiTrendPoint {
 }
 
 export async function getSpiTrend(projectId: string): Promise<SpiTrendPoint[]> {
-  const { data } = await api.get<{ points: SpiTrendPoint[] }>('/api/v1/dashboard/spi-trend', {
+  const { data } = await sharedGet<{ points: SpiTrendPoint[] }>('/api/v1/dashboard/spi-trend', {
     params: { project_id: projectId },
   })
   return data.points
@@ -72,7 +72,7 @@ export interface PvEvAcTrendPoint {
 // SPI Trend already uses — PV has no meaning for cost with no linked
 // activity to give it a timeline.
 export async function getPvEvAcTrend(projectId: string): Promise<PvEvAcTrendPoint[]> {
-  const { data } = await api.get<{ points: PvEvAcTrendPoint[] }>('/api/v1/dashboard/pv-ev-ac-trend', {
+  const { data } = await sharedGet<{ points: PvEvAcTrendPoint[] }>('/api/v1/dashboard/pv-ev-ac-trend', {
     params: { project_id: projectId },
   })
   return data.points
@@ -88,7 +88,7 @@ export interface IcdOpenItemsTrendPoint {
 }
 
 export async function getIcdOpenItemsTrend(periodId: string): Promise<IcdOpenItemsTrendPoint[]> {
-  const { data } = await api.get<{ points: IcdOpenItemsTrendPoint[] }>('/api/v1/dashboard/icd-open-items-trend', {
+  const { data } = await sharedGet<{ points: IcdOpenItemsTrendPoint[] }>('/api/v1/dashboard/icd-open-items-trend', {
     params: { period_id: periodId },
   })
   return data.points

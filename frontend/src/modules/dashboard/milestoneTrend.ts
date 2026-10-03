@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { sharedGet } from '@/lib/sharedGet'
 
 // Milestone Trend Analysis (2026-09-03, per Maro: "i need charts across
 // baseline periods e.g milestones over time a trend analysis... whether
@@ -23,7 +23,7 @@ export interface MilestoneTrendSeries {
 }
 
 export async function getMilestoneTrend(schedulePeriodId: string): Promise<MilestoneTrendSeries[]> {
-  const { data } = await api.get<{ series: MilestoneTrendSeries[] }>('/api/v1/schedule-baselines/milestone-trend', {
+  const { data } = await sharedGet<{ series: MilestoneTrendSeries[] }>('/api/v1/schedule-baselines/milestone-trend', {
     params: { schedule_period_id: schedulePeriodId },
   })
   return data.series

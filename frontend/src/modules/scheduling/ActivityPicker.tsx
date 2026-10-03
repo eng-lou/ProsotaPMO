@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualRows } from '@/lib/useVirtualRows'
 import { activityRowBackground, type GanttStyle } from '@/lib/ganttLayout'
 import { formatDateTime } from './dateTime'
 import type { Activity } from './types'
@@ -64,8 +65,25 @@ export function ActivityPicker({
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const listId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
-  const itemRefs = useRef(new Map<string, HTMLButtonElement>())
+  const listRef = useRef<HTMLDivElement>(null)
+  const rowHeight = showDates ? 48 : 32
+  const q = query.trim().toLowerCase()
+  const filtered = useMemo(() => q
+    ? activities.filter(a => a.code.toLowerCase().includes(q) || a.task_name.toLowerCase().includes(q))
+    : activities, [activities, q])
+
+  useLayoutEffect(() => {
+    if (!open || !listRef.current) return
+    const index = q ? 0 : Math.max(0, activities.findIndex(a => a.id === (scrollToId ?? value)))
+    setActiveIndex(index)
+    listRef.current.scrollTop = Math.max(0, index * rowHeight - (256 - rowHeight) / 2)
+    // A search resets to its first result; reopening centres the anchor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, q, rowHeight])
+  const { start, end } = useVirtualRows(listRef, filtered.length, rowHeight, 0, open)
 
   const selected = activities.find(a => a.id === value) ?? null
 
@@ -84,22 +102,6 @@ export function ActivityPicker({
     }
   }, [open])
 
-  // Scrolls the nearby candidate into view instead of leaving the list at
-  // the top — only while unfiltered (a typed search already narrows the
-  // list to what's relevant, no repositioning needed on top of that).
-  useEffect(() => {
-    if (!open || query.trim()) return
-    const id = scrollToId ?? value
-    if (!id) return
-    itemRefs.current.get(id)?.scrollIntoView({ block: 'center' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  const q = query.trim().toLowerCase()
-  const filtered = q
-    ? activities.filter(a => a.code.toLowerCase().includes(q) || a.task_name.toLowerCase().includes(q))
-    : activities
-
   const handleSelect = (a: Activity) => {
     onChange(a.id)
     setQuery('')
@@ -109,48 +111,80 @@ export function ActivityPicker({
   return (
     <div ref={rootRef} className={`relative ${className}`}>
       <input
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-autocomplete="list"
+        aria-label={placeholder}
+        aria-activedescendant={open && activeIndex >= start && activeIndex < end ? `${listId}-${activeIndex}` : undefined}
         value={open ? query : (selected ? `${selected.code}: ${selected.task_name}` : '')}
         onChange={e => { setQuery(e.target.value); if (!open) setOpen(true) }}
         onFocus={() => { setOpen(true); setQuery('') }}
+        onKeyDown={e => {
+          if (e.key === 'Escape' || e.key === 'Tab') { setOpen(false); return }
+          if (e.key === 'Enter' && open) {
+            e.preventDefault()
+            if (filtered[activeIndex]) handleSelect(filtered[activeIndex])
+          }
+          if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+          e.preventDefault()
+          if (!open) { setOpen(true); return }
+          const index = Math.max(0, Math.min(filtered.length - 1, activeIndex + (e.key === 'ArrowDown' ? 1 : -1)))
+          setActiveIndex(index)
+          const list = listRef.current
+          if (list) {
+            const top = index * rowHeight
+            if (top < list.scrollTop) list.scrollTop = top
+            else if (top + rowHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + rowHeight - list.clientHeight
+          }
+        }}
         placeholder={placeholder}
         className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1"
       />
       {open && (
-        <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg">
+        <div ref={listRef} id={listId} role="listbox" aria-label={placeholder} className="absolute z-50 top-full left-0 mt-1 w-full max-h-64 overflow-y-auto bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg">
           {filtered.length === 0 && (
             <div className="px-2 py-1.5 text-xs text-gray-400 dark:text-prosota-muted">No matches</div>
           )}
-          {filtered.map(a => (
+          {start > 0 && <div aria-hidden="true" style={{ height: start * rowHeight }} />}
+          {filtered.slice(start, end).map((a, offset) => (
             <button
               key={a.id}
-              ref={el => { if (el) itemRefs.current.set(a.id, el); else itemRefs.current.delete(a.id) }}
               type="button"
+              id={`${listId}-${start + offset}`}
+              role="option"
+              aria-selected={a.id === value}
+              aria-posinset={start + offset + 1}
+              aria-setsize={filtered.length}
+              tabIndex={-1}
+              title={`${a.code}: ${a.task_name}`}
               onClick={() => handleSelect(a)}
               // The selected row keeps its own bg-blue-50 highlight (inline
               // style always wins over a class, so it's left undefined here
               // rather than fighting the type/critical/WBS tint below) — same
               // "expanded row" precedent the main activity table already
               // uses for the same reason (Scheduling.tsx).
-              style={a.id === value || !ganttStyle ? undefined : {
-                backgroundColor: activityRowBackground(ganttStyle, {
+              style={{ height: rowHeight,
+                backgroundColor: a.id === value || !ganttStyle ? undefined : activityRowBackground(ganttStyle, {
                   isArchived: a.is_archived || a.is_archive_container,
                   isCritical: a.is_critical ?? false,
                   activityType: a.activity_type,
                   depth: depthOf(a),
                 }),
               }}
-              className={`block w-full text-left px-2 py-1.5 text-xs dark:text-prosota-paper hover:bg-blue-50 dark:hover:bg-prosota-azure/10 ${a.id === value ? 'bg-blue-50 dark:bg-prosota-azure/15 font-medium' : ''}`}
+              className={`block w-full text-left px-2 py-1.5 text-xs dark:text-prosota-paper hover:bg-blue-50 dark:hover:bg-prosota-azure/10 ${a.id === value ? 'bg-blue-50 dark:bg-prosota-azure/15 font-medium' : ''} ${start + offset === activeIndex ? 'outline outline-1 -outline-offset-1 outline-blue-400' : ''}`}
             >
-              <div>
+              <div className="truncate">
                 <span className="font-mono text-gray-400 dark:text-prosota-muted mr-1">{a.code}:</span>{a.task_name}
               </div>
               {showDates && (
-                <div className="text-[10px] text-gray-400 dark:text-prosota-muted">
+                <div className="truncate text-[10px] text-gray-400 dark:text-prosota-muted">
                   {formatDateTime(a.start, false)} → {formatDateTime(a.finish, false)}
                 </div>
               )}
             </button>
           ))}
+          {end < filtered.length && <div aria-hidden="true" style={{ height: (filtered.length - end) * rowHeight }} />}
         </div>
       )}
     </div>

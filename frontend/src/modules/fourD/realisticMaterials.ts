@@ -28,7 +28,7 @@ import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 // material types e.g asphalt"). Appended, never reordered: the shader's
 // class index and texture layer both follow this order.
 export const REALISTIC_CLASSES = [
-  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile',
+  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal',
 ] as const
 export type RealisticClass = typeof REALISTIC_CLASSES[number]
 // 'original' — explicitly keep the imported look for this material, even
@@ -37,9 +37,9 @@ export type RealisticMapping = RealisticClass | 'original'
 export type RealisticMaterialMap = Record<string, RealisticMapping>
 
 export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
-  concrete: 'Concrete / render',
+  concrete: 'Cast concrete',
   glass: 'Glass',
-  metal: 'Metal',
+  metal: 'Exposed metal',
   grass: 'Grass / green roof',
   brick: 'Brick',
   timber: 'Timber',
@@ -48,12 +48,15 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
   gravel: 'Gravel',
   soil: 'Soil / earth',
   tile: 'Tiles',
+  render: 'Smooth render',
+  'painted-metal': 'Painted / powder-coated metal',
 }
 
 // Shader-side class index. 0 = no class (keep the imported look). The
-// generated texture array's layer for a class is its index - 1.
+// Original classes use texture layer index - 1; finish variants reuse layers.
 const CLASS_INDEX: Record<RealisticClass, number> = {
   concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6, asphalt: 7, stone: 8, gravel: 9, soil: 10, tile: 11,
+  render: 12, 'painted-metal': 13,
 }
 export const GLASS_CLASS = CLASS_INDEX.glass
 // Classes whose texture carries its own colour (a brick is brick-coloured
@@ -339,7 +342,7 @@ export function classIndexForKey(key: string | undefined, info: RealisticModelIn
   if (key === undefined) return 0
   const manual = mapping[key]
   if (manual === 'original') return 0
-  if (manual) return CLASS_INDEX[manual]
+  if (manual) return CLASS_INDEX[manual] ?? 0
   const auto = info?.entries.get(key)?.autoClass
   return auto ? CLASS_INDEX[auto] : 0
 }
@@ -353,6 +356,41 @@ export function classIndexForKey(key: string | undefined, info: RealisticModelIn
 // replaces the imported colour outright, and for a textured class (timber,
 // brick, ...) it tints the texture instead of leaving it its own colour.
 const COLOUR_KEY_PREFIX = 'colour:'
+const TEXTURE_KEY_PREFIX = 'texture:'
+export const REALISTIC_TEXTURE_SCALES = [0.25, 0.5, 1, 2, 4] as const
+export interface RealisticTextureSettings { scale: number; rotation: number }
+const DEFAULT_TEXTURE_SETTINGS: RealisticTextureSettings = { scale: 1, rotation: 0 }
+
+// Metadata shares the existing per-project mapping storage, as colour does.
+// Discrete settings fit into the existing per-instance lookup without extra
+// varyings, texture fetches or draw calls. Old maps keep their original look.
+export function textureSettingsForKey(key: string | undefined, mapping: RealisticMaterialMap): RealisticTextureSettings {
+  if (key === undefined) return DEFAULT_TEXTURE_SETTINGS
+  try {
+    const raw = (mapping as Record<string, string>)[TEXTURE_KEY_PREFIX + key]
+    if (!raw) return DEFAULT_TEXTURE_SETTINGS
+    const value = JSON.parse(raw)
+    return {
+      scale: REALISTIC_TEXTURE_SCALES.includes(value?.scale) ? value.scale : 1,
+      rotation: [0, 90, 180, 270].includes(value?.rotation) ? value.rotation : 0,
+    }
+  } catch { return DEFAULT_TEXTURE_SETTINGS }
+}
+
+export function withTextureSettings(mapping: RealisticMaterialMap, key: string, settings: RealisticTextureSettings): RealisticMaterialMap {
+  const next = { ...mapping } as Record<string, string>
+  if (settings.scale === 1 && settings.rotation === 0) delete next[TEXTURE_KEY_PREFIX + key]
+  else next[TEXTURE_KEY_PREFIX + key] = JSON.stringify(settings)
+  return next as RealisticMaterialMap
+}
+
+export function resetRealisticEntry(mapping: RealisticMaterialMap, key: string): RealisticMaterialMap {
+  const next = { ...mapping }
+  delete next[key]
+  delete next[COLOUR_KEY_PREFIX + key]
+  delete next[TEXTURE_KEY_PREFIX + key]
+  return next
+}
 const overrideColourCache = new Map<string, THREE.Color>()
 export function colourOverrideHex(key: string | undefined, mapping: RealisticMaterialMap): string | null {
   if (key === undefined) return null
@@ -406,6 +444,10 @@ export function colourOverrideForMesh(
   return colourOverrideForKey(meshKey(mesh, material, info), mapping)
 }
 
+export function textureSettingsForMesh(mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap) {
+  return textureSettingsForKey(meshKey(mesh, material, info), mapping)
+}
+
 // Class for one individual (non-batched) mesh's material.
 export function classIndexForMesh(
   mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap,
@@ -421,7 +463,7 @@ export function classIndexForMesh(
   if (info) return classIndexForKey(key, info, mapping)
   // No extracted table yet — still honour a manual mapping or a clear name.
   const manual = mapping[key]
-  if (manual) return manual === 'original' ? 0 : CLASS_INDEX[manual]
+  if (manual) return manual === 'original' ? 0 : (CLASS_INDEX[manual] ?? 0)
   const found = matchClassesInText(material.name)
   return found.length === 1 ? CLASS_INDEX[found[0]] : 0
 }
@@ -657,7 +699,7 @@ const tileLayer: LayerFn = (u, v) => {
   return [d, d, d, 0.6]
 }
 
-// Order = REALISTIC_CLASSES order (layer = class index - 1).
+// Original class layers. Additional finish presets reuse these textures.
 const LAYERS: LayerFn[] = [
   concreteLayer, glassLayer, metalLayer, grassLayer, brickLayer, timberLayer,
   asphaltLayer, stoneLayer, gravelLayer, soilLayer, tileLayer,
@@ -724,7 +766,14 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [0.8, 0.8], roughness: 0.97, metalness: 0, bump: 1.5, detail: 0, textured: true }, // gravel
   { tile: [2, 2], roughness: 1, metalness: 0, bump: 0.8, detail: 0, textured: true }, // soil
   { tile: [0.6, 0.6], roughness: 0.3, metalness: 0, bump: 0.5, detail: 1, textured: false }, // tile
+  { tile: [2.4, 2.4], roughness: 0.8, metalness: 0, bump: 0.05, detail: 0.12, textured: false }, // smooth render
+  { tile: [1.5, 1.5], roughness: 0.5, metalness: 0, bump: 0.03, detail: 0.08, textured: false }, // coated metal
 ]
+
+export function realisticTileSize(cls: RealisticClass, scale: number): [number, number] {
+  const tile = (CLASS_PARAMS[CLASS_INDEX[cls]] ?? CLASS_PARAMS[0]).tile
+  return [tile[0] * scale, tile[1] * scale]
+}
 
 // The table above as a (classes x 2) float texture, read with two texelFetches per
 // vertex (2026-09-28, measured live on a 6M-triangle model: indexing GLSL
@@ -737,7 +786,10 @@ function getClassParamsTexture(): THREE.DataTexture {
   const n = CLASS_PARAMS.length
   const data = new Float32Array(n * 2 * 4)
   CLASS_PARAMS.forEach((c, i) => {
-    data.set([1 / c.tile[0], 1 / c.tile[1], Math.max(i - 1, 0), c.textured ? 1 : 0], i * 4)
+    // New finishes reuse the original detail layers rather than allocate
+    // duplicate texture-array layers. Existing class indices stay stable.
+    const layer = i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
+    data.set([1 / c.tile[0], 1 / c.tile[1], layer, c.textured ? 1 : 0], i * 4)
     data.set([c.roughness, c.metalness, c.bump, c.detail], (n + i) * 4)
   })
   classParamsTexture = new THREE.DataTexture(data, n, 2, THREE.RGBAFormat, THREE.FloatType)
@@ -765,18 +817,21 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
   const classSource = forBatch
     ? /* glsl */`
       int vRealClass = 0;
+      vec2 realTransformValue = vec2( 1.0, 0.0 );
       #ifdef USE_BATCHING
       {
         int realSize = textureSize( realClassTex, 0 ).x;
         int realJ = int( getIndirectIndex( gl_DrawID ) );
-        vRealClass = int( texelFetch( realClassTex, ivec2( realJ % realSize, realJ / realSize ), 0 ).r * 255.0 + 0.5 );
+        vec4 realEntry = texelFetch( realClassTex, ivec2( realJ % realSize, realJ / realSize ), 0 );
+        vRealClass = int( realEntry.r * 255.0 + 0.5 );
+        realTransformValue = vec2( exp2( floor( realEntry.g * 255.0 + 0.5 ) - 2.0 ), floor( realEntry.b * 255.0 + 0.5 ) );
       }
       #endif`
-    : 'int vRealClass = realClass;'
+    : 'int vRealClass = realClass; vec2 realTransformValue = realTransform;'
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>
       ${VERTEX_PARS}
-      ${forBatch ? 'uniform sampler2D realClassTex;' : 'uniform int realClass;'}`)
+      ${forBatch ? 'uniform sampler2D realClassTex;' : 'uniform int realClass; uniform vec2 realTransform;'}`)
     .replace('#include <uv_vertex>', `#include <uv_vertex>
       // Box projection of the local position onto the face's dominant axis —
       // the same metres-based mapping ifcModel.ts bakes into the 'uv'
@@ -788,7 +843,10 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
         vec3 realN = abs( normal );
         vec2 realUvLocal = ( realN.x >= realN.y && realN.x >= realN.z ) ? position.yz
           : ( realN.y >= realN.z ) ? position.xz : position.xy;
-        vRealUvClass = vec3( realUvLocal, float( vRealClass ) );
+        if ( realTransformValue.y > 2.5 ) realUvLocal = vec2( realUvLocal.y, -realUvLocal.x );
+        else if ( realTransformValue.y > 1.5 ) realUvLocal = -realUvLocal;
+        else if ( realTransformValue.y > 0.5 ) realUvLocal = vec2( -realUvLocal.y, realUvLocal.x );
+        vRealUvClass = vec3( realUvLocal / realTransformValue.x, float( vRealClass ) );
       }`)
     // Glass drawn by the separate glass batch is collapsed here, per vertex,
     // rather than discarded per fragment (keeps the opaque batch's shader
@@ -858,6 +916,7 @@ interface SurfaceUniforms {
   realParams: { value: THREE.DataTexture }
   realGlassHidden: { value: number }
   realClass: { value: number }
+  realTransform: { value: THREE.Vector2 }
   realClassTex: { value: THREE.Texture | null }
 }
 
@@ -868,6 +927,7 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
     realParams: { value: getClassParamsTexture() },
     realGlassHidden: { value: 0 },
     realClass: { value: 0 },
+    realTransform: { value: new THREE.Vector2(1, 0) },
     realClassTex: { value: null },
   }
   material.userData.realisticUniforms = uniforms
@@ -876,12 +936,15 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
     shader.uniforms.realParams = uniforms.realParams
     shader.uniforms.realGlassHidden = uniforms.realGlassHidden
     if (forBatch) shader.uniforms.realClassTex = uniforms.realClassTex
-    else shader.uniforms.realClass = uniforms.realClass
+    else {
+      shader.uniforms.realClass = uniforms.realClass
+      shader.uniforms.realTransform = uniforms.realTransform
+    }
     patchRealisticSurfaceShader(shader, forBatch)
   }
   // Every realistic surface material shares one compiled program per
   // variant kind; uniforms stay per material.
-  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v16' : 'realistic-surface-v16')
+  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v17' : 'realistic-surface-v17')
   return material
 }
 
@@ -977,6 +1040,7 @@ const WHITE = new THREE.Color(1, 1, 1)
 export function getRealisticVariant(
   source: THREE.MeshStandardMaterial, classIndex: number, original: THREE.Color | undefined, glassTransmission: boolean,
   ifcAlpha = 1, colourOverride: THREE.Color | null = null,
+  textureSettings: RealisticTextureSettings = DEFAULT_TEXTURE_SETTINGS,
 ): THREE.Material {
   const kind = classIndex === GLASS_CLASS ? (glassTransmission ? 'glass-t' : 'glass') : 'surface'
   let variant = source.userData.realisticVariant as THREE.Material | undefined
@@ -992,6 +1056,9 @@ export function getRealisticVariant(
   variant.userData.realisticClass = classIndex
   variant.userData.realisticIfcAlpha = ifcAlpha
   variant.userData.realisticOverride = colourOverride
+  if (classIndex !== GLASS_CLASS) {
+    ;(variant.userData.realisticUniforms as SurfaceUniforms).realTransform.value.set(textureSettings.scale, textureSettings.rotation / 90)
+  }
   if (original) variant.userData.realisticOriginal = original
   syncRealisticVariant(source)
   return variant
@@ -1191,16 +1258,35 @@ export function applyRealisticToBatch(
   let state = batch.mesh.userData.realistic as BatchRealisticState | undefined
   const classesStale = !state || state.classesInfo !== info || state.classesMapping !== mapping || state.classesSuppressed !== suppressed
   if (!state || classesStale) {
-    const classes = computeBatchClasses(batch, info, mapping, suppressed)
+    const nextClasses = computeBatchClasses(batch, info, mapping, suppressed)
+    // Texture/colour-only edits must not tear down and rebuild glass geometry.
+    const classes = state && state.classes.length === nextClasses.length && nextClasses.every((cls, i) => cls === state!.classes[i])
+      ? state.classes : nextClasses
     const size = Math.max(1, Math.ceil(Math.sqrt(classes.length)))
-    const texData = new Uint8Array(size * size)
-    texData.set(classes)
-    if (state && state.classTexture.image.width === size) {
+    const texData = new Uint8Array(size * size * 4)
+    for (let i = 0; i < classes.length; i++) {
+      texData[i * 4] = classes[i]
+      texData[i * 4 + 1] = 2 // default scale = 2^(2-2) = 1
+    }
+    if (info && !suppressed) {
+      const settingsByKey = new Map<string, RealisticTextureSettings>()
+      for (const [expressID, instances] of batch.byExpressId) {
+        for (const inst of instances) {
+          const key = info.keyByPiece.get(`${expressID}:${inst.ifcGeometryId}`) ?? info.keyByExpressId.get(expressID)
+          if (key === undefined) continue
+          let settings = settingsByKey.get(key)
+          if (!settings) { settings = textureSettingsForKey(key, mapping); settingsByKey.set(key, settings) }
+          texData[inst.instanceId * 4 + 1] = Math.log2(settings.scale) + 2
+          texData[inst.instanceId * 4 + 2] = settings.rotation / 90
+        }
+      }
+    }
+    if (state && state.classTexture.image.width === size && state.classTexture.format === THREE.RGBAFormat) {
       ;(state.classTexture.image.data as Uint8Array).set(texData)
       state.classTexture.needsUpdate = true
     } else {
       state?.classTexture.dispose()
-      const classTexture = new THREE.DataTexture(texData, size, size, THREE.RedFormat, THREE.UnsignedByteType)
+      const classTexture = new THREE.DataTexture(texData, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
       classTexture.unpackAlignment = 1
       classTexture.needsUpdate = true
       state = { classes, classTexture, classesInfo: info, classesMapping: mapping, classesSuppressed: suppressed, glass: state?.glass ?? null }

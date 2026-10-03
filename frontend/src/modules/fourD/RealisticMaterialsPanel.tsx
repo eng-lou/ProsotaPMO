@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import {
   REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, withColourOverride,
+  REALISTIC_TEXTURE_SCALES, textureSettingsForKey, withTextureSettings, resetRealisticEntry, realisticTileSize,
   type RealisticEntryModel, type RealisticMapping, type RealisticMaterialEntry, type RealisticMaterialMap,
 } from './realisticMaterials'
 
@@ -140,6 +141,10 @@ export function RealisticMaterialsPanel({
       <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100 dark:divide-prosota-line">
         {visible.map(entry => {
           const manual = mapping[entry.key]
+          const cls = manual === 'original' ? null : manual ?? entry.autoClass
+          const texture = textureSettingsForKey(entry.key, mapping)
+          const tile = cls ? realisticTileSize(cls, texture.scale) : null
+          const customised = !!manual || !!colourOverrideHex(entry.key, mapping) || texture.scale !== 1 || texture.rotation !== 0
           const flagged = needsMapping(entry)
           const models = entryModels[entry.key] ?? []
           const autoLabel = entry.autoClass
@@ -167,6 +172,7 @@ export function RealisticMaterialsPanel({
                   </button>
                 ))}
                 <select
+                  aria-label={`Finish for ${entry.label}`}
                   value={manual ?? 'auto'}
                   onChange={e => setEntry(entry.key, e.target.value as RealisticMapping | 'auto')}
                   className="flex-1 min-w-[9rem] text-[11px] border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
@@ -181,6 +187,31 @@ export function RealisticMaterialsPanel({
                   recentColors={recentColours}
                 />
               </div>
+              {cls && cls !== 'glass' && (
+                <details className="text-[11px] text-gray-500 dark:text-prosota-muted">
+                  <summary className="cursor-pointer py-1">Texture scale and direction</summary>
+                  <div className="flex gap-2 py-1">
+                    <label className="flex-1">Scale
+                      <select aria-label={`Texture scale for ${entry.label}`} value={texture.scale}
+                        onChange={e => onMappingChange(withTextureSettings(mapping, entry.key, { ...texture, scale: Number(e.target.value) }))}
+                        className="block w-full border rounded px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper">
+                        {REALISTIC_TEXTURE_SCALES.map(scale => <option key={scale} value={scale}>{scale}×{scale === 1 ? ' (default)' : ''}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex-1">Direction
+                      <select aria-label={`Texture direction for ${entry.label}`} value={texture.rotation}
+                        onChange={e => onMappingChange(withTextureSettings(mapping, entry.key, { ...texture, rotation: Number(e.target.value) }))}
+                        className="block w-full border rounded px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper">
+                        {[0, 90, 180, 270].map(rotation => <option key={rotation} value={rotation}>{rotation}°</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  {tile && <p>Pattern repeat: {Number(tile[0].toFixed(3))} × {Number(tile[1].toFixed(3))} m. Preview changes in the model.</p>}
+                </details>
+              )}
+              {customised && <button onClick={() => onMappingChange(resetRealisticEntry(mapping, entry.key))}
+                title="Restore automatic mapping, original colour and default texture settings for this material"
+                className="text-[10px] text-left underline text-gray-500 dark:text-prosota-muted">Reset material</button>}
             </div>
           )
         })}

@@ -1891,23 +1891,27 @@ export function Scheduling() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleActivities])
 
-  const gridScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const gridScrollFrameRef = useRef<number | null>(null)
   const handleGridScroll = (scrollTop: number) => {
     // Unchanged from before this fix — the Gantt pane still needs to track
     // scroll position immediately, every tick, not debounced.
     ganttRef.current?.setScrollTop(scrollTop)
-    if (gridScrollDebounceRef.current !== null) clearTimeout(gridScrollDebounceRef.current)
-    gridScrollDebounceRef.current = setTimeout(() => {
-      gridScrollDebounceRef.current = null
+    if (gridScrollFrameRef.current !== null) return
+    gridScrollFrameRef.current = requestAnimationFrame(() => {
+      gridScrollFrameRef.current = null
       recomputeVisibleGridRowRange()
-    }, 150)
+    })
   }
 
   useEffect(() => {
     window.addEventListener('resize', recomputeVisibleGridRowRange)
-    return () => window.removeEventListener('resize', recomputeVisibleGridRowRange)
+    return () => {
+      window.removeEventListener('resize', recomputeVisibleGridRowRange)
+      if (gridScrollFrameRef.current !== null) cancelAnimationFrame(gridScrollFrameRef.current)
+      gridScrollFrameRef.current = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [visibleActivities.length])
 
   // Clamped to visibleActivities.length for the same reason every other
   // virtualized table's window is — a filter/search/collapse change can
@@ -2004,23 +2008,27 @@ export function Scheduling() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flatGroupRows])
 
-  const groupScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const groupScrollFrameRef = useRef<number | null>(null)
   const handleGroupScroll = (scrollTop: number) => {
     // Same "every tick, not debounced" reasoning as handleGridScroll — the
     // Gantt pane below needs to track scroll position immediately.
     ganttRef.current?.setScrollTop(scrollTop)
-    if (groupScrollDebounceRef.current !== null) clearTimeout(groupScrollDebounceRef.current)
-    groupScrollDebounceRef.current = setTimeout(() => {
-      groupScrollDebounceRef.current = null
+    if (groupScrollFrameRef.current !== null) return
+    groupScrollFrameRef.current = requestAnimationFrame(() => {
+      groupScrollFrameRef.current = null
       recomputeVisibleGroupRowRange()
-    }, 150)
+    })
   }
 
   useEffect(() => {
     window.addEventListener('resize', recomputeVisibleGroupRowRange)
-    return () => window.removeEventListener('resize', recomputeVisibleGroupRowRange)
+    return () => {
+      window.removeEventListener('resize', recomputeVisibleGroupRowRange)
+      if (groupScrollFrameRef.current !== null) cancelAnimationFrame(groupScrollFrameRef.current)
+      groupScrollFrameRef.current = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [flatGroupRows.length])
 
   // Clamped to flatGroupRows.length for the same reason every other
   // virtualized table's window is — collapsing/expanding a group can shrink

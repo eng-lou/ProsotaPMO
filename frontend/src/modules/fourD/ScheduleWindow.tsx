@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualRows } from '@/lib/useVirtualRows'
 import { createPortal } from 'react-dom'
 import { formatDateTime } from '@/modules/scheduling/dateTime'
 import { GANTT_ROW_HEIGHT, HEADER_HEIGHT, parseDate } from '@/modules/scheduling/GanttChart'
@@ -230,7 +231,7 @@ export function ScheduleWindow({
   const [bulkProfile, setBulkProfile] = useState('')
   const [applyingProfile, setApplyingProfile] = useState(false)
   const [profileMessage, setProfileMessage] = useState('')
-  const selectedTasks = activities.filter(a => selectedActivityIds.has(a.id) && a.activity_type !== 'wbs_summary')
+  const selectedTasks = useMemo(() => activities.filter(a => selectedActivityIds.has(a.id) && a.activity_type !== 'wbs_summary'), [activities, selectedActivityIds])
   const selectRow = (id: string, e: React.MouseEvent) => {
     const anchorIndex = visibleActivities.findIndex(a => a.id === selectionAnchor.current)
     const index = visibleActivities.findIndex(a => a.id === id)
@@ -255,8 +256,7 @@ export function ScheduleWindow({
       setProfileMessage(err instanceof Error ? err.message : 'Could not apply profile.')
     } finally { setApplyingProfile(false) }
   }
-  const hasChildren = new Set<string>()
-  for (const a of activities) if (a.parent_id) hasChildren.add(a.parent_id)
+  const hasChildren = useMemo(() => new Set(activities.flatMap(a => a.parent_id ? [a.parent_id] : [])), [activities])
 
   // Auto-scroll-to-current-row (2026-08-29, revised same day per Maro:
   // "too jittery... the table move in and out of focus... i just want a
@@ -311,6 +311,16 @@ export function ScheduleWindow({
   // re-save the *previous* value).
   const [editingCell, setEditingCell] = useState<{ id: string; field: ScheduleWindowEditableField } | null>(null)
   const [editingValue, setEditingValue] = useState('')
+  const { start, end } = useVirtualRows(scrollContainerRef, visibleActivities.length, GANTT_ROW_HEIGHT, HEADER_HEIGHT)
+  // Keep an edited row mounted when it scrolls off screen, without rendering
+  // the intervening thousands of rows or losing an uncommitted input value.
+  const renderedIndices = useMemo(() => {
+    const indices = Array.from({ length: end - start }, (_, i) => start + i)
+    const editingIndex = editingCell ? visibleActivities.findIndex(a => a.id === editingCell.id) : -1
+    if (editingIndex >= 0 && (editingIndex < start || editingIndex >= end)) indices.push(editingIndex)
+    return indices.sort((a, b) => a - b)
+  }, [start, end, editingCell, visibleActivities])
+  const tailStart = renderedIndices.length ? renderedIndices[renderedIndices.length - 1] + 1 : 0
 
   const startEdit = (a: Activity, field: ScheduleWindowEditableField, e: React.MouseEvent) => {
     e.stopPropagation() // don't also fire the row's own onClick (select activity)
@@ -334,7 +344,7 @@ export function ScheduleWindow({
   return (
     <div className="h-full flex flex-col">
     <div ref={scrollContainerRef} onScroll={e => onScroll(e.currentTarget.scrollTop)} className="overflow-auto flex-1 min-h-0">
-      <table className="w-full text-xs border-collapse">
+      <table className="w-full text-xs border-collapse whitespace-nowrap" aria-rowcount={visibleActivities.length + 1}>
           {/* Row/header heights pinned to GanttChart.tsx's own exported
               GANTT_ROW_HEIGHT/HEADER_HEIGHT constants (2026-07-09 fix, per
               Maro: "the gantt and activity table has misalignment") — same
@@ -358,7 +368,9 @@ export function ScheduleWindow({
             </tr>
           </thead>
           <tbody>
-            {visibleActivities.map(a => {
+            {renderedIndices.map((index, position) => {
+              const a = visibleActivities[index]
+              const gap = index - (position ? renderedIndices[position - 1] + 1 : 0)
               const depth = depthOf(a)
               const isSummary = a.activity_type === 'wbs_summary'
               const critical = a.is_critical || a.sub_is_critical
@@ -367,8 +379,10 @@ export function ScheduleWindow({
               const isCurrent = a.id === currentActivityId
               const links = elementLinksByActivityId.get(a.id) ?? []
               return (
+                <Fragment key={a.id}>
+                {gap > 0 && <tr aria-hidden="true"><td colSpan={7} style={{ height: gap * GANTT_ROW_HEIGHT, padding: 0, border: 0 }} /></tr>}
                 <tr
-                  key={a.id}
+                  aria-rowindex={index + 2}
                   onClick={e => selectRow(a.id, e)}
                   style={{ height: GANTT_ROW_HEIGHT }}
                   className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${isSummary ? 'bg-gray-50/70' : ''} ${isSelected ? 'bg-blue-50 outline outline-1 outline-blue-400 -outline-offset-1' : ''} ${isCurrent ? 'border-l-2 border-l-amber-500' : ''}`}
@@ -465,8 +479,10 @@ export function ScheduleWindow({
                     </button>
                   </td>
                 </tr>
+                </Fragment>
               )
             })}
+            {tailStart < visibleActivities.length && <tr aria-hidden="true"><td colSpan={7} style={{ height: (visibleActivities.length - tailStart) * GANTT_ROW_HEIGHT, padding: 0, border: 0 }} /></tr>}
             {activities.length === 0 && (
               <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-400 dark:text-prosota-muted">No activities yet</td></tr>
             )}

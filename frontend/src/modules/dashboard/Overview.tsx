@@ -24,6 +24,11 @@ export function formatDate(value: string | null) {
 }
 
 export function Overview() {
+  const { selectedProject } = useProject()
+  return <ProjectOverview key={selectedProject?.id} />
+}
+
+function ProjectOverview() {
   const navigate = useNavigate()
   const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
@@ -37,9 +42,14 @@ export function Overview() {
   const [wbsNodes, setWbsNodes] = useState<Activity[]>([])
   useEffect(() => {
     if (!selectedProject || !schedulePeriod) return
+    const controller = new AbortController()
     api.get<Activity[]>('/api/v1/activities/', {
+      signal: controller.signal,
       params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id },
-    }).then(({ data }) => setWbsNodes(data.filter(a => a.activity_type === 'wbs_summary')))
+    }).then(({ data }) => {
+      if (!controller.signal.aborted) setWbsNodes(data.filter(a => a.activity_type === 'wbs_summary'))
+    }).catch(() => {})
+    return () => controller.abort()
   }, [selectedProject?.id, schedulePeriod?.id])
 
   const [wbsNodeId, setWbsNodeId] = useState<string>('')
@@ -59,9 +69,11 @@ export function Overview() {
 
   useEffect(() => {
     if (!selectedProject || !period || !schedulePeriod) return
+    const controller = new AbortController()
     setLoading(true)
     setError(false)
     api.get<DashboardOverviewResponse>('/api/v1/dashboard/overview', {
+      signal: controller.signal,
       params: {
         project_id: selectedProject.id,
         period_id: period.id,
@@ -69,9 +81,10 @@ export function Overview() {
         wbs_node_activity_id: wbsNodeId || undefined,
       },
     })
-      .then(({ data }) => setData(data))
-      .catch(() => setError(true))
-      .finally(() => setLoading(false))
+      .then(({ data }) => { if (!controller.signal.aborted) setData(data) })
+      .catch(() => { if (!controller.signal.aborted) setError(true) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
   }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId, retryCount])
 
   // Cross-widget "click to filter" (2026-09-06, per Maro — see
@@ -115,7 +128,7 @@ export function Overview() {
     )
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="p-8 text-sm">
         <p className="text-gray-500 dark:text-prosota-muted mb-3">Couldn't load the dashboard. Check your connection and try again.</p>
@@ -129,12 +142,16 @@ export function Overview() {
     )
   }
 
-  if (periodLoading || scheduleLoading || loading || !data) {
+  if (periodLoading || scheduleLoading || !data) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
   }
 
   return (
     <div className="space-y-6">
+      {error && <div role="alert" className="text-sm text-amber-700 dark:text-prosota-amber">
+        Couldn’t refresh the dashboard. Showing the previous results.{' '}
+        <button className="underline" onClick={() => setRetryCount(c => c + 1)}>Retry</button>
+      </div>}
       <div className="no-print flex items-center justify-end">
         <div className="flex items-center gap-3 text-sm">
           {/* 2026-09-02, per Maro: "using the general wbs filter at the top

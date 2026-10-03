@@ -52,7 +52,7 @@ import {
 } from './renderModeMaterials'
 import {
   applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
-  getRealisticVariant, realisticInstanceBase, releaseRealisticTextureArrayGpu, setRealisticGlassMoving, syncRealisticGlassBatch, syncRealisticVariant,
+  getRealisticVariant, realisticInstanceBase, releaseRealisticTextureArrayGpu, setRealisticGlassMoving, syncRealisticGlassBatch, syncRealisticVariant, textureSettingsForMesh,
   type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { ViewportErrorBoundary } from './ViewportErrorBoundary'
@@ -1931,6 +1931,7 @@ function ModelObjects({
                   // has to come from the import-time capture instead.
                   (child.userData.ifcColorAlpha as number | undefined) ?? 1,
                   colourOverride,
+                  textureSettingsForMesh(child, mat, realisticInfo, realisticMapping),
                 ))
               } else {
                 disposeRealisticVariant(mat)

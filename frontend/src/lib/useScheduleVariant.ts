@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import { sharedGet } from './sharedGet'
 import { describeLoadError } from './describeLoadError'
 import type { SchedulePeriod, ScheduleVariant } from '@/modules/scheduling/types'
 
@@ -21,8 +22,8 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const loadPeriodFor = async (v: ScheduleVariant) => {
-    const { data: p } = await api.get<SchedulePeriod>('/api/v1/schedule-periods/bootstrap', {
+  const loadPeriodFor = async (v: ScheduleVariant, share = false) => {
+    const { data: p } = await (share ? sharedGet<SchedulePeriod> : api.get<SchedulePeriod>)('/api/v1/schedule-periods/bootstrap', {
       params: { schedule_variant_id: v.id },
     })
     setPeriod(p)
@@ -49,7 +50,7 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
     return data
   }
 
-  const bootstrap = async () => {
+  const bootstrap = async (share = false) => {
     if (!projectId) return
     try {
       setLoading(true)
@@ -66,19 +67,19 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
       // network at all means loadPeriodFor is still only ever called once —
       // no risk of a stale-then-corrected flash of the wrong variant's data
       // the way racing both fetches and reconciling afterward would.
-      const { data: master } = await api.get<ScheduleVariant>('/api/v1/schedule-variants/bootstrap', {
+      const { data: master } = await (share ? sharedGet<ScheduleVariant> : api.get<ScheduleVariant>)('/api/v1/schedule-variants/bootstrap', {
         params: { project_id: projectId },
       })
       const storedId = sessionStorage.getItem(STORAGE_PREFIX + projectId)
       if (!storedId || storedId === master.id) {
         setVariant(master)
-        await loadPeriodFor(master)
+        await loadPeriodFor(master, share)
         refetchVariants().catch(() => {}) // fire-and-forget — only the picker dropdown needs this
       } else {
         const list = await refetchVariants()
         const active = list.find(v => v.id === storedId) ?? master
         setVariant(active)
-        await loadPeriodFor(active)
+        await loadPeriodFor(active, share)
       }
     } catch (err) {
       setError(describeLoadError(err, "this project's schedule"))
@@ -88,7 +89,7 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
   }
 
   useEffect(() => {
-    bootstrap()
+    bootstrap(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 

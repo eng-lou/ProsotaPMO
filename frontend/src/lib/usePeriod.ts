@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { sharedGet } from './sharedGet'
 import { api } from './api'
 import { describeLoadError } from './describeLoadError'
 import type { Period } from './types'
@@ -10,9 +11,11 @@ export function useActivePeriod(projectId: string | undefined) {
   const [period, setPeriod] = useState<Period | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const request = useRef(0)
 
-  const bootstrap = async () => {
-    if (!projectId) return
+  const bootstrap = async (share = false) => {
+    if (!projectId) { setLoading(false); return }
+    const requestId = ++request.current
     try {
       setLoading(true)
       setError(null)
@@ -23,19 +26,21 @@ export function useActivePeriod(projectId: string | undefined) {
       // periods (see backend migration a3f9c02e5b71). One atomic backend call
       // now does the whole thing, with a DB-level constraint as the real
       // guard against the race.
-      const { data } = await api.get<Period>('/api/v1/periods/bootstrap', {
+      const { data } = await (share ? sharedGet<Period> : api.get<Period>)('/api/v1/periods/bootstrap', {
         params: { project_id: projectId },
       })
-      setPeriod(data)
+      if (requestId === request.current) setPeriod(data)
     } catch (err) {
-      setError(describeLoadError(err, "this project's period"))
+      if (requestId === request.current) setError(describeLoadError(err, "this project's period"))
     } finally {
-      setLoading(false)
+      if (requestId === request.current) setLoading(false)
     }
   }
 
   useEffect(() => {
-    bootstrap()
+    setPeriod(null)
+    bootstrap(true)
+    return () => { request.current++ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
@@ -44,5 +49,5 @@ export function useActivePeriod(projectId: string | undefined) {
   // ever fetched once on mount, so the Reschedule panel's "Data Date" reverted
   // to showing the original value the next time it was reopened, even though
   // the backend (and everything derived from it, like PV) had genuinely moved.
-  return { period, loading, error, refetch: bootstrap }
+  return { period: period?.project_id === projectId ? period : null, loading, error, refetch: bootstrap }
 }

@@ -21,7 +21,7 @@ import type { PathFollower } from './pathFollowers'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import {
   applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
-  getRealisticVariant, realisticInstanceBase, setRealisticGlassMoving, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
+  getRealisticVariant, realisticInstanceBase, setRealisticGlassMoving, syncRealisticGlassBatch, textureSettingsForMesh, type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { hideSmallWhileMoving, restoreAfterMoving } from './movingDetail'
 import { ScopeFilterFields } from './ScopeFilterFields'
@@ -504,6 +504,7 @@ export function ComparisonViewportPane({
               return getRealisticVariant(
                 mat, realisticClass, undefined, realisticGlassTransmission, (child.userData.ifcColorAlpha as number | undefined) ?? 1,
                 colourOverride,
+                textureSettingsForMesh(child, mat, realisticInfo, realisticMapping),
               )
             }
           }
