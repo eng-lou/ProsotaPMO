@@ -107,7 +107,12 @@ export interface ViewerSettings {
   // equirect image (or the plain grey clear colour when environmentBackground
   // is already off). Off by default so existing projects keep showing
   // whatever backdrop they already had.
+  // Shown as "Solid Background" since 2026-10-03, with any colour
+  // (backgroundColor, per Maro: "give me the option of picking not just
+  // white"); the key keeps its old name so saved settings carry over.
   whiteBackground: boolean
+  // The Solid Background's colour, "#rrggbb". White by default, the old look.
+  backgroundColor: string
   // Blender is Z-up; three.js (and every GLTF/OBJ/FBX import) is natively
   // Y-up (2026-07-08, per Maro: "the axis differs from blender... swap y
   // and z... make sure z up is the default"). See upAxis.ts for exactly how
@@ -211,6 +216,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   ambientOcclusion: false,
   environmentBackground: true,
   whiteBackground: false,
+  backgroundColor: '#ffffff',
   upAxis: 'z',
   showVarianceColors: false,
   showClashColors: false,

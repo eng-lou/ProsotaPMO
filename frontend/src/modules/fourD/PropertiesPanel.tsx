@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { ColorPickerPopover, normalizeHex } from '@/components/ColorPickerPopover'
 import type { CustomTextureSet, TextureSlot } from './customTextures'
 import { ResettableNumberInput } from './ResettableNumberInput'
 import { TextureFields } from './TextureFields'
@@ -115,6 +116,45 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-2 px-3 py-1">
       <span className="text-xs text-gray-600 dark:text-prosota-muted">{label}</span>
       {children}
+    </div>
+  )
+}
+
+// Solid Background's colour (2026-10-03, per Maro: "give me the option of
+// picking not just white but any other color, use the color picker style
+// settings in the profile") — the same swatch + hex box + page-level picker
+// as the animation profile editor's colour fields.
+function BackgroundColorField({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const swatchRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { setDraft(value) }, [value])
+  const commitDraft = () => {
+    const hex = normalizeHex(draft)
+    if (hex) onChange(hex)
+    else setDraft(value)
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        ref={swatchRef}
+        onClick={() => setOpen(v => !v)}
+        title="Pick background colour"
+        className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line shrink-0"
+        style={{ backgroundColor: value }}
+      />
+      <input
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commitDraft}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDraft() } }}
+        spellCheck={false}
+        aria-label="Background hex colour"
+        className="w-[4.75rem] text-xs font-mono border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
+      />
+      {open && (
+        <ColorPickerPopover value={value} onChange={onChange} onClose={() => setOpen(false)} anchor={swatchRef.current} />
+      )}
     </div>
   )
 }
@@ -373,13 +413,18 @@ export function PropertiesPanel({
       <Row label="Show as background">
         <input type="checkbox" checked={settings.environmentBackground} onChange={e => set('environmentBackground', e.target.checked)} />
       </Row>
-      <Row label="White Background">
-        <input
-          type="checkbox"
-          checked={settings.whiteBackground}
-          onChange={e => set('whiteBackground', e.target.checked)}
-          title="Plain white backdrop instead of the HDR sky — same look as the Baseline pane. Lighting is unaffected either way."
-        />
+      <Row label="Solid Background">
+        <div className="flex items-center gap-1.5">
+          {settings.whiteBackground && (
+            <BackgroundColorField value={settings.backgroundColor} onChange={hex => set('backgroundColor', hex)} />
+          )}
+          <input
+            type="checkbox"
+            checked={settings.whiteBackground}
+            onChange={e => set('whiteBackground', e.target.checked)}
+            title="Plain colour backdrop instead of the HDR sky. Lighting is unaffected either way."
+          />
+        </div>
       </Row>
 
       <SectionHeader label="Indicators" />

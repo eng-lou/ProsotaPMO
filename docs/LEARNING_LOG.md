@@ -6586,3 +6586,27 @@ on a comparison view's very first frame the copied model's parent positions
 aren't calculated yet. If the playhead is already inside a Grow window at
 that moment, the box can land in the wrong place for good. The measurement
 now updates the parents first.
+
+## 2026-10-03 — HDR in orthographic, any-colour backdrop, quieter materials panel
+
+**HDR missing in orthographic.** Maro uploaded an HDR with "Show as
+background" on, but the main view showed a pale grey-blue gradient. The view
+was orthographic. three.js draws an HDR sky as a tiny cube around the
+camera, which only fills the screen under a perspective camera. In
+orthographic it shows as a small square, so the previous fix had swapped in
+a flat gradient, which hid any HDR. Now, while orthographic, the sky is drawn
+through a perspective camera pointing the same way, with the same field of
+view, into a texture, and that texture is used as a flat backdrop (flat
+backdrops work in both projections). It's redrawn only when the camera turns,
+the window resizes or the sky changes. A throwaway test page showed the
+orthographic backdrop matching a perspective render exactly: same
+orientation, marker position and brightness.
+
+**Solid Background in any colour.** "White Background" is now "Solid
+Background" with the same swatch, hex box and picker as the animation
+profiles. The comparison views use the same colour. The saved setting keeps
+its old name, so existing settings carry over.
+
+**Materials panel no longer pops up.** Switching to Realistic Materials used
+to open the materials panel every time. It now opens only from "Open panel"
+in 3D View Properties.

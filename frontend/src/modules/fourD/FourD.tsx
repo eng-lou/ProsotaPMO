@@ -5836,14 +5836,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Realistic Materials' own dock panel (2026-09-29, per Maro: mapping +
   // glass were "a bit compressed" inside 3D View Properties — "give them
-  // their own widget panel that pops only... when realistic materials are
-  // selected"). Opens itself every time the mode is switched on; closing it
-  // only hides it until the next switch (3D View Properties offers reopening
-  // it meanwhile). Dock side persists like every other dock panel.
-  const [realisticPanelDismissed, setRealisticPanelDismissed] = useState(false)
-  useEffect(() => {
-    if (settings.renderMode === 'realistic') setRealisticPanelDismissed(false)
-  }, [settings.renderMode])
+  // their own widget panel"). Opened only from 3D View Properties' "Open
+  // panel" button (2026-10-03, per Maro: popping up by itself whenever the
+  // mode is switched on was "disruptive"). Dock side persists like every
+  // other dock panel.
+  const [realisticPanelDismissed, setRealisticPanelDismissed] = useState(true)
   const realisticPanelOpen = settings.renderMode === 'realistic' && !realisticPanelDismissed
   const [realisticPanelDock, setRealisticPanelDock] = useState<PanelSide>(() => {
     try {
@@ -6809,6 +6806,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         environmentUrl={customEnvironment?.url ?? null}
         environmentBackground={settings.environmentBackground}
         whiteBackground={settings.whiteBackground}
+        backgroundColor={settings.backgroundColor}
         shadows={settings.shadows}
         sunAzimuth={settings.sunAzimuth}
         sunElevation={settings.sunElevation}

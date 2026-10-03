@@ -4599,42 +4599,78 @@ function ProjectionController({ orthographic, controlsRef }: {
   // the view, but an orthographic projection draws it at its true tiny size:
   // a little sky-coloured square floating in the middle of the scene. A
   // plain 2D texture background is drawn as a full-screen plane instead,
-  // which works in either projection, so while orthographic any such
-  // background is swapped for a flat sky gradient (Blender shows the world
-  // background flat in ortho too) and put back the moment it's
-  // perspective again. Checked every frame because drei's <Environment>
-  // re-assigns scene.background whenever its own props change. The sky
-  // still lights the scene — only the visible backdrop changes.
+  // which works in either projection.
+  //
+  // While orthographic, the sky is rendered through a perspective camera
+  // with the same orientation and field of view into a texture, and that
+  // texture is the 2D background (2026-10-03, per Maro: an uploaded HDR
+  // "not showing in the background" — the first version swapped in a flat
+  // grey-blue gradient here, so any HDR vanished the moment the view was
+  // orthographic). Re-rendered only when the camera turns, the canvas
+  // resizes, or the sky itself changes; the Real-Time Sky's cube is
+  // re-captured continuously, so it's re-rendered every frame. The texture
+  // stays linear (three.js skips tone mapping when rendering to a target),
+  // so the main render tone-maps it exactly once, like any other
+  // background. Checked every frame because drei's <Environment>
+  // re-assigns scene.background whenever its own props change.
   const scene = useThree(s => s.scene)
-  const [orthoBackdrop] = useState(() => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 2
-    canvas.height = 256
-    const ctx = canvas.getContext('2d')!
-    const g = ctx.createLinearGradient(0, 0, 0, 256)
-    g.addColorStop(0, '#9fbbd8')
-    g.addColorStop(0.65, '#dfe7ef')
-    g.addColorStop(1, '#f1f3f5')
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, 2, 256)
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.colorSpace = THREE.SRGBColorSpace
-    return texture
-  })
+  const gl = useThree(s => s.gl)
+  const [backdrop] = useState(() => ({
+    target: new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false }),
+    skyScene: new THREE.Scene(),
+    skyCamera: new THREE.PerspectiveCamera(),
+    drawingSize: new THREE.Vector2(),
+    key: '',
+  }))
   const stashedBackgroundRef = useRef<THREE.Texture | null>(null)
-  useEffect(() => () => orthoBackdrop.dispose(), [orthoBackdrop])
-  useFrame(() => {
+  useEffect(() => () => backdrop.target.dispose(), [backdrop])
+  useFrame(({ camera }) => {
     const background = scene.background
-    if (orthographic) {
-      if (background instanceof THREE.Texture && background !== orthoBackdrop
-        && ((background as THREE.CubeTexture).isCubeTexture || background.mapping !== THREE.UVMapping)) {
-        stashedBackgroundRef.current = background
-        scene.background = orthoBackdrop
+    const backdropTexture = backdrop.target.texture
+    if (!orthographic) {
+      if (background === backdropTexture) {
+        scene.background = stashedBackgroundRef.current
+        stashedBackgroundRef.current = null
+        backdrop.skyScene.background = null
       }
-    } else if (background === orthoBackdrop) {
-      scene.background = stashedBackgroundRef.current
-      stashedBackgroundRef.current = null
+      return
     }
+    if (background instanceof THREE.Texture && background !== backdropTexture
+      && ((background as THREE.CubeTexture).isCubeTexture || background.mapping !== THREE.UVMapping)) {
+      stashedBackgroundRef.current = background
+      scene.background = backdropTexture
+      backdrop.key = ''
+    }
+    const sky = stashedBackgroundRef.current
+    if (scene.background !== backdropTexture || !sky) return
+    gl.getDrawingBufferSize(backdrop.drawingSize)
+    const width = Math.max(1, backdrop.drawingSize.x)
+    const height = Math.max(1, backdrop.drawingSize.y)
+    const key = [
+      width, height, perspective.fov, sky.uuid, sky.version,
+      ...camera.quaternion.toArray(), ...scene.backgroundRotation.toArray().slice(0, 3), scene.backgroundBlurriness,
+    ].join('|')
+    if (key === backdrop.key && !sky.isRenderTargetTexture) return
+    backdrop.key = key
+    backdrop.target.setSize(width, height)
+    const { skyScene, skyCamera } = backdrop
+    skyScene.background = sky
+    skyScene.backgroundRotation.copy(scene.backgroundRotation)
+    skyScene.backgroundBlurriness = scene.backgroundBlurriness
+    // Intensity is applied once, by the main render's own background pass.
+    skyScene.backgroundIntensity = 1
+    skyCamera.fov = perspective.fov
+    skyCamera.aspect = width / height
+    skyCamera.near = 0.1
+    skyCamera.far = 10
+    skyCamera.position.set(0, 0, 0)
+    skyCamera.quaternion.copy(camera.quaternion)
+    skyCamera.updateProjectionMatrix()
+    skyCamera.updateMatrixWorld()
+    const previousTarget = gl.getRenderTarget()
+    gl.setRenderTarget(backdrop.target)
+    gl.render(skyScene, skyCamera)
+    gl.setRenderTarget(previousTarget)
   })
   useEffect(() => {
     const current = get().camera
@@ -5644,6 +5680,9 @@ export function Viewport3D({
   // backdrop is always white there, captures included.
   const showWhiteBackground = (captureBackgroundOverride === null && settings.whiteBackground)
     || (!settings.dynamicSky && !environmentUrl)
+  // Solid Background's chosen colour when that's what's showing; white when
+  // the backdrop is only solid because there's no sky to show.
+  const solidBackgroundColor = captureBackgroundOverride === null && settings.whiteBackground ? settings.backgroundColor : '#ffffff'
   // Path/Zone drag handles (PathGizmo.tsx/ZoneGizmo.tsx) are pure live-
   // editing chrome, not part of the model — forced off for the duration of
   // a capture/still-export the same way captureBackgroundOverride forces
@@ -6948,7 +6987,7 @@ export function Viewport3D({
               null) so that feature's own forced-HDR-on behaviour is
               untouched — the two are independent, deliberately not fighting
               over which one wins. */}
-          {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
+          {showWhiteBackground && <color attach="background" args={[solidBackgroundColor]} />}
           {/* Site Context (2026-08-19) — real-world Google Photorealistic
               3D Tiles, a real object in this scene like everything else
               here (see SiteTilesLayer.tsx's own header for why this

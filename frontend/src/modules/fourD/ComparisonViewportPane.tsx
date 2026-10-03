@@ -58,6 +58,8 @@ interface Props {
   environmentUrl: string | null
   environmentBackground: boolean
   whiteBackground: boolean
+  // Solid Background's colour (viewerSettings.ts), same as the main view.
+  backgroundColor: string
   shadows: boolean
   sunAzimuth: number
   sunElevation: number
@@ -293,7 +295,7 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 export function ComparisonViewportPane({
   importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
-  environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
+  environmentUrl, environmentBackground, whiteBackground, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, hiddenElementKeys, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
@@ -315,6 +317,7 @@ export function ComparisonViewportPane({
   // DefaultEnvironment's header in Viewport3D.tsx).
   const showWhiteBackground = (captureBackgroundOverride === null && whiteBackground)
     || (!dynamicSky && !environmentUrl)
+  const solidBackgroundColor = captureBackgroundOverride === null && whiteBackground ? backgroundColor : '#ffffff'
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
   // center-offset sun position + explicit target (2026-08-22, mirrors
   // Viewport3D.tsx's own fix — see computeModelBounds's header there for
@@ -712,7 +715,7 @@ export function ComparisonViewportPane({
               environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
             />
           )}
-          {showWhiteBackground && <color attach="background" args={['#ffffff']} />}
+          {showWhiteBackground && <color attach="background" args={[solidBackgroundColor]} />}
           {shadows && (
             <mesh position={groundPosition} rotation={groundRotation} receiveShadow>
               <planeGeometry args={[groundSize, groundSize]} />
