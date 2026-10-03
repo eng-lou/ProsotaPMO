@@ -6817,6 +6817,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         realisticMapping={realisticMapping}
         realisticInfoVersion={realisticInfoVersion}
         realisticGlassTransmission={settings.realisticGlassTransmission}
+        simplifyWhileOrbiting={settings.simplifyWhileOrbiting}
         showEdges={settings.showEdges}
         ambientOcclusion={settings.ambientOcclusion}
         dynamicSky={settings.dynamicSky}

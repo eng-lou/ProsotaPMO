@@ -4515,8 +4515,12 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 // progress (see setRealisticGlassMoving, realisticMaterials.ts) and restores
 // it on release. Listens to the same OrbitControls start/end events
 // ShadowFrustumSync uses for its own shadow-map freeze.
-function MovingQualityDriver({ controlsRef, objects, enabled, simplify }: {
+function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify }: {
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
+  // Publishes drag start/end to synced comparison views (see
+  // CameraSyncState.moving); the version bump makes them render once more
+  // at drag end so they restore.
+  syncRef: React.MutableRefObject<CameraSyncState | null>
   objects: ImportedObject[]
   enabled: boolean
   // "Simplify while orbiting" (movingDetail.ts) — independent of render mode.
@@ -4535,7 +4539,18 @@ function MovingQualityDriver({ controlsRef, objects, enabled, simplify }: {
     const controls = controlsRef.current
     if (!controls || listenedRef.current === controls) return
     listenedRef.current = controls
+    const publishMoving = (moving: boolean) => {
+      const prev = syncRef.current
+      const { camera } = get()
+      syncRef.current = {
+        position: prev?.position ?? camera.position.toArray() as [number, number, number],
+        target: prev?.target ?? controls.target.toArray() as [number, number, number],
+        version: (prev?.version ?? 0) + 1,
+        moving,
+      }
+    }
     controls.addEventListener('start', () => {
+      publishMoving(true)
       if (simplifyRef.current) {
         const { camera, size } = get()
         for (const { object } of objectsRef.current) hideSmallWhileMoving(object, camera, size.height)
@@ -4544,6 +4559,7 @@ function MovingQualityDriver({ controlsRef, objects, enabled, simplify }: {
       for (const { object } of objectsRef.current) setRealisticGlassMoving(object, true)
     })
     controls.addEventListener('end', () => {
+      publishMoving(false)
       for (const { object } of objectsRef.current) {
         restoreAfterMoving(object)
         setRealisticGlassMoving(object, false)
@@ -4675,6 +4691,11 @@ export interface CameraSyncState {
   position: [number, number, number]
   target: [number, number, number]
   version: number
+  // The main view's orbit drag is in progress (2026-10-03) — synced
+  // comparison views simplify for its duration too (PaneMovingDriver in
+  // ComparisonViewportPane.tsx), same as the main view's own
+  // MovingQualityDriver.
+  moving?: boolean
 }
 
 // Synchronises orbit camera position/target across the two independent
@@ -4733,6 +4754,7 @@ export function CameraSync({
         position: camera.position.toArray() as [number, number, number],
         target: controls.target.toArray() as [number, number, number],
         version: nextVersion,
+        moving: syncRef.current?.moving,
       }
       lastAppliedVersion.current = nextVersion
     }
@@ -7166,7 +7188,7 @@ export function Viewport3D({
             never fights a live drag at a static date). */}
         <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
         <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
-        <MovingQualityDriver controlsRef={controlsRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} />
+        <MovingQualityDriver controlsRef={controlsRef} syncRef={cameraSyncRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual

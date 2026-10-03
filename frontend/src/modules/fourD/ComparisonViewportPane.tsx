@@ -21,8 +21,9 @@ import type { PathFollower } from './pathFollowers'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import {
   applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
-  getRealisticVariant, realisticInstanceBase, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
+  getRealisticVariant, realisticInstanceBase, setRealisticGlassMoving, syncRealisticGlassBatch, type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
+import { hideSmallWhileMoving, restoreAfterMoving } from './movingDetail'
 import { ScopeFilterFields } from './ScopeFilterFields'
 import { cloneSceneHierarchy, disposeClonedBatch } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
@@ -74,6 +75,9 @@ interface Props {
   realisticMapping: RealisticMaterialMap
   realisticInfoVersion: number
   realisticGlassTransmission: boolean
+  // "Simplify while orbiting" — applied here too while the main view's
+  // synced orbit drag is in progress (PaneMovingDriver).
+  simplifyWhileOrbiting: boolean
   showEdges: boolean
   ambientOcclusion: boolean
   dynamicSky: boolean
@@ -145,6 +149,45 @@ function RealisticGlassSync({ clones, enabled }: { clones: Iterable<THREE.Object
   return null
 }
 
+// The comparison views' half of "Simplify while orbiting" (2026-10-03, per
+// Maro: "optimise... less lag" — with three Realistic comparison views open,
+// every main-view orbit frame re-rendered each of them at full detail, AO,
+// shadows and transmission glass). While the main view's orbit drag is in
+// progress (CameraSyncState.moving) and this view follows it, sub-pixel
+// elements are hidden and the glass swaps to the cheap material, exactly
+// as the main view does (movingDetail.ts / setRealisticGlassMoving); both
+// come back the first frame after the drag ends.
+function PaneMovingDriver({ syncRef, clones, simplify, glassSwap, disconnected }: {
+  syncRef: React.MutableRefObject<CameraSyncState | null>
+  clones: Map<THREE.Object3D, THREE.Object3D>
+  simplify: boolean
+  glassSwap: boolean
+  disconnected: boolean
+}) {
+  const get = useThree(s => s.get)
+  const invalidate = useThree(s => s.invalidate)
+  const activeRef = useRef(false)
+  useFrame(() => {
+    const moving = !disconnected && !!syncRef.current?.moving
+    if (moving === activeRef.current) return
+    activeRef.current = moving
+    if (moving) {
+      const { camera, size } = get()
+      for (const clone of clones.values()) {
+        if (simplify) hideSmallWhileMoving(clone, camera, size.height)
+        if (glassSwap) setRealisticGlassMoving(clone, true)
+      }
+    } else {
+      for (const clone of clones.values()) {
+        restoreAfterMoving(clone)
+        setRealisticGlassMoving(clone, false)
+      }
+      invalidate()
+    }
+  })
+  return null
+}
+
 const PANE_WHITE = new THREE.Color(1, 1, 1)
 
 // The cloned batch's per-instance colours (sceneClone.ts copies whatever
@@ -196,7 +239,7 @@ export function ComparisonViewportPane({
   importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
-  renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, showEdges, ambientOcclusion, dynamicSky, showGrid,
+  renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, hiddenElementKeys, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
 }: Props) {
@@ -578,6 +621,13 @@ export function ComparisonViewportPane({
         />
         <ShadowFrustumSync lightRef={sunLightRef} controlsRef={controlsRef} modelRadius={modelRadius} sunRadius={sunRadius} />
         <RealisticGlassSync clones={clonesByOriginal.values()} enabled={renderMode === 'realistic'} />
+        <PaneMovingDriver
+          syncRef={cameraSyncRef}
+          clones={clonesByOriginal}
+          simplify={simplifyWhileOrbiting}
+          glassSwap={renderMode === 'realistic' && realisticGlassTransmission}
+          disconnected={config.cameraDisconnected}
+        />
         <Suspense fallback={null}>
           {dynamicSky ? (
             // Real-Time Sky (2026-09-01) — same Environment-with-children
