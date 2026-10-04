@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.schedule_period import SchedulePeriodResponse
 
 
 class ScheduleVariantCreate(BaseModel):
@@ -32,6 +33,11 @@ class ScheduleVariantResponse(BaseModel):
     is_master: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ScheduleContextResponse(BaseModel):
+    variant: ScheduleVariantResponse
+    period: SchedulePeriodResponse
 
 
 class PromoteVariantResponse(BaseModel):

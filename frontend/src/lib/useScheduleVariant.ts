@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { sharedGet } from './sharedGet'
 import { describeLoadError } from './describeLoadError'
 import type { SchedulePeriod, ScheduleVariant } from '@/modules/scheduling/types'
+
+interface ScheduleContext { variant: ScheduleVariant; period: SchedulePeriod }
 
 const STORAGE_PREFIX = 'prosota_selected_schedule_variant:'
 
@@ -16,17 +18,18 @@ const STORAGE_PREFIX = 'prosota_selected_schedule_variant:'
 // variant whenever nothing was saved yet or the saved one's since been
 // deleted.
 export function useActiveScheduleVariant(projectId: string | undefined) {
+  const requestVersion = useRef(0)
   const [variants, setVariants] = useState<ScheduleVariant[]>([])
   const [variant, setVariant] = useState<ScheduleVariant | null>(null)
   const [period, setPeriod] = useState<SchedulePeriod | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const loadPeriodFor = async (v: ScheduleVariant, share = false) => {
-    const { data: p } = await (share ? sharedGet<SchedulePeriod> : api.get<SchedulePeriod>)('/api/v1/schedule-periods/bootstrap', {
+  const loadPeriodFor = async (v: ScheduleVariant, version: number) => {
+    const { data: p } = await api.get<SchedulePeriod>('/api/v1/schedule-periods/bootstrap', {
       params: { schedule_variant_id: v.id },
     })
-    setPeriod(p)
+    if (version === requestVersion.current) setPeriod(p)
   }
 
   const selectVariant = async (v: ScheduleVariant) => {
@@ -37,59 +40,70 @@ export function useActiveScheduleVariant(projectId: string | undefined) {
     // switching into a schedule a P6 import just created) still left that
     // stale message on screen even though the new variant's own period had
     // loaded correctly.
+    const version = ++requestVersion.current
     setError(null)
+    setLoading(true)
+    setPeriod(null)
     setVariant(v)
     if (projectId) sessionStorage.setItem(STORAGE_PREFIX + projectId, v.id)
-    await loadPeriodFor(v)
+    try {
+      await loadPeriodFor(v, version)
+    } catch (err) {
+      if (version === requestVersion.current) setError(describeLoadError(err, "this project's schedule"))
+      throw err
+    } finally {
+      if (version === requestVersion.current) setLoading(false)
+    }
   }
 
   const refetchVariants = async (): Promise<ScheduleVariant[]> => {
     if (!projectId) return []
+    const version = requestVersion.current
     const { data } = await api.get<ScheduleVariant[]>('/api/v1/schedule-variants/', { params: { project_id: projectId } })
-    setVariants(data)
+    if (version === requestVersion.current) setVariants(data)
     return data
   }
 
   const bootstrap = async (share = false) => {
-    if (!projectId) return
+    const version = ++requestVersion.current
+    if (!projectId) {
+      setVariant(null)
+      setPeriod(null)
+      setVariants([])
+      setLoading(false)
+      return
+    }
     try {
       setLoading(true)
       setError(null)
-      // Lazily seeds the master (same as before this widget existed). The
-      // full list used to be awaited *before* loading a period — but it
-      // only exists to resolve a sessionStorage-restored variant id, and to
-      // populate the switcher dropdown; the id check itself is synchronous
-      // (2026-08-29, per Maro: "it loads too long" — this list fetch was
-      // the single largest hop in Scheduling's own load-schedule waterfall,
-      // ~500-700ms of pure serial network time on every visit for a lookup
-      // whose answer is "yes, it's the master" the overwhelming majority of
-      // the time). Deciding which branch to take *before* touching the
-      // network at all means loadPeriodFor is still only ever called once —
-      // no risk of a stale-then-corrected flash of the wrong variant's data
-      // the way racing both fetches and reconciling afterward would.
-      const { data: master } = await (share ? sharedGet<ScheduleVariant> : api.get<ScheduleVariant>)('/api/v1/schedule-variants/bootstrap', {
-        params: { project_id: projectId },
-      })
       const storedId = sessionStorage.getItem(STORAGE_PREFIX + projectId)
-      if (!storedId || storedId === master.id) {
-        setVariant(master)
-        await loadPeriodFor(master, share)
-        refetchVariants().catch(() => {}) // fire-and-forget — only the picker dropdown needs this
-      } else {
-        const list = await refetchVariants()
-        const active = list.find(v => v.id === storedId) ?? master
-        setVariant(active)
-        await loadPeriodFor(active, share)
-      }
+      // Ignore malformed saved preferences instead of failing the API's UUID validation.
+      const selectedId = storedId && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(storedId) ? storedId : undefined
+      const { data } = await (share ? sharedGet<ScheduleContext> : api.get<ScheduleContext>)(
+        '/api/v1/schedule-variants/context',
+        { params: { project_id: projectId, ...(selectedId ? { selected_variant_id: selectedId } : {}) } },
+      )
+      if (version !== requestVersion.current) return
+      setVariant(data.variant)
+      setPeriod(data.period)
+      setVariants([data.variant])
+      // Only the picker needs the full list; it must not hold up the grid.
+      api.get<ScheduleVariant[]>('/api/v1/schedule-variants/', { params: { project_id: projectId } })
+        .then(({ data: list }) => { if (version === requestVersion.current) setVariants(list) })
+        .catch(() => {})
     } catch (err) {
-      setError(describeLoadError(err, "this project's schedule"))
+      if (version === requestVersion.current) setError(describeLoadError(err, "this project's schedule"))
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
   }
 
   useEffect(() => {
+    setPeriod(null)
+    setVariant(null)
+    setVariants([])
     bootstrap(true)
+    return () => { requestVersion.current++ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 

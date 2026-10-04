@@ -146,3 +146,25 @@ transforms, glass-batch reuse and explicit-material suppression.
 Large-model GPU timings and final appearance under project-specific lighting
 remain to be checked on representative production models. Lighting/quality
 presets and independent roughness/relief sliders remain recommendations.
+
+
+## Schedule startup follow-up - 4 October 2026
+
+An empty schedule still paid for sequential variant bootstrap, period bootstrap,
+and six parallel data requests. The new schedule-variants/context endpoint resolves
+the saved selection and its period in one request, falling back to the project master
+for deleted or foreign selections. Project calendars, resources and model links now
+start alongside that request. Their warm-up result is consumed only once; changing
+periods or refreshing after edits still reloads current project data. Stale project
+and selection responses cannot replace the current bootstrap result.
+
+Eight optional panels (calendar, baseline, P6 import, layout, letterhead, quality,
+subprojects and custom-field definitions) load when opened, each with its own
+Suspense boundary. Printing remains eagerly available so browser print events
+cannot race a lazy download. The Scheduling entry chunk fell from 346.70 kB
+(73.18 kB gzip) to approximately 256.89 kB (57.46 kB gzip). This is the entry chunk,
+not the total shared dependency graph or a measured wall-clock speed-up.
+
+Four mocked backend regression checks cover default/master startup, saved alternatives,
+and deleted/foreign selection fallback. The production frontend build passes.
+Live production startup timings have not been measured for this follow-up.

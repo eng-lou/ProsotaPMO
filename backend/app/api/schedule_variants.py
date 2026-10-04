@@ -11,8 +11,10 @@ from app.schemas.schedule_variant import (
     ScheduleVariantCreate,
     ScheduleVariantResponse,
     ScheduleVariantUpdate,
+    ScheduleContextResponse,
 )
 from app.services import schedule_variant as svc
+from app.services import schedule_period
 
 router = APIRouter(prefix="/schedule-variants", tags=["schedule-variants"])
 
@@ -34,6 +36,20 @@ async def create_variant(data: ScheduleVariantCreate, db: AsyncSession = Depends
 @router.api_route("/bootstrap", methods=["GET", "POST"], response_model=ScheduleVariantResponse)
 async def bootstrap_variant(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return await svc.get_or_create_master(db, project_id)
+
+
+@router.get("/context", response_model=ScheduleContextResponse)
+async def schedule_context(project_id: uuid.UUID, selected_variant_id: uuid.UUID | None = None,
+                           db: AsyncSession = Depends(get_db)):
+    # Resolve saved selection and its period in one round trip. An ID from
+    # another project or a deleted variant must never select foreign data.
+    master = await svc.get_or_create_master(db, project_id)
+    active = master
+    if selected_variant_id and selected_variant_id != master.id:
+        variants = await svc.list_variants(db, project_id)
+        active = next((v for v in variants if v.id == selected_variant_id), master)
+    period = await schedule_period.bootstrap_period(db, active.id)
+    return {"variant": active, "period": period}
 
 
 @router.get("/{variant_id}", response_model=ScheduleVariantResponse)

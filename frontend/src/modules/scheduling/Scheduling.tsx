@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { lazyPanel } from '@/components/LazyPanel'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { api } from '@/lib/api'
@@ -18,24 +19,19 @@ import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/mo
 import { stringifyUdfValue } from '@/modules/fourD/scheduleScope'
 import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
 import { buildResourceRecipe, type ResourceRecipeActivity } from '@/modules/fourD/scheduleGeneration'
-import { LetterheadEditorWidget } from '@/components/LetterheadEditorWidget'
 import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
 import { ActivityStepsWidget } from './ActivityStepsWidget'
-import { BaselineWidget } from './BaselineWidget'
 import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
-import { CalendarWidget } from './CalendarWidget'
 import { CodeHistory } from './CodeHistory'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { downloadP6Xml } from './exportP6'
-import { P6ImportDialog } from './P6ImportDialog'
 import { GanttChart, GANTT_ROW_HEIGHT, HEADER_HEIGHT, type GanttChartHandle } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
-import { LayoutWidget } from './LayoutWidget'
 import { PasteFieldsWidget } from './PasteFieldsWidget'
 import { ResourceAssignments } from './ResourceAssignments'
 import { ResourcePoolWidget } from './ResourcePoolWidget'
@@ -54,11 +50,8 @@ import { SchedulingPrintView } from './SchedulingPrintView'
 import { SchedulingFiltersWidget } from './SchedulingFiltersWidget'
 import { SchedulingHighlightsWidget } from './SchedulingHighlightsWidget'
 import { SchedulingQualityPrintView } from './SchedulingQualityPrintView'
-import { SchedulingQualityWidget } from './SchedulingQualityWidget'
 import { ScheduleVariantWidget } from './ScheduleVariantWidget'
-import { SubProjectsWidget } from './SubProjectsWidget'
 import { UdfCell } from './UdfCell'
-import { UserDefinedFieldsWidget } from './UserDefinedFieldsWidget'
 import {
   findNextOverallocatedTarget, levelTarget,
   type LevelingGranularity, type LevelingMode, type LevelingTarget,
@@ -68,6 +61,23 @@ import {
   ACTIVITY_TYPES, type Activity, type ActivityRelationship, type ActualsHistoryItem, type Calendar, type QualityReport,
   type Resource, type ResourceAssignment, type SchedulingFilter,
 } from './types'
+
+const LetterheadEditorWidget = lazyPanel(() => import('@/components/LetterheadEditorWidget').then(m => ({ default: m.LetterheadEditorWidget })))
+const BaselineWidget = lazyPanel(() => import('./BaselineWidget').then(m => ({ default: m.BaselineWidget })))
+const CalendarWidget = lazyPanel(() => import('./CalendarWidget').then(m => ({ default: m.CalendarWidget })))
+const P6ImportDialog = lazyPanel(() => import('./P6ImportDialog').then(m => ({ default: m.P6ImportDialog })))
+const LayoutWidget = lazyPanel(() => import('./LayoutWidget').then(m => ({ default: m.LayoutWidget })))
+const SchedulingQualityWidget = lazyPanel(() => import('./SchedulingQualityWidget').then(m => ({ default: m.SchedulingQualityWidget })))
+const SubProjectsWidget = lazyPanel(() => import('./SubProjectsWidget').then(m => ({ default: m.SubProjectsWidget })))
+const UserDefinedFieldsWidget = lazyPanel(() => import('./UserDefinedFieldsWidget').then(m => ({ default: m.UserDefinedFieldsWidget })))
+
+function loadScheduleProjectData(projectId: string, signal: AbortSignal) {
+  return Promise.all([
+    api.get<Calendar[]>('/api/v1/calendars/', { params: { project_id: projectId }, signal }),
+    api.get<Resource[]>('/api/v1/resources/', { params: { project_id: projectId }, signal }),
+    listModelElementLinks(projectId),
+  ])
+}
 
 const PANE_MAX_HEIGHT = 600
 
@@ -1735,49 +1745,56 @@ export function Scheduling() {
   const leftPaneRef = useRef<HTMLDivElement>(null)
   const ganttRef = useRef<GanttChartHandle>(null)
 
+  const initialProjectData = useRef<{
+    projectId: string; used: boolean; promise: ReturnType<typeof loadScheduleProjectData>
+  } | null>(null)
+  // Start independent reads while the schedule context is being resolved.
+  // Consume this warm-up once; later period changes reload current project data.
   useEffect(() => {
-    if (!selectedProject || !period) return
-    let cancelled = false
+    const projectId = selectedProject?.id
+    if (!projectId) return
+    const controller = new AbortController()
+    const promise = loadScheduleProjectData(projectId, controller.signal)
+    promise.catch(() => {}) // The main load below displays any failure.
+    initialProjectData.current = { projectId, used: false, promise }
+    return () => controller.abort()
+  }, [selectedProject?.id])
 
-    async function load() {
-      try {
-        setLoading(true)
-        const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes, elementLinks] = await Promise.all([
-          api.get<Activity[]>('/api/v1/activities/', {
-            params: { project_id: selectedProject!.id, schedule_period_id: period!.id },
-          }),
-          api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
-            params: { schedule_period_id: period!.id },
-          }),
-          api.get<Calendar[]>('/api/v1/calendars/', {
-            params: { project_id: selectedProject!.id },
-          }),
-          api.get<Resource[]>('/api/v1/resources/', {
-            params: { project_id: selectedProject!.id },
-          }),
-          api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
-            params: { schedule_period_id: period!.id },
-          }),
-          listModelElementLinks(selectedProject!.id),
-        ])
-        if (!cancelled) {
-          setActivities(activitiesRes.data)
-          setRelationships(relationshipsRes.data)
-          setCalendars(calendarsRes.data)
-          setResources(resourcesRes.data)
-          setResourceAssignments(assignmentsRes.data)
-          setModelElementLinks(elementLinks)
-        }
-      } catch {
-        if (!cancelled) setError('Failed to load schedule')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    load()
-    return () => { cancelled = true }
-  }, [selectedProject, period])
+  useEffect(() => {
+    if (!selectedProject || !period || activeVariant?.project_id !== selectedProject.id) return
+    const controller = new AbortController()
+    setLoading(true)
+    setError(null)
+    const initial = initialProjectData.current
+    const projectData = initial?.projectId === selectedProject.id && !initial.used
+      ? (initial.used = true, initial.promise)
+      : loadScheduleProjectData(selectedProject.id, controller.signal)
+    Promise.all([
+      api.get<Activity[]>('/api/v1/activities/', {
+        params: { project_id: selectedProject.id, schedule_period_id: period.id }, signal: controller.signal,
+      }),
+      api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', {
+        params: { schedule_period_id: period.id }, signal: controller.signal,
+      }),
+      api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', {
+        params: { schedule_period_id: period.id }, signal: controller.signal,
+      }),
+      projectData,
+    ]).then(([activitiesRes, relationshipsRes, assignmentsRes, [calendarRes, resourceRes, links]]) => {
+      if (controller.signal.aborted) return
+      setActivities(activitiesRes.data)
+      setRelationships(relationshipsRes.data)
+      setResourceAssignments(assignmentsRes.data)
+      setCalendars(calendarRes.data)
+      setResources(resourceRes.data)
+      setModelElementLinks(links)
+    }).catch(() => {
+      if (!controller.signal.aborted) setError('Failed to load schedule')
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false)
+    })
+    return () => controller.abort()
+  }, [selectedProject?.id, period, activeVariant?.project_id])
 
   // Delayed/At Risk are computed badges, not stored fields — consistent with how
   // Cost Plan's variance-band fix went (never expose a derivable value as manual
