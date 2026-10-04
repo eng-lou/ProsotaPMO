@@ -32,7 +32,7 @@ function Schedule({ count = 5000 }: { count?: number }) {
   return <div style={{height: 500}}><ScheduleWindow activities={activities} visibleActivities={activities.slice(0, count)}
     collapsedIds={new Set()} onToggleCollapsed={noop} selectedActivityIds={selected}
     onSelectActivity={(id, add) => setSelected(prev => new Set(add ? [...prev, id] : [id]))}
-    onSelectActivities={setSelected} onApplyProfile={async () => {}}
+    onSelectActivities={setSelected}
     scrollContainerRef={ref} onScroll={noop} animationProfiles={[]} modelElementLinks={[]} onUpdateActivity={async () => {}} /></div>
 }
 try {

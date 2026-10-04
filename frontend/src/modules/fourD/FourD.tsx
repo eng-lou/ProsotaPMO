@@ -1,3 +1,4 @@
+import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
@@ -6655,7 +6656,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             subscribeFocusDate={subscribeTimelineFocus}
             onUpdateActivity={handleUpdateScheduleWindowActivity}
             onSelectActivities={setSelectedActivityIds}
-            onApplyProfile={handleApplyScheduleProfiles}
           />
         )
       case 'gantt':
@@ -7960,6 +7960,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           animationProfiles={animationProfiles.profiles}
           onLinkElement={handleLinkElement}
           onUnlinkElement={handleUnlinkElement}
+          activityProfileMapper={
+            <ActivityProfileMapper
+              activities={scheduleWindowActivities}
+              visibleActivities={scheduleVisibleActivities}
+              selectedActivityIds={selectedActivityIds}
+              animationProfiles={animationProfiles.profiles}
+              onSelectActivities={setSelectedActivityIds}
+              onApplyProfile={handleApplyScheduleProfiles}
+            />
+          }
           onBulkLinkSelected={handleBulkLinkSelectedToActivity}
           onBulkUnlinkSelected={handleBulkUnlinkSelectedFromActivity}
           selectedElementLinks={selectedElementLinks}

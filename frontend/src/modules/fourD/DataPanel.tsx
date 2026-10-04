@@ -60,6 +60,7 @@ interface Props {
   // profileId lets Link Selected set every new link's profile in the same
   // action (2026-08-30, per Maro: "why cant i set the profile at the same
   // time") — ignored by Unlink, which has no use for one.
+  activityProfileMapper: React.ReactNode
   onBulkLinkSelected: (activityId: string, profileId: string | null) => void
   onBulkUnlinkSelected: (activityId: string | null) => Promise<void>
   selectedElementLinks: ModelElementLink[]
@@ -98,7 +99,7 @@ export function DataPanel({
   unloadedCountByModelId, onReloadIfc,
   meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
-  onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
+  activityProfileMapper, onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
   selectedElementLinks, selectionLinksLoading, selectionLinksError, unlinkingSelection,
 }: Props) {
   const [bulkActivityId, setBulkActivityId] = useState('')
@@ -157,58 +158,64 @@ export function DataPanel({
         </button>
         <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
-      {isBulkSelection && (
-        <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-1.5 shrink-0 max-h-[50%] overflow-y-auto">
-          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
-            Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
+      <section aria-label="Activity links and profiles" className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-2 shrink-0 max-h-[50%] overflow-y-auto">
+        <h3 className="text-xs font-semibold text-gray-700 dark:text-prosota-paper">Activity links &amp; profiles</h3>
+        {isBulkSelection && (
+          <div className="space-y-1.5">
+            <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
+              Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
+            </div>
+            <ActivityPicker
+              activities={activities.filter(a => a.activity_type !== 'wbs_summary')}
+              value={bulkActivityId}
+              onChange={setBulkActivityId}
+              placeholder="Choose an activity…"
+              className="w-full"
+            />
+            {animationProfiles.length > 0 && (
+              <select
+                value={bulkProfileId}
+                onChange={e => setBulkProfileId(e.target.value)}
+                className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
+                title="Animation profile Link Selected sets on every new link"
+              >
+                <option value="">Default (no animation profile)</option>
+                {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            )}
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId, bulkProfileId || null)}
+                disabled={!bulkActivityId || unlinkingSelection}
+                title="Link every currently selected element to the chosen activity, with the profile above already set"
+                className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                Link Selected
+              </button>
+            </div>
+            <div className="pt-2 border-t border-gray-200 dark:border-prosota-line space-y-1">
+              <div className="text-[11px] font-semibold">Selected elements are assigned to</div>
+              {selectionLinksLoading ? <p className="text-[11px]" role="status">Loading assignments…</p>
+                : selectionLinksError ? <p className="text-[11px] text-red-600" role="alert">{selectionLinksError}</p>
+                : linkedActivityCounts.size === 0 ? <p className="text-[11px] text-gray-500">No linked activities.</p>
+                : <>
+                  {[...linkedActivityCounts].map(([id, count]) => {
+                    const activity = activities.find(a => a.id === id)
+                    const label = activity ? `${activity.code}: ${activity.task_name}` : 'Activity outside this schedule'
+                    return <div key={id} className="flex items-center gap-1 text-[11px]">
+                      <span className="flex-1 min-w-0 truncate" title={`${label} (${count} selected elements)`}>{label} ({count})</span>
+                      <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(id)} aria-label={`Unlink selected elements from ${label}`} className="text-red-600 border rounded px-1.5 py-1 disabled:opacity-40">Unlink</button>
+                    </div>
+                  })}
+                  <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(null)} title="Remove all activity assignments from the selected elements only" className="text-[11px] text-red-600 border rounded px-2 py-1 disabled:opacity-40">{unlinkingSelection ? 'Unlinking…' : `Unlink all (${selectedElementLinks.length} assignments)`}</button>
+                </>}
+            </div>
           </div>
-          <ActivityPicker
-            activities={activities.filter(a => a.activity_type !== 'wbs_summary')}
-            value={bulkActivityId}
-            onChange={setBulkActivityId}
-            placeholder="Choose an activity…"
-            className="w-full"
-          />
-          {animationProfiles.length > 0 && (
-            <select
-              value={bulkProfileId}
-              onChange={e => setBulkProfileId(e.target.value)}
-              className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
-              title="Animation profile Link Selected sets on every new link"
-            >
-              <option value="">Default (no animation profile)</option>
-              {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          )}
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => bulkActivityId && onBulkLinkSelected(bulkActivityId, bulkProfileId || null)}
-              disabled={!bulkActivityId || unlinkingSelection}
-              title="Link every currently selected element to the chosen activity, with the profile above already set"
-              className="flex-1 text-[11px] px-1.5 py-1 rounded border border-gray-200 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-white dark:hover:bg-prosota-panel disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              Link Selected
-            </button>
-          </div>
-          <div className="pt-2 border-t border-gray-200 dark:border-prosota-line space-y-1">
-            <div className="text-[11px] font-semibold">Selected elements are assigned to</div>
-            {selectionLinksLoading ? <p className="text-[11px]" role="status">Loading assignments…</p>
-              : selectionLinksError ? <p className="text-[11px] text-red-600" role="alert">{selectionLinksError}</p>
-              : linkedActivityCounts.size === 0 ? <p className="text-[11px] text-gray-500">No linked activities.</p>
-              : <>
-                {[...linkedActivityCounts].map(([id, count]) => {
-                  const activity = activities.find(a => a.id === id)
-                  const label = activity ? `${activity.code}: ${activity.task_name}` : 'Activity outside this schedule'
-                  return <div key={id} className="flex items-center gap-1 text-[11px]">
-                    <span className="flex-1 min-w-0 truncate" title={`${label} (${count} selected elements)`}>{label} ({count})</span>
-                    <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(id)} aria-label={`Unlink selected elements from ${label}`} className="text-red-600 border rounded px-1.5 py-1 disabled:opacity-40">Unlink</button>
-                  </div>
-                })}
-                <button type="button" disabled={unlinkingSelection} onClick={() => onBulkUnlinkSelected(null)} title="Remove all activity assignments from the selected elements only" className="text-[11px] text-red-600 border rounded px-2 py-1 disabled:opacity-40">{unlinkingSelection ? 'Unlinking…' : `Unlink all (${selectedElementLinks.length} assignments)`}</button>
-              </>}
-          </div>
+        )}
+        <div className={isBulkSelection ? 'pt-2 border-t border-gray-200 dark:border-prosota-line' : ''}>
+          {activityProfileMapper}
         </div>
-      )}
+      </section>
       {activeTab === 'ifc' ? (
         <IfcDataPanel
           handles={ifcHandles}

@@ -40,7 +40,6 @@ interface Props {
   selectedActivityIds: Set<string>
   onSelectActivity: (id: string, additive: boolean) => void
   onSelectActivities: (ids: Set<string>) => void
-  onApplyProfile: (ids: string[], profileId: string | null) => Promise<void>
   // Native scrollTop sync with the Gantt window (2026-07-09, per Maro: "I
   // want full sync capabilities") — plain DOM scroll-mirroring (not
   // GanttChart.tsx's own transform-based GanttChartHandle trick, which
@@ -225,13 +224,9 @@ export function computeVisibleActivities(activities: Activity[], collapsedIds: S
 export function ScheduleWindow({
   activities, visibleActivities, collapsedIds, onToggleCollapsed, selectedActivityIds, onSelectActivity,
   scrollContainerRef, onScroll, animationProfiles, modelElementLinks, subscribeFocusDate, onUpdateActivity,
-  onSelectActivities, onApplyProfile,
+  onSelectActivities,
 }: Props) {
   const selectionAnchor = useRef<string | null>(null)
-  const [bulkProfile, setBulkProfile] = useState('')
-  const [applyingProfile, setApplyingProfile] = useState(false)
-  const [profileMessage, setProfileMessage] = useState('')
-  const selectedTasks = useMemo(() => activities.filter(a => selectedActivityIds.has(a.id) && a.activity_type !== 'wbs_summary'), [activities, selectedActivityIds])
   const selectRow = (id: string, e: React.MouseEvent) => {
     const anchorIndex = visibleActivities.findIndex(a => a.id === selectionAnchor.current)
     const index = visibleActivities.findIndex(a => a.id === id)
@@ -243,18 +238,6 @@ export function ScheduleWindow({
       selectionAnchor.current = id
       onSelectActivity(id, e.ctrlKey || e.metaKey)
     }
-    setProfileMessage('')
-  }
-  const applyProfile = async () => {
-    if (applyingProfile || selectedTasks.length === 0) return
-    setApplyingProfile(true)
-    setProfileMessage('')
-    try {
-      await onApplyProfile(selectedTasks.map(a => a.id), bulkProfile || null)
-      setProfileMessage(`Profile applied to ${selectedTasks.length} activities.`)
-    } catch (err) {
-      setProfileMessage(err instanceof Error ? err.message : 'Could not apply profile.')
-    } finally { setApplyingProfile(false) }
   }
   const hasChildren = useMemo(() => new Set(activities.flatMap(a => a.parent_id ? [a.parent_id] : [])), [activities])
 
@@ -517,19 +500,6 @@ export function ScheduleWindow({
           document.body,
         )
       })()}
-    </div>
-    <div className="shrink-0 border-t border-gray-200 dark:border-prosota-line px-2 py-1.5 text-xs bg-white dark:bg-prosota-panel">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span title="Click then Shift-click for a range; Ctrl/Cmd-click to select separate rows. Summary rows are excluded.">{selectedTasks.length} activities selected</span>
-        <button type="button" onClick={() => onSelectActivities(new Set(visibleActivities.filter(a => a.activity_type !== 'wbs_summary').map(a => a.id)))} className="text-blue-600">Select visible</button>
-        <select aria-label="Profile for selected activities" value={bulkProfile} onChange={e => setBulkProfile(e.target.value)} disabled={applyingProfile} className="border rounded px-1 py-1 dark:bg-prosota-panel2 dark:border-prosota-line">
-          <option value="">Default</option>
-          {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <button type="button" disabled={applyingProfile || selectedTasks.length === 0} onClick={applyProfile} className="rounded bg-blue-600 text-white px-2 py-1 disabled:opacity-40">{applyingProfile ? 'Applying…' : 'Apply profile'}</button>
-      </div>
-      <p className="text-[10px] text-gray-500 mt-1">Shift-click selects a range; Ctrl/Cmd-click adds rows. Element profile overrides stay in effect.</p>
-      {profileMessage && <p role="status" className="mt-1">{profileMessage}</p>}
     </div>
     </div>
   )
