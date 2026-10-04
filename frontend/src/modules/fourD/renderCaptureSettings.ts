@@ -29,43 +29,9 @@ export interface RenderCaptureSettings {
   // it, the same "force a state, wait a few real frames, capture, revert"
   // pattern boostQuality already established.
   showHdrBackground: boolean
-  // AI Enhance (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md; extended
-  // 2026-09-02 with a second mode after Maro's own live A/B test showed
-  // fal.ai's faithful upscaler barely changes flat-shaded CAD geometry) —
-  // runs the raw 3D render (before Capture's own overlay compositing)
-  // through an AI model before it's composited into the final PNG. Stills
-  // only — Capture Image reads this; Export Video does not (naive
-  // per-frame upscaling has no inter-frame memory and flickers, see the
-  // scope doc's own "Video walkthroughs" section).
-  //   'off'      — no AI call, same as before this feature existed.
-  //   'faithful' — fal.ai Real-ESRGAN. Can't hallucinate detail that isn't
-  //                in the actual model; barely visible on flat/untextured
-  //                CAD geometry, real improvement only on actual
-  //                photographic texture (Material Preset images, Tiles
-  //                closeups).
-  //   'concept'  — Gemini generative enhancement (ai_concept_render.py's
-  //                own guardrail prompt keeps it from inventing new
-  //                objects, but materials/lighting/realism are still an
-  //                AI's best guess, not model data) — always stamped with
-  //                a visible "AI-generated concept" label by
-  //                Viewport3D.tsx's own doCapture, never silently blended
-  //                in as if it were a real capture.
-  // Off by default, same opt-in-cost reasoning as includeBaseline — every
-  // non-'off' value makes a real network call that isn't free and takes a
-  // few real seconds, unlike every other toggle in this file.
-  aiEnhanceMode: 'off' | 'faithful' | 'concept'
-  // 'concept' mode only (2026-09-02, per Maro: "opportunity to build the
-  // generative then toggle the upscale to go through it all") — pipes
-  // Gemini's own output through fal.ai's faithful upscaler afterward
-  // (ai_concept_render.py's own generate_concept_render), since Gemini's
-  // native output resolution is often smaller than the requested export
-  // size. Ignored when aiEnhanceMode isn't 'concept'.
-  conceptAlsoUpscale: boolean
-  // 'concept' mode only — additive on top of ai_concept_render.py's own
-  // always-on guardrail prompt, never a replacement for it (materials/
-  // lighting/mood requests only, e.g. "overcast sky" — the guardrail
-  // against inventing objects still applies server-side regardless of
-  // what's typed here).
+  // Still-image AI rendering, applied before export overlays.
+  aiEnhanceMode: 'off' | 'concept'
+  conceptCreativity: number
   conceptPrompt: string
   // Explicit output resolution (2026-07-25 rework, per Maro: "the
   // resolution options we have are very simplistic and insufficient
@@ -188,7 +154,7 @@ export interface RenderCaptureSettings {
 export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   showHdrBackground: true,
   aiEnhanceMode: 'off',
-  conceptAlsoUpscale: false,
+  conceptCreativity: 0.2,
   conceptPrompt: '',
   resolutionWidth: RESOLUTION_PRESETS['1080p'].width,
   resolutionHeight: RESOLUTION_PRESETS['1080p'].height,
@@ -217,7 +183,14 @@ const STORAGE_KEY = 'prosota_4d_render_capture_settings'
 export function loadRenderCaptureSettings(): RenderCaptureSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? { ...DEFAULT_RENDER_CAPTURE_SETTINGS, ...JSON.parse(raw) } : DEFAULT_RENDER_CAPTURE_SETTINGS
+    const saved = raw ? JSON.parse(raw) : {}
+    const settings = { ...DEFAULT_RENDER_CAPTURE_SETTINGS, ...saved }
+    // Retired upscale preferences must never trigger a paid generative render.
+    settings.aiEnhanceMode = saved.aiEnhanceMode === 'concept' ? 'concept' : 'off'
+    settings.conceptCreativity = typeof saved.conceptCreativity === 'number' && Number.isFinite(saved.conceptCreativity)
+      ? Math.max(0, Math.min(1, saved.conceptCreativity)) : DEFAULT_RENDER_CAPTURE_SETTINGS.conceptCreativity
+    delete settings.conceptAlsoUpscale
+    return settings
   } catch {
     return DEFAULT_RENDER_CAPTURE_SETTINGS
   }

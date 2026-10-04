@@ -5,6 +5,8 @@ psycopg[binary,pool]==3.2.10
 alembic>=1.13.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
+# OpenAI Responses and Images HTTP APIs (also used by existing services).
+httpx>=0.27,<1
 PyJWT[crypto]>=2.8.0
 # Cloudflare R2 (2026-08-23) — see config.py's own r2_* header. boto3 talks
 # to R2 directly since it's plain S3-compatible; ~15MB installed, well
@@ -21,20 +23,7 @@ pye57==0.4.19
 # (tool use, adaptive thinking, effort) is Messages API surface, not
 # SDK-version-gated.
 anthropic==0.125.0
-# AI Render Enhancement (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md) —
-# fal.ai's own official client, used by app/services/ai_upscale.py to call
-# Real-ESRGAN (faithful super-resolution) on the 3D viewport's raw render
-# at still-capture time only. Chosen over Gemini's generative image-editing
-# (logged-not-built, see memory) specifically because it can't hallucinate
-# materials/detail that aren't in the actual IFC/Tiles data.
-fal-client==1.0.1
-# AI Concept Render (2026-09-02, per Maro's own live A/B test against
-# fal.ai's faithful-only Real-ESRGAN — see
-# app/services/ai_concept_render.py's own header for the full "why", incl.
-# its guardrail prompt against hallucinated objects) — Google's official
-# Gemini SDK, used for the generative (not faithful) image-enhance mode,
-# kept as a separate, clearly-labeled option alongside fal.ai rather than
-# replacing it.
+# Legacy image provider for rollback.
 google-genai==2.21.0
 # P6 Excel progress extracts (2026-09-04, per Maro — a series of monthly
 # "Export to Excel" snapshots from P6, used to layer real historical

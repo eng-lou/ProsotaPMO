@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -86,6 +88,14 @@ class Settings(BaseSettings):
     # endpoint fails clearly (see client.py) rather than silently degrading
     # when this isn't set.
     anthropic_api_key: str = ""
+    # Auto uses OpenAI only once its server key is configured. Explicit
+    # provider overrides allow rollback without rewriting conversations.
+    ai_provider: Literal['auto', 'openai', 'anthropic'] = "auto"
+    ai_concept_render_provider: Literal['auto', 'openai', 'gemini'] = "auto"
+    openai_api_key: str = ""
+    openai_chat_model: str = "gpt-6-astra"
+    openai_reasoning_effort: str = "high"
+    openai_image_model: str = "gpt-image-2.5-sunburst"
     # Per-user daily cap on the assistant (2026-08-31, per Maro: "add a user
     # cap, except for superuser" — the key is safe from ever reaching a
     # browser, but every approved user can trigger real Anthropic billing
@@ -96,18 +106,7 @@ class Settings(BaseSettings):
     # ai_messages_reset_date and require_ai_quota in app/core/auth.py.
     # Super users (is_super_user) bypass this entirely, per Maro's own ask.
     ai_daily_message_cap: int = 30
-    # AI Render Enhancement (2026-09-01, per AI_RENDER_ENHANCEMENT_SCOPE.md)
-    # — fal.ai key for app/services/ai_upscale.py's Real-ESRGAN calls
-    # (faithful super-resolution on the 3D viewport's own raw render at
-    # still-capture time only; never used during normal interactive
-    # rendering). Same "empty by default, fails clearly at call time"
-    # reasoning as anthropic_api_key above.
-    fal_key: str = ""
-    # AI Concept Render (2026-09-02, per Maro's own live A/B test against
-    # fal.ai's faithful-only Real-ESRGAN — see
-    # app/services/ai_concept_render.py's own header) — Google AI Studio key
-    # for Gemini's image-generation model. Separate, clearly-labeled
-    # generative mode alongside (not replacing) fal.ai's faithful upscaler.
+    # Legacy render provider for explicit rollback.
     gemini_api_key: str = ""
 
 

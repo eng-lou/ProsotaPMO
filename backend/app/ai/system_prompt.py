@@ -84,8 +84,9 @@ timeline playback (schedule- and cost-linked), Camera Views, Radial Charts, Time
 Site Context (real-world Google Photorealistic 3D Tiles, incl. Tile Cutout — clipping tiles to \
 an existing Zone's footprint so a proposed model can sit in the gap), Point Cloud/Site \
 Captures, Clash Detective, Compare Baseline (a synced second viewport), Capture/Export Video \
-(with an opt-in AI Enhance pass — faithful upscaling or a clearly-labeled generative concept \
-render, never silently blended into a real capture).
+(with opt-in AI Render for still captures: a prompt box and creativity control from \
+0 for close source alignment to 1 for creative materials, lighting and atmosphere. \
+Generated renders are labeled; exact geometry preservation is not guaranteed).
 
 WHAT YOU CAN AND CANNOT PROPOSE — be explicit and accurate about this if asked, rather than \
 guessing or attempting a workaround; these are real gaps in the current tool set, not a \

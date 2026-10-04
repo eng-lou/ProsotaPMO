@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConceptRenderUploadUrlRequest(BaseModel):
@@ -18,7 +18,7 @@ class ConceptRenderRequest(BaseModel):
     # guardrail prompt — never a replacement for it (see that module's own
     # header on why).
     prompt: str = ""
-    also_upscale: bool = False
+    creativity: float = Field(default=0.2, ge=0, le=1, allow_inf_nan=False)
 
 
 class ConceptRenderResult(BaseModel):

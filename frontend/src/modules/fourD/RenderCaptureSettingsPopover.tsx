@@ -132,29 +132,32 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-prosota-muted">
-                <span title="Capture Image only (not Export Video). Adds a few real seconds and a small per-image cost.">AI Enhance</span>
+                <span title="Capture Image only (not Export Video). Adds a few real seconds and a small per-image cost.">AI Render</span>
                 <select
                   value={settings.aiEnhanceMode}
                   onChange={e => set('aiEnhanceMode', e.target.value as RenderCaptureSettings['aiEnhanceMode'])}
                   className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
                 >
                   <option value="off">Off</option>
-                  <option value="faithful" title="fal.ai Real-ESRGAN — can't invent detail that isn't in the model; only a visible difference on real photographic texture (Material Presets, Site Context tiles), not flat/untextured CAD geometry">Faithful Upscale</option>
-                  <option value="concept" title="Gemini generative enhancement — a guardrail prompt keeps it from adding/removing objects, but materials/lighting are still an AI's best guess. Always stamped as an AI-generated concept, never blended in as a real capture.">AI Concept Render</option>
+                  <option value="concept">Render</option>
                 </select>
               </div>
               {settings.aiEnhanceMode === 'concept' && (
                 <div className="space-y-1.5 pl-1 border-l-2 border-gray-100 dark:border-prosota-line">
-                  <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted" title="Pipes Gemini's own output through the Faithful Upscale pass afterward — Gemini's native resolution is often smaller than your requested export size">
+                  <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-prosota-muted">
+                    <span className="flex justify-between"><span>Creativity</span><span>{settings.conceptCreativity.toFixed(2)}</span></span>
                     <input
-                      type="checkbox"
-                      checked={settings.conceptAlsoUpscale}
-                      onChange={e => set('conceptAlsoUpscale', e.target.checked)}
+                      type="range" min={0} max={1} step={0.05}
+                      value={settings.conceptCreativity}
+                      onChange={e => set('conceptCreativity', Number(e.target.value))}
+                      aria-label="Render creativity"
+                      aria-valuetext={`${settings.conceptCreativity.toFixed(2)}, 0 closely aligned, 1 more creative`}
+                      className="w-full accent-blue-600"
                     />
-                    Also upscale the result
+                    <span className="flex justify-between text-[10px]"><span>0 � Aligned</span><span>1 � Creative</span></span>
                   </label>
                   <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-prosota-muted">
-                    <span title="Materials/lighting/mood only, e.g. 'overcast sky', 'warm evening light' — a fixed guardrail prompt already stops the AI from adding or removing objects, regardless of what's typed here">Prompt (optional)</span>
+                    <span>Prompt (optional)</span>
                     <textarea
                       value={settings.conceptPrompt}
                       onChange={e => set('conceptPrompt', e.target.value)}

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import base64
+import binascii
 
 import httpx
 from fastapi import HTTPException
@@ -9,7 +11,8 @@ from google import genai
 from google.genai import types
 
 from app.core.config import settings
-from app.services import ai_upscale, object_storage
+from app.ai.openai_transport import post_openai
+from app.services import object_storage
 
 STORAGE_PREFIX = "ai-concept-renders"
 
@@ -25,29 +28,42 @@ STORAGE_PREFIX = "ai-concept-renders"
 # assumed-working integration.
 MODEL = "gemini-3.1-flash-image"
 
-# Guardrail prompt (2026-09-02, per Maro: "improved results but more like
-# photoshop level not hallucinating by adding objects i did not ask for")
-# — this is the entire reason Concept Render exists as a *separate*,
-# explicitly-labeled mode instead of just replacing fal.ai: a schedule/IFC
-# -tied engineering tool can't risk a stakeholder mistaking an invented
-# rooftop unit or a repainted brick pattern for real model data (see
-# AI_RENDER_ENHANCEMENT_SCOPE.md's own "What NOT to build"). This prompt is
-# the actual enforcement mechanism for that boundary — always sent, with
-# the user's own optional prompt appended as an addition, never a
-# replacement, so a user-supplied prompt can't accidentally drop the
-# guardrail.
+# Creativity is prompt guidance, not a provider temperature or geometry guarantee.
 GUARDRAIL_PROMPT = (
-    "You are enhancing a 3D architectural/engineering render into a "
-    "photorealistic image — a Photoshop-level materials/lighting retouch, "
-    "not a reimagining. Improve surface materials, textures, lighting, and "
-    "photographic realism only. Do NOT add, remove, duplicate, or relocate "
-    "any object, structure, vehicle, person, sign, plant, or piece of "
-    "equipment that is not already visible in the source image. Do NOT "
-    "change the building's massing, proportions, layout, number of "
-    "elements, or the camera's framing/angle/crop. The output must depict "
-    "exactly the same scene and composition as the input image, just "
-    "rendered with more realistic materials and lighting."
+    "Create an architectural visualization from the supplied capture. "
+    "Keep the camera angle, framing, building massing, proportions, layout and "
+    "visible structural elements aligned with the source. Do not invent or "
+    "remove buildings, floors or equipment. Treat the user's prompt as art "
+    "direction within these constraints. Return only the rendered image."
 )
+
+
+def build_render_prompt(user_prompt: str, creativity: float) -> str:
+    if not 0 <= creativity <= 1:
+        raise ValueError('Creativity must be between 0 and 1')
+    if creativity <= 0.25:
+        direction = (
+            "Prioritize close source alignment. Retouch existing surfaces and lighting "
+            "subtly, preserve material colours and visible details, and add no objects."
+        )
+    elif creativity <= 0.65:
+        direction = (
+            "Balance source alignment with creative presentation. Explore realistic "
+            "material finishes, richer textures, lighting and mood while preserving "
+            "all objects and the original composition."
+        )
+    else:
+        direction = (
+            "Allow adventurous material palettes, lighting, atmosphere and artistic "
+            "styling. Follow requested decorative changes, but preserve the source "
+            "architecture and camera; do not add unrequested scene objects."
+        )
+    return (
+        f"{GUARDRAIL_PROMPT}\n\nCreativity: {creativity:.2f} on a 0 to 1 scale "
+        f"(0 = closest source alignment; 1 = strongest creative interpretation). "
+        f"Scale the strength of the treatment to this value. {direction}"
+        + (f"\n\nUser art direction: {user_prompt.strip()}" if user_prompt.strip() else "")
+    )
 
 
 @lru_cache(maxsize=1)
@@ -65,9 +81,22 @@ def presign_upload(content_type: str) -> tuple[str, str]:
     return storage_key, upload_url
 
 
-async def _generate(image_bytes: bytes, user_prompt: str) -> bytes:
+async def _generate(image_bytes: bytes, user_prompt: str, creativity: float = 0.2) -> bytes:
+    prompt = build_render_prompt(user_prompt, creativity)
+    if settings.ai_concept_render_provider == 'openai' or (settings.ai_concept_render_provider == 'auto' and settings.openai_api_key):
+        response = await post_openai('images/edits', timeout=240,
+            data={'model': settings.openai_image_model, 'prompt': prompt, 'n': '1',
+                  'quality': 'high', 'size': 'auto', 'output_format': 'png'},
+            files={'image': ('capture.png', image_bytes, 'image/png')},
+        )
+        try:
+            image = base64.b64decode(response['data'][0]['b64_json'], validate=True)
+            if not image:
+                raise ValueError('Empty image')
+            return image
+        except (KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
+            raise HTTPException(502, 'OpenAI Concept Render returned no valid image.') from exc
     client = _get_client()
-    prompt = GUARDRAIL_PROMPT if not user_prompt.strip() else f"{GUARDRAIL_PROMPT}\n\nAdditional instructions (materials/lighting/mood only — the rules above still apply): {user_prompt.strip()}"
     try:
         response = await client.aio.models.generate_content(
             model=MODEL,
@@ -81,21 +110,8 @@ async def _generate(image_bytes: bytes, user_prompt: str) -> bytes:
     raise HTTPException(status_code=502, detail="AI Concept Render returned no image")
 
 
-# The browser has already PUT the raw capture straight to R2 via /presign
-# by the time this runs (same shape as ai_upscale.py's own
-# upscale_stored_image) — Gemini's own API takes real image bytes, not a
-# URL it fetches itself the way fal.ai does, so this downloads once here
-# rather than handing it a presigned url.
-#
-# also_upscale (2026-09-02, per Maro: "opportunity to build the generative
-# then toggle the upscale to go through it all") — composes the two
-# pipelines rather than duplicating either: Gemini's own output resolution
-# is often smaller than the requested export size, so this just asks the
-# existing fal.ai faithful-upscale pipeline to enlarge/sharpen the
-# generated image afterward, reusing ai_upscale.upscale_stored_image
-# directly rather than a second implementation of the same R2/fal.ai
-# round-trip.
-async def generate_concept_render(storage_key: str, user_prompt: str, also_upscale: bool) -> str:
+# The capture is already in object storage; fetch once for the image edit.
+async def generate_concept_render(storage_key: str, user_prompt: str, creativity: float = 0.2) -> str:
     source_url = object_storage.presigned_get_url(storage_key)
     async with httpx.AsyncClient() as http:
         response = await http.get(source_url)
@@ -103,12 +119,7 @@ async def generate_concept_render(storage_key: str, user_prompt: str, also_upsca
         raw_bytes = response.content
     await run_in_threadpool(object_storage.delete_object, storage_key)
 
-    generated_bytes = await _generate(raw_bytes, user_prompt)
-
-    if also_upscale:
-        intermediate_key = object_storage.generate_storage_key(ai_upscale.STORAGE_PREFIX, "concept.png")
-        await run_in_threadpool(object_storage.upload_bytes, intermediate_key, generated_bytes, "image/png")
-        return await ai_upscale.upscale_stored_image(intermediate_key)
+    generated_bytes = await _generate(raw_bytes, user_prompt, creativity)
 
     result_key = object_storage.generate_storage_key(STORAGE_PREFIX, "concept.png")
     await run_in_threadpool(object_storage.upload_bytes, result_key, generated_bytes, "image/png")

@@ -47,7 +47,7 @@ export interface AiChatResponse {
 }
 
 export async function sendChatTurn(payload: AiChatRequest): Promise<AiChatResponse> {
-  const res = await api.post<AiChatResponse>('/api/v1/ai/chat', payload)
+  const res = await api.post<AiChatResponse>('/api/v1/ai/chat', payload, { timeout: 240_000 })
   return res.data
 }
 

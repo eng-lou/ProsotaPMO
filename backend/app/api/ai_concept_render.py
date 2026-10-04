@@ -10,8 +10,7 @@ from app.services import ai_concept_render as svc
 router = APIRouter(prefix="/ai/concept-render", tags=["ai"])
 
 
-# Step 1 of the direct-to-R2 upload — same shape as ai_upscale.py's own
-# /presign.
+# Upload directly to storage before requesting a render.
 @router.post("/presign", response_model=ConceptRenderUploadUrl)
 async def presign_concept_render_upload(payload: ConceptRenderUploadUrlRequest) -> ConceptRenderUploadUrl:
     storage_key, upload_url = svc.presign_upload(payload.content_type)
@@ -20,5 +19,5 @@ async def presign_concept_render_upload(payload: ConceptRenderUploadUrlRequest) 
 
 @router.post("/", response_model=ConceptRenderResult)
 async def concept_render(payload: ConceptRenderRequest) -> ConceptRenderResult:
-    download_url = await svc.generate_concept_render(payload.storage_key, payload.prompt, payload.also_upscale)
+    download_url = await svc.generate_concept_render(payload.storage_key, payload.prompt, payload.creativity)
     return ConceptRenderResult(download_url=download_url)

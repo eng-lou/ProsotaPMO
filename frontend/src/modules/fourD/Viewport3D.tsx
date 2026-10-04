@@ -72,7 +72,6 @@ import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptur
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
-import { upscaleCanvasBlob } from './aiUpscale'
 import { generateConceptRenderBlob } from './aiConceptRender'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
 import type { Path, PathPoint } from './paths'
@@ -6052,29 +6051,16 @@ export function Viewport3D({
       // (Gantt/Table/titles/labels) stay at native sharpness rather than
       // getting run through the AI model themselves — only the actual
       // IFC/Tiles render content is a candidate for AI-added detail.
-      // Best-effort: any failure here (network error, fal.ai down, key not
+      // Best-effort: any failure here (network error, provider unavailable, key not
       // configured server-side) falls back to the un-enhanced capture
       // rather than losing the whole export.
       let mainSource: HTMLCanvasElement = canvas
-      // Only 'concept' output gets the visible label below — 'faithful'
-      // (fal.ai) genuinely can't invent content, so it's not held to the
-      // same "never mistaken for a real capture" labeling requirement.
       let isConceptRender = false
-      if (renderCaptureSettings.aiEnhanceMode !== 'off') {
+      if (renderCaptureSettings.aiEnhanceMode === 'concept') {
         setIsEnhancingCapture(true)
         try {
-          // Flattened onto opaque white first (2026-09-02 fix, per Maro's
-          // own live test: a solid black background came back from fal.ai
-          // instead of the expected sky/blank). This canvas's own GL
-          // context defaults to a transparent (0,0,0,0) clear color
-          // wherever nothing else is drawn — invisible in every other use
-          // of this same canvas (drawImage onto composite, which is also
-          // transparent by default, so the transparency just carries
-          // through harmlessly), but both fal.ai's esrgan endpoint and
-          // Gemini flatten the upload to plain RGB before running their
-          // own model, which exposes that invisible black RGB as a solid
-          // opaque black fill. Flattening onto white ourselves first means
-          // there's no alpha channel left for either to silently drop.
+          // Flatten transparent pixels onto white before sending the capture,
+          // so image providers cannot expose their invisible black RGB values.
           const flattened = document.createElement('canvas')
           flattened.width = canvas.width
           flattened.height = canvas.height
@@ -6086,9 +6072,9 @@ export function Viewport3D({
           }
           const rawBlob = await new Promise<Blob | null>(resolve => flattened.toBlob(resolve, 'image/png'))
           if (rawBlob) {
-            const enhancedBlob = renderCaptureSettings.aiEnhanceMode === 'concept'
-              ? await generateConceptRenderBlob(rawBlob, renderCaptureSettings.conceptPrompt, renderCaptureSettings.conceptAlsoUpscale)
-              : await upscaleCanvasBlob(rawBlob)
+            const enhancedBlob = await generateConceptRenderBlob(
+              rawBlob, renderCaptureSettings.conceptPrompt, renderCaptureSettings.conceptCreativity,
+            )
             const bitmap = await createImageBitmap(enhancedBlob)
             const enhancedCanvas = document.createElement('canvas')
             enhancedCanvas.width = bitmap.width
@@ -6099,7 +6085,7 @@ export function Viewport3D({
             isConceptRender = renderCaptureSettings.aiEnhanceMode === 'concept'
           }
         } catch (err) {
-          window.alert(`AI Enhance failed — capturing without it.\n${err instanceof Error ? err.message : String(err)}`)
+          window.alert(`AI Render failed — capturing without it.\n${err instanceof Error ? err.message : String(err)}`)
         } finally {
           setIsEnhancingCapture(false)
         }

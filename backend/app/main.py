@@ -9,7 +9,6 @@ from app.api.ai_attachments import router as ai_attachments_router
 from app.api.ai_chat import router as ai_chat_router
 from app.api.poe_conversations import router as poe_conversations_router
 from app.api.ai_concept_render import router as ai_concept_render_router
-from app.api.ai_upscale import router as ai_upscale_router
 from app.api.animation_profiles import router as animation_profiles_router
 from app.api.annotations import router as annotations_router
 from app.api.baseline_sets import router as baseline_sets_router
@@ -117,7 +116,6 @@ app.include_router(activity_steps_router, prefix="/api/v1", dependencies=_auth_a
 app.include_router(ai_attachments_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(ai_chat_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(poe_conversations_router, prefix="/api/v1", dependencies=_auth_approved)
-app.include_router(ai_upscale_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(ai_concept_render_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(calendars_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(calendar_exceptions_router, prefix="/api/v1", dependencies=_auth_approved)
