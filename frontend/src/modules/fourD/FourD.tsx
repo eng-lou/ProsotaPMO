@@ -1,4 +1,5 @@
 import { ActivityProfileMapper } from './ActivityProfileMapper'
+import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
@@ -317,6 +318,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [calendars, setCalendars] = useState<Calendar[]>([])
 
   const [scheduleLoading, setScheduleLoading] = useState(false)
+  const [integratedIfcExportOpen, setIntegratedIfcExportOpen] = useState(false)
   // Guards against an out-of-order response overwriting newer data (2026-07-09
   // fix — "still cant see the loaded schedule" turned out to be this, not
   // just the staleness this refetch was originally added for): the effect
@@ -7783,6 +7785,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           ⬆ Import Model
         </button>
+        <button
+          onClick={() => setIntegratedIfcExportOpen(true)}
+          disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
+        >Export IFC</button>
+        {integratedIfcExportOpen && selectedProject && period && costPeriod && <IntegratedIfcExportDialog
+          key={`${selectedProject.id}:${period.id}:${costPeriod.id}`}
+          project={selectedProject} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
+          onClose={() => setIntegratedIfcExportOpen(false)}
+        />}
         {importing && uploadProgress.size === 0 && <span className="text-xs text-gray-400 dark:text-prosota-muted">Importing…</span>}
         {/* Visible counterpart to the beforeunload guard above (2026-07-17,
             per Maro: "force a save and recall ifc after every refresh") —
