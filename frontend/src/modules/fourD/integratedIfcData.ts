@@ -186,7 +186,16 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     const set = byTask.get(task) ?? new Set<string>()
     set.add(`#${id}`); byTask.set(task, set)
   }
-  for (const [task, ids] of byTask) add('IFCRELASSIGNSTOPROCESS', ...root('Prosota model elements'), list([...ids]), '$', task, '$')
+  // Built elements are task OUTPUTS. AssignsToProcess means consumed input
+  // (e.g. demolition), which reverses construction playback in Bonsai.
+  const byProduct = new Map<string, Set<string>>()
+  for (const [task, ids] of byTask) for (const product of ids) {
+    const producers = byProduct.get(product) ?? new Set<string>()
+    producers.add(task); byProduct.set(product, producers)
+  }
+  for (const [product, producers] of byProduct) {
+    add('IFCRELASSIGNSTOPRODUCT', ...root('Prosota model elements'), list([...producers]), '$', product)
+  }
   if (missingLinks) warnings.push(`${missingLinks} activity/model links could not be resolved in the source IFCs.`)
   if (unsupportedLinks) warnings.push(`${unsupportedLinks} mesh, annotation or split links have no source IFC element; retained in export metadata only.`)
   properties(schedule, 'Prosota_ModelLinks', { links: data.links.filter(l => tasks.has(l.activity_id)) })

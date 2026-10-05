@@ -62,6 +62,21 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
 
+function checkProductOutputs(api, model) {
+  const outputs = lines(api, model, W.IFCRELASSIGNSTOPRODUCT).filter(r => r.Name.value === 'Prosota model elements')
+  assert.deepEqual(outputs.map(r => api.GetLine(model, r.RelatingProduct.value).GlobalId.value).sort(), [wallA, wallB])
+  for (const output of outputs) {
+    assert.ok(output.RelatedObjects.length)
+    for (const task of output.RelatedObjects) assert.equal(api.GetLine(model, task.value).type, W.IFCTASK)
+  }
+  const inputs = lines(api, model, W.IFCRELASSIGNSTOPROCESS)
+  assert.equal(inputs.filter(r => r.Name.value === 'Prosota model elements').length, 0)
+  assert.ok(inputs.some(r => r.Name.value === 'Prosota resource assignment'))
+  for (const input of inputs) for (const object of input.RelatedObjects) {
+    assert.notEqual(api.GetLine(model, object.value).type, W.IFCWALL)
+  }
+}
+
 test('combined IFC reopens with geometry, native planning, currencies and remapped element links', async () => withApi(async api => {
   const result = await exportIntegratedIfc(api, [source('a.ifc', wallA), source('b.ifc', wallB, { offset: 25 })], data())
   assert.deepEqual(result.warnings, [])
@@ -85,9 +100,7 @@ test('combined IFC reopens with geometry, native planning, currencies and remapp
   assert.equal(lines(api, model, W.IFCLABORRESOURCE).length, 1)
   assert.equal(lines(api, model, W.IFCCOSTITEM).length, 1)
   assert.equal(lines(api, model, W.IFCMONETARYUNIT)[0].Currency.value, 'GBP')
-  const process = lines(api, model, W.IFCRELASSIGNSTOPROCESS).filter(r => r.Name.value === 'Prosota model elements')
-  const linkedWalls = process.flatMap(r => r.RelatedObjects.map(h => api.GetLine(model, h.value).GlobalId.value)).sort()
-  assert.deepEqual(linkedWalls, [wallA, wallB])
+  checkProductOutputs(api, model)
   // Every serialized reference resolves, including second-model geometry.
   const v = api.GetAllLines(model), present = new Set(Array.from({ length: v.size() }, (_, i) => v.get(i)))
   function check(value) { if (Array.isArray(value)) value.forEach(check); else if (value && typeof value === 'object') { if (value.type === W.REF) assert.ok(present.has(value.value), `dangling #${value.value}`); else Object.values(value).forEach(check) } }
@@ -121,6 +134,7 @@ test('IFC2X3 combines geometry and exports native tasks, dates, lags, resources 
   const result = await exportIntegratedIfc(api, [source('old-a.ifc', wallA, {schema: 'IFC2X3'}), source('old-b.ifc', wallB, {schema: 'IFC2X3', offset: 25})], d)
   const model = api.OpenModel(result.bytes)
   assert.equal(api.GetModelSchema(model), 'IFC2X3')
+  checkProductOutputs(api, model)
   assert.equal(api.LoadAllGeometry(model).size(), 2)
   assert.equal(lines(api, model, W.IFCPROJECT).length, 1)
   assert.equal(lines(api, model, W.IFCTASK).length, 2)

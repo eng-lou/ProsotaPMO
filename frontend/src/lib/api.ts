@@ -64,7 +64,10 @@ const isRetryable = (err: unknown) => {
   return status === undefined || status >= 500
 }
 
-async function downloadOnce(url: string): Promise<Blob> {
+// Signed storage URLs carry their own credentials. Never send the app token.
+const storageDownloadClient = axios.create()
+
+async function downloadOnce(url: string, external: boolean): Promise<Blob> {
   const controller = new AbortController()
   let timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
   const resetWatchdog = () => {
@@ -72,7 +75,7 @@ async function downloadOnce(url: string): Promise<Blob> {
     timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
   }
   try {
-    const res = await api.get<Blob>(url, {
+    const res = await (external ? storageDownloadClient : api).get<Blob>(url, {
       responseType: 'blob',
       timeout: 0,
       signal: controller.signal,
@@ -89,17 +92,17 @@ async function downloadOnce(url: string): Promise<Blob> {
   }
 }
 
-export async function downloadLargeBlob(url: string): Promise<Blob> {
+export async function downloadLargeBlob(url: string, external = false): Promise<Blob> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await downloadOnce(url)
+      return await downloadOnce(url, external)
     } catch (err) {
       if (attempt >= RETRY_DELAYS_MS.length || !isRetryable(err)) {
         if (attempt === 0) throw err
         const detail = err instanceof Error ? err.message : String(err)
         throw new Error(`${detail} — failed ${attempt + 1} times`)
       }
-      console.warn(`Download failed, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length})`, url, err)
+      console.warn(`Download failed, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length})`)
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
     }
   }

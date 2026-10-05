@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
-import { api } from '@/lib/api'
+import { api, downloadLargeBlob } from '@/lib/api'
 import { decompressIfGzip } from '@/lib/fileCache'
 import type { IntegratedIfcData } from './integratedIfcData'
 import { downloadModel3DFile, listModel3DFiles, type Model3DFile } from './model3dFiles'
@@ -32,6 +32,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   const run = async () => {
     if (!files?.length) return
     setBusy(true); setError(''); setCounts(''); setStatus('Reading saved project data…')
+    let stage = 'Reading project data'
     try {
       const get = async <T,>(path: string, params: object) => (await api.get<T>(`/api/v1/${path}/`, { params })).data
       const p = { project_id: project.id }, s = { schedule_period_id: schedulePeriodId }
@@ -59,15 +60,19 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       for (const [i, file] of files.entries()) {
         if (!alive.current) return
         setStatus(`Reading model ${i + 1} of ${files.length}: ${file.name}`)
+        stage = `Downloading source model: ${file.name}`
         let blob = await downloadModel3DFile(file)
         const header = await blob.slice(0, 65536).text()
         if (targetSchema === 'IFC4' && /FILE_SCHEMA\s*\(\s*\(\s*'IFC2X3'/i.test(header)) {
           setStatus(`Converting model ${i + 1} of ${files.length} to IFC4: ${file.name}`)
+          stage = `Converting source model to IFC4: ${file.name}`
           const { data: converted } = await api.post<{ download_url: string }>(`/api/v1/model3d-files/${file.id}/ifc4-export-source`, undefined, { timeout: 240000 })
           if (!alive.current) return
-          const response = await fetch(converted.download_url)
-          if (!response.ok) throw new Error('Could not download the converted IFC4 model.')
-          blob = await decompressIfGzip(await response.blob())
+          stage = `Downloading converted IFC4 model: ${file.name}`
+          setStatus(stage)
+          const packed = await downloadLargeBlob(converted.download_url, true)
+          stage = `Unpacking converted IFC4 model: ${file.name}`
+          blob = await decompressIfGzip(packed)
         }
         const bytes = new Uint8Array(await blob.arrayBuffer())
         if (targetSchema === 'IFC4' && !/FILE_SCHEMA\s*\(\s*\(\s*'IFC4'/i.test(new TextDecoder().decode(bytes.slice(0, 65536)))) {
@@ -103,7 +108,8 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
     } catch (e) {
       if (alive.current) {
         const detail = axios.isAxiosError(e) ? e.response?.data?.detail : null
-        setError(typeof detail === 'string' ? detail : e instanceof Error ? e.message : 'Could not read project data.')
+        const message = typeof detail === 'string' ? detail : e instanceof Error ? e.message : 'Request failed.'
+        setError(`${stage} failed. ${message}${stage.startsWith('Downloading converted') ? ' The converted model is cached; retrying will reuse it. If this persists, check browser network errors for blocked storage access.' : ''}`)
         setBusy(false); setStatus('')
       }
     }

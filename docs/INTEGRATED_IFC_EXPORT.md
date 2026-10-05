@@ -18,7 +18,11 @@ with explicit notices for empty resource/assignment/cost data.
 - IfcWorkCalendar with weekly working intervals, daily breaks and whole-day
   non-working exceptions. Other exceptions are retained in custom properties
   and explicitly reported, rather than approximated as native calendar rules.
-- Model-to-task relationships resolved by original element GlobalId.
+- Model-to-task relationships resolved by original element GlobalId, exported
+  as task outputs (IfcRelAssignsToProduct) in both schemas. Construction
+  resources remain IfcRelAssignsToProcess assignments. Model links currently
+  represent construction outputs; demolition/maintenance input roles and
+  custom animation profiles are not inferred.
 - Construction resource occurrences per assignment, usage ratios and total
   assignment budgets; original catalogue and assignment fields retained.
 - IfcCostSchedule/IfcCostItem with separately labelled BUDGET, ACTUAL and
