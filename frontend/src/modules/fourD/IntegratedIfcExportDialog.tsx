@@ -85,7 +85,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
     <div className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-text rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
       <h2 id="integrated-ifc-title" className="font-semibold text-base mb-3">Export integrated IFC</h2>
       <p>Combine all saved IFC models with the active schedule, dependencies, resource assignments and current cost plan.</p>
-      <p className="mt-2 text-xs text-gray-500">Uses original geometry, placements and materials, including hidden/unloaded elements. Viewport transforms, material overrides, split geometry and animation are not baked. Mesh and point-cloud files are excluded. Source files must be IFC4 with matching units.</p>
+      <p className="mt-2 text-xs text-gray-500">Uses original geometry, placements and materials, including hidden/unloaded elements. Viewport transforms, material overrides, split geometry and animation are not baked. Mesh and point-cloud files are excluded. Supports IFC2X3 and IFC4, preserving the source schema. Combined sources must use the same schema and matching units.</p>
       <ul className="my-3 text-xs list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
       <label className="block my-3">Currency of the Prosota costs

@@ -1,4 +1,4 @@
-import { IfcAPI, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCMONETARYUNIT, IFCREAL, LABEL, REAL, REF, type RawLineData } from 'web-ifc'
+import { IfcAPI, IFC2X3, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCSIUNIT, IFCCONVERSIONBASEDUNIT, IFCMONETARYUNIT, REF } from 'web-ifc'
 import { buildPlanningStep, type IntegratedIfcData } from './integratedIfcData'
 
 export interface IfcExportSource { name: string; bytes: Uint8Array }
@@ -43,12 +43,16 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
       .map((h: any) => JSON.stringify(canonical(model, h))).sort().join('|')
   }
   let expectedUnits = ''
+  let schema = ''
   try {
     for (const [index, source] of sources.entries()) {
       progress(`Combining model ${index + 1} of ${sources.length}: ${source.name}`)
       const model = api.OpenModel(source.bytes)
       try {
-        if (api.GetModelSchema(model).toUpperCase() !== 'IFC4') throw new Error(`"${source.name}" uses ${api.GetModelSchema(model)}. Integrated export currently requires IFC4 source files; export this model as IFC4 from its authoring tool.`)
+        const sourceSchema = api.GetModelSchema(model).toUpperCase()
+        if (!['IFC4', 'IFC2X3'].includes(sourceSchema)) throw new Error(`"${source.name}" uses ${sourceSchema}. Integrated export supports IFC2X3 and IFC4.`)
+        if (index && sourceSchema !== schema) throw new Error('The source models mix IFC2X3 and IFC4. Combining different schemas requires conversion; use source models with the same schema.')
+        schema = sourceSchema
         const projects = ids(model, IFCPROJECT)
         if (projects.length !== 1) throw new Error(`"${source.name}" must contain exactly one IfcProject.`)
         const p = api.GetLine(model, projects[0])
@@ -85,36 +89,30 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
         const rewrite = (value: any): any => {
           if (Array.isArray(value)) return value.map(rewrite)
           if (value && typeof value === 'object') {
-            // web-ifc reads REAL tokens as strings, but its writer requires
-            // the generated measure object's numeric accessors.
-            if (value.type === REAL) return api.CreateIfcType(destination, IFCREAL, Number(value.value))
-            if (value.type === LABEL && value.typecode) {
-              const typed = api.CreateIfcType(destination, value.typecode, value.value)
-              const key = typed.type === REAL ? 'internalValue' : 'value'
-              return { [key]: typed[key], valueType: typed.type, type: LABEL, label: typed.name }
-            }
             if (value.type === REF) {
+              if (value.value === 0) return null // web-ifc's unset/derived handle
               const mapped = remap.get(value.value)
               if (mapped == null) throw new Error(`"${source.name}" contains a dangling IFC reference #${value.value}.`)
-              return { ...value, value: mapped }
+              value.value = mapped
+              return value
             }
-            return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, rewrite(v)]))
+            // Preserve generated measure prototypes/accessors. Only handles
+            // need remapping; the schema-aware writer restores derived '*'
+            // attributes (e.g. IfcSIUnit), which raw copies would omit.
+            return value
           }
           return value
         }
         for (let offset = 0; offset < lineIds.length; offset += 1000) {
-          const batch: RawLineData[] = []
           for (const id of lineIds.slice(offset, offset + 1000)) {
             if (index && id === projects[0]) continue
             if (!index && !changedGuids.has(id)) continue
-            const raw = api.GetRawLineData(model, id)
-            const args = rewrite(raw.arguments)
-            if (changedGuids.has(id)) args[0] = { ...args[0], value: changedGuids.get(id) }
-            batch.push({ ...raw, ID: remap.get(id)!, arguments: args })
-          }
-          for (const line of batch) {
-            try { api.WriteRawLineData(destination, line) }
-            catch { throw new Error(`Unable to copy ${api.GetNameFromTypeCode(line.type)} #${line.ID} from "${source.name}".`) }
+            const line = api.GetLine(model, id)
+            for (const key of Object.keys(line)) line[key] = rewrite(line[key])
+            line.expressID = remap.get(id)!
+            if (changedGuids.has(id)) line.GlobalId.value = changedGuids.get(id)
+            try { api.WriteLine(destination, line) }
+            catch (error) { throw new Error(`Unable to copy ${api.GetNameFromTypeCode(line.type)} #${id} from "${source.name}": ${error instanceof Error ? error.message : String(error)}`) }
           }
         }
         if (index) {
@@ -134,14 +132,47 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
       throw new Error('The source IFC currency differs from the export currency. Select the source currency; this exporter does not convert money.')
     }
     if (!currencies.length) {
-      const unit = api.CreateIfcEntity(destination, IFCMONETARYUNIT, api.CreateIfcType(destination, api.GetTypeCodeFromName('IFCLABEL'), data.currency))
+      const currency = schema === 'IFC2X3' ? (IFC2X3.IfcCurrencyEnum as any)[data.currency]
+        : api.CreateIfcType(destination, api.GetTypeCodeFromName('IFCLABEL'), data.currency)
+      if (!currency) throw new Error(`Currency ${data.currency} is not supported by IFC2X3.`)
+      const unit = api.CreateIfcEntity(destination, IFCMONETARYUNIT, currency)
       unit.expressID = ++maxId
       api.WriteLine(destination, unit)
       const rawUnits = api.GetRawLineData(destination, project.UnitsInContext.value)
       rawUnits.arguments[0].push({ type: REF, value: unit.expressID })
       api.WriteRawLineData(destination, rawUnits)
     }
-    const planning = buildPlanningStep(data, projectId, maxId + 1, elements, guid)
+    let timeUnitSeconds: number | undefined
+    if (schema === 'IFC2X3') {
+      // IFC2X3 uses numeric IfcTimeMeasure values in the project's time unit.
+      // Preserve any existing unit (including conversion-based hours/days).
+      const timeUnits = unitAssignment.Units.filter((h: any) => api.GetLine(destination, h.value).UnitType?.value === 'TIMEUNIT')
+      if (timeUnits.length > 1) throw new Error('Source IFC contains multiple time units; resolve them before exporting.')
+      const scale = (id: number, visited = new Set<number>()): number => {
+        if (visited.has(id)) throw new Error('Cyclic IFC time unit definition.')
+        visited.add(id)
+        const unit = api.GetLine(destination, id)
+        if (unit.type === IFCSIUNIT && unit.Name?.value === 'SECOND') {
+          const prefixes: Record<string, number> = { EXA: 1e18, PETA: 1e15, TERA: 1e12, GIGA: 1e9, MEGA: 1e6, KILO: 1e3, HECTO: 1e2, DECA: 10, DECI: .1, CENTI: .01, MILLI: .001, MICRO: 1e-6, NANO: 1e-9, PICO: 1e-12, FEMTO: 1e-15, ATTO: 1e-18 }
+          return unit.Prefix ? prefixes[unit.Prefix.value] : 1
+        }
+        if (unit.type === IFCCONVERSIONBASEDUNIT) {
+          const factor = api.GetLine(destination, unit.ConversionFactor.value)
+          return Number(factor.ValueComponent.value) * scale(factor.UnitComponent.value, visited)
+        }
+        throw new Error('Unsupported IFC time unit; cannot safely export task durations.')
+      }
+      if (timeUnits.length) timeUnitSeconds = scale(timeUnits[0].value)
+      else {
+        const unit = api.CreateIfcEntity(destination, IFCSIUNIT, IFC2X3.IfcUnitEnum.TIMEUNIT, null, IFC2X3.IfcSIUnitName.SECOND)
+        unit.expressID = ++maxId; api.WriteLine(destination, unit)
+        const rawUnits = api.GetRawLineData(destination, project.UnitsInContext.value)
+        rawUnits.arguments[0].push({ type: REF, value: unit.expressID }); api.WriteRawLineData(destination, rawUnits)
+        timeUnitSeconds = 1
+      }
+      if (!Number.isFinite(timeUnitSeconds) || timeUnitSeconds! <= 0) throw new Error('Invalid IFC time unit scale.')
+    }
+    const planning = buildPlanningStep(data, projectId, maxId + 1, elements, guid, timeUnitSeconds)
     const original = new TextDecoder().decode(api.SaveModel(destination))
     const marker = original.lastIndexOf('ENDSEC;')
     if (marker < 0) throw new Error('Could not serialise the combined IFC.')

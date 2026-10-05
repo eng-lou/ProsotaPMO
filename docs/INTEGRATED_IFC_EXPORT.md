@@ -1,9 +1,10 @@
 # Integrated IFC export
 
-The 4D toolbar's **Export IFC** action creates one combined IFC4 file from all
+The 4D toolbar's **Export IFC** action creates one combined IFC file from all
 saved IFC sources in the selected project. It reads the active schedule period
 and the active cost period afresh at export time. It does not change source
-files, server records or the viewport's IFC handles.
+files, server records or the viewport's IFC handles. IFC2X3 sources produce
+IFC2X3; IFC4 sources produce IFC4. Sources in a combined export must share a schema.
 
 ## Contents
 
@@ -27,7 +28,8 @@ files, server records or the viewport's IFC handles.
 
 ## Boundaries and safeguards
 
-- IFC4 sources only. IFC2X3/IFC4X3 schema conversion is not implemented.
+- IFC2X3 and IFC4 sources are supported natively. Mixed schemas and IFC4X3
+  remain unsupported; no schema header relabelling or geometry conversion occurs.
 - Project units must match across sources. Export does not rescale geometry or
   reconcile distinct coordinate reference systems; original coordinates remain.
 - Currency is explicitly selected; source currencies must agree. No conversion.
@@ -51,13 +53,37 @@ files, server records or the viewport's IFC handles.
 
 ## Verification
 
+### IFC2X3 representation
+
+IFC2X3 exports use IfcTask, IfcScheduleTimeControl and IfcRelAssignsTasks for
+scheduled/actual dates, duration, remaining time, float and completion.
+Dependencies use numeric IfcRelSequence lags. Time measures respect the source
+project's time unit (including conversion-based hours); seconds are added only
+when the source has no time unit. Native resource occurrences are linked to
+tasks, and IfcCostValue records are linked through IfcRelAssociatesAppliedValue.
+New entities have their own Prosota owner history.
+
+IFC2X3 does not have IFC4's work calendar or resource-time entities. Calendar
+rules, breaks and exceptions are retained in Prosota_Calendar properties on
+calendar groups linked to tasks. Assignment utilisation, quantity and all
+original assignment fields remain in Prosota_ResourceAssignment properties.
+The download shows a notice explaining this receiving-application limitation.
+The IFC4 representation described above remains unchanged.
+
 `node --test tests/integratedIfcExport.test.mjs` from frontend tests native
 planning round trips, geometry/coordinate preservation, reference resolution,
 Unicode, mixed units, ambiguous IDs and unresolved links. Setting
-`PROSOTA_IFC_TEST_FILE` enables an additional real IFC4 fixture test that combines
+`PROSOTA_IFC_TEST_FILE` enables an additional real IFC2X3 or IFC4 fixture test that combines
 two copies and checks geometry counts, property values and GlobalId uniqueness.
 The source fixture is not copied into the repository.
 
+The regression fixture covers both schemas, legacy time units, all six resource
+types and mixed-schema rejection. `PROSOTA_IFC_OUTPUT` saves the IFC2X3 fixture
+export for independent validation. The fixture passed IfcOpenShell schema and
+EXPRESS validation with zero diagnostics. A local real IFC2X3 structural model
+also passed geometry and source-property preservation checks when combined.
+
 The production Vite build includes the separate IFC export worker. Browser UI,
-large high-rise files, formal EXPRESS validation and independent third-party
-IFC application interoperability need further validation.
+large high-rise files and independent third-party IFC application interoperability
+need further validation. Validation of the fixture does not certify arbitrary
+input models or repair pre-existing source schema errors.

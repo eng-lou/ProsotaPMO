@@ -17,11 +17,11 @@ function source(name, wallGuid, { schema = 'IFC4', prefix = '$', offset = 0, pro
   return { name, bytes: new TextEncoder().encode(`ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');
-FILE_NAME('test.ifc','2026-10-05T12:00:00',(),(),'Test','Test','');
+FILE_NAME('test.ifc','2026-10-05T12:00:00',('Tester'),('Test'),'Test','Test','');
 FILE_SCHEMA(('${schema}'));
 ENDSEC;
 DATA;
-#1=IFCPROJECT('${projectGuid}',$,'Project',$,$,$,$,(#5),#3);
+#1=IFCPROJECT('${projectGuid}',${schema === 'IFC2X3' ? '#23' : '$'},'Project',$,$,$,$,(#5),#3);
 #2=IFCSIUNIT(*,.LENGTHUNIT.,${prefix},.METRE.);
 #3=IFCUNITASSIGNMENT((#2));
 #4=IFCCARTESIANPOINT((0.,0.,0.));
@@ -30,7 +30,7 @@ DATA;
 #7=IFCCARTESIANPOINT((${offset}.,0.,0.));
 #8=IFCAXIS2PLACEMENT3D(#7,$,$);
 #9=IFCLOCALPLACEMENT($,#8);
-#10=IFCWALL('${wallGuid}',$,'Wall',$,$,#9,#16,$,.NOTDEFINED.);
+#10=IFCWALL('${wallGuid}',${schema === 'IFC2X3' ? '#23' : '$'},'Wall',$,$,#9,#16,$${schema === 'IFC2X3' ? '' : ',.NOTDEFINED.'});
 #11=IFCDIRECTION((0.,0.,1.));
 #12=IFCCARTESIANPOINT((0.,0.));
 #13=IFCAXIS2PLACEMENT2D(#12,$);
@@ -38,6 +38,11 @@ DATA;
 #15=IFCEXTRUDEDAREASOLID(#14,#6,#11,3.);
 #16=IFCPRODUCTDEFINITIONSHAPE($,$,(#17));
 #17=IFCSHAPEREPRESENTATION(#5,'Body','SweptSolid',(#15));
+${schema === 'IFC2X3' ? `#19=IFCPERSON($,$,'Tester',$,$,$,$,$);
+#20=IFCORGANIZATION($,'Test',$,$,$);
+#21=IFCPERSONANDORGANIZATION(#19,#20,$);
+#22=IFCAPPLICATION(#20,'1','Test ${offset}','Test ${offset}');
+#23=IFCOWNERHISTORY(#21,#22,$,.ADDED.,$,$,$,1791201600);` : ''}
 ENDSEC;
 END-ISO-10303-21;`) }
 }
@@ -104,6 +109,63 @@ test('missing and split links are reported, not silently discarded', async () =>
 test('invalid resource references stop the export', async () => withApi(async api => {
   const d = data(); d.assignments[0].resource_id = 'missing'
   await assert.rejects(exportIntegratedIfc(api, [source('a.ifc', wallA)], d), /resource assignment cannot be resolved/)
+}))
+
+test('IFC2X3 combines geometry and exports native tasks, dates, lags, resources and cost associations', async () => withApi(async api => {
+  const d = data()
+  d.calendars.push({...d.calendars[0], id: 'unused', name: 'Unused retained calendar', is_project_default: false})
+  for (const type of ['crew', 'equipment', 'material', 'subcontractor', 'cost']) {
+    d.resources.push({ id: type, resource_type: type, name: type, rate: '10', unit: 'day' })
+    d.assignments.push({ id: type, resource_id: type, activity_id: 'b', utilisation_pct: '25', quantity: '3', budget: '30' })
+  }
+  const result = await exportIntegratedIfc(api, [source('old-a.ifc', wallA, {schema: 'IFC2X3'}), source('old-b.ifc', wallB, {schema: 'IFC2X3', offset: 25})], d)
+  const model = api.OpenModel(result.bytes)
+  assert.equal(api.GetModelSchema(model), 'IFC2X3')
+  assert.equal(api.LoadAllGeometry(model).size(), 2)
+  assert.equal(lines(api, model, W.IFCPROJECT).length, 1)
+  assert.equal(lines(api, model, W.IFCTASK).length, 2)
+  assert.equal(lines(api, model, W.IFCTASK)[0].Name.value, d.activities[0].task_name)
+  const time = lines(api, model, W.IFCSCHEDULETIMECONTROL)[0]
+  assert.equal(time.ScheduleDuration.value, 28800)
+  assert.equal(time.TotalFloat.value, -7200)
+  assert.equal(time.Completion.value, .5)
+  const start = api.GetLine(model, time.ScheduleStart.value)
+  assert.equal(api.GetLine(model, start.TimeComponent.value).HourComponent.value, 8)
+  assert.equal(api.GetLine(model, start.DateComponent.value).DayComponent.value, 5)
+  assert.equal(lines(api, model, W.IFCRELASSIGNSTASKS).length, 2)
+  assert.equal(lines(api, model, W.IFCRELSEQUENCE)[0].TimeLag.value, -7200)
+  assert.equal(lines(api, model, W.IFCMONETARYUNIT)[0].Currency.value, 'GBP')
+  assert.equal(lines(api, model, W.IFCRELASSOCIATESAPPLIEDVALUE).length, 9)
+  assert.ok(lines(api, model, W.IFCPROPERTYSET).some(p => p.Name.value === 'Prosota_Calendar'))
+  assert.ok(result.warnings.some(w => w.includes('IFC2X3')))
+  const text = new TextDecoder().decode(result.bytes)
+  assert.doesNotMatch(text, /IFCTASKTIME\(|IFCWORKCALENDAR\(|IFCRELDECLARES\(|IFCRESOURCETIME\(/)
+  const ids = api.GetAllLines(model), present = new Set(Array.from({length: ids.size()}, (_, i) => ids.get(i)))
+  const check = value => { if (Array.isArray(value)) value.forEach(check); else if (value && typeof value === 'object') { if (value.type === W.REF) assert.ok(present.has(value.value), `dangling #${value.value}`); else Object.values(value).forEach(check) } }
+  for (const id of present) check(api.GetRawLineData(model, id).arguments)
+  if (process.env.PROSOTA_IFC_OUTPUT) {
+    const {writeFileSync} = await import('node:fs')
+    writeFileSync(process.env.PROSOTA_IFC_OUTPUT, result.bytes)
+  }
+  api.CloseModel(model)
+}))
+
+test('mixed schemas are rejected explicitly without corrupting source models', async () => withApi(async api => {
+  await assert.rejects(exportIntegratedIfc(api, [source('old.ifc', wallA, {schema: 'IFC2X3'}), source('new.ifc', wallB)], data()), /mix IFC2X3 and IFC4/)
+}))
+
+test('IFC2X3 durations respect conversion-based hour units', async () => withApi(async api => {
+  const s = source('hours.ifc', wallA, {schema: 'IFC2X3'})
+  s.bytes = new TextEncoder().encode(new TextDecoder().decode(s.bytes).replace('#3=IFCUNITASSIGNMENT((#2));', `#3=IFCUNITASSIGNMENT((#2,#24));
+#24=IFCCONVERSIONBASEDUNIT(#25,.TIMEUNIT.,'hour',#26);
+#25=IFCDIMENSIONALEXPONENTS(0,0,1,0,0,0,0);
+#26=IFCMEASUREWITHUNIT(IFCTIMEMEASURE(3600.),#27);
+#27=IFCSIUNIT(*,.TIMEUNIT.,$,.SECOND.);`))
+  const result = await exportIntegratedIfc(api, [s], data())
+  const m = api.OpenModel(result.bytes)
+  assert.equal(lines(api, m, W.IFCSCHEDULETIMECONTROL)[0].ScheduleDuration.value, 8)
+  assert.equal(lines(api, m, W.IFCRELSEQUENCE)[0].TimeLag.value, -2)
+  api.CloseModel(m)
 }))
 
 test('real IFC source retains its geometry when combined with a second copy', { skip: !process.env.PROSOTA_IFC_TEST_FILE }, async () => withApi(async api => {

@@ -42,10 +42,12 @@ const duration = (hours: number | null) => hours == null ? '$' : stepText(`${hou
 const dateTime = (value: string | null) => stepText(value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value)
 const bool = (value: boolean | null) => value == null ? '$' : value ? '.T.' : '.F.'
 
-/** Native IFC4 planning entities, plus named Prosota property sets retaining
+/** Native IFC4/IFC2X3 planning entities, plus named Prosota property sets retaining
  * fields that have no direct IFC equivalent. Original geometry is untouched. */
 export function buildPlanningStep(data: IntegratedIfcData, projectId: number, firstId: number,
-  elements: Map<string, number>, guid: () => string) {
+  elements: Map<string, number>, guid: () => string, legacyTimeUnitSeconds?: number) {
+  const legacy = legacyTimeUnitSeconds !== undefined
+  const measure = (hours: unknown) => hours == null ? '$' : real(Number(hours) * 3600 / legacyTimeUnitSeconds!)
   let next = firstId
   const lines: string[] = []
   const warnings: string[] = []
@@ -54,7 +56,27 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     lines.push(`${id}=${type}(${args.join(',')});`)
     return id
   }
-  const root = (name: string | null, description: string | null = null) => [stepText(guid()), '$', stepText(name), stepText(description)]
+  let owner = '$'
+  if (legacy) {
+    const person = add('IFCPERSON', '$', '$', stepText('Prosota user'), '$', '$', '$', '$', '$')
+    const org = add('IFCORGANIZATION', '$', stepText('Prosota'), '$', '$', '$')
+    const user = add('IFCPERSONANDORGANIZATION', person, org, '$')
+    const app = add('IFCAPPLICATION', org, stepText('1'), stepText('Prosota integrated export'), stepText('Prosota'))
+    owner = add('IFCOWNERHISTORY', user, app, '$', '.ADDED.', '$', '$', '$', String(Math.floor(Date.parse(data.exportedAt) / 1000)))
+    warnings.push('IFC2X3 export: calendar rules, resource utilisation and assignment quantities are retained in Prosota properties. Receiving applications may not interpret these fields automatically.')
+  }
+  const root = (name: string | null, description: string | null = null) => [stepText(guid()), owner, stepText(name), stepText(description)]
+  const stamp = (value: string | null) => {
+    if (!legacy) return dateTime(value)
+    if (!value) return '$'
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(value)
+    if (!m) throw new Error(`Invalid IFC date: ${value}`)
+    const date = add('IFCCALENDARDATE', String(+m[3]), String(+m[2]), m[1])
+    let zone = '$'
+    if (m[7]) zone = add('IFCCOORDINATEDUNIVERSALTIMEOFFSET', m[7] === 'Z' ? '0' : String(+m[7].slice(1, 3)), m[7] === 'Z' ? '0' : String(+m[7].slice(4, 6)), m[7][0] === '-' ? '.BEHIND.' : '.AHEAD.')
+    return add('IFCDATEANDTIME', date, add('IFCLOCALTIME', String(+(m[4] ?? 0)), String(+(m[5] ?? 0)), real(+(m[6] ?? 0)), zone, '$'))
+  }
+  const costValue = (name: string, value: unknown) => add('IFCCOSTVALUE', stepText(name), '$', `IFCMONETARYMEASURE(${real(value)})`, '$', '$', '$', stepText(name), '$', ...(legacy ? [] : ['$', '$']))
   const properties = (target: string, name: string, values: object) => {
     const props = Object.entries(values).filter(([, v]) => v != null).map(([key, value]) =>
       add('IFCPROPERTYSINGLEVALUE', stepText(key), '$', `IFCTEXT(${stepText(typeof value === 'object' ? JSON.stringify(value) : value)})`, '$'))
@@ -66,13 +88,14 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     if (objects.length) add('IFCRELASSIGNSTOCONTROL', ...root(name), list(objects), '$', target)
   }
   const declare = (objects: string[]) => {
-    if (objects.length) add('IFCRELDECLARES', ...root(null), `#${projectId}`, list(objects))
+    if (objects.length && !legacy) add('IFCRELDECLARES', ...root(null), `#${projectId}`, list(objects))
   }
   const starts = data.activities.flatMap(a => a.start ? [a.start] : []).sort()
   const finishes = data.activities.flatMap(a => a.finish ? [a.finish] : []).sort()
   if (!starts.length && data.activities.length) warnings.push('No scheduled start dates: the work schedule uses the export date; task dates remain unset.')
   const schedule = add('IFCWORKSCHEDULE', ...root(`${data.project.name} — Prosota schedule`), '$', stepText(data.schedulePeriodId),
-    dateTime(data.exportedAt), '$', stepText('Prosota active schedule snapshot'), '$', '$', dateTime(starts[0] ?? data.exportedAt), dateTime(finishes[finishes.length - 1] ?? null), '.PLANNED.')
+    stamp(data.exportedAt), '$', stepText('Prosota active schedule snapshot'), '$', '$', stamp(starts[0] ?? data.exportedAt), stamp(finishes[finishes.length - 1] ?? null), ...(legacy ? ['.PLANNED.', '$'] : ['.PLANNED.']))
+  if (legacy) control(schedule, [`#${projectId}`])
   declare([schedule])
   properties(schedule, 'Prosota_Export', { project_id: data.project.id, schedule_period_id: data.schedulePeriodId,
     cost_period_id: data.costPeriodId, exported_at: data.exportedAt, currency: data.currency,
@@ -81,6 +104,12 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
 
   const calendars = new Map<string, string>()
   for (const c of data.calendars) {
+    if (legacy) {
+      const calendar = add('IFCGROUP', ...root(c.name), stepText('Prosota calendar'))
+      calendars.set(c.id, calendar)
+      properties(calendar, 'Prosota_Calendar', { ...c, breaks: data.breaks.filter(b => b.calendar_id === c.id), exceptions: data.exceptions.filter(e => e.calendar_id === c.id) })
+      continue
+    }
     let intervals = [[c.day_start_time, c.day_end_time]]
     for (const b of data.breaks.filter(b => b.calendar_id === c.id)) {
       intervals = intervals.flatMap(([s, e]) => b.end_time <= s || b.start_time >= e ? [[s, e]] :
@@ -106,15 +135,27 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   }
   declare([...calendars.values()])
   const tasks = new Map<string, string>()
+  const calendarTasks = new Map<string, string[]>()
   for (const a of data.activities) {
     const completion = a.pct_complete == null ? '$' : real(Number(a.pct_complete) / 100)
-    const time = add('IFCTASKTIME', '$', '.USERDEFINED.', stepText('Prosota'), '.WORKTIME.', duration(a.duration_hours), dateTime(a.start), dateTime(a.finish),
+    const time = legacy ? add('IFCSCHEDULETIMECONTROL', ...root(a.task_name), '$', stamp(a.actual_start), '$', '$', stamp(a.start), stamp(a.actual_finish), '$', '$', stamp(a.finish), measure(a.duration_hours), '$', measure(a.remaining_duration_hours), measure(a.free_float_hours), measure(a.total_float_hours), bool(a.is_critical), '$', '$', '$', completion)
+      : add('IFCTASKTIME', '$', '.USERDEFINED.', stepText('Prosota'), '.WORKTIME.', duration(a.duration_hours), dateTime(a.start), dateTime(a.finish),
       '$', '$', '$', '$', duration(a.free_float_hours), duration(a.total_float_hours), bool(a.is_critical), '$', '$', dateTime(a.actual_start), dateTime(a.actual_finish), duration(a.remaining_duration_hours), completion)
-    const task = add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), '$', stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$', time, '.NOTDEFINED.')
+    const task = legacy ? add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$')
+      : add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), '$', stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$', time, '.NOTDEFINED.')
+    if (legacy) add('IFCRELASSIGNSTASKS', ...root(null), list([task]), '$', schedule, time)
     tasks.set(a.id, task)
     properties(task, 'Prosota_Activity', a)
     const calendar = calendars.get(a.calendar_id ?? data.calendars.find(c => c.is_project_default)?.id ?? '')
-    if (calendar) control(calendar, [task])
+    if (calendar) {
+      if (legacy) calendarTasks.set(calendar, [...(calendarTasks.get(calendar) ?? []), task])
+      else control(calendar, [task])
+    }
+  }
+  if (legacy) for (const calendar of calendars.values()) {
+    // IFC2X3 IfcGroup requires exactly one grouping relationship, even for an
+    // unused calendar retained with the schedule snapshot.
+    add('IFCRELASSIGNSTOGROUP', ...root(null), list(calendarTasks.get(calendar) ?? [schedule]), '$', calendar)
   }
   const children = new Map<string, string[]>()
   const roots: string[] = []
@@ -124,15 +165,15 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     if (parent) children.set(parent, [...(children.get(parent) ?? []), task])
     else roots.push(task)
   }
-  control(schedule, roots)
+  if (!legacy) control(schedule, roots)
   declare(roots)
   for (const [parent, nested] of children) add('IFCRELNESTS', ...root(null), parent, list(nested))
   const sequences = { FS: 'FINISH_START', SS: 'START_START', FF: 'FINISH_FINISH', SF: 'START_FINISH' }
   for (const r of data.relationships) {
     const pred = tasks.get(r.predecessor_id), succ = tasks.get(r.successor_id)
     if (!pred || !succ) throw new Error('A schedule dependency refers to an activity outside the export. Refresh the schedule and retry.')
-    const lag = add('IFCLAGTIME', '$', '.USERDEFINED.', stepText('Prosota'), `IFCDURATION(${duration(r.lag_hours)})`, '.WORKTIME.')
-    add('IFCRELSEQUENCE', ...root(null), pred, succ, lag, `.${sequences[r.relationship_type]}.`, '$')
+    const lag = legacy ? measure(r.lag_hours) : add('IFCLAGTIME', '$', '.USERDEFINED.', stepText('Prosota'), `IFCDURATION(${duration(r.lag_hours)})`, '.WORKTIME.')
+    add('IFCRELSEQUENCE', ...root(null), pred, succ, lag, `.${sequences[r.relationship_type]}.`, ...(legacy ? [] : ['$']))
   }
   const byTask = new Map<string, Set<string>>()
   let missingLinks = 0, unsupportedLinks = 0
@@ -159,24 +200,32 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     const task = tasks.get(a.activity_id), r = resourceDefs.get(a.resource_id)
     if (!task || !r) throw new Error('A resource assignment cannot be resolved. Refresh and retry.')
     const usage = a.utilisation_pct == null ? '$' : real(Number(a.utilisation_pct) / 100)
-    const time = add('IFCRESOURCETIME', '$', '.USERDEFINED.', stepText('Prosota'), '$', usage, '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$')
-    const cost = add('IFCCOSTVALUE', stepText('Assignment budget'), '$', `IFCMONETARYMEASURE(${real(a.budget)})`, '$', '$', '$', stepText('BUDGET'), '$', '$', '$')
-    const resource = add(resourceTypes[r.resource_type], ...root(r.name), '$', stepText(a.id), '$', time, list([cost]), '$', '.NOTDEFINED.')
+    const time = legacy ? '$' : add('IFCRESOURCETIME', '$', '.USERDEFINED.', stepText('Prosota'), '$', usage, '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$')
+    const cost = costValue('BUDGET', a.budget)
+    // IFC2X3 resource subclasses have different trailing optional attributes.
+    const legacyTail: Record<string, string[]> = { labour: ['$'], equipment: [], crew: [], material: ['$', '$'], subcontractor: ['$', '$'], cost: [] }
+    const resource = legacy ? add(resourceTypes[r.resource_type], ...root(r.name), '$', stepText(a.id), '$', '$', '$', ...legacyTail[r.resource_type])
+      : add(resourceTypes[r.resource_type], ...root(r.name), '$', stepText(a.id), '$', time, list([cost]), '$', '.NOTDEFINED.')
+    if (legacy) add('IFCRELASSOCIATESAPPLIEDVALUE', ...root(null), list([resource]), cost)
     resourceRoots.push(resource)
     properties(resource, 'Prosota_ResourceAssignment', { ...r, assignment: a })
     add('IFCRELASSIGNSTOPROCESS', ...root('Prosota resource assignment'), list([resource]), '$', task, '$')
   }
   declare(resourceRoots)
   properties(schedule, 'Prosota_ResourceCatalogue', { resources: data.resources })
-  const costSchedule = add('IFCCOSTSCHEDULE', ...root(`${data.project.name} — Prosota cost plan`), '$', stepText(data.costPeriodId), '.NOTDEFINED.', '$', '$', dateTime(data.exportedAt))
+  const costSchedule = legacy ? add('IFCCOSTSCHEDULE', ...root(`${data.project.name} — Prosota cost plan`), '$', '$', '$', '$', '$', '$', stamp(data.exportedAt), stepText(data.costPeriodId), '.COSTPLAN.')
+    : add('IFCCOSTSCHEDULE', ...root(`${data.project.name} — Prosota cost plan`), '$', stepText(data.costPeriodId), '.NOTDEFINED.', '$', '$', dateTime(data.exportedAt))
+  if (legacy) control(costSchedule, [`#${projectId}`])
   declare([costSchedule])
   const costItems: string[] = []
   let unlinkedCosts = 0
   for (const c of data.costs) {
     // Separate categories avoid summing budget + actual + forecast as one cost.
     const values = [['BUDGET', c.bac], ['ACTUAL', c.computed_actuals ?? c.actuals], ['FORECAST', c.forecast]]
-      .filter(([, value]) => value != null).map(([category, value]) => add('IFCCOSTVALUE', stepText(category), '$', `IFCMONETARYMEASURE(${real(value)})`, '$', '$', '$', stepText(category), '$', '$', '$'))
-    const item = add('IFCCOSTITEM', ...root(c.description, c.scope_note), '$', stepText(c.code), '.NOTDEFINED.', list(values), '$')
+      .filter(([, value]) => value != null).map(([category, value]) => costValue(String(category), value))
+    const item = legacy ? add('IFCCOSTITEM', ...root(c.description, c.scope_note), '$')
+      : add('IFCCOSTITEM', ...root(c.description, c.scope_note), '$', stepText(c.code), '.NOTDEFINED.', list(values), '$')
+    if (legacy) for (const value of values) add('IFCRELASSOCIATESAPPLIEDVALUE', ...root(null), list([item]), value)
     costItems.push(item)
     properties(item, 'Prosota_Cost', c)
     const task = c.linked_activity_id && tasks.get(c.linked_activity_id)
