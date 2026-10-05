@@ -5,12 +5,12 @@ import { uploadDirectToStorage } from '@/lib/directUpload'
 // images, spreadsheets etc"). Two genuinely different paths, not one
 // generic "upload anything" flow:
 //
-// - Images/PDF go straight to R2 via the same presigned-url pattern this
+// - Images/PDF/Word go straight to R2 via the same presigned-url pattern this
 //   app already uses everywhere else (model3d_files.ts's own precedent —
 //   see ai_attachments.py's own header for the Vercel 4.5MB body-cap
 //   reason) — the message only ever carries a storage_key placeholder
 //   (see aiAssistant.ts's own AttachmentStorageSource header), never the
-//   real bytes or a real Anthropic url, resolved backend-side fresh on
+//   real bytes or a provider URL, resolved backend-side fresh on
 //   every single turn.
 // - Spreadsheets (csv/xlsx) never touch the backend at all — this app's
 //   own backend deliberately dropped pandas/openpyxl for Vercel's 500MB
@@ -23,6 +23,18 @@ import { uploadDirectToStorage } from '@/lib/directUpload'
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const MAX_SPREADSHEET_TEXT_CHARS = 50_000
+export const POE_ATTACHMENT_ACCEPT = 'image/*,.pdf,application/pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.csv,.xlsx,.xls'
+
+const DOCUMENT_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+
+export function documentContentType(file: Pick<File, 'name' | 'type'>): string | null {
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return DOCUMENT_TYPES[extension] ?? (Object.values(DOCUMENT_TYPES).includes(file.type) ? file.type : null)
+}
 
 // Every block this module produces carries this one extra field so
 // PoePanel.tsx can render a filename chip for past turns instead of either
@@ -57,11 +69,11 @@ function spreadsheetTextBlock(name: string, content: string): AiContentBlock {
   return { type: 'text', text: `Attached spreadsheet ${name}:\n\n${body}`, [ATTACHMENT_NAME_FIELD]: name }
 }
 
-async function prepareUploadAttachment(file: File, kind: 'image' | 'document'): Promise<PreparedAttachment> {
-  const { storage_key, upload_url } = await presignAttachment(file.name, file.type)
-  await uploadDirectToStorage(upload_url, file, file.type)
+async function prepareUploadAttachment(file: File, kind: 'image' | 'document', contentType = file.type): Promise<PreparedAttachment> {
+  const { storage_key, upload_url } = await presignAttachment(file.name, contentType)
+  await uploadDirectToStorage(upload_url, file, contentType)
   const source: AttachmentStorageSource = { type: 'storage_key', key: storage_key }
-  return { name: file.name, kind, block: { type: kind, source, [ATTACHMENT_NAME_FIELD]: file.name } }
+  return { name: file.name, kind, block: { type: kind, source, ...(kind === 'document' ? { title: file.name } : {}), [ATTACHMENT_NAME_FIELD]: file.name } }
 }
 
 async function prepareCsvAttachment(file: File): Promise<PreparedAttachment> {
@@ -91,9 +103,10 @@ export async function prepareAttachment(file: File): Promise<PreparedAttachment>
   if (file.size > MAX_ATTACHMENT_BYTES) {
     throw new Error(`${file.name} is too large (max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB).`)
   }
+  const documentType = documentContentType(file)
+  if (documentType) return prepareUploadAttachment(file, 'document', documentType)
   if (file.type.startsWith('image/')) return prepareUploadAttachment(file, 'image')
-  if (file.type === 'application/pdf') return prepareUploadAttachment(file, 'document')
   if (isCsvFile(file)) return prepareCsvAttachment(file)
   if (isSpreadsheetFile(file)) return prepareXlsxAttachment(file)
-  throw new Error(`${file.name}: unsupported file type — attach an image, PDF, or spreadsheet (.csv/.xlsx).`)
+  throw new Error(`${file.name}: unsupported file type — attach an image, PDF, Word document (.doc/.docx), or spreadsheet (.csv/.xlsx/.xls).`)
 }

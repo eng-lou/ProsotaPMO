@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { ATTACHMENT_NAME_FIELD, prepareAttachment } from '@/lib/aiAttachments'
+import { ATTACHMENT_NAME_FIELD, POE_ATTACHMENT_ACCEPT, prepareAttachment } from '@/lib/aiAttachments'
 import { api } from '@/lib/api'
 import { sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssistant'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
@@ -532,7 +532,8 @@ export function PoePanel({
           setAttachments(prev => prev.map(a => (a.id === id ? { ...a, status: 'ready', block: prepared.block } : a)))
         })
         .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : 'Failed to attach'
+          const detail = axios.isAxiosError(err) ? err.response?.data?.detail : null
+          const message = typeof detail === 'string' ? detail : err instanceof Error ? err.message : 'Failed to attach'
           setAttachments(prev => prev.map(a => (a.id === id ? { ...a, status: 'error', error: message } : a)))
         })
     }
@@ -543,6 +544,7 @@ export function PoePanel({
 
   const readyAttachments = attachments.filter(a => a.status === 'ready' && a.block)
   const hasPendingAttachment = attachments.some(a => a.status === 'preparing')
+  const hasFailedAttachment = attachments.some(a => a.status === 'error')
 
   // Sends one turn and, if the response comes back with pending_client_tool_calls
   // (2026-09-01), resolves each via the live 4D bridge and resends — looping
@@ -592,7 +594,7 @@ export function PoePanel({
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
     const text = draft.trim()
-    if ((!text && readyAttachments.length === 0) || sending || hasPendingAttachment) return
+    if ((!text && readyAttachments.length === 0) || sending || hasPendingAttachment || hasFailedAttachment) return
     const content: AiContentBlock[] = []
     if (text) content.push({ type: 'text', text })
     for (const a of readyAttachments) content.push(a.block as AiContentBlock)
@@ -1339,20 +1341,24 @@ export function PoePanel({
             </div>
           )}
 
+          {hasFailedAttachment && <p role="alert" className="text-xs text-red-600 px-4 pb-2">
+            {attachments.filter(a => a.status === 'error').map(a => `${a.name}: ${a.error}`).join(' ')}
+            {' '}Remove the failed attachment and attach it again before sending.
+          </p>}
           <form onSubmit={handleSend} className="flex items-end gap-2 px-4 pb-3 pt-1 shrink-0">
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/*,application/pdf,.csv,.xlsx,.xls"
+              accept={POE_ATTACHMENT_ACCEPT}
               onChange={e => handleFilesSelected(e.target.files)}
               className="hidden"
             />
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach a file (image, PDF, or spreadsheet)"
-              title="Attach a file (image, PDF, or spreadsheet)"
+              aria-label="Attach a file (image, PDF, Word document, or spreadsheet)"
+              title="Attach an image, PDF, Word document (.doc/.docx), or spreadsheet — up to 20MB. Word text is read; use PDF for embedded diagrams."
               className="shrink-0 text-gray-500 dark:text-prosota-muted hover:text-gray-900 dark:hover:text-prosota-paper rounded px-2 py-2 text-sm leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-prosota-amber"
             >
               📎
@@ -1371,7 +1377,8 @@ export function PoePanel({
             />
             <button
               type="submit"
-              disabled={sending || hasPendingAttachment || (!draft.trim() && readyAttachments.length === 0)}
+              disabled={sending || hasPendingAttachment || hasFailedAttachment || (!draft.trim() && readyAttachments.length === 0)}
+              title={hasFailedAttachment ? 'Remove the failed attachment and attach it again before sending.' : undefined}
               className="shrink-0 text-xs px-3 py-2 rounded-md bg-blue-600 dark:bg-prosota-azure text-white font-medium hover:bg-blue-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-prosota-amber"
             >
               {sending ? 'Sending…' : 'Send'}

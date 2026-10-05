@@ -30,6 +30,45 @@ def call(name='get_project_snapshot'):
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pdf_and_word_presign_and_replay(self):
+        from app.api.ai_attachments import presign_attachment
+        from app.schemas.ai_attachment import AiAttachmentPresignRequest
+        from app.services import object_storage
+        cases = [
+            ('REPORT.PDF', 'application/pdf'),
+            ('report.doc', 'application/msword'),
+            ('report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+        ]
+        for name, mime in cases:
+            with self.subTest(name=name), patch.object(settings, 'ai_provider', 'openai'), \
+                 patch.object(object_storage, 'presigned_put_url', return_value='https://storage.invalid/upload') as put, \
+                 patch.object(object_storage, 'presigned_get_url', side_effect=['https://storage.invalid/fresh-1', 'https://storage.invalid/fresh-2']):
+                uploaded = await presign_attachment(AiAttachmentPresignRequest(name=name, content_type=''))
+                put.assert_called_once_with(uploaded.storage_key, mime)
+                messages = [{'role': 'user', 'content': [{'type': 'document', 'title': name,
+                    '_poeAttachmentName': name, 'source': {'type': 'storage_key', 'key': uploaded.storage_key}}]}]
+                original = copy.deepcopy(messages)
+                for index in (1, 2):
+                    resolved = orchestrator._expand_attachment_blocks(messages)
+                    part = adapter.responses_input(resolved)[0]['content'][0]
+                    self.assertEqual(part, {'type': 'input_file', 'filename': name, 'file_url': f'https://storage.invalid/fresh-{index}'})
+                self.assertEqual(messages, original)
+
+    def test_inline_word_keeps_its_filename(self):
+        part = adapter.responses_input([{'role': 'user', 'content': [{'type': 'document', 'title': 'brief.docx',
+            'source': {'type': 'base64', 'media_type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'data': 'UEs='}}]}])[0]['content'][0]
+        self.assertEqual(part['filename'], 'brief.docx')
+
+    async def test_word_fails_clearly_for_legacy_provider_before_upload(self):
+        from app.api.ai_attachments import presign_attachment
+        from app.schemas.ai_attachment import AiAttachmentPresignRequest
+        from app.services import object_storage
+        with patch.object(settings, 'ai_provider', 'anthropic'), patch.object(object_storage, 'presigned_put_url') as put:
+            with self.assertRaises(HTTPException) as error:
+                await presign_attachment(AiAttachmentPresignRequest(name='brief.docx', content_type=''))
+            self.assertIn('Save the document as PDF', error.exception.detail)
+            put.assert_not_called()
+
     def test_legacy_conversation_and_attachments(self):
         messages = [
             {'role': 'user', 'content': [

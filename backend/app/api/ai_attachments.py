@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+
+from app.core.config import settings
 
 from app.schemas.ai_attachment import AiAttachmentPresign, AiAttachmentPresignRequest
 from app.services import object_storage
@@ -22,6 +26,15 @@ STORAGE_PREFIX = "ai-attachments"
 # conversation runs.
 @router.post("/presign", response_model=AiAttachmentPresign)
 async def presign_attachment(payload: AiAttachmentPresignRequest) -> AiAttachmentPresign:
+    document_types = {
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }
+    content_type = document_types.get(Path(payload.name).suffix.lower(), payload.content_type)
+    uses_openai = settings.ai_provider == 'openai' or (settings.ai_provider == 'auto' and bool(settings.openai_api_key))
+    if content_type in (document_types['.doc'], document_types['.docx']) and not uses_openai:
+        raise HTTPException(400, 'Word attachments require the OpenAI provider. Save the document as PDF for the current provider.')
     storage_key = object_storage.generate_storage_key(STORAGE_PREFIX, payload.name)
-    upload_url = object_storage.presigned_put_url(storage_key, payload.content_type)
+    upload_url = object_storage.presigned_put_url(storage_key, content_type)
     return AiAttachmentPresign(storage_key=storage_key, upload_url=upload_url)

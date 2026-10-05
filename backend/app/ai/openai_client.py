@@ -89,9 +89,10 @@ def responses_input(messages: list[dict]) -> list[dict]:
                 if kind == "image":
                     parts.append({"type": "input_image", "image_url": url})
                 elif source.get("type") == "url":
-                    parts.append({"type": "input_file", "file_url": url})
+                    parts.append({"type": "input_file", "file_url": url,
+                                  **({"filename": block["title"]} if block.get("title") else {})})
                 else:
-                    parts.append({"type": "input_file", "filename": "attachment.pdf", "file_data": url})
+                    parts.append({"type": "input_file", "filename": block.get("title") or "attachment.pdf", "file_data": url})
             elif kind == "tool_use":
                 flush()
                 result.append({"type": "function_call", "call_id": block["id"], "name": block["name"],
