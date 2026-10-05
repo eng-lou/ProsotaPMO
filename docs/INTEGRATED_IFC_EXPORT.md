@@ -72,6 +72,14 @@ function body limits. Live planning records are added in the browser on every
 export, so cached geometry never caches an old schedule. Deployment requires the
 new native Python dependency; production deployment/runtime remains to be tested.
 
+Native workers are explicitly imported for deployment packaging and launched by
+absolute script path. Their PYTHONPATH inherits the API process's runtime
+sys.path, including serverless dependency directories. Worker startup/dependency
+failures return 503, timeouts return 504, and explicit snapshot validation
+failures return 422; infrastructure failures must not be labelled invalid IFCs.
+Regression tests cover runtime-only dependency paths. Both plain and gzip-stored
+copies of the user's sample passed the complete local worker read path.
+
 ### Restoring planning into Prosota
 
 After importing the geometry with **Import Model**, use **Import IFC planning**

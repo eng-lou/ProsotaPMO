@@ -1,8 +1,6 @@
 from __future__ import annotations
 import gzip
 import json
-import subprocess
-import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -13,6 +11,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.services import object_storage
 from app.services.ifc_conversion import MAX_SOURCE_BYTES
+from app.services import ifc_planning_snapshot
+from app.services.ifc_worker_runtime import run_worker
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
@@ -41,12 +41,7 @@ def read_snapshot(storage_key):
                 if size > MAX_SOURCE_BYTES:
                     raise HTTPException(413, 'Uncompressed IFC exceeds the planning import size limit.')
                 outgoing.write(chunk)
-        try:
-            subprocess.run([sys.executable, '-m', 'app.services.ifc_planning_snapshot', str(source), str(result)],
-                           cwd=Path(__file__).resolve().parents[2], timeout=120, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise HTTPException(422, 'Could not read a single supported Prosota planning snapshot. Use an integrated IFC exported by Prosota.') from exc
+        run_worker(ifc_planning_snapshot, source, result, timeout=120)
         return json.loads(result.read_text(encoding='utf-8'))
 
 

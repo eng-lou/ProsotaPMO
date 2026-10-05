@@ -4,6 +4,10 @@ from pathlib import Path
 import sys
 
 
+class SnapshotError(ValueError):
+    """An expected, user-facing snapshot validation failure."""
+
+
 def extract(path):
     import ifcopenshell
     import ifcopenshell.util.unit
@@ -17,7 +21,7 @@ def extract(path):
                   if p.is_a('IfcPropertySingleValue') and p.NominalValue is not None}
         groups.setdefault(pset.Name, []).append((relation.RelatedObjects, values))
     if len(groups.get('Prosota_Export', [])) != 1:
-        raise ValueError('Select an IFC containing exactly one Prosota planning snapshot.')
+        raise SnapshotError('Select an IFC containing exactly one Prosota planning snapshot.')
     result = {name: [] for name in ('activities', 'relationships', 'resources', 'assignments', 'calendars', 'breaks', 'exceptions', 'costs', 'links')}
     task_ids = {}
     for objects, values in groups.get('Prosota_Activity', []):
@@ -46,14 +50,18 @@ def extract(path):
             value = rel.TimeLag.LagValue.wrappedValue if rel.TimeLag else 'PT0H'
             match = re.fullmatch(r'(-?)PT([0-9.]+)H', str(value))
             if not match:
-                raise ValueError('This snapshot has an unsupported dependency lag.')
+                raise SnapshotError('This snapshot has an unsupported dependency lag.')
             hours = float(match[2]) * (-1 if match[1] else 1)
         result['relationships'].append(dict(predecessor_id=task_ids[rel.RelatingProcess.id()], successor_id=task_ids[rel.RelatedProcess.id()], relationship_type=kinds[rel.SequenceType], lag_hours=hours))
     if not result['activities']:
-        raise ValueError('This IFC has no embedded Prosota activities.')
+        raise SnapshotError('This IFC has no embedded Prosota activities.')
     result['warnings'] = ['Imports the saved planning snapshot. Baseline history, custom animation profiles and non-IFC links are not restored. Costs are restored as manual snapshot values.']
     return result
 
 
 if __name__ == '__main__':
-    Path(sys.argv[2]).write_text(json.dumps(extract(sys.argv[1])), encoding='utf-8')
+    try:
+        Path(sys.argv[2]).write_text(json.dumps(extract(sys.argv[1])), encoding='utf-8')
+    except SnapshotError as exc:
+        Path(sys.argv[2]).with_suffix('.error.json').write_text(json.dumps({'kind': 'snapshot', 'message': str(exc)}), encoding='utf-8')
+        sys.exit(1)
