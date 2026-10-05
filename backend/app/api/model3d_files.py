@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, HTTPException
+from fastapi.concurrency import run_in_threadpool
+from app.core.auth import get_db_user
+from app.models.model3d_file import Model3DFile
+from app.models.project import Project
+from app.services.ifc_conversion import prepare_ifc4
+from pydantic import BaseModel
+from app.services import ifc_planning_import
+from sqlalchemy.exc import IntegrityError
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +22,42 @@ from app.schemas.model3d_file import (
 from app.services import model3d_file as svc
 
 router = APIRouter(prefix="/model3d-files", tags=["model3d-files"])
+
+
+class PlanningImportRequest(BaseModel):
+    schedule_period_id: uuid.UUID
+    cost_period_id: uuid.UUID
+    commit: bool = False
+
+
+@router.post("/{file_id}/planning-import")
+async def planning_import(file_id: uuid.UUID, payload: PlanningImportRequest, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    row = await db.get(Model3DFile, file_id)
+    project = await db.get(Project, row.project_id) if row else None
+    if project is None or project.org_id != user.org_id or project.created_by != user.id:
+        raise HTTPException(404, 'Model file not found')
+    if row.kind != 'ifc': raise HTTPException(422, 'Select an IFC model')
+    snapshot = await run_in_threadpool(ifc_planning_import.read_snapshot, row.storage_filename)
+    if not payload.commit:
+        return {'counts': {k: len(snapshot[k]) for k in ('activities','relationships','resources','assignments','calendars','costs','links')}, 'warnings': snapshot['warnings']}
+    try:
+        counts = await ifc_planning_import.restore(db, row.project_id, payload.schedule_period_id, payload.cost_period_id, snapshot)
+    except (ValueError, KeyError, TypeError, ArithmeticError, IntegrityError) as exc:
+        await db.rollback()
+        raise HTTPException(422, 'The planning snapshot has invalid or unresolved records; no planning data was imported.') from exc
+    return {'counts': counts, 'warnings': snapshot['warnings']}
+
+
+@router.post("/{file_id}/ifc4-export-source")
+async def ifc4_export_source(file_id: uuid.UUID, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    row = await db.get(Model3DFile, file_id)
+    project = await db.get(Project, row.project_id) if row else None
+    if project is None or project.org_id != user.org_id or project.created_by != user.id:
+        raise HTTPException(404, "Model file not found")
+    if row.kind != "ifc":
+        raise HTTPException(422, "Only IFC models can be converted")
+    url = await run_in_threadpool(prepare_ifc4, row.id, row.storage_filename)
+    return {"download_url": url}
 
 
 @router.get("/", response_model=list[Model3DFileResponse])

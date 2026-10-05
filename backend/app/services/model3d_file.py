@@ -53,6 +53,8 @@ async def create_file(
         )
     )).scalar_one_or_none()
     if existing is not None:
+        from app.services.ifc_conversion import converted_key
+        await run_in_threadpool(object_storage.delete_object, converted_key(existing.id))
         await run_in_threadpool(object_storage.delete_object, existing.storage_filename)
         await db.delete(existing)
         await db.flush()
@@ -91,6 +93,8 @@ async def delete_file(db: AsyncSession, file_id: uuid.UUID) -> None:
     row = await db.get(Model3DFile, file_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Model file not found")
+    from app.services.ifc_conversion import converted_key
+    await run_in_threadpool(object_storage.delete_object, converted_key(row.id))
     await run_in_threadpool(object_storage.delete_object, row.storage_filename)
     await db.delete(row)
     await db.commit()

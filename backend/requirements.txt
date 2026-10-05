@@ -32,3 +32,5 @@ google-genai==2.21.0
 # transitive deps beyond et-xmlfile) — well within the same 500MB Vercel
 # cap this file's own header already discusses.
 openpyxl==3.1.5
+# Native schema migration for IFC4 integrated exports.
+ifcopenshell==0.8.5

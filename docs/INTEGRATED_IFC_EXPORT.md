@@ -3,8 +3,11 @@
 The 4D toolbar's **Export IFC** action creates one combined IFC file from all
 saved IFC sources in the selected project. It reads the active schedule period
 and the active cost period afresh at export time. It does not change source
-files, server records or the viewport's IFC handles. IFC2X3 sources produce
-IFC2X3; IFC4 sources produce IFC4. Sources in a combined export must share a schema.
+files, server records or the viewport's IFC handles. Keep-source mode remains
+the default: IFC2X3 produces IFC2X3 and IFC4 produces IFC4. Alternatively, select
+IFC4 to convert saved IFC2X3 sources before embedding native IFC4 planning data.
+The result shows activity, dependency, resource, assignment and cost counts,
+with explicit notices for empty resource/assignment/cost data.
 
 ## Contents
 
@@ -28,8 +31,8 @@ IFC2X3; IFC4 sources produce IFC4. Sources in a combined export must share a sch
 
 ## Boundaries and safeguards
 
-- IFC2X3 and IFC4 sources are supported natively. Mixed schemas and IFC4X3
-  remain unsupported; no schema header relabelling or geometry conversion occurs.
+- IFC2X3 and IFC4 sources are supported. Mixed IFC2X3/IFC4 sources require IFC4
+  output mode; IFC4X3 remains unsupported. No schema header relabelling occurs.
 - Project units must match across sources. Export does not rescale geometry or
   reconcile distinct coordinate reference systems; original coordinates remain.
 - Currency is explicitly selected; source currencies must agree. No conversion.
@@ -52,6 +55,49 @@ IFC2X3; IFC4 sources produce IFC4. Sources in a combined export must share a sch
   sets. Cross-vendor scheduling parity is not claimed.
 
 ## Verification
+
+### Optional IFC4 conversion
+
+The authenticated `POST /model3d-files/{id}/ifc4-export-source` endpoint checks
+project owner and organisation, then migrates the saved source with pinned
+IfcOpenShell 0.8.5. It preserves source product GlobalIds and checks represented
+product coverage. Conversion runs in an isolated subprocess with a 180-second
+timeout and a 128 MiB compressed/uncompressed input limit. Unsupported conversions
+fail explicitly; original models are never overwritten. A checked conversion
+does not imply that every source-specific field is interpreted by other viewers.
+
+Converted source files are cached as gzip in R2 under immutable file IDs and
+removed when the source is replaced or deleted. Signed downloads avoid Vercel
+function body limits. Live planning records are added in the browser on every
+export, so cached geometry never caches an old schedule. Deployment requires the
+new native Python dependency; production deployment/runtime remains to be tested.
+
+### Restoring planning into Prosota
+
+After importing the geometry with **Import Model**, use **Import IFC planning**
+in the 4D toolbar and select the saved file. Review its counts, then confirm.
+This restores one Prosota snapshot from either IFC2X3 or IFC4. Arbitrary native
+IFC schedules without Prosota snapshot properties are not supported by this
+restore path; multiple embedded snapshots are rejected as ambiguous.
+
+The server checks ownership and destination project scope. It requires an empty
+schedule variant and cost period, both live and unlocked. Period row locks and
+the empty-destination check prevent repeated imports from duplicating data.
+Calendars, breaks, exceptions, tasks, dependencies, resources, assignments,
+costs and IFC links receive fresh IDs, with internal references remapped. All
+planning writes commit together; failure rolls back. Saved dates are preserved
+without running CPM and the schedule anchor is set to the earliest saved start.
+
+Imported calendars are explicitly assigned to tasks; the existing project
+default is not replaced. Cost lines are restored as manual snapshots, avoiding
+unintended cost regeneration. Approval signoffs, animation-profile references,
+external organisation IDs, non-IFC links and baseline history are not restored.
+The review dialog states these boundaries. The original source export contains
+no risks, activity steps or historical reporting periods, so those cannot be
+reconstructed. This is snapshot restoration, not a general project backup.
+
+SYNCHRO has been observed by the user to display the IFC2X3 task hierarchy,
+dates and linked model; this does not establish parity for every planning field.
 
 ### IFC2X3 representation
 

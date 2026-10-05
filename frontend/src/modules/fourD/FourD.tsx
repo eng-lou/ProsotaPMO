@@ -1,5 +1,6 @@
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
+import { IntegratedIfcImportDialog } from './IntegratedIfcImportDialog'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
@@ -319,6 +320,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const [scheduleLoading, setScheduleLoading] = useState(false)
   const [integratedIfcExportOpen, setIntegratedIfcExportOpen] = useState(false)
+  const [integratedIfcImportOpen, setIntegratedIfcImportOpen] = useState(false)
   // Guards against an out-of-order response overwriting newer data (2026-07-09
   // fix — "still cant see the loaded schedule" turned out to be this, not
   // just the staleness this refetch was originally added for): the effect
@@ -7790,6 +7792,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
           className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
         >Export IFC</button>
+        <button onClick={() => setIntegratedIfcImportOpen(true)} disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line disabled:opacity-50">Import IFC planning</button>
+        {integratedIfcImportOpen && selectedProject && period && costPeriod && <IntegratedIfcImportDialog
+          key={`${selectedProject.id}:${period.id}:${costPeriod.id}`}
+          projectId={selectedProject.id} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
+          onClose={() => setIntegratedIfcImportOpen(false)}
+          onImported={async () => { await refreshSchedule(); setModelElementLinks(await listModelElementLinks(selectedProject.id)) }}
+        />}
         {integratedIfcExportOpen && selectedProject && period && costPeriod && <IntegratedIfcExportDialog
           key={`${selectedProject.id}:${period.id}:${costPeriod.id}`}
           project={selectedProject} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
