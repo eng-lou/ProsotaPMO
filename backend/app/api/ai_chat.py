@@ -33,9 +33,14 @@ async def chat(
     project = await db.get(Project, data.project_id)
     if project is None or project.org_id != _user.org_id or project.created_by != _user.id:
         raise HTTPException(404, "Project not found")
+    # Save approval results before the next paid request can fail.
+    async def checkpoint(messages):
+        await poe_conversation_svc.save_messages(db, data.project_id, messages)
+
+    await checkpoint(data.messages)
     result = await run_agent_turn(
         db, data.messages, data.project_id, data.schedule_period_id, data.period_id,
-        data.client_tools_available,
+        data.client_tools_available, checkpoint=checkpoint,
     )
     # Persisted verbatim so a page reload (or coming back later) picks up
     # where the conversation left off (2026-09-06, per Maro: "the chat

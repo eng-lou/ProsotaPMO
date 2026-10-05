@@ -205,6 +205,18 @@ def build_system_prompt() -> str:
     return _SYSTEM_PROMPT + """
 
 PLANNING CREATION AND EDITING:
+For resource planning use get_resource_planning_context first: it combines the schedule,
+resource pool, existing assignments and saved IFC link evidence in fewer calls. Read further
+pages when indicated. A schedule does NOT need IFC-generated categories to be resourced.
+Use the brief and activity names, WBS, durations, quantities and dates. Where IFC evidence
+exists, use it too; absent IFC is never a reason to refuse assignment. Unlinked model geometry
+is not visible through this tool: state that limitation without blocking schedule-based work.
+After a timeout or rate limit, inspect saved records and continue the missing stage, never
+restart by recreating the resource pool. If activities do not exist yet, propose them first.
+Propose assignments in manageable batches (around 25). Verify existing pairs before proposing
+new ones. Resource pool creation alone does not complete a resource-loaded programme.
+Do not call every crew pool a validated capacity plan; headcount in a name is not a capacity
+constraint. Do not spread package allowances equally without explaining the approximation.
 Use get_planning_records and propose_planning_changes for the planning operations now available.
 These extend the older toolkit descriptions above: resources/rates, calendars, breaks, holidays,
 cost allowances, activity edits and schedule dates can now be proposed. Read current records first.

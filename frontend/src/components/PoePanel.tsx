@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { ATTACHMENT_NAME_FIELD, POE_ATTACHMENT_ACCEPT, prepareAttachment } from '@/lib/aiAttachments'
 import { api } from '@/lib/api'
-import { sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssistant'
+import { getPersistedConversation, sendChatTurn, type AiContentBlock, type AiMessage } from '@/lib/aiAssistant'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useActivePeriod } from '@/lib/usePeriod'
@@ -595,6 +595,23 @@ export function PoePanel({
       }
       currentMessages = [...res.messages, { role: 'user', content: toolResults }]
       onMessagesChange(currentMessages)
+    }
+  }
+
+  const handleResume = async () => {
+    if (sending || resolvingProposal || pendingProposal) return
+    setSending(true)
+    setError(null)
+    try {
+      const saved = await getPersistedConversation(projectId)
+      // Checkpoints end after read-tool results, never partway through approval.
+      const checkpoint = saved.length >= messages.length && saved[saved.length - 1]?.role === 'user' ? saved : messages
+      onMessagesChange(checkpoint)
+      await continueConversation(checkpoint)
+    } catch (err) {
+      setError(describeChatError(err))
+    } finally {
+      setSending(false)
     }
   }
 
@@ -1354,7 +1371,11 @@ export function PoePanel({
             {sending && <p className="text-xs text-gray-400 dark:text-prosota-muted">Poe is thinking…</p>}
           </div>
 
-          {error && <p role="alert" className="text-xs text-red-600 px-4 pb-2 shrink-0">{error}</p>}
+          {error && <div className="px-4 pb-2 shrink-0">
+            <p role="alert" className="text-xs text-red-600">{error}</p>
+            {!pendingProposal && <button type="button" disabled={sending || resolvingProposal} onClick={handleResume}
+              className="text-xs text-blue-600 mt-2 disabled:opacity-50">Resume conversation</button>}
+          </div>}
 
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-4 pb-1.5 shrink-0">

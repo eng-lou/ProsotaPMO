@@ -28,6 +28,16 @@ def _error_detail(response: httpx.Response) -> str:
     logger.warning("OpenAI rejected request: status=%s code=%s param=%s request_id=%s",
                    response.status_code, code, param, request_id)
     message = "OpenAI could not complete this request."
+    if response.status_code == 429:
+        billing_codes = {"insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
+                         "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "usage_limit_exceeded"}
+        if code in billing_codes or error.get("type") == "insufficient_quota":
+            message = "OpenAI API credits or a spending/usage limit blocked this request. Check API billing and limits before resuming. Previously saved changes remain saved."
+        else:
+            message = "OpenAI temporarily limited the request rate or token volume. Wait before resuming. Previously saved changes remain saved."
+            retry_after = response.headers.get("retry-after", "")
+            if retry_after.isdigit() and len(retry_after) <= 6:
+                message += f" Retry after at least {retry_after} seconds."
     if response.status_code == 400:
         if any(word in param.lower() for word in ("file", "filename")) or code in (
             "invalid_file", "unsupported_file", "file_not_found", "file_download_failed",
@@ -63,7 +73,7 @@ async def post_openai(path: str, *, timeout: float = 120, **kwargs) -> dict:
         if status in (401, 403, 404):
             raise HTTPException(503, "OpenAI credentials or model access need checking by the administrator.") from exc
         if status == 429:
-            raise HTTPException(429, "OpenAI usage or rate limit reached. Check API billing and limits, then retry.") from exc
+            raise HTTPException(429, detail) from exc
         raise HTTPException(502, detail) from exc
     except (httpx.RequestError, ValueError) as exc:
         raise HTTPException(502, "OpenAI returned an unavailable or invalid response.") from exc

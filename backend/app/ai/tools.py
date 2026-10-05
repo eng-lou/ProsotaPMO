@@ -411,9 +411,8 @@ TOOLS: list[dict] = [
         "name": "propose_create_resource_assignments",
         "description": (
             "Draft one or more resource assignments (assigning a Resource to an Activity) for "
-            "human review — nothing is saved until explicitly approved. Call find_records with "
-            "record_type='resource' and record_type='activity' first to resolve real ids from "
-            "names — never invent one. Which of quantity/utilisation_pct to set depends on the "
+            "human review — nothing is saved until explicitly approved. Use get_resource_planning_context to resolve activity/resource IDs and existing assignments, "
+            "or find_records for individual names — never invent one. Which of quantity/utilisation_pct to set depends on the "
             "resource's own type (check get_project_snapshot's resources or ask if unsure): "
             "labour/equipment/crew use utilisation_pct (0-100, % of the activity's own duration "
             "spent on this); material uses quantity (e.g. 267 for '267 piles'); subcontractor "
@@ -938,3 +937,6 @@ PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
 from app.ai.planning_tools import PLANNING_TOOLS
 TOOLS.extend(PLANNING_TOOLS)
 PROPOSAL_TOOL_NAMES = PROPOSAL_TOOL_NAMES | {"propose_planning_changes"}
+
+from app.ai.resource_context import TOOL as RESOURCE_CONTEXT_TOOL
+TOOLS.append(RESOURCE_CONTEXT_TOOL)

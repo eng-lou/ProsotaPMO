@@ -25,6 +25,9 @@ from app.services import object_storage
 
 async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, project_id: uuid.UUID,
                                 schedule_period_id: uuid.UUID | None, period_id: uuid.UUID | None) -> dict:
+    if name == "get_resource_planning_context":
+        from app.ai.resource_context import get_context
+        return await get_context(db, project_id, schedule_period_id, **tool_input)
     if name == "get_planning_records":
         from app.ai.planning_tools import read_records
         return await read_records(db, tool_input["entity"], project_id, schedule_period_id, period_id, tool_input.get("offset", 0))
@@ -123,6 +126,7 @@ async def run_agent_turn(
     schedule_period_id: uuid.UUID | None,
     period_id: uuid.UUID | None,
     client_tools_available: list[str],
+    checkpoint=None,
 ) -> AgentTurnResult:
     """Loops Messages API calls, executing server tools inline, until either
     a final text response or a client-tool/proposal-tool request pauses it
@@ -188,3 +192,5 @@ async def run_agent_turn(
                     "type": "tool_result", "tool_use_id": block["id"], "content": str(exc), "is_error": True,
                 })
         working_messages = working_messages + [{"role": "user", "content": tool_results}]
+        if checkpoint is not None:
+            await checkpoint(working_messages)

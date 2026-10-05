@@ -27,3 +27,11 @@ Review cards begin unselected and show every proposed input. Select all is avail
 The server checks project ownership and record/reference scope for the new approval route. Input fields are restricted to a fixed registry backed by existing Pydantic schemas/services. No arbitrary HTTP/SQL/code, deletion, lock overrides or sign-off fields are exposed. Rates for time-based resources must use `day`, because the existing costing formula multiplies working days by rate; hourly quotations must be explicitly converted. Crew utilisation is not headcount. Resource rate updates resynchronise linked live costs.
 
 This does not grant universal control of every Prosota feature. Baseline capture, P6 export, resource levelling and advanced quality checks still use their existing application controls. Full customer-brief completion and P6 round-trip require a live acceptance test; unit tests do not establish planning correctness.
+
+## Resource context and interrupted conversations
+
+`get_resource_planning_context` supplies a paginated combined view of activities (50), resources (100), existing assignments (500), per-activity IFC link counts/example labels, and the saved IFC file count. It exposes saved schedule quantities, not a fresh geometry take-off. Manual/brief/P6 schedules do not need IFC categories for Poe to propose assignments. Unlinked IFC geometry is not inspected by this server tool.
+
+Approval-result messages are saved before calling the AI provider; completed read-tool exchanges are checkpointed too. After a failed generation, Resume conversation continues from an available checkpoint without re-running the approval handler. Read existing assignments before proposing another batch. The deterministic Resources-tab shortcuts still use IFC categories; their empty-state message directs other schedules to Poe.
+
+Provider 429 messages distinguish known billing/credit limits from temporary request/token limits and show numeric Retry-After guidance when supplied. There is no automatic billing retry or bypass of account limits.

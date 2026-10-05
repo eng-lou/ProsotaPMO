@@ -2121,7 +2121,7 @@ export function Scheduling() {
     if (!period) return
     const { resources: recipeResources } = buildResourceRecipe(toResourceRecipeActivities(activities))
     if (recipeResources.length === 0) {
-      setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
+      setResourceGenMessage('This shortcut needs IFC-generated activity categories. For brief-based or imported schedules, ask Poe to assign the existing resource pool to the schedule.')
       return
     }
     setResourceGenBusy('generate')
@@ -2158,7 +2158,7 @@ export function Scheduling() {
     if (!period) return
     const { resources: recipeResources, assignments: recipeAssignments } = buildResourceRecipe(toResourceRecipeActivities(activities))
     if (recipeAssignments.length === 0) {
-      setResourceGenMessage('No IFC-generated activities found (nothing has a schedule category yet).')
+      setResourceGenMessage('This shortcut needs IFC-generated activity categories. For brief-based or imported schedules, ask Poe to assign the existing resource pool to the schedule.')
       return
     }
     setResourceGenBusy('assign')
