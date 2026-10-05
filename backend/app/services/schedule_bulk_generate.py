@@ -40,6 +40,25 @@ from app.services.scheduling_cpm import _find_cycle, _find_cycle_path
 # between) — parents are always inserted before children, since
 # `activities` is walked in strict parent-before-child order below, not
 # assumed to arrive pre-sorted from the frontend.
+async def resolve_existing_resources(db, project_id, resources):
+    requested = {r.existing_id for r in resources if r.existing_id is not None}
+    if not requested:
+        return {}
+    rows = (await db.execute(select(Resource.id, Resource.resource_type).where(
+        Resource.project_id == project_id, Resource.id.in_(requested)
+    ))).all()
+    kinds = dict(rows)
+    if requested - kinds.keys():
+        raise HTTPException(422, "An existing resource is missing or belongs to another project")
+    result = {}
+    for r in resources:
+        if r.existing_id is not None:
+            if kinds[r.existing_id] != r.resource_type:
+                raise HTTPException(422, "Resource type changed; refresh before assigning")
+            result[r.temp_id] = r.existing_id
+    return result
+
+
 async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> ScheduleBulkGenerateResponse:
     period = await _require_live_schedule_period(db, data.schedule_period_id)
 
@@ -88,8 +107,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     # name) instead of minting a fresh row for a temp_id whose name is
     # already in the pool. One query up front for every candidate name,
     # rather than one query per resource.
-    resource_real_id_by_temp_id: dict[str, uuid.UUID] = {}
-    new_resource_temp_ids: set[str] = set(r.temp_id for r in data.resources)
+    resource_real_id_by_temp_id: dict[str, uuid.UUID] = await resolve_existing_resources(db, data.project_id, data.resources)
+    new_resource_temp_ids: set[str] = set(r.temp_id for r in data.resources if r.existing_id is None)
     if data.dedupe_resources_by_name and data.resources:
         existing_by_name_result = await db.execute(
             select(Resource.name, Resource.id).where(
@@ -99,6 +118,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         )
         existing_id_by_name = dict(existing_by_name_result.all())
         for r in data.resources:
+            if r.existing_id is not None:
+                continue
             existing_id = existing_id_by_name.get(r.name)
             if existing_id is not None:
                 resource_real_id_by_temp_id[r.temp_id] = existing_id
@@ -169,6 +190,7 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
             raise HTTPException(status_code=422, detail=f"quantity is required for material resource '{resource.name}'")
         activities_with_assignments.add(activity_id)
         assignments_to_insert.append((activity_id, resource_id, a))
+        already_assigned_pairs.add((activity_id, resource_id))
 
     # Relationship cycle check, done once in memory against the batch's own
     # candidate edges plus whatever already exists in this schedule period

@@ -1,3 +1,4 @@
+import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
 import { lazyPanel } from '@/components/LazyPanel'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -2146,19 +2147,16 @@ export function Scheduling() {
     }
   }
 
-  // "Auto Assign Resources" — stage 2: links the pool (by name — expects
-  // "Generate Resources" to have already been run, but sends the same
-  // dedupe_resources_by_name recipe again so it's self-sufficient even if
-  // run on its own) to every one of those same activities.
-  // skip_existing_assignments makes this safely repeatable too — re-running
-  // after linking a few more elements only assigns the newly-eligible
-  // activities, never re-assigns (and re-costs) one that already has its
-  // resource.
+  // Assign existing pool IDs directly; IFC metadata is optional. Both the
+  // matcher and server skip existing pairs so reruns do not duplicate costs.
+  const [resourceAssignmentIssues, setResourceAssignmentIssues] = useState<string[]>([])
   const handleAutoAssignResources = async () => {
     if (!period) return
-    const { resources: recipeResources, assignments: recipeAssignments } = buildResourceRecipe(toResourceRecipeActivities(activities))
-    if (recipeAssignments.length === 0) {
-      setResourceGenMessage('This shortcut needs IFC-generated activity categories. For brief-based or imported schedules, ask Poe to assign the existing resource pool to the schedule.')
+    const recipe = buildResourceRecipe(toResourceRecipeActivities(activities))
+    const plan = buildDirectAssignments(activities, resources, resourceAssignments, recipe, modelElementLinks)
+    setResourceAssignmentIssues(plan.issues)
+    if (plan.assignments.length === 0) {
+      setResourceGenMessage(plan.issues.length ? 'No new clear matches. Review the unmatched activities below.' : 'No new assignments needed.')
       return
     }
     setResourceGenBusy('assign')
@@ -2166,11 +2164,11 @@ export function Scheduling() {
     try {
       const { data } = await api.post('/api/v1/schedule-bulk-generate/', {
         project_id: selectedProject.id, schedule_period_id: period.id,
-        activities: [], resources: recipeResources, assignments: recipeAssignments, relationships: [],
+        activities: [], resources: plan.resources, assignments: plan.assignments, relationships: [],
         dedupe_resources_by_name: true, skip_existing_assignments: true,
       })
       await refresh()
-      const skipped = recipeAssignments.length - data.assignment_count
+      const skipped = plan.assignments.length - data.assignment_count
       setResourceGenMessage(
         `${data.assignment_count} assignment(s) created${skipped > 0 ? `, ${skipped} already assigned` : ''}.`
       )
@@ -2735,6 +2733,15 @@ export function Scheduling() {
               >Cost</button>
             </div>
             <div className="ml-auto flex items-center gap-1">
+              {resourceAssignmentIssues.length > 0 && (
+                <details className="relative text-xs">
+                  <summary className="cursor-pointer text-amber-700">Review {resourceAssignmentIssues.length} matching notices</summary>
+                  <div className="absolute right-0 top-full z-30 w-96 max-h-72 overflow-auto rounded border bg-white dark:bg-prosota-panel p-3 shadow-lg">
+                    <p className="mb-2">Only clear matches were assigned at 100% utilisation. Check capacity separately. Package allowances and materials without measured quantities require manual assignment.</p>
+                    <ul className="list-disc pl-4">{resourceAssignmentIssues.map((message, i) => <li key={i}>{message}</li>)}</ul>
+                  </div>
+                </details>
+              )}
               {resourceGenMessage && (
                 <div className="text-[11px] text-gray-500 dark:text-prosota-muted max-w-xs truncate" title={resourceGenMessage}>{resourceGenMessage}</div>
               )}
@@ -2747,7 +2754,7 @@ export function Scheduling() {
               <button
                 onClick={handleAutoAssignResources}
                 disabled={resourceGenBusy !== null}
-                title="Links the Resource Pool below to every IFC-generated activity — run after Generate Resources, once the pool looks right"
+                title="Assign existing resources directly using IFC recipes and activity descriptions; ambiguous matches are left for review"
                 className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >{resourceGenBusy === 'assign' ? 'Assigning…' : 'Auto Assign Resources'}</button>
               <div className="w-px h-4 bg-gray-200 mx-1" />

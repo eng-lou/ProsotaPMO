@@ -114,6 +114,7 @@ class BulkActivityInput(BaseModel):
 
 class BulkResourceInput(BaseModel):
     temp_id: str
+    existing_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     resource_type: ResourceType = "crew"
     unit: str = Field(min_length=1, max_length=50)
