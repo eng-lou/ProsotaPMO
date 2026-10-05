@@ -51,7 +51,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 for index in (1, 2):
                     resolved = orchestrator._expand_attachment_blocks(messages)
                     part = adapter.responses_input(resolved)[0]['content'][0]
-                    self.assertEqual(part, {'type': 'input_file', 'filename': name, 'file_url': f'https://storage.invalid/fresh-{index}'})
+                    self.assertEqual(part, {'type': 'input_file', 'file_url': f'https://storage.invalid/fresh-{index}'})
                 self.assertEqual(messages, original)
 
     def test_inline_word_keeps_its_filename(self):
@@ -205,6 +205,25 @@ class ConceptTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_attachment_error_is_actionable_without_exposing_provider_message(self):
+        response = httpx.Response(400, headers={'x-request-id': 'req_123'}, json={'error': {
+            'code': 'invalid_value', 'param': 'input[0].content[0].filename',
+            'message': 'Rejected secret document at https://private.invalid?signature=secret',
+        }})
+        with self.assertLogs(transport.logger, level='WARNING') as logs:
+            detail = transport._error_detail(response)
+        self.assertIn('attachment', detail)
+        self.assertIn('req_123', detail)
+        self.assertIn('filename', ''.join(logs.output))
+        self.assertNotIn('secret', detail + ''.join(logs.output))
+
+    def test_malformed_error_metadata_is_not_echoed(self):
+        for error in ('private text', {'param': 'https://private.invalid?secret=abc', 'code': 'private text'}):
+            with self.assertLogs(transport.logger, level='WARNING') as logs:
+                detail = transport._error_detail(httpx.Response(400, json={'error': error}))
+            self.assertIn('request format', detail)
+            self.assertNotIn('private', detail + ''.join(logs.output))
+
     async def test_missing_key_never_calls_network(self):
         with patch.object(settings, 'openai_api_key', ''), patch.object(transport.httpx, 'AsyncClient') as http:
             with self.assertRaises(HTTPException) as raised:

@@ -169,7 +169,10 @@ interface ClashTestProposalDraft {
 // proposal tool can ever be pending at once (findPendingProposal only
 // looks at the single last message), so "which kind" and "which payload"
 // should never be able to disagree.
+interface PlanningOperation { entity: string; action: string; label: string; record_id?: string; data: Record<string, unknown> }
+
 type PendingProposal =
+  | { kind: 'planning'; toolUseId: string; operations: PlanningOperation[] }
   | { kind: 'risks'; toolUseId: string; risks: RiskProposalDraft[] }
   | { kind: 'activities'; toolUseId: string; activities: ActivityProposalDraft[]; relationships: RelationshipProposalDraft[] }
   | { kind: 'links'; toolUseId: string; links: LinkProposalDraft[] }
@@ -195,11 +198,14 @@ function findPendingProposal(messages: AiMessage[]): PendingProposal | null {
     && (b.name === 'propose_create_risks' || b.name === 'propose_create_activities' || b.name === 'propose_link_records'
       || b.name === 'propose_edit_relationships' || b.name === 'propose_link_elements' || b.name === 'propose_clash_test'
       || b.name === 'propose_create_resource_assignments' || b.name === 'propose_create_dashboard_layout'
-      || b.name === 'propose_create_icd_items'),
+      || b.name === 'propose_create_icd_items' || b.name === 'propose_planning_changes'),
   )
   if (!block) return null
   const toolUseId = block.id as string
   const input = block.input as Record<string, unknown>
+  if (block.name === 'propose_planning_changes') {
+    return { kind: 'planning', toolUseId, operations: (input.operations as PlanningOperation[] | undefined) ?? [] }
+  }
   if (block.name === 'propose_create_risks') {
     return { kind: 'risks', toolUseId, risks: (input.risks as RiskProposalDraft[] | undefined) ?? [] }
   }
@@ -467,7 +473,8 @@ export function PoePanel({
 
   useEffect(() => {
     if (!pendingProposal) return
-    if (pendingProposal.kind === 'risks') setSelectedIndices(new Set(pendingProposal.risks.map((_, i) => i)))
+    if (pendingProposal.kind === 'planning') setSelectedIndices(new Set())
+    else if (pendingProposal.kind === 'risks') setSelectedIndices(new Set(pendingProposal.risks.map((_, i) => i)))
     else if (pendingProposal.kind === 'links') setSelectedIndices(new Set(pendingProposal.links.map((_, i) => i)))
     else if (pendingProposal.kind === 'edit_relationships') setSelectedIndices(new Set(pendingProposal.operations.map((_, i) => i)))
     else if (pendingProposal.kind === 'link_elements') setSelectedIndices(new Set(pendingProposal.elements.map((_, i) => i)))
@@ -650,7 +657,17 @@ export function PoePanel({
     try {
       let summary: string
 
-      if (pendingProposal.kind === 'risks') {
+      if (pendingProposal.kind === 'planning') {
+        const operations = pendingProposal.operations.filter((_, i) => selectedIndices.has(i))
+        if (!operations.length) summary = 'All planning changes rejected. Nothing saved.'
+        else {
+          const { data } = await api.post('/api/v1/ai/planning-approval', {
+            project_id: projectId, schedule_period_id: schedulePeriod?.id ?? null,
+            period_id: period?.id ?? null, operations,
+          })
+          summary = JSON.stringify({ ...data, rejected_count: pendingProposal.operations.length - operations.length })
+        }
+      } else if (pendingProposal.kind === 'risks') {
         if (!period) { setResolvingProposal(false); return }
         const approved = pendingProposal.risks.filter((_, i) => selectedIndices.has(i))
         if (approved.length > 0) {
@@ -675,7 +692,7 @@ export function PoePanel({
             project_id: projectId, schedule_period_id: schedulePeriod.id,
             activities: pendingProposal.activities, relationships: pendingProposal.relationships,
           })
-          summary = `Created ${data.activity_count} activity(ies) and ${data.relationship_count} relationship(s).`
+          summary = JSON.stringify(data)
         } else {
           summary = 'The proposed activities were rejected — nothing created.'
         }
@@ -986,6 +1003,31 @@ export function PoePanel({
             )}
             {pendingProposal && (
               <div className="border border-amber-300 dark:border-prosota-line rounded-lg p-3 space-y-2 bg-white dark:bg-prosota-panel">
+                {pendingProposal.kind === 'planning' && (
+                  <>
+                    <p className="text-sm font-semibold">Review planning changes</p>
+                    <div className="flex gap-3 text-xs">
+                      <button type="button" disabled={resolvingProposal} onClick={() => setSelectedIndices(new Set(pendingProposal.operations.map((_, i) => i)))}>Select all</button>
+                      <button type="button" disabled={resolvingProposal} onClick={() => setSelectedIndices(new Set())}>Clear selection</button>
+                    </div>
+                    <p className="text-xs">Select the changes you approve. Calendar and resource changes can affect other schedules in this project.</p>
+                    {pendingProposal.operations.map((op, i) => (
+                      <label key={i} className="block border rounded p-2 space-y-1">
+                        <span className="flex gap-2 items-start">
+                          <input type="checkbox" checked={selectedIndices.has(i)} disabled={resolvingProposal}
+                            onChange={e => setSelectedIndices(prev => { const next = new Set(prev); if (e.target.checked) next.add(i); else next.delete(i); return next })} />
+                          <span className="text-xs font-semibold">{op.action === 'update' ? 'Update' : 'Create'} {op.entity.replace(/_/g, ' ')}: {op.label}</span>
+                        </span>
+                        {op.record_id && <p className="text-[10px] break-all">Record: {op.record_id}</p>}
+                        <dl className="text-xs space-y-1">
+                          {Object.entries(op.data).map(([field, value]) => <div key={field} className="flex gap-2 justify-between">
+                            <dt>{field.replace(/_/g, ' ')}</dt><dd className="break-all text-right">{value === null ? 'Clear value' : String(value)}</dd>
+                          </div>)}
+                        </dl>
+                      </label>
+                    ))}
+                  </>
+                )}
                 {pendingProposal.kind === 'risks' && (
                   <>
                     <p className="text-xs font-medium text-gray-700 dark:text-prosota-paper">
@@ -1301,7 +1343,7 @@ export function PoePanel({
                         ? (clashTestApproved ? 'Create and run this test' : 'Reject')
                         : selectedIndices.size === 0
                           ? 'Reject all'
-                          : pendingProposal.kind === 'edit_relationships'
+                          : pendingProposal.kind === 'edit_relationships' || pendingProposal.kind === 'planning'
                             ? `Apply ${selectedIndices.size} selected`
                             : pendingProposal.kind === 'link_elements'
                               ? `Link ${selectedIndices.size} selected`

@@ -25,6 +25,9 @@ from app.services import object_storage
 
 async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, project_id: uuid.UUID,
                                 schedule_period_id: uuid.UUID | None, period_id: uuid.UUID | None) -> dict:
+    if name == "get_planning_records":
+        from app.ai.planning_tools import read_records
+        return await read_records(db, tool_input["entity"], project_id, schedule_period_id, period_id, tool_input.get("offset", 0))
     if name == "get_project_snapshot":
         return await get_project_snapshot(db, project_id, schedule_period_id, period_id)
     if name == "find_records":

@@ -934,3 +934,7 @@ PROPOSAL_TOOL_NAMES: frozenset[str] = frozenset({
     "propose_create_resource_assignments", "propose_create_dashboard_layout",
     "propose_create_icd_items",
 })
+
+from app.ai.planning_tools import PLANNING_TOOLS
+TOOLS.extend(PLANNING_TOOLS)
+PROPOSAL_TOOL_NAMES = PROPOSAL_TOOL_NAMES | {"propose_planning_changes"}

@@ -89,8 +89,9 @@ def responses_input(messages: list[dict]) -> list[dict]:
                 if kind == "image":
                     parts.append({"type": "input_image", "image_url": url})
                 elif source.get("type") == "url":
-                    parts.append({"type": "input_file", "file_url": url,
-                                  **({"filename": block["title"]} if block.get("title") else {})})
+                    # URL inputs use the name/extension on the stored object.
+                    # Keep filename for inline file_data, as in the API guide.
+                    parts.append({"type": "input_file", "file_url": url})
                 else:
                     parts.append({"type": "input_file", "filename": block.get("title") or "attachment.pdf", "file_data": url})
             elif kind == "tool_use":
@@ -146,6 +147,7 @@ async def run_turn(system: str, messages: list[dict], tools: list[dict]) -> Turn
         "input": responses_input(messages),
         "tools": [{"type": "function", "name": t["name"], "description": t["description"],
                    "parameters": t["input_schema"], "strict": False} for t in tools],
+        "parallel_tool_calls": False,
         "reasoning": {"effort": settings.openai_reasoning_effort},
         "max_output_tokens": 16000,
         "store": False,
