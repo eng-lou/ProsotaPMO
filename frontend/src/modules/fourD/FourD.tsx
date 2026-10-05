@@ -1,6 +1,7 @@
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
 import { IntegratedIfcImportDialog } from './IntegratedIfcImportDialog'
+import { hasProsotaPlanning } from './detectIfcPlanning'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
@@ -311,6 +312,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // same now-wrong period id — asking the right question of the wrong
   // period, however many times you ask it.
   const { period, refetch: refetchPeriod } = useActiveScheduleVariant(selectedProject?.id)
+  const { period: costPeriod } = useActivePeriod(selectedProject?.id)
 
   const [activities, setActivities] = useState<Activity[]>([])
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
@@ -320,7 +322,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const [scheduleLoading, setScheduleLoading] = useState(false)
   const [integratedIfcExportOpen, setIntegratedIfcExportOpen] = useState(false)
-  const [integratedIfcImportOpen, setIntegratedIfcImportOpen] = useState(false)
+  const [planningImports, setPlanningImports] = useState<{fileId: string; name: string}[]>([])
+  const planningContext = `${selectedProject?.id}:${period?.id}:${costPeriod?.id}`
+  const planningContextRef = useRef(planningContext)
+  planningContextRef.current = planningContext
+  useEffect(() => { setPlanningImports([]) }, [planningContext])
   // Guards against an out-of-order response overwriting newer data (2026-07-09
   // fix — "still cant see the loaded schedule" turned out to be this, not
   // just the staleness this refetch was originally added for): the effect
@@ -3968,12 +3974,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const saved = await uploadModel3DFile(selectedProject.id, name, kind, sourceUpAxis, file, percent => {
         setUploadProgress(prev => new Map(prev).set(id, { name, percent }))
       }, keepRawAnimation)
-      let stillLoaded = false
-      setSceneObjects(prev => {
-        stillLoaded = prev.some(o => o.id === id)
-        return stillLoaded ? prev.map(o => (o.id === id ? { ...o, fileId: saved.id } : o)) : prev
-      })
+      const stillLoaded = sceneObjectsRef.current.some(o => o.id === id)
+      setSceneObjects(prev => prev.map(o => o.id === id ? { ...o, fileId: saved.id } : o))
       if (!stillLoaded) deleteModel3DFile(saved.id).catch(() => {})
+      if (stillLoaded && kind === 'ifc' && period && costPeriod) {
+        try {
+          if (await hasProsotaPlanning(file) && planningContextRef.current === planningContext) {
+            setPlanningImports(prev => [...prev, {fileId: saved.id, name}])
+          }
+        } catch { addImportError(`The model "${name}" was saved, but its embedded planning data could not be checked. Re-import to retry.`) }
+      }
     } catch (err) {
       // Used to only console.error here (2026-07-11 fix, per a real
       // incident: "imported, translated....gone on refresh" — the upload
@@ -5719,7 +5729,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // EV bars (2026-09-08, per Maro) — see Scheduling.tsx's own matching
   // fetch for why this needs the separate Cost Plan period, not the
   // schedule period already in scope here.
-  const { period: costPeriod } = useActivePeriod(selectedProject?.id)
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
   useEffect(() => {
     if (!selectedProject || !costPeriod) return
@@ -7792,12 +7801,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
           className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
         >Export IFC</button>
-        <button onClick={() => setIntegratedIfcImportOpen(true)} disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
-          className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line disabled:opacity-50">Import IFC planning</button>
-        {integratedIfcImportOpen && selectedProject && period && costPeriod && <IntegratedIfcImportDialog
-          key={`${selectedProject.id}:${period.id}:${costPeriod.id}`}
-          projectId={selectedProject.id} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
-          onClose={() => setIntegratedIfcImportOpen(false)}
+        {planningImports.length > 0 && selectedProject && period && costPeriod && <IntegratedIfcImportDialog
+          key={`${planningContext}:${planningImports[0].fileId}`}
+          fileId={planningImports[0].fileId} filename={planningImports[0].name} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
+          onClose={() => setPlanningImports(prev => prev.slice(1))}
           onImported={async () => { await refreshSchedule(); setModelElementLinks(await listModelElementLinks(selectedProject.id)) }}
         />}
         {integratedIfcExportOpen && selectedProject && period && costPeriod && <IntegratedIfcExportDialog

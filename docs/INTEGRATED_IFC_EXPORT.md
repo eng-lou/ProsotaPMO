@@ -82,8 +82,11 @@ copies of the user's sample passed the complete local worker read path.
 
 ### Restoring planning into Prosota
 
-After importing the geometry with **Import Model**, use **Import IFC planning**
-in the 4D toolbar and select the saved file. Review its counts, then confirm.
+Use **Import Model** in the 4D toolbar. After saving an IFC with embedded
+Prosota planning data, a dialog automatically previews its counts. Choose
+**Include planning data** to restore it or **Keep model only** to skip it.
+Multiple imported files are offered in sequence. There is no separate planning
+import toolbar action.
 This restores one Prosota snapshot from either IFC2X3 or IFC4. Arbitrary native
 IFC schedules without Prosota snapshot properties are not supported by this
 restore path; multiple embedded snapshots are rejected as ambiguous.
