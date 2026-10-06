@@ -267,7 +267,7 @@ function ResourceUsageProfileWidgetImpl({
   // calc with the print view so the two can't drift apart. See
   // computeUsageProfileSeries' own header for exactly how Actual/EV are
   // derived from actualsHistory.
-  const { budgetValues, actualValues, evValues, limitValue } = useMemo(
+  const { budgetValues, actualValues, evValues, limitValue, estimatedPhasing } = useMemo(
     () => computeUsageProfileSeries(
       trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
       resolvedDataDate, actualsHistory,
@@ -301,7 +301,8 @@ function ResourceUsageProfileWidgetImpl({
   if (trackedResources.length === 0) return null
 
   return (
-    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print [color-scheme:light] dark:[color-scheme:dark] [--resource-limit-color:#111827] dark:[--resource-limit-color:#E6EDF7]">
+{estimatedPhasing && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">Opening AC/EV totals are estimated across elapsed calendar time; later captured changes retain their reporting dates. Hours/days are cost-derived equivalents, not recorded timesheets.</p>}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="font-bold text-sm dark:text-prosota-paper">Resource Usage Profile</div>
         <div className="text-xs text-gray-400 dark:text-prosota-muted">Budgeted {unit} per period vs capacity (Limit)</div>
@@ -392,7 +393,7 @@ function ResourceUsageProfileWidgetImpl({
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
-              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-gray-900 dark:bg-prosota-paper" />Limit</span>
             </div>
             {/* mt-2 — the topmost y-axis gridline label sits at
                 bottom:chartHeight with a -translate-y-1/2 (2026-07-14, per
@@ -461,7 +462,7 @@ function ResourceUsageProfileWidgetImpl({
                   {limitValue > 0 && (
                     <div
                       className="absolute left-0 right-0"
-                      style={{ bottom: (limitValue / maxValue) * chartHeight, height: 2, backgroundColor: RESOURCE_USAGE_COLORS.limit }}
+                      style={{ bottom: (limitValue / maxValue) * chartHeight, height: 2, backgroundColor: 'var(--resource-limit-color)' }}
                       title={`Limit: ${unit === 'cost' ? `£${limitValue.toFixed(0)}` : `${limitValue.toFixed(0)}${unit === 'days' ? 'd' : 'h'}`}`}
                     />
                   )}

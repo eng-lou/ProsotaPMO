@@ -34,7 +34,7 @@ export function ResourceUsageProfilePrintView({
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.
-  const { budgetValues, actualValues, evValues, limitValue } = computeUsageProfileSeries(
+  const { budgetValues, actualValues, evValues, limitValue, estimatedPhasing } = computeUsageProfileSeries(
     trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit,
     dataDate ? new Date(dataDate) : new Date(), actualsHistory,
   )
@@ -58,6 +58,7 @@ export function ResourceUsageProfilePrintView({
     <div className="mb-8">
       <p className="text-sm text-gray-500 mb-2">Resource Usage Profile · {trackedResources.length} resource{trackedResources.length === 1 ? '' : 's'}</p>
 
+{estimatedPhasing && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">Opening AC/EV totals are estimated across elapsed calendar time; later captured changes retain their reporting dates. Hours/days are cost-derived equivalents, not recorded timesheets.</p>}
       <div className="flex items-center gap-3 mb-3">
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>

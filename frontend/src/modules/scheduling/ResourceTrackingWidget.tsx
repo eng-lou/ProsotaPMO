@@ -126,6 +126,7 @@ function ResourceTrackingWidgetImpl({
   onLeftPaneWidthChange,
 }: Props) {
   const { theme } = useTheme()
+  const stickyBodyBg = theme === 'dark' ? '#0C1A2E' : '#ffffff'
   const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
   const [visibleOptionalCols, setVisibleOptionalCols] = useState<Set<OptionalColKey>>(loadVisibleOptionalCols)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
@@ -582,7 +583,7 @@ function ResourceTrackingWidgetImpl({
 
   if (trackedResources.length === 0) {
     return (
-      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
+      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print [color-scheme:light] dark:[color-scheme:dark]">
         <div className="font-bold text-sm mb-1">Resource Tracking</div>
         <div className="text-xs text-gray-400 dark:text-prosota-muted">
           No Labour/Equipment resources with assignments yet — assign one to an activity via Logic to see it here.
@@ -592,7 +593,7 @@ function ResourceTrackingWidgetImpl({
   }
 
   return (
-    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print">
+    <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print [color-scheme:light] dark:[color-scheme:dark]">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="font-bold text-sm dark:text-prosota-paper">Resource Tracking</div>
         <div className="text-xs text-gray-400 dark:text-prosota-muted">Hours per period, per activity — double-click a cell to level it manually</div>
@@ -737,17 +738,17 @@ function ResourceTrackingWidgetImpl({
                   const { resource, row } = flat
                   return (
                     <tr key={row.assignment.id} style={{ height: RESOURCE_CHILD_ROW_HEIGHT }}>
-                      <td className="px-1.5 border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>
+                      <td className="px-1.5 border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>
                         <input type="checkbox" checked={selectedActivityIds.has(row.activity.id)} onChange={() => onToggleActivitySelected(row.activity.id)} />
                       </td>
-                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.code}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-700 dark:text-prosota-muted truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{row.activity.task_name}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.start, false)}</td>
-                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{formatDateTime(row.activity.finish, false)}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted font-mono" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>{row.activity.code}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-700 dark:text-prosota-muted truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>{row.activity.task_name}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>{formatDateTime(row.activity.start, false)}</td>
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>{formatDateTime(row.activity.finish, false)}</td>
                       {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
-                        <td key={c.key} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }}>{renderOptionalCell(c.key, row)}</td>
+                        <td key={c.key} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }}>{renderOptionalCell(c.key, row)}</td>
                       ))}
-                      <td className="border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: 'white' }} />
+                      <td className="border-r border-gray-200 dark:border-prosota-line" style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden', backgroundColor: stickyBodyBg }} />
                       {leadingSpacerWidth > 0 && <td style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />}
                       {visibleBucketIndices.map(i => {
                         const bucket = buckets[i]

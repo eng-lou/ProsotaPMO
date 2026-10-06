@@ -1,3 +1,4 @@
+import { profileElapsedTotal } from './profileElapsedTotal'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { toDateOnly, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
@@ -246,6 +247,7 @@ export function computeUsageProfileBars(
 }
 
 export interface UsageProfileSeries {
+  estimatedPhasing: boolean
   budgetValues: number[]
   actualValues: (number | null)[]
   evValues: (number | null)[]
@@ -268,36 +270,16 @@ function costToUnit(cost: number, resource: Resource, unit: 'hours' | 'days' | '
   return unit === 'days' ? days : days * (Number(resource.max_hours_per_day) || 8)
 }
 
-// Real per-period Budget/Actual/EV (PV/AC/EV) for the Resource Usage
-// Profile (2026-09-08, per Maro: "in the past there is budget and actuals
-// and even forecast bars... in future there is budgeted and forecast but
-// no actuals"; the third series was redone 2026-09-10, per Maro: "you're
-// showing EAC and BAC in the same chart so it looks disproportional. its
-// meant to be PV, EV, AC" — the original "Forecast" series dumped a
-// snapshot's whole-activity EAC, a single cumulative total, unscaled into
-// one bucket, dwarfing the genuinely time-phased Budget/Actual bars next
-// to it). Budget is unchanged from computeUsageProfileBars' own
-// day-weighted schedule demand (Prosota's own stand-in for PV — real,
-// schedule-driven planned cost per period). Actual/EV are derived per
-// ACTIVITY, not per resource (an activity's own recorded history is one
-// number regardless of how many resources are assigned to it — using
-// whichever ONE time-based resource is assigned for the £-to-hours/days
-// conversion, the same "one time-based resource" convention this app's own
-// Actual Hours/Days toggle already assumes), from `history` (real captured
-// Cost Baseline snapshots, oldest first — see backend's own
-// get_actuals_history) plus each activity's own live EVM fields as the
-// final "now" point. Never invents a number: a past bucket with no
-// snapshot bracketing it, or an activity with no real actuals/baseline
-// history at all, is left null (blank), not zero or an estimate — and
-// unlike the old Forecast series, EV is never reprofiled into buckets that
-// haven't happened yet (nothing has genuinely been earned there), so a
-// future bucket simply has no EV bar, same as Actual.
+// Budget follows assignment demand. Recorded history stays at its reporting dates.
+// With only a cumulative total, estimate elapsed-time phasing over actual work
+// dates and label it as reconstructed in both the screen and printed profile.
 export function computeUsageProfileSeries(
   trackedResources: Resource[], assignmentsByResource: Map<string, AssignmentRow[]>,
   buckets: { start: Date; end: Date; label: string }[], spreadByResource: Map<string, ResourceSpread>,
   selectedActivityIds: Set<string>, unit: 'hours' | 'days' | 'cost', dataDate: Date,
   history: ActualsHistoryItem[],
 ): UsageProfileSeries {
+  let estimatedPhasing = false
   const budgetValues = buckets.map(() => 0)
   const capacityByBucket = buckets.map(() => 0)
   const actualValues: (number | null)[] = buckets.map(() => null)
@@ -346,52 +328,59 @@ export function computeUsageProfileSeries(
   }
   for (const list of historyByActivity.values()) list.sort((a, b) => a.time - b.time)
 
-  function pointAtOrBefore(points: HistoryPoint[], time: number): HistoryPoint | null {
-    let result: HistoryPoint | null = null
-    for (const p of points) {
-      if (p.time <= time) result = p
-      else break
-    }
-    return result
-  }
-
   const dataDateTime = dataDate.getTime()
 
   for (const { activity, resource } of activityRows) {
-    if (activity.start == null || activity.finish == null) continue
-    const actStart = new Date(activity.start)
-    const actFinish = new Date(activity.finish)
-    if (actFinish < actStart) continue
+    const points = (historyByActivity.get(activity.id) ?? []).filter(p => p.time <= dataDateTime)
+    if (points.length === 0) {
+      const start = activity.actual_start ?? activity.start
+      const finish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : dataDate.toISOString())
+      if (!start || !finish) continue
+      for (const [raw, values] of [[activity.ac, actualValues], [activity.ev, evValues]] as const) {
+        if (raw == null) continue
+        const phased = profileElapsedTotal(Number(raw), new Date(start), new Date(finish), dataDate, buckets)
+        phased.forEach((value, i) => {
+          if (value === null) return
+          values[i] = (values[i] ?? 0) + costToUnit(value, resource, unit)
+          if (value !== 0) estimatedPhasing = true
+        })
+      }
+      continue
+    }
 
-    const points = historyByActivity.get(activity.id) ?? []
-    const live: HistoryPoint | null = activity.ac !== null
-      ? { time: dataDateTime, ac: Number(activity.ac), ev: activity.ev !== null ? Number(activity.ev) : null }
+    const live: HistoryPoint | null = activity.ac != null || activity.ev != null
+      ? { time: dataDateTime, ac: activity.ac != null ? Number(activity.ac) : points[points.length - 1].ac, ev: activity.ev !== null ? Number(activity.ev) : null }
       : null
     const allPoints = live ? [...points, live] : points
     if (allPoints.length === 0) continue
 
-    buckets.forEach((bucket, i) => {
-      if (bucket.end < actStart || bucket.start > actFinish) return
-      // Only a bucket that's actually elapsed by the data date has real
-      // figures to show — a bucket straddling the data date still gets
-      // them (capped at the data date, not the bucket's own end), but one
-      // entirely in the future gets neither Actual nor EV: nothing there
-      // has genuinely been spent or earned yet, so there's nothing real to
-      // plot (never an invented/reprofiled estimate, unlike the old
-      // Forecast series).
-      if (bucket.start.getTime() > dataDateTime) return
-
-      const before = pointAtOrBefore(allPoints, bucket.start.getTime())
-      const at = pointAtOrBefore(allPoints, Math.min(bucket.end.getTime(), dataDateTime))
-      if (!at) return
-      const acDelta = at.ac - (before?.ac ?? 0)
-      actualValues[i] = (actualValues[i] ?? 0) + costToUnit(acDelta, resource, unit)
-      if (at.ev !== null) {
-        const evDelta = at.ev - (before?.ev ?? 0)
-        evValues[i] = (evValues[i] ?? 0) + costToUnit(evDelta, resource, unit)
+    for (const [field, values] of [['ac', actualValues], ['ev', evValues]] as const) {
+      const metricPoints = allPoints.filter(point => point[field] !== null)
+      if (!metricPoints.length) continue
+      const first = metricPoints[0]
+      const firstValue = first[field]!
+      const start = activity.actual_start ?? activity.start
+      const completedFinish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : null)
+      const initialEnd = Math.min(first.time, completedFinish ? new Date(completedFinish).getTime() : first.time)
+      // The first snapshot is cumulative, not a transaction dated that day.
+      // Reconstruct only that opening balance; later captured deltas keep
+      // their reporting dates, including late costs after physical completion.
+      const initial = start
+        ? profileElapsedTotal(firstValue, new Date(start), new Date(initialEnd), dataDate, buckets)
+        : buckets.map(bucket => bucket.start.getTime() <= first.time && first.time < bucket.end.getTime() ? firstValue : null)
+      initial.forEach((value, i) => {
+        if (value === null) return
+        values[i] = (values[i] ?? 0) + costToUnit(value, resource, unit)
+        if (value !== 0) estimatedPhasing = true
+      })
+      for (let j = 1; j < metricPoints.length; j++) {
+        const point = metricPoints[j]
+        const delta = point[field]! - metricPoints[j - 1][field]!
+        const index = buckets.findIndex(bucket => bucket.start.getTime() <= point.time && point.time < bucket.end.getTime())
+        if (index >= 0) values[index] = (values[index] ?? 0) + costToUnit(delta, resource, unit)
       }
-    })
+    }
   }
 
-  return { budgetValues, actualValues, evValues, limitValue: capacityByBucket.reduce((m, c) => Math.max(m, c), 0) }
+  return { budgetValues, actualValues, evValues, estimatedPhasing, limitValue: capacityByBucket.reduce((m, c) => Math.max(m, c), 0) }
 }
