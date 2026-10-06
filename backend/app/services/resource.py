@@ -11,6 +11,7 @@ from app.models.calendar import Calendar
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_variant import ScheduleVariant
 from app.schemas.resource import ResourceCreate, ResourceUpdate
 from app.services import cost_sync
 
@@ -46,12 +47,26 @@ async def create_resource(db: AsyncSession, data: ResourceCreate) -> Resource:
 async def update_resource(db: AsyncSession, resource_id: uuid.UUID, data: ResourceUpdate) -> Resource:
     resource = await get_resource(db, resource_id)
     updates = data.model_dump(exclude_unset=True)
+    affected = []
     if updates.get("calendar_id") is not None:
         await _validate_calendar_in_project(db, updates["calendar_id"], resource.project_id)
+    if {"rate", "resource_type"}.intersection(updates):
+        assigned = (await db.execute(select(ResourceAssignment).join(Activity, Activity.id == ResourceAssignment.activity_id).join(SchedulePeriod, SchedulePeriod.id == Activity.schedule_period_id).where(ResourceAssignment.resource_id == resource_id, SchedulePeriod.freeze_status == "live"))).scalars().all()
+        for assignment in assigned:
+            assignment.p6_data = {k: v for k, v in (assignment.p6_data or {}).items() if k in {"ObjectId", "GUID"} or k.startswith("Actual")} or None
+        affected = (await db.execute(select(Activity).where(Activity.id.in_({a.activity_id for a in assigned})))).scalars().all()
+        for activity in affected:
+            if activity.p6_data:
+                activity.p6_data = {**activity.p6_data, "_resource_plan_edited": True}
     for field, value in updates.items():
         setattr(resource, field, value)
     await db.commit()
     await db.refresh(resource)
+    if affected:
+        master_ids = set((await db.execute(select(Activity.id).join(ScheduleVariant, ScheduleVariant.id == Activity.schedule_variant_id)
+            .where(Activity.id.in_([a.id for a in affected]), ScheduleVariant.is_master.is_(True)))).scalars().all())
+        await cost_sync.sync_cost_elements_from_resources_bulk(db, master_ids)
+        await db.commit()
     return resource
 
 

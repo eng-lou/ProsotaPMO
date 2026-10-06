@@ -4,7 +4,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import ForeignKey, Numeric, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -28,6 +28,9 @@ class ResourceAssignment(Base, TimestampMixin):
     """
 
     __tablename__ = "resource_assignments"
+
+    # Original scalar P6 fields and native import values for lossless export.
+    p6_data: Mapped[dict | None] = mapped_column(JSONB)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     activity_id: Mapped[uuid.UUID] = mapped_column(

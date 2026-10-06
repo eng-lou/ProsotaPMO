@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
-from app.models.cost_baseline import CostBaseline
+from app.models.cost_baseline import CostBaseline, CostBaselineItem
 from app.models.cost_element import CostElement
 from app.models.record_link import RecordLink
 from app.models.resource_assignment import ResourceAssignment
@@ -468,6 +468,23 @@ async def promote_variant(db: AsyncSession, variant_id: uuid.UUID) -> tuple[Sche
                             baseline_date=assigned_schedule_baseline.baseline_date,
                         ),
                     )
+                    # A P6 baseline is an approved historical budget, not the
+                    # current resource plan captured by create_baseline.
+                    imported_budgets = dict((await db.execute(
+                        select(ScheduleBaselineActivity.activity_id, ScheduleBaselineActivity.budget)
+                        .where(ScheduleBaselineActivity.baseline_id == assigned_schedule_baseline.id,
+                               ScheduleBaselineActivity.budget.is_not(None))
+                    )).all())
+                    if imported_budgets:
+                        items = (await db.execute(
+                            select(CostBaselineItem, CostElement.linked_activity_id)
+                            .join(CostElement, CostElement.id == CostBaselineItem.cost_element_id)
+                            .where(CostBaselineItem.baseline_id == new_cost_baseline.id)
+                        )).all()
+                        for item, activity_id in items:
+                            if activity_id in imported_budgets:
+                                item.bac = imported_budgets[activity_id]
+                        await db.flush()
                     await cost_baseline.assign_baseline(db, new_cost_baseline.id)
 
     return new_master, unmatched_codes

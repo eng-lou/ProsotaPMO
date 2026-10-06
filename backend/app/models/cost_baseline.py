@@ -65,6 +65,6 @@ class CostBaselineItem(Base):
     )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
-    bac: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    bac: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     ac: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     pct_complete: Mapped[int | None] = mapped_column(Integer)

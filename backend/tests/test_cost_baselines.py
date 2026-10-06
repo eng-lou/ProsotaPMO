@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from httpx import AsyncClient
 
 from app.models.period import Period
@@ -26,9 +28,9 @@ async def test_create_baseline_resolves_percentage_elements(client: AsyncClient,
     snapshot = (await client.get(f"/api/v1/cost-baselines/{baseline['id']}/snapshot")).json()
     fixed_item = next(s for s in snapshot if s["cost_element_id"] == fixed["id"])
     pct_item = next(s for s in snapshot if s["cost_element_id"] == pct["id"])
-    assert fixed_item["bac"] == "100000.00" and fixed_item["ac"] == "40000.00"
+    assert Decimal(fixed_item["bac"]) == Decimal("100000.00") and fixed_item["ac"] == "40000.00"
     # 10% of the fixed subtotal (100,000) -> resolved computed_budget/computed_actuals.
-    assert pct_item["bac"] == "10000.00" and pct_item["ac"] == "4000.00"
+    assert Decimal(pct_item["bac"]) == Decimal("10000.00") and pct_item["ac"] == "4000.00"
 
 
 async def test_element_with_no_budget_is_skipped(client: AsyncClient, project: Project, live_period: Period):

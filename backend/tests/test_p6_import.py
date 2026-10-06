@@ -551,17 +551,8 @@ async def test_status_derived_and_in_progress_finish_trusts_the_file(db: AsyncSe
 
     not_started = next(a for a in activities if a.task_name == "Not Started Yet")
     assert not_started.status == "planned"
-    # 2026-09-05, per Maro, correcting the *previous* version of this
-    # assertion — a follow-up real comparison ("Pergola and Amenities", 0%
-    # complete, no progress at all) found Prosota's own calendar math
-    # already landing bit-for-bit on P6's actual value while the file's own
-    # snapshot was stale by an hour. For genuinely not-yet-started,
-    # unconstrained work, CPM's own fresh computation is the right answer,
-    # not a frozen file value — the absurd 2097 dates are deliberate proof
-    # that Prosota did NOT blindly copy them: with no predecessors, CPM
-    # schedules this at the project's own data date instead.
-    assert not_started.start != datetime(2097, 3, 1, 10, 40)
-    assert not_started.start.year == 2011
+    # Import preserves the P6 snapshot; rescheduling is an explicit action.
+    assert not_started.start == datetime(2097, 3, 1, 10, 40)
 
     milestone = next(a for a in activities if a.task_name == "Overall Finish")
     assert milestone.status == "planned"
@@ -829,6 +820,12 @@ async def test_pinned_predecessor_finish_propagates_to_its_own_successor(db: Asy
     predecessor = next(a for a in activities if a.task_name == "Third Floor Masonry Structure")
     successor = next(a for a in activities if a.task_name == "Fourth Floor Slab")
 
+    # Missing source dates stay missing until an explicit scheduling action.
+    assert successor.start is None
+    from app.services import scheduling_cpm
+    await scheduling_cpm.recompute_schedule(db, summary.schedule_period_id,
+        pinned_finish_by_id={predecessor.id: predecessor.finish})
+
     # Pinned from the file, not Prosota's own (2 working days earlier) calendar math.
     assert predecessor.finish == datetime(2011, 1, 20, 8, 0)
     # The successor must never start before its own predecessor finishes on
@@ -880,19 +877,10 @@ async def test_completed_start_milestone_with_zero_percent_complete_is_not_resch
     assert milestone.finish == datetime(2010, 9, 1, 8, 0)
 
 
-async def test_duplicate_resource_assignment_same_units_is_deduplicated_not_double_counted(
+async def test_distinct_resource_assignments_with_same_units_are_preserved(
     db: AsyncSession, project: Project,
 ):
-    """Real, serious BAC bug (2026-09-06, per Maro: "you're saying its 5m??"
-    — a real file's total BAC was £5,088,728 where P6's own report said
-    £3,605,744.44). Traced to a genuine data-export artifact: 73
-    (Activity, Resource) pairs in the real file each had a byte-identical
-    second <ResourceAssignment> element — same PlannedUnits, same
-    PlannedCost, only the ObjectId and a ~1-hour StartDate/FinishDate
-    difference distinguished them. Removing exactly those duplicates
-    reproduced P6's own total to the penny. A second assignment for the
-    same (activity, resource) pair with the SAME units isn't a genuinely
-    separate real-world assignment — it's the same one recorded twice."""
+    """Distinct P6 assignment identities must survive even with equal quantities."""
     xml = (
         b'<APIBusinessObjects xmlns="http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects">'
         b"<Resource><ObjectId>50</ObjectId><Name>Framer</Name><ResourceType>Labor</ResourceType></Resource>"
@@ -909,20 +897,17 @@ async def test_duplicate_resource_assignment_same_units_is_deduplicated_not_doub
     parsed = parse_pmxml(xml)
     summary = await import_pmxml(db, project.id, parsed)
 
-    assert summary.assignment_count == 1
-    assert any("Duplicate resource assignment" in note for note in summary.skipped)
+    assert summary.assignment_count == 2
+    assert not any("Duplicate resource assignment" in note for note in summary.skipped)
 
     activity = (await db.execute(
         select(Activity).where(Activity.project_id == project.id, Activity.task_name == "Unit Finishes")
     )).scalar_one()
-    assignment = (await db.execute(
+    assignments = (await db.execute(
         select(ResourceAssignment).where(ResourceAssignment.activity_id == activity.id)
-    )).scalar_one()
-    resource = await db.get(Resource, assignment.resource_id)
-    budget = compute_assignment_budget(resource, activity, assignment, Decimal(8))
-    # £50/hr -> £400/day (x8h default calendar) x 10 days (80h/8h-per-day) x
-    # 100% utilisation = £4,000 — not £8,000 if double-counted.
-    assert budget == Decimal("4000.00")
+    )).scalars().all()
+    resource = await db.get(Resource, assignments[0].resource_id)
+    assert sum(compute_assignment_budget(resource, activity, a, Decimal(8)) for a in assignments) == Decimal("8000.00")
 
 
 async def test_actual_cost_applied_via_the_canonical_sync_activity_actuals_path(db: AsyncSession, project: Project):

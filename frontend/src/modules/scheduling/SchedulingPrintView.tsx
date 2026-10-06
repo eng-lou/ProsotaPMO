@@ -1,3 +1,4 @@
+import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { useMemo } from 'react'
 import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
 import { DEFAULT_GANTT_STYLE, FONT_FAMILY_CSS, wbsLevelColor, wbsRowBackground, withAlpha, type GanttStyle } from '@/lib/ganttLayout'
@@ -40,6 +41,7 @@ interface Props {
   resourceAssignments: ResourceAssignment[]
   calendars: Calendar[]
   visibleColumns: Set<ColumnKey>
+  columnOrder?: string[]
   columnWidths: Record<string, number>
   // User Defined Fields currently toggled on in the Columns menu (2026-07-07,
   // per Maro: "make sure active columns and their right position onscreen
@@ -507,7 +509,7 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
 // the same kind of cross-row line a dependency connector is, and wasn't
 // asked for here).
 export function SchedulingPrintView({
-  activities, relationships, resourceAssignments, calendars, visibleColumns, columnWidths, projectName, letterhead,
+  activities, relationships, resourceAssignments, calendars, visibleColumns, columnWidths, columnOrder = [], projectName, letterhead,
   udfDefinitions = [], getUdfValue, udfColumnWidth = UDF_COLUMN_WIDTH, ganttStyle = DEFAULT_GANTT_STYLE, ganttZoom = 'week',
   highlightedActivityIds = new Set(), dataDate = null, preview = false, lookups = EMPTY_LOOKUPS,
 }: Props) {
@@ -535,6 +537,8 @@ export function SchedulingPrintView({
     .filter((c): c is PrintColumnDef => !!c && visibleColumns.has(c.key))
   const columnsBeforeActivity = columns.filter(c => c.key === 'code' || c.key === 'wbs')
   const columnsAfterActivity = columns.filter(c => c.key !== 'code' && c.key !== 'wbs')
+  const sourceColumnKeys = [...columnsBeforeActivity.map(c => c.key), 'activity', ...columnsAfterActivity.map(c => c.key), ...udfDefinitions.map(d => `udf:${d.id}`)]
+  const orderedColumnKeys = reconcileColumnOrder(columnOrder, sourceColumnKeys)
   // Moved from GanttStyle to ProjectLetterhead (2026-07-07, per Maro — see
   // frontend/src/lib/letterhead.ts) — letterhead can be null before the
   // first real fetch resolves, hence the fallbacks (GanttStyle's own
@@ -662,6 +666,7 @@ export function SchedulingPrintView({
         style={{ tableLayout: 'fixed', color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[printFontFamily], fontSize: printFontSize }}
       >
         <colgroup>
+          <OrderedColumns sourceKeys={sourceColumnKeys} order={orderedColumnKeys}>
           {columnsBeforeActivity.map(c => (
             <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale) }} />
           ))}
@@ -670,6 +675,7 @@ export function SchedulingPrintView({
             <col key={c.key} style={{ width: printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale) }} />
           ))}
           {udfDefinitions.map(d => <col key={d.id} style={{ width: udfWidth }} />)}
+          </OrderedColumns>
           <col />
         </colgroup>
         <thead>
@@ -677,6 +683,7 @@ export function SchedulingPrintView({
               fill, muted grey uppercase text. Being a real <thead>, this
               repeats on every printed page automatically. */}
           <tr className="text-left bg-gray-50 border-b border-gray-300 text-gray-500 font-medium uppercase tracking-wide" style={{ height: HEADER_HEIGHT }}>
+            <OrderedColumns sourceKeys={sourceColumnKeys} order={orderedColumnKeys}>
             {columnsBeforeActivity.map(c => (
               <th key={c.key} className={`px-1 py-1 border-r border-gray-300 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`} style={headerCellStyle}>
                 {c.label}
@@ -693,6 +700,7 @@ export function SchedulingPrintView({
                 {d.name} (UDF)
               </th>
             ))}
+            </OrderedColumns>
             <th className="p-0 relative" style={{ overflow: 'hidden' }}>
               {/* overflow:hidden here (the body row's gantt <td> already had it,
                   this one didn't) — without it, a time-mark label spills
@@ -740,6 +748,7 @@ export function SchedulingPrintView({
                   boxShadow: rowIndex === activities.length - 1 ? undefined : 'inset 0 -1px 0 #e5e7eb',
                 }}
               >
+                <OrderedColumns sourceKeys={sourceColumnKeys} order={orderedColumnKeys}>
                 {columnsBeforeActivity.map(c => (
                   <td
                     key={c.key} style={dataCellStyle}
@@ -779,6 +788,7 @@ export function SchedulingPrintView({
                     </td>
                   )
                 })}
+                </OrderedColumns>
                 <td className="p-0 relative" style={{ overflow: 'hidden', height: GANTT_ROW_HEIGHT }}>
                   {/* Explicit pixel height, not height:100% — percentage heights
                       inside a <td> are unreliable across print rendering engines

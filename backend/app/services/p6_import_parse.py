@@ -110,6 +110,7 @@ class ParsedWbs:
     code: str
     commentary: str | None
     udf_values: list["ParsedUdfValue"] = field(default_factory=list)
+    source_fields: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +188,8 @@ class ParsedActivity:
     # recompute) when the file has no such field.
     remaining_duration_hours: Decimal | None
 
+    source_fields: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass
 class ParsedRelationship:
@@ -218,6 +221,8 @@ class ParsedAssignment:
     activity_object_id: str
     resource_object_id: str
     planned_units: Decimal  # hours (labour/equipment) or a plain quantity (material)
+    object_id: str | None = None
+    source_fields: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -242,6 +247,9 @@ class ParsedBaselineActivity:
     finish: datetime | None
     duration_hours: Decimal
 
+    budget: Decimal | None = None
+    object_id: str | None = None
+
 
 @dataclass
 class ParsedBaseline:
@@ -259,6 +267,8 @@ class ParsedBaseline:
     # one rather than leaving every capture unassigned.
     object_id: str | None = None
     activities: list[ParsedBaselineActivity] = field(default_factory=list)
+    source_xml: str | None = None
+    relationships: list[ParsedRelationship] = field(default_factory=list)
 
 
 @dataclass
@@ -294,6 +304,12 @@ class ParsedP6Schedule:
     # own object_id. None when P6 itself has nothing assigned (or the field
     # is simply empty in this file).
     current_baseline_object_id: str | None = None
+    data_time: time | None = None
+    project_fields: dict[str, str] = field(default_factory=dict)
+    enterprise_xml: list[str] = field(default_factory=list)
+    project_xml: str | None = None
+    shared_xml: list[str] = field(default_factory=list)
+    resource_fields: dict[str, dict[str, str]] = field(default_factory=dict)
     # Human-readable notes on anything the file contained that Prosota has
     # no model for, or a real file's actual values genuinely couldn't be
     # mapped cleanly — surfaced in the import summary rather than silently
@@ -435,17 +451,13 @@ def _parse_udf_value(udf_el: ET.Element) -> ParsedUdfValue | None:
 
 
 def _actuals(el: ET.Element) -> Decimal | None:
-    """An activity's own real actual cost to date — ActualLaborCost +
-    ActualNonLaborCost, both already rolled up to the activity level by P6
-    itself (confirmed against a real activity: 49500 + 0, matching the
-    flat P6 Excel report's own Actual Cost column exactly). None (not 0)
-    when the file has neither field, so a genuinely un-costed activity
-    stays blank rather than showing a fake £0 actual."""
-    labor = _decimal(el, "ActualLaborCost")
-    non_labor = _decimal(el, "ActualNonLaborCost")
-    if labor is None and non_labor is None:
-        return None
-    return (labor or Decimal(0)) + (non_labor or Decimal(0))
+    """Sum supplied actual cost categories; absent costs remain unknown."""
+    return _optional_cost_total(el, "Actual")
+
+
+def _optional_cost_total(el: ET.Element, prefix: str) -> Decimal | None:
+    values = [_decimal(el, prefix + category + "Cost") for category in ("Labor", "NonLabor", "Material", "Expense")]
+    return sum((v for v in values if v is not None), Decimal(0)) if any(v is not None for v in values) else None
 
 
 def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
@@ -509,6 +521,7 @@ def _parse_activity(el: ET.Element, skipped: list[str]) -> ParsedActivity:
         status=status,
         units_pct_complete=_decimal(el, "UnitsPercentComplete"),
         remaining_duration_hours=_decimal(el, "RemainingDuration"),
+        source_fields={child.tag.split("}")[-1]: child.text for child in el if len(child) == 0},
     )
 
 
@@ -555,8 +568,18 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
         project_name=_text(project_el, "Name") or _text(project_el, "Id") or "Imported Project",
         project_id_code=_text(project_el, "Id"),
         data_date=project_data_date.date() if project_data_date else None,
+        data_time=project_data_date.time() if project_data_date else None,
+        project_xml=ET.tostring(project_el, encoding="unicode"),
+        shared_xml=[ET.tostring(e, encoding="unicode") for e in root if e.tag.split("}")[-1] not in {"Project", "BaselineProject"}],
+        project_fields={child.tag.split("}")[-1]: child.text for child in project_el if len(child) == 0},
         skipped=skipped,
     )
+
+    # Preserve enterprise definitions referenced by the project and baseline.
+    out.enterprise_xml = [ET.tostring(e, encoding="unicode") for e in root
+        if e.tag.split("}")[-1] not in {"Project", "BaselineProject", "Calendar", "Resource", "ResourceRate", "UDFType", "Currency", "DisplayCurrency"}]
+    out.resource_fields = {_text(e, "ObjectId"): {c.tag.split("}")[-1]: c.text for c in e if len(c) == 0 and c.text is not None}
+        for e in root.findall(_tag("Resource"))}
 
     for cal_el in root.findall(_tag("Calendar")):
         out.calendars.append(_parse_calendar(cal_el, skipped))
@@ -624,6 +647,7 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
             object_id=_text(wbs_el, "ObjectId") or "", parent_object_id=_text(wbs_el, "ParentObjectId"),
             name=_text(wbs_el, "Name") or "Imported WBS", code=_text(wbs_el, "Code") or "",
             commentary=_text(wbs_el, "Description"), udf_values=wbs_udf_values,
+            source_fields={child.tag.split("}")[-1]: child.text for child in wbs_el if len(child) == 0},
         ))
 
     for activity_el in project_el.findall(_tag("Activity")):
@@ -652,6 +676,8 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
         out.assignments.append(ParsedAssignment(
             activity_object_id=activity_object_id, resource_object_id=resource_object_id,
             planned_units=_decimal(asg_el, "PlannedUnits") or Decimal(0),
+            object_id=_text(asg_el, "ObjectId"),
+            source_fields={child.tag.split("}")[-1]: child.text for child in asg_el if len(child) == 0},
         ))
 
     # --- Baselines: each is its own <BaselineProject>, a full sibling
@@ -672,17 +698,24 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
             name=_text(bp_el, "BaselineTypeName") or _text(bp_el, "Name") or "Imported Baseline",
             data_date=bp_data_date.date() if bp_data_date else None,
             object_id=_text(bp_el, "ObjectId"),
+            source_xml=ET.tostring(bp_el, encoding="unicode"),
         )
         for bact_el in bp_el.findall(_tag("Activity")):
             p6_activity_id = _text(bact_el, "Id")
             if p6_activity_id is None:
                 continue
             baseline.activities.append(ParsedBaselineActivity(
-                p6_activity_id=p6_activity_id,
+                p6_activity_id=p6_activity_id, object_id=_text(bact_el, "ObjectId"),
                 start=_datetime(bact_el, "StartDate") or _datetime(bact_el, "PlannedStartDate"),
                 finish=_datetime(bact_el, "FinishDate") or _datetime(bact_el, "PlannedFinishDate"),
                 duration_hours=_decimal(bact_el, "PlannedDuration") or Decimal(0),
+                budget=_optional_cost_total(bact_el, "Planned"),
             ))
+        for rel in bp_el.findall(_tag("Relationship")):
+            pred, succ = _text(rel, "PredecessorActivityObjectId"), _text(rel, "SuccessorActivityObjectId")
+            if pred and succ:
+                baseline.relationships.append(ParsedRelationship(pred, succ,
+                    _RELATIONSHIP_TYPE_BY_NAME.get(_text(rel, "Type"), "FS"), _decimal(rel, "Lag") or Decimal(0)))
         out.baselines.append(baseline)
 
     return out

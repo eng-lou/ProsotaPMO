@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from decimal import Decimal
 from xml.sax.saxutils import escape
 
@@ -31,7 +32,7 @@ def _fmt_time(t) -> str:  # noqa: ANN001 — datetime.time
 
 
 def _fmt_dec(value: Decimal | None, places: int = 2) -> str:
-    return "" if value is None else f"{float(value):.{places}f}"
+    return "" if value is None else f"{value:.{places}f}"
 
 
 def _el(tag: str, value: str | None) -> str:
@@ -102,7 +103,7 @@ def _calendar_xml(c) -> str:  # noqa: ANN001 — p6_export.P6Calendar
             for i in range(0, len(bounds), 2):
                 seg_start, seg_end = bounds[i], bounds[i + 1]
                 if seg_end > seg_start:
-                    work_times += f"<WorkTime><Start>{_fmt_time(seg_start)}</Start><Finish>{_fmt_time(seg_end)}</Finish></WorkTime>"
+                    work_times += f"<WorkTime><Start>{_fmt_time(seg_start)}</Start><Finish>{_fmt_time((datetime.combine(datetime.min.date(), seg_end) - timedelta(minutes=1)).time())}</Finish></WorkTime>"
         else:
             work_times = '<WorkTime xsi:nil="true" />'
         day_blocks.append(f"<StandardWorkHours><DayOfWeek>{_DAY_NAMES[p6_day - 1]}</DayOfWeek>{work_times}</StandardWorkHours>")
@@ -115,7 +116,7 @@ def _calendar_xml(c) -> str:  # noqa: ANN001 — p6_export.P6Calendar
             if ex.is_working:
                 start = ex.start_time or c.day_start
                 finish = ex.end_time or c.day_end
-                wt = f"<WorkTime><Start>{_fmt_time(start)}</Start><Finish>{_fmt_time(finish)}</Finish></WorkTime>"
+                wt = f"<WorkTime><Start>{_fmt_time(start)}</Start><Finish>{_fmt_time((datetime.combine(datetime.min.date(), finish) - timedelta(minutes=1)).time())}</Finish></WorkTime>"
             else:
                 wt = '<WorkTime xsi:nil="true" />'
             exceptions_xml.append(f'<HolidayOrException><Date>{d.strftime("%Y-%m-%dT00:00:00")}</Date>{wt}</HolidayOrException>')
@@ -229,7 +230,7 @@ _TASK_TYPE_NAMES = {"TT_Task": "Task Dependent", "TT_Mile": "Start Milestone", "
 _STATUS_NAMES = {"TK_NotStart": "Not Started", "TK_Active": "In Progress", "TK_Complete": "Completed"}
 
 
-def _activity_xml(a, udf_values_by_task: dict[int, list]) -> str:  # noqa: ANN001 — p6_export.P6Activity
+def _activity_xml_generated(a, udf_values_by_task: dict[int, list]) -> str:  # noqa: ANN001 — p6_export.P6Activity
     udf_xml = "".join(
         f"<UDF><TypeObjectId>{v.udf_type_id}</TypeObjectId>{_udf_value_element(v)}</UDF>"
         for v in udf_values_by_task.get(a.id, [])
@@ -275,7 +276,7 @@ def _activity_xml(a, udf_values_by_task: dict[int, list]) -> str:  # noqa: ANN00
         f"<TotalFloat>{_fmt_dec(a.total_float_hours, 2) if a.total_float_hours is not None else ''}</TotalFloat>"
         f"<FreeFloat>{_fmt_dec(a.free_float_hours, 2) if a.free_float_hours is not None else ''}</FreeFloat>"
         f"<Type>{_TASK_TYPE_NAMES.get(a.task_type, 'Task Dependent')}</Type>"
-        f"<WBSObjectId>{a.wbs_id}</WBSObjectId>"
+        f"{_el('WBSObjectId', str(a.wbs_id) if a.wbs_id is not None else None)}"
         f"{f'<Notes>{escape(a.commentary)}</Notes>' if a.commentary else ''}"
         f"{udf_xml}"
         f"</Activity>"
@@ -301,7 +302,7 @@ def _relationship_xml(rel) -> str:  # noqa: ANN001 — p6_export.P6Relationship
 # version omitted entirely despite the real sample carrying it on every row;
 # needs the owning activity (for its wbs_id/start/finish), not just the
 # assignment's own fields, hence the extra activity_by_id lookup.
-def _resource_assignment_xml(asg, activity_by_id: dict, resource_by_id: dict) -> str:  # noqa: ANN001 — p6_export.{P6Assignment,P6Activity,P6Resource} lookups
+def _resource_assignment_xml_generated(asg, activity_by_id: dict, resource_by_id: dict) -> str:  # noqa: ANN001 — p6_export.{P6Assignment,P6Activity,P6Resource} lookups
     activity = activity_by_id.get(asg.task_id)
     start = activity.start if activity is not None else None
     finish = activity.finish if activity is not None else None
@@ -387,6 +388,129 @@ def _udftype_xml(u) -> str:  # noqa: ANN001 — p6_export.P6UdfType
     )
 
 
+def _merge_source_xml(generated: str, source: dict[str, str], authoritative: set[str]) -> str:
+    wrapper = ET.fromstring('<root xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' + generated + '</root>')
+    element = wrapper[0]
+    for key, value in source.items():
+        # Object references must use the newly mapped identities. External
+        # references absent from the export cannot safely be copied as scalars.
+        if key.startswith("_") or key in authoritative or key.endswith("ObjectId"):
+            continue
+        child = element.find(key)
+        if child is None:
+            child = ET.SubElement(element, key)
+        child.attrib.clear()
+        child.text = value
+        if value is None:
+            child.set("{http://www.w3.org/2001/XMLSchema-instance}nil", "true")
+    return ET.tostring(element, encoding="unicode")
+
+
+def _activity_xml(a, udf_values_by_task):
+    generated = _activity_xml_generated(a, udf_values_by_task)
+    source = dict(a.source_fields)
+    for key, current in (("PlannedDuration", a.duration_hours), ("TotalFloat", a.total_float_hours), ("FreeFloat", a.free_float_hours)):
+        original = source.get(key)
+        if current is None:
+            source[key] = None
+        elif original is None or Decimal(original).quantize(Decimal(".01")) != current:
+            source[key] = str(current)
+    original_progress = source.get("PercentComplete")
+    if original_progress is None or (Decimal(original_progress) * 100).quantize(Decimal("0.00000001")) != a.pct_complete:
+        source["PhysicalPercentComplete"] = _fmt_dec(a.pct_complete / 100, 4)
+        source["PercentComplete"] = str(a.pct_complete / 100)
+    # Derived early/late dates from the old solve must not outlive a changed
+    # native schedule. The editable start/finish always come from the model.
+    if source.get("StartDate") != _fmt_datetime(a.start) or source.get("FinishDate") != _fmt_datetime(a.finish):
+        for key in ("RemainingEarlyStartDate", "RemainingEarlyFinishDate", "RemainingLateStartDate", "RemainingLateFinishDate"):
+            source.pop(key, None)
+
+    if a.remaining_duration is not None:
+        original = source.get("RemainingDuration")
+        if original is None or Decimal(original).quantize(Decimal("0.01")) != a.remaining_duration:
+            source["RemainingDuration"] = str(a.remaining_duration)
+    if a.duration_pct_complete is not None:
+        original = source.get("DurationPercentComplete")
+        if original is None or (Decimal(original) * 100).quantize(Decimal("0.00000001")) != a.duration_pct_complete:
+            source["DurationPercentComplete"] = str(a.duration_pct_complete / 100)
+    if a.units_pct_complete is not None:
+        original = source.get("UnitsPercentComplete")
+        if original is None or (Decimal(original) * 100).quantize(Decimal("0.00000001")) != a.units_pct_complete:
+            source["UnitsPercentComplete"] = str(a.units_pct_complete / 100)
+    return _merge_source_xml(generated, source, {"Id", "Name", "StartDate", "FinishDate", "ActualStartDate", "ActualFinishDate", "Status", "PrimaryConstraintType", "PrimaryConstraintDate"})
+
+
+def _resource_assignment_xml(asg, activity_by_id, resource_by_id):
+    return _merge_source_xml(_resource_assignment_xml_generated(asg, activity_by_id, resource_by_id), asg.source_fields, set())
+
+
+def _baseline_xml(data, baseline, index):
+    offset = index * 10000000
+    project_id = offset + data.project_id
+    if baseline.get("raw_xml"):
+        root = ET.fromstring(baseline["raw_xml"])
+        for element in root.iter():
+            element.tag = element.tag.split("}")[-1]
+        source_project_id = root.findtext("ObjectId")
+        local_ids = {e.text for e in root.iter("ObjectId") if e.text}
+        external_maps = {"CalendarObjectId": baseline["calendar_map"],
+            "ActivityDefaultCalendarObjectId": baseline["calendar_map"],
+            "ResourceObjectId": baseline["resource_map"], "PrimaryResourceObjectId": baseline["resource_map"],
+            "TypeObjectId": baseline["udf_map"]}
+        external_ids = _enterprise_ids(data)
+        for parent in root.iter():
+            for element in list(parent):
+                if element.tag == "OriginalProjectObjectId": element.text = str(data.project_id)
+                elif element.tag in external_maps and element.text:
+                    value = external_maps[element.tag].get(element.text)
+                    if value is None:
+                        parent.remove(element)
+                    else: element.text = str(value)
+                elif element.tag.endswith("ObjectId") and element.text == source_project_id:
+                    element.text = str(project_id)
+                elif element.tag.endswith("ObjectId") and element.text in external_ids:
+                    element.text = str(int(element.text) + 20000000)
+                elif element.tag.endswith("ObjectId") and element.text in local_ids:
+                    element.text = str(int(element.text) + offset)
+        root.find("Name").text = baseline["name"]
+        return ET.tostring(root, encoding="unicode")
+    parts = [f'<BaselineProject><ObjectId>{project_id}</ObjectId><OriginalProjectObjectId>{data.project_id}</OriginalProjectObjectId>',
+             _el("Name", baseline["name"]), _el("BaselineTypeName", baseline["name"]),
+             _el("Id", f"BL{index}"), _el("DataDate", str(baseline["date"]) + "T08:00:00")]
+    # Use the same hierarchy and shared calendars/resources; baseline activity
+    # IDs match the live project while ObjectIds occupy a separate range.
+    parts.extend(_wbs_xml(w) for w in data.wbs_nodes)
+    parts.extend(_activity_xml(a, {}) for a in baseline["activities"])
+    parts.extend(_relationship_xml(r) for r in baseline["relationships"])
+    parts.append('</BaselineProject>')
+    root = ET.fromstring('<root xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' + ''.join(parts) + '</root>')[0]
+    local_refs = {"ObjectId", "ParentObjectId", "WBSObjectId", "PredecessorActivityObjectId", "SuccessorActivityObjectId", "ActivityObjectId"}
+    for entity in list(root):
+        if entity.tag not in {"WBS", "Activity", "Relationship"}: continue
+        for field in entity:
+            if field.tag == "ProjectObjectId": field.text = str(project_id)
+            elif field.tag in local_refs and field.text: field.text = str(int(field.text) + offset)
+    return ET.tostring(root, encoding="unicode")
+
+
+def _enterprise_ids(data):
+    return {e.text for xml in data.enterprise_xml for e in ET.fromstring(xml).iter()
+            if e.tag.split("}")[-1] == "ObjectId" and e.text}
+
+
+def _enterprise_elements(data):
+    ids = _enterprise_ids(data)
+    for xml in data.enterprise_xml:
+        root = ET.fromstring(xml)
+        for e in root.iter():
+            e.tag = e.tag.split("}")[-1]
+            if e.tag == "ResourceObjectId" and e.text in data.source_resource_map:
+                e.text = str(data.source_resource_map[e.text])
+            elif e.tag.endswith("ObjectId") and e.text in ids:
+                e.text = str(int(e.text) + 20000000)
+        yield ET.tostring(root, encoding="unicode")
+
+
 def build_pmxml(data: P6ExportData) -> str:
     """Assembles one complete PMXML document. Structural nesting confirmed
     directly against the real reference file (not assumed): Calendar and
@@ -414,6 +538,7 @@ def build_pmxml(data: P6ExportData) -> str:
         "<ExchangeRate>1</ExchangeRate><Id>GBP</Id><Name>Great British Pounds</Name>"
         '<ObjectId>1</ObjectId><PositiveSymbol>#1.1</PositiveSymbol><Symbol>£</Symbol></Currency>'
     )
+    parts.extend(_enterprise_elements(data))
     for u in data.udf_types:
         parts.append(_udftype_xml(u))
     for c in data.calendars:
@@ -428,6 +553,9 @@ def build_pmxml(data: P6ExportData) -> str:
         parts.append(_resource_rate_xml(r, 1_000_000 + r.id))
 
     parts.append("<Project>")
+    for index, baseline in enumerate(data.baselines, 1):
+        if baseline["active"]:
+            parts.append(_el("CurrentBaselineProjectObjectId", str(index * 10000000 + data.project_id)))
     parts.append(f"<DataDate>{_fmt_datetime(data.data_date)}</DataDate>")
     parts.append(f"<GUID>{data.project_guid}</GUID>")
     # Reuse the real P6 Project Id from a previous import when one was
@@ -452,7 +580,10 @@ def build_pmxml(data: P6ExportData) -> str:
         parts.append(_relationship_xml(rel))
     parts.append("</Project>")
 
+    for index, baseline in enumerate(data.baselines, 1):
+        parts.append(_baseline_xml(data, baseline, index))
     parts.append("</APIBusinessObjects>")
-    return "\n".join(parts)
+    from app.services.p6_fidelity import enrich_pmxml
+    return enrich_pmxml("\n".join(parts), data)
 
 

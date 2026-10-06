@@ -16,7 +16,7 @@ from app.models.activity_relationship import ActivityRelationship
 from app.models.animation_profile import AnimationProfile
 from app.models.calendar import Calendar
 from app.models.cost_element import CostElement
-from app.models.schedule_baseline import ScheduleBaselineActivity
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
 from app.models.schedule_period import SchedulePeriod
 from app.models.schedule_subproject import ScheduleSubproject
 from app.models.schedule_variant import ScheduleVariant
@@ -104,6 +104,25 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         project_id: await _get_eac_method(db, project_id)
         for project_id in {a.project_id for a in activities}
     }
+    baseline_budgets = dict((await db.execute(
+        select(ScheduleBaselineActivity.activity_id, ScheduleBaselineActivity.budget)
+        .join(ScheduleBaseline, ScheduleBaseline.id == ScheduleBaselineActivity.baseline_id)
+        .where(ScheduleBaseline.is_active.is_(True), ScheduleBaseline.schedule_period_id.in_(period_ids),
+               ScheduleBaselineActivity.budget.is_not(None))
+    )).all())
+    edited_budgets = {}
+    edited_activities = {a.id: a for a in activities if (a.p6_data or {}).get("_resource_plan_edited")}
+    if edited_activities:
+        from app.models.resource_assignment import ResourceAssignment
+        from app.models.resource import Resource
+        from app.services.resource_costing import compute_assignment_budget_raw
+        edited_budgets = {aid: Decimal(a.p6_data.get("PlannedExpenseCost") or 0) for aid, a in edited_activities.items()}
+        pairs = (await db.execute(select(ResourceAssignment, Resource).join(Resource, Resource.id == ResourceAssignment.resource_id)
+            .where(ResourceAssignment.activity_id.in_(edited_activities)))).all()
+        for assignment, resource in pairs:
+            activity = edited_activities[assignment.activity_id]
+            lookup = calendar_lookups[activity.project_id]
+            edited_budgets[activity.id] += compute_assignment_budget_raw(resource, activity, assignment, lookup.hours_per_day(lookup.resolve(activity)))
     for a in activities:
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
@@ -125,6 +144,18 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         a.schedule_pct_complete = (fraction * Decimal(100)).quantize(Decimal("0.01")) if fraction is not None else None
 
         element = elements_by_activity.get(a.id)
+        source = getattr(a, "p6_data", None) or {}
+        if source or a.id in baseline_budgets:
+            from types import SimpleNamespace
+            def source_sum(keys):
+                values = [Decimal(source[k]) for k in keys if source.get(k) is not None]
+                return sum(values, Decimal(0)) if values else None
+            element = SimpleNamespace(
+                budget=edited_budgets[a.id] if a.id in edited_budgets else element.budget if element is not None else source_sum(("PlannedLaborCost", "PlannedNonLaborCost", "PlannedMaterialCost", "PlannedExpenseCost")),
+                bl_budget=element.bl_budget if element is not None and element.bl_budget is not None else baseline_budgets.get(a.id),
+                actuals=element.actuals if element is not None else source_sum(("ActualLaborCost", "ActualNonLaborCost", "ActualMaterialCost", "ActualExpenseCost")),
+                pct_complete=a.pct_complete,
+            )
         if element is None:
             for field in _EVM_FIELDS:
                 setattr(a, field, None)
@@ -630,6 +661,12 @@ async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) 
         finishes = [k.finish for k in kids if k.finish is not None]
         node.start = min(starts) if starts else None
         node.finish = max(finishes) if finishes else None
+        baseline_starts = [k.bl_start for k in kids if k.bl_start is not None]
+        baseline_finishes = [k.bl_finish for k in kids if k.bl_finish is not None]
+        node.bl_start = min(baseline_starts) if baseline_starts else None
+        node.bl_finish = max(baseline_finishes) if baseline_finishes else None
+        node.variance_days = (node.finish - node.bl_finish).days if node.finish and node.bl_finish else None
+
         if node.start is not None and node.finish is not None and calendar_lookup is not None:
             calendar = calendar_lookup.resolve(node)
             hours_per_day = calendar_lookup.hours_per_day(calendar)
@@ -831,6 +868,10 @@ async def update_activity(
             await _validate_animation_profile_in_project(db, profile_id, activity.project_id)
         activity.animation_profile_id = profile_id
         await db.commit()
+        # SQL onupdate fields (updated_at) expire even with expire_on_commit=False.
+        # Load them before FastAPI serializes the response, otherwise an async
+        # lazy load can fail after the profile has already been saved.
+        await db.refresh(activity)
         await _attach_evm_fields(db, [activity])
         return activity
 
@@ -977,6 +1018,25 @@ async def update_activity(
         activity.status = "in_progress"
         if activity.actual_start is None:
             activity.actual_start = datetime.now()
+
+    # Native edits supersede imported P6 values without discarding stable
+    # identity or unrelated precision-preserving source fields.
+    if activity.p6_data:
+        source = dict(activity.p6_data)
+        invalidated = set()
+        if "pct_complete" in updates or "status" in updates:
+            invalidated.update({"PhysicalPercentComplete", "PercentComplete", "ScopePercentComplete"})
+        if "activity_type" in updates:
+            invalidated.add("Type")
+        if "commentary" in updates:
+            invalidated.add("Notes")
+        if "suspend_date" in updates:
+            invalidated.add("SuspendDate")
+        if "resume_date" in updates:
+            invalidated.add("ResumeDate")
+        for key in invalidated:
+            source.pop(key, None)
+        activity.p6_data = source
 
     parent_changed = "parent_id" in updates and updates["parent_id"] != activity.parent_id
     for field, value in updates.items():

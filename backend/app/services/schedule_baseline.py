@@ -26,7 +26,7 @@ from app.schemas.schedule_baseline import (
 )
 from app.schemas.schedule_variant import ScheduleVariantResponse
 from app.services import scheduling_cpm
-from app.services.activity import _attach_evm_fields, _require_live_schedule_period
+from app.services.activity import _attach_evm_fields, _require_live_schedule_period, _recompute_hierarchy
 from app.services.project import _clone_row
 
 
@@ -351,6 +351,7 @@ async def assign_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> list[Acti
     for a in activities:
         if a.id in dirty_ids:
             await db.refresh(a)
+    await _recompute_hierarchy(db, baseline.schedule_period_id)
     await _attach_evm_fields(db, activities)
     return activities
 
@@ -397,6 +398,7 @@ async def unassign_baseline(db: AsyncSession, baseline_id: uuid.UUID) -> list[Ac
     activities = await _clear_baseline_fields(db, baseline.schedule_period_id)  # already flushed + refreshed
 
     await db.commit()
+    await _recompute_hierarchy(db, baseline.schedule_period_id)
     await _attach_evm_fields(db, activities)
     return activities
 

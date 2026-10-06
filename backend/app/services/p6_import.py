@@ -16,7 +16,7 @@ from app.models.cost_element import CostElement
 from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
-from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity, ScheduleBaselineRelationship
 from app.models.schedule_period import SchedulePeriod
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.schemas.activity import ActivityStatus, is_milestone_type
@@ -127,10 +127,21 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # per Maro: "the dates are very off").
     if parsed.data_date is not None:
         period.start_date = parsed.data_date
+        period.start_time = parsed.data_time
 
-    # --- Calendars: match existing project calendars by name, else stage new ones ---
+    # --- Calendars: reuse only identical native patterns, never name alone ---
     existing_calendars_result = await db.execute(select(Calendar).where(Calendar.project_id == project_id))
-    existing_calendar_by_name = {c.name: c for c in existing_calendars_result.scalars().all()}
+    existing_calendars = list(existing_calendars_result.scalars().all())
+    existing_calendar_by_name = {c.name: c for c in existing_calendars}
+    existing_breaks = (await db.execute(select(CalendarBreak).where(CalendarBreak.calendar_id.in_([c.id for c in existing_calendars])))).scalars().all()
+    existing_exceptions = (await db.execute(select(CalendarException).where(CalendarException.calendar_id.in_([c.id for c in existing_calendars])))).scalars().all()
+    def calendar_matches(c, pc):
+        return (c.name == pc.name and not c.whole_day_scheduling and
+            c.day_start_time == pc.day_start and c.day_end_time == pc.day_end and
+            all(getattr(c, _P6_DAY_TO_WORKS_FIELD[d]) == working for d, working in pc.works.items()) and
+            sorted((b.start_time, b.end_time) for b in existing_breaks if b.calendar_id == c.id) == sorted(pc.breaks) and
+            sorted((e.start_date, e.end_date, e.is_working, str(e.start_time), str(e.end_time)) for e in existing_exceptions if e.calendar_id == c.id) ==
+            sorted((e.start_date, e.end_date, e.is_working, str(e.start_time), str(e.end_time)) for e in pc.exceptions))
     calendar_real_id_by_object_id: dict[str, uuid.UUID] = {}
     default_hours_per_day = Decimal(8)  # overwritten below once at least one calendar resolves
     # scheduling_cpm._CalendarLookup.resolve_calendar_id 422s outright for any
@@ -158,7 +169,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         default_calendar_assigned = False
     explicit_default_calendar: Calendar | None = None
     for pc in parsed.calendars:
-        existing = existing_calendar_by_name.get(pc.name)
+        existing = next((c for c in existing_calendars if calendar_matches(c, pc)), None)
         if existing is not None:
             calendar_real_id_by_object_id[pc.object_id] = existing.id
             if pc.object_id == explicit_default_object_id:
@@ -206,15 +217,11 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         default_pc = next((c for c in parsed.calendars if c.is_default), parsed.calendars[0])
         default_hours_per_day = _net_hours_per_day(default_pc.day_start, default_pc.day_end, default_pc.breaks) or Decimal(8)
 
-    # --- Resources: match existing project resources by name, else stage new ones ---
+    # --- Resources: reuse only matching name, type, rate and calendar ---
     existing_resources_result = await db.execute(select(Resource).where(Resource.project_id == project_id))
-    existing_resource_by_name = {r.name: r for r in existing_resources_result.scalars().all()}
+    existing_resources = list(existing_resources_result.scalars().all())
     resource_real_id_by_object_id: dict[str, uuid.UUID] = {}
     for pr in parsed.resources:
-        existing = existing_resource_by_name.get(pr.name)
-        if existing is not None:
-            resource_real_id_by_object_id[pr.object_id] = existing.id
-            continue
         rate = pr.rate_per_unit or Decimal(0)
         # P6 prices labour/equipment per hour; Prosota prices them per day —
         # inverse of p6_export.py's own day-rate -> hourly conversion.
@@ -222,6 +229,12 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         # per whatever unit P6's "each" pricing means for them).
         if pr.is_hourly:
             rate = rate * default_hours_per_day
+        resource_calendar_id = calendar_real_id_by_object_id.get(pr.calendar_object_id) if pr.calendar_object_id else None
+        existing = next((r for r in existing_resources if r.name == pr.name and r.resource_type == pr.resource_type
+                         and r.rate == rate.quantize(Decimal(".01")) and r.calendar_id == resource_calendar_id), None)
+        if existing is not None:
+            resource_real_id_by_object_id[pr.object_id] = existing.id
+            continue
         resource = Resource(
             id=uuid.uuid4(), project_id=project_id, resource_type=pr.resource_type, name=pr.name,
             unit="day" if pr.is_hourly else "each", rate=rate,
@@ -365,6 +378,13 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         id=root_activity_id, code=root_code, wbs_role="P", project_id=project_id,
         schedule_variant_id=variant.id, schedule_period_id=period.id,
         task_name=parsed.project_name[:500], activity_type="wbs_summary", parent_id=None,
+        p6_data={**parsed.project_fields, "_kind": "Project",
+            "_enterprise_xml": parsed.enterprise_xml,
+            "_project_xml": parsed.project_xml, "_shared_xml": parsed.shared_xml,
+            "_calendar_map": {k: str(v) for k, v in calendar_real_id_by_object_id.items()},
+            "_udf_map": {k: str(v) for k, v in udf_def_real_id_by_object_id.items()},
+            "_resource_fields": {str(resource_real_id_by_object_id[k]): v for k, v in parsed.resource_fields.items() if k in resource_real_id_by_object_id},
+            "_resource_map": {k: str(v) for k, v in resource_real_id_by_object_id.items()}},
         sort_order=-1,
     )
     _apply_computed_fields(root_activity)
@@ -401,6 +421,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             id=activity_id, code=code, wbs_role=role, project_id=project_id,
             schedule_variant_id=variant.id, schedule_period_id=period.id,
             task_name=pw.name[:500], activity_type="task", parent_id=parent_real_id,
+            p6_data={**pw.source_fields, "_kind": "WBS", "_sort_order": wbs_sort_counter},
             sort_order=wbs_sort_counter, commentary=pw.commentary,
         )
         wbs_sort_counter += 1
@@ -447,6 +468,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             task_name=pa.name[:500], activity_type=pa.activity_type, parent_id=parent_real_id,
             sort_order=activity_sort_counter,
             duration_hours=duration_hours, pct_complete=pa.pct_complete,
+            p6_data=pa.source_fields,
             # start/finish (2026-09-04, per Maro — a real historical import
             # showed PV=£0 for every activity, even long-completed ones):
             # scheduling_cpm.recompute_schedule below has its own "once an
@@ -511,6 +533,9 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         # this activity in Prosota, the normal service-layer call to
         # _apply_computed_fields recomputes it fresh, same as before this
         # existed.
+        activity.total_float_hours = Decimal(pa.source_fields["TotalFloat"]) if pa.source_fields.get("TotalFloat") else None
+        activity.free_float_hours = Decimal(pa.source_fields["FreeFloat"]) if pa.source_fields.get("FreeFloat") else None
+        activity.is_critical = activity.total_float_hours <= 0 if activity.total_float_hours is not None else None
         if pa.remaining_duration_hours is not None:
             activity.remaining_duration_hours = pa.remaining_duration_hours
         db.add(activity)
@@ -565,24 +590,14 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
 
     # --- Resource assignments ---
     assignment_count = 0
-    # A real export can carry an exact duplicate <ResourceAssignment> for the
-    # same (Activity, Resource) pair with identical PlannedUnits — confirmed
-    # against a real file (2026-09-06, per Maro: BAC showing £5,088,728
-    # where P6's own report said £3,605,744.44 — a genuine data-export
-    # artifact, not a rate/calendar/formula bug; 73 (activity, resource)
-    # pairs each had a byte-identical second <ResourceAssignment>, and
-    # removing exactly those duplicates reproduces P6's own total to the
-    # penny). Same "duplicate relationship, keep only one" precedent already
-    # established for ActivityRelationship above — a second assignment with
-    # the SAME units for the SAME pair isn't a genuinely separate real-world
-    # assignment, it's the same one recorded twice.
-    seen_assignment_keys: set[tuple[str, str, Decimal]] = set()
+    # Separate P6 assignment ObjectIds are distinct records, even when their
+    # resource, activity and units happen to match. Never silently collapse them.
+    seen_assignment_ids: set[str] = set()
     for asg in parsed.assignments:
-        assignment_key = (asg.activity_object_id, asg.resource_object_id, asg.planned_units)
-        if assignment_key in seen_assignment_keys:
-            skipped.append("Duplicate resource assignment (same activity, resource, and units) — skipped (only one is kept).")
-            continue
-        seen_assignment_keys.add(assignment_key)
+        if asg.object_id and asg.object_id in seen_assignment_ids:
+            raise HTTPException(422, "Duplicate P6 resource assignment ObjectId; resolve the source ambiguity before importing.")
+        if asg.object_id:
+            seen_assignment_ids.add(asg.object_id)
         activity_id = activity_real_id_by_object_id.get(asg.activity_object_id)
         resource_id = resource_real_id_by_object_id.get(asg.resource_object_id)
         if activity_id is None or resource_id is None:
@@ -591,7 +606,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         pa = activity_by_object_id.get(asg.activity_object_id)
         parsed_resource = next((r for r in parsed.resources if r.object_id == asg.resource_object_id), None)
         if parsed_resource is not None and parsed_resource.resource_type == "material":
-            db.add(ResourceAssignment(id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id, quantity=asg.planned_units))
+            db.add(ResourceAssignment(id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id, quantity=asg.planned_units, p6_data=asg.source_fields))
         else:
             duration_hours = pa.duration_hours if pa is not None and pa.duration_hours else Decimal(0)
             utilisation = (asg.planned_units / duration_hours * Decimal(100)) if duration_hours else Decimal(100)
@@ -606,7 +621,7 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             # never rounding the intermediate percentage at all.
             db.add(ResourceAssignment(
                 id=uuid.uuid4(), activity_id=activity_id, resource_id=resource_id,
-                utilisation_pct=utilisation, planned_hours=asg.planned_units,
+                utilisation_pct=utilisation, planned_hours=asg.planned_units, p6_data=asg.source_fields,
             ))
         assignment_count += 1
 
@@ -687,6 +702,10 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
         baseline = ScheduleBaseline(
             id=uuid.uuid4(), schedule_period_id=period.id,
             name=pb.name[:200], baseline_date=pb.data_date or date.today(),
+            p6_data={"xml": pb.source_xml,
+                "calendars": {k: str(v) for k, v in calendar_real_id_by_object_id.items()},
+                "resources": {k: str(v) for k, v in resource_real_id_by_object_id.items()},
+                "udfs": {k: str(v) for k, v in udf_def_real_id_by_object_id.items()}},
         )
         db.add(baseline)
         matched = 0
@@ -697,9 +716,17 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             activity_id, prosota_code = match
             db.add(ScheduleBaselineActivity(
                 id=uuid.uuid4(), baseline_id=baseline.id, activity_id=activity_id, code=prosota_code,
-                start=pba.start, finish=pba.finish, duration_hours=pba.duration_hours,
+                start=pba.start, finish=pba.finish, duration_hours=pba.duration_hours, budget=pba.budget,
             ))
             matched += 1
+        baseline_activity_map = {a.object_id: activity_real_id_by_p6_id[a.p6_activity_id][0]
+            for a in pb.activities if a.object_id and a.p6_activity_id in activity_real_id_by_p6_id}
+        for rel in pb.relationships:
+            pred = baseline_activity_map.get(rel.predecessor_object_id)
+            succ = baseline_activity_map.get(rel.successor_object_id)
+            if pred is not None and succ is not None:
+                db.add(ScheduleBaselineRelationship(baseline_id=baseline.id, predecessor_id=pred,
+                    successor_id=succ, relationship_type=rel.relationship_type, lag_hours=rel.lag_hours))
         if matched == 0 and pb.activities:
             skipped.append(f"Baseline \"{pb.name}\" had no activities matching this import — skipped.")
         else:
@@ -725,49 +752,8 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     if assign_baseline_id is not None:
         await schedule_baseline.assign_baseline(db, assign_baseline_id)
 
-    # Same two-pass shape bulk_generate.py uses for its own batch insert —
-    # hierarchy -> CPM -> hierarchy again, run once for the whole import,
-    # not once per row.
-    # Pin the file's own start/finish for activities CPM genuinely can't
-    # derive on its own, and feed them into the SAME recompute_schedule call
-    # below rather than correcting afterward (2026-09-05, per Maro, tracing
-    # a real P6-vs-Prosota mismatch to its root cause — see
-    # scheduling_cpm.recompute_schedule's own docstring for the full story):
-    # a real *In Progress* activity ("Third Floor Masonry Structure") had
-    # PhysicalPercentComplete 90% but DurationPercentComplete 77.78% — P6
-    # had already re-projected its at-completion duration longer than the
-    # original PlannedDuration once real progress showed it running behind
-    # pace, something Prosota's own finish_from_start has no way to
-    # reproduce (it only knows the original planned duration). A milestone
-    # with no predecessors has nothing else to derive its position from at
-    # all. Both need the file's own date pinned directly.
-    #
-    # Deliberately NOT extended to a plain not-yet-started, unconstrained
-    # activity: a follow-up real comparison ("Pergola and Amenities", 0%
-    # complete, no progress at all) found Prosota's own calendar math
-    # already landing bit-for-bit on P6's actual value — both correctly
-    # walking the calendar's own lunch break — while the file's own
-    # snapshot was stale by an hour. For genuinely not-yet-started work,
-    # a fresh, correct calendar+logic computation is more trustworthy than
-    # a frozen file value, not less.
-    pinned_start_by_id: dict[uuid.UUID, datetime] = {}
-    pinned_finish_by_id: dict[uuid.UUID, datetime] = {}
-    for pa in parsed.activities:
-        activity_id = activity_real_id_by_object_id.get(pa.object_id)
-        if activity_id is None:
-            continue
-        has_progress = pa.pct_complete > 0 or pa.actual_start is not None
-        if not (has_progress or is_milestone_type(pa.activity_type)):
-            continue
-        if pa.start is not None:
-            pinned_start_by_id[activity_id] = pa.start
-        if pa.finish is not None:
-            pinned_finish_by_id[activity_id] = pa.finish
-
-    await _recompute_hierarchy(db, period.id)
-    await scheduling_cpm.recompute_schedule(
-        db, period.id, pinned_start_by_id=pinned_start_by_id, pinned_finish_by_id=pinned_finish_by_id,
-    )
+    # Import is a snapshot operation. Scheduling is a separate, explicit
+    # user action; do not replace P6 dates/float with Prosota's CPM results.
     await _recompute_hierarchy(db, period.id)
     # No Cost Element sync here (2026-09-04, per Maro — same "over a
     # minute" report): this variant is always freshly created and never

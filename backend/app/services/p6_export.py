@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time
 from decimal import Decimal
 
@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.schedule_period import SchedulePeriod
+from app.models.schedule_baseline import ScheduleBaseline, ScheduleBaselineActivity, ScheduleBaselineRelationship
 from app.models.schedule_variant import ScheduleVariant
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.services import resource_costing
@@ -149,7 +150,7 @@ class P6Wbs:
 class P6Activity:
     id: int
     guid: str
-    wbs_id: int
+    wbs_id: int | None
     calendar_id: int
     code: str
     name: str
@@ -170,6 +171,11 @@ class P6Activity:
     constraint_type: str | None
     constraint_date: datetime | None
     commentary: str | None
+
+    source_fields: dict[str, str] = field(default_factory=dict)
+    remaining_duration: Decimal | None = None
+    duration_pct_complete: Decimal | None = None
+    units_pct_complete: Decimal | None = None
 
 
 @dataclass
@@ -222,6 +228,8 @@ class P6Assignment:
     actual_start: datetime | None
     actual_finish: datetime | None
 
+    source_fields: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass
 class P6UdfType:
@@ -266,6 +274,12 @@ class P6ExportData:
     # falling back to a freshly-derived acronym only when it's None (a
     # schedule Prosota built from scratch, never imported from P6 at all).
     original_project_id_code: str | None = None
+    baselines: list[dict] = field(default_factory=list)
+    enterprise_xml: list[str] = field(default_factory=list)
+    source_resource_map: dict[str, int] = field(default_factory=dict)
+    source_project_xml: str | None = None
+    source_shared_xml: list[str] = field(default_factory=list)
+    source_maps: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _resource_type(resource_type: str) -> str:
@@ -442,7 +456,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         project_id=1,
         project_guid=_p6_guid(),
         project_name=_sanitize_p6_text(project.name) or project.name,
-        data_date=datetime.combine(period.cutoff_date or period.start_date or datetime.now().date(), time(0, 0)),
+        data_date=datetime.combine(period.cutoff_date or period.start_date or datetime.now().date(), period.start_time or time(8, 0)),
         plan_start=datetime.combine(period.start_date, time(0, 0)) if period.start_date else None,
     )
 
@@ -561,8 +575,8 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         wbs_name = _sanitize_p6_text(a.task_name) or a.task_name
         wbs_name_by_id[wbs_id] = wbs_name
         out.wbs_nodes.append(P6Wbs(
-            id=wbs_id, guid=_p6_guid(), code=a.code, name=wbs_name,
-            parent_id=parent_wbs_id, seq_num=a.sort_order or 0, is_project_node=False,
+            id=wbs_id, guid=(a.p6_data or {}).get("GUID") or _p6_guid(), code=(a.p6_data or {}).get("Code", a.code), name=wbs_name,
+            parent_id=parent_wbs_id, seq_num=(int(a.p6_data["SequenceNumber"]) if (a.p6_data or {}).get("SequenceNumber") and a.sort_order == a.p6_data.get("_sort_order") else a.sort_order or 0), is_project_node=False,
             commentary=_sanitize_p6_text(a.commentary),
         ))
 
@@ -576,7 +590,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         activity_name = _strip_redundant_wbs_prefix(activity_name, wbs_name_by_id.get(wbs_id, ""))
         out.activities.append(P6Activity(
             id=task_ids.id_for(a.id), guid=_p6_guid(), wbs_id=wbs_id,
-            calendar_id=calendar_ids.id_for(calendar.id), code=a.code, name=activity_name,
+            calendar_id=calendar_ids.id_for(calendar.id), code=a.code, name=a.task_name if a.p6_data else activity_name,
             task_type=_task_type(a.activity_type), status_code=_status_code(a),
             pct_complete=a.pct_complete if a.pct_complete is not None else Decimal(0),
             duration_hours=a.duration_hours if a.duration_hours is not None else Decimal(0),
@@ -584,7 +598,33 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             total_float_hours=a.total_float_hours, free_float_hours=a.free_float_hours,
             constraint_type=_CONSTRAINT_TYPE_MAP.get(a.constraint_type or ""), constraint_date=a.constraint_date,
             commentary=_sanitize_p6_text(a.commentary),
+            source_fields=a.p6_data or {}, remaining_duration=a.remaining_duration_hours,
+            duration_pct_complete=a.duration_pct_complete, units_pct_complete=a.units_pct_complete,
         ))
+
+    if project_root_activity is not None and (project_root_activity.p6_data or {}).get("_kind") == "Project":
+        out.project_name = project_root_activity.task_name
+        out.project_guid = project_root_activity.p6_data.get("GUID") or out.project_guid
+        original_plan_start = project_root_activity.p6_data.get("PlannedStartDate")
+        if original_plan_start:
+            out.plan_start = datetime.fromisoformat(original_plan_start)
+        out.wbs_nodes = [w for w in out.wbs_nodes if w.id != root_wbs_id]
+        for exported in out.activities:
+            if exported.wbs_id == root_wbs_id:
+                exported.wbs_id = None
+
+    # Reuse the P6 activity identifier retained on import, rather than
+    # exporting the internal Prosota outline code as a new P6 activity.
+    p6_id_definition = next((d for d in udf_defs if d.name == "P6 Activity ID"), None)
+    if p6_id_definition is not None:
+        original_codes = {v.record_id: v.value_text for v in udf_values
+                          if v.field_definition_id == p6_id_definition.id and v.value_text}
+        for activity in activities:
+            if activity.id in original_codes and activity.activity_type != "wbs_summary":
+                exported = next(a for a in out.activities if a.id == task_ids.id_for(activity.id))
+                exported.code = original_codes[activity.id]
+        if len({a.code for a in out.activities}) != len(out.activities):
+            raise HTTPException(422, "P6 Activity IDs must be unique before export.")
 
     # --- Relationships ---
     for rel in relationships:
@@ -598,10 +638,15 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
 
     # --- Resources + assignments ---
     resources_by_id = {r.id: r for r in resources}
+    if project_root_activity is not None:
+        metadata = project_root_activity.p6_data or {}
+        out.enterprise_xml = metadata.get("_enterprise_xml", [])
+        out.source_resource_map = {k: rsrc_ids.id_for(uuid.UUID(v)) for k, v in metadata.get("_resource_map", {}).items()}
     used_resource_ids = {a.resource_id for a in assignments}
+    imported_resource_ids = {uuid.UUID(v) for v in ((project_root_activity.p6_data or {}).get("_resource_map", {}).values() if project_root_activity else [])}
     for r in resources:
-        if r.id not in used_resource_ids:
-            continue  # export only what's actually assigned somewhere in this schedule
+        if r.id not in used_resource_ids and r.id not in imported_resource_ids:
+            continue  # Native schedules export only assigned resources.
         notes_parts = [p for p in (
             f"Discipline: {r.discipline}" if r.discipline else None,
             f"Company: {r.company}" if r.company else None,
@@ -634,9 +679,10 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         # down to 23, losing the other rates in the process). The full,
         # untruncated name still round-trips correctly via <Name> below —
         # this code only needs to be short and unique, not readable.
-        resource_code = f"RES-{rsrc_object_id:04d}"
+        original_resource = ((project_root_activity.p6_data or {}).get("_resource_fields", {}).get(str(r.id), {}) if project_root_activity else {})
+        resource_code = original_resource.get("Id") or f"RES-{rsrc_object_id:04d}"
         out.resources.append(P6Resource(
-            id=rsrc_object_id, guid=_p6_guid(), short_name=resource_code, name=resource_name,
+            id=rsrc_object_id, guid=original_resource.get("GUID") or _p6_guid(), short_name=resource_code, name=resource_name,
             rsrc_type=_resource_type(r.resource_type),
             rate=rate, cost_qty_type="QT_Hour" if is_hourly else "QT_Each",
             calendar_id=calendar_ids.id_for(r.calendar_id) if r.calendar_id else None,
@@ -660,7 +706,7 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
         # display value (2026-09-05, per Maro: "time is costed by the hour"
         # — see compute_assignment_budget's own header).
         export_hours_per_day = calendar_lookup.hours_per_day(calendar_lookup.resolve(activity))
-        cost = resource_costing.compute_assignment_budget(resource, activity, asg, export_hours_per_day)
+        cost = resource_costing.compute_assignment_budget_raw(resource, activity, asg, export_hours_per_day)
         # Same shared formula Prosota's own budget reads from (never a
         # second, hand-rolled copy) — for a labour/equipment/crew
         # assignment this is duration_hours-in-days x utilisation_pct/100,
@@ -698,18 +744,60 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             actual_cost=actual_cost, actual_units=actual_units,
             actual_start=activity.actual_start if has_actuals else None,
             actual_finish=activity.actual_finish if has_actuals else None,
+            source_fields=asg.p6_data or {},
         ))
+
+    # Once a resource plan is edited, derive its activity totals from the
+    # current assignments instead of replaying the imported totals.
+    for task in out.activities:
+        if not task.source_fields.get("_resource_plan_edited"):
+            continue
+        source = dict(task.source_fields)
+        totals = {"Labor": Decimal(0), "NonLabor": Decimal(0), "Material": Decimal(0)}
+        for asg in valid_assignments:
+            if task_ids.id_for(asg.activity_id) == task.id:
+                kind = resources_by_id[asg.resource_id].resource_type
+                category = "Material" if kind == "material" else "NonLabor" if kind == "equipment" else "Labor"
+                totals[category] += costed[asg.id][0]
+        for category, total in totals.items():
+            source["Planned" + category + "Cost"] = str(total)
+            source["AtCompletion" + category + "Cost"] = str(total)
+            source["Remaining" + category + "Cost"] = str(total - Decimal(source.get("Actual" + category + "Cost") or 0))
+        task.source_fields = source
+
+    # Actual costs edited in Prosota supersede the imported cost snapshot.
+    # Preserve original category proportions where available.
+    exported_tasks = {a.id: a for a in out.activities}
+    actual_keys = ("ActualLaborCost", "ActualNonLaborCost", "ActualMaterialCost", "ActualExpenseCost")
+    for activity in activities:
+        current_actual = actuals_by_activity_id.get(activity.id)
+        exported = exported_tasks.get(task_ids.id_for(activity.id)) if activity.activity_type != "wbs_summary" else None
+        if current_actual is None or exported is None:
+            continue
+        source = dict(exported.source_fields)
+        previous = sum((Decimal(source.get(k) or 0) for k in actual_keys), Decimal(0))
+        if previous.quantize(Decimal(".01")) == current_actual.quantize(Decimal(".01")):
+            continue
+        for k in actual_keys:
+            source[k] = str(current_actual * Decimal(source.get(k) or 0) / previous if previous else current_actual if k == "ActualLaborCost" else Decimal(0))
+        exported.source_fields = source
+        for assignment in out.assignments:
+            if assignment.task_id == exported.id:
+                assignment.source_fields = {k: v for k, v in assignment.source_fields.items() if not k.startswith("Actual") and k not in {"RemainingCost", "AtCompletionCost"}}
 
     # --- UDFs ---
     udf_type_p6_id_by_def_id: dict[uuid.UUID, int] = {}
+    original_udf_ids = set((project_root_activity.p6_data or {}).get("_udf_map", {}).values()) if project_root_activity else set()
     for d in udf_defs:
+        if project_root_activity is not None and project_root_activity.p6_data and d.name in {"P6 Activity ID", "P6 Project ID", "P6 Actual Cost"} and str(d.id) not in original_udf_ids:
+            continue
         p6_id = udf_type_ids.id_for(d.id)
         udf_type_p6_id_by_def_id[d.id] = p6_id
         out.udf_types.append(P6UdfType(id=p6_id, table_name="TASK", field_name=f"user_field_{p6_id}", label=d.name, data_type=_udf_data_type(d.data_type)))
     defs_by_id = {d.id: d for d in udf_defs}
     for v in udf_values:
         definition = defs_by_id.get(v.field_definition_id)
-        if definition is None or v.record_id not in activities_by_id:
+        if definition is None or definition.id not in udf_type_p6_id_by_def_id or v.record_id not in activities_by_id:
             continue
         activity = activities_by_id[v.record_id]
         if activity.activity_type == "wbs_summary":
@@ -720,4 +808,44 @@ async def gather_p6_export_data(db: AsyncSession, schedule_period_id: uuid.UUID)
             number=v.value_number, date=v.value_date,
         ))
 
+    baselines = (await db.execute(select(ScheduleBaseline).where(ScheduleBaseline.schedule_period_id == period.id))).scalars().all()
+    for baseline in baselines:
+        snapshots = (await db.execute(select(ScheduleBaselineActivity).where(ScheduleBaselineActivity.baseline_id == baseline.id))).scalars().all()
+        exported_by_id = {a.id: a for a in out.activities}
+        baseline_tasks = []
+        for snapshot in snapshots:
+            current = exported_by_id.get(task_ids.id_for(snapshot.activity_id))
+            if current is None:
+                continue
+            source = {}
+            if snapshot.budget is not None:
+                source["PlannedLaborCost"] = str(snapshot.budget)
+            baseline_tasks.append(replace(current, start=snapshot.start, finish=snapshot.finish,
+                duration_hours=snapshot.duration_hours or Decimal(0), source_fields=source,
+                actual_start=None, actual_finish=None, pct_complete=Decimal(0), status_code="TK_NotStart",
+                remaining_duration=snapshot.duration_hours, duration_pct_complete=None, units_pct_complete=None))
+        snapshot_rels = (await db.execute(select(ScheduleBaselineRelationship).where(ScheduleBaselineRelationship.baseline_id == baseline.id))).scalars().all()
+        preserved = baseline.p6_data or {}
+        out.baselines.append({"raw_xml": preserved.get("xml"),
+            "calendar_map": {k: calendar_ids.id_for(uuid.UUID(v)) for k,v in preserved.get("calendars", {}).items()},
+            "resource_map": {k: rsrc_ids.id_for(uuid.UUID(v)) for k,v in preserved.get("resources", {}).items()},
+            "udf_map": {k: udf_type_ids.id_for(uuid.UUID(v)) for k,v in preserved.get("udfs", {}).items()},
+            "name": baseline.name, "date": baseline.baseline_date, "active": baseline.is_active,
+            "activities": baseline_tasks, "relationships": [P6Relationship(id=i+1,
+                pred_id=task_ids.id_for(r.predecessor_id), succ_id=task_ids.id_for(r.successor_id),
+                type=f"PR_{r.relationship_type}", lag_hours=r.lag_hours) for i, r in enumerate(snapshot_rels)]})
+
+    if project_root_activity is not None:
+        meta = project_root_activity.p6_data or {}
+        out.source_project_xml = meta.get("_project_xml")
+        out.source_shared_xml = meta.get("_shared_xml", [])
+        out.source_maps = {
+            "Project": {meta["ObjectId"]: out.project_id} if meta.get("ObjectId") else {},
+            "Activity": {a.source_fields["ObjectId"]: a.id for a in out.activities if a.source_fields.get("ObjectId")},
+            "WBS": {(a.p6_data or {})["ObjectId"]: wbs_ids.id_for(a.id) for a in activities if (a.p6_data or {}).get("_kind") == "WBS"},
+            "ResourceAssignment": {a.source_fields["ObjectId"]: a.id for a in out.assignments if a.source_fields.get("ObjectId")},
+            "Calendar": {k: calendar_ids.id_for(uuid.UUID(v)) for k,v in meta.get("_calendar_map", {}).items()},
+            "Resource": out.source_resource_map,
+            "UDFType": {k: udf_type_ids.id_for(uuid.UUID(v)) for k,v in meta.get("_udf_map", {}).items()},
+        }
     return out

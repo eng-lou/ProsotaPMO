@@ -1,3 +1,4 @@
+import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
 import { lazyPanel } from '@/components/LazyPanel'
@@ -1497,6 +1498,27 @@ export function Scheduling() {
     })
   }
   const visibleUdfDefinitions = udfDefinitions.filter(d => isUdfColumnVisible(d.id))
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('prosota_scheduling_column_order') ?? '[]')
+      return Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : []
+    } catch { return [] }
+  })
+  const columnChoices = [
+    ...ALL_COLUMNS.slice(0, 2), { key: 'activity', label: 'Activity' }, ...ALL_COLUMNS.slice(2),
+    ...udfDefinitions.map(d => ({key: `udf:${d.id}`, label: `${d.name} (UDF)`})),
+  ]
+  const orderedColumnKeys = reconcileColumnOrder(columnOrder, columnChoices.map(c => c.key))
+  const sourceColumnKeys = columnChoices.filter(c => c.key === 'activity' || (c.key.startsWith('udf:')
+    ? isUdfColumnVisible(c.key.slice(4)) : isColumnVisible(c.key as ColumnKey))).map(c => c.key)
+  const displayedColumnKeys = orderedColumnKeys.filter(key => sourceColumnKeys.includes(key))
+  const moveColumn = (key: string, destination: string) => {
+    const next = orderedColumnKeys.filter(k => k !== key)
+    next.splice(next.indexOf(destination), 0, key)
+    setColumnOrder(next)
+    try { localStorage.setItem('prosota_scheduling_column_order', JSON.stringify(next)) } catch { /* session only */ }
+  }
+
   // Widened for value-fetching only, not column rendering (2026-07-17) —
   // grouping by a UDF (groupBy = `udf:${id}`) still needs its values
   // fetched even when that field's own grid column isn't separately
@@ -3273,7 +3295,31 @@ export function Scheduling() {
             ☰ Columns
           </button>
           {columnsMenuOpen && (
-            <div className="absolute z-10 top-full mt-1 left-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-52">
+            <div className="absolute z-10 top-full mt-1 left-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg shadow-lg p-3 w-80 max-h-[70vh] overflow-y-auto">
+              <p className="text-xs font-semibold mb-2">Column order</p>
+              <p className="text-xs text-gray-500 mb-2">Choose a position for any visible column.</p>
+              {displayedColumnKeys.map((key, index) => <label key={key} className="flex items-center justify-between gap-2 text-xs py-1">
+                <span>{columnChoices.find(c => c.key === key)?.label}</span>
+                <select aria-label={`Position of ${columnChoices.find(c => c.key === key)?.label}`} value={index}
+                  className="border rounded dark:bg-prosota-panel2 px-1" onChange={e => {
+                    const targetIndex = Number(e.target.value)
+                    const remaining = displayedColumnKeys.filter(k => k !== key)
+                    const target = remaining[targetIndex]
+                    if (target) moveColumn(key, target)
+                    else {
+                      const next = [...orderedColumnKeys.filter(k => k !== key), key]
+                      setColumnOrder(next)
+                      try { localStorage.setItem('prosota_scheduling_column_order', JSON.stringify(next)) } catch { /* session only */ }
+                    }
+                  }}>
+                  {displayedColumnKeys.map((_, i) => <option key={i} value={i}>{i + 1}</option>)}
+                </select>
+              </label>)}
+              <button className="text-xs text-blue-600 my-2" onClick={() => {
+                setColumnOrder([])
+                try { localStorage.removeItem('prosota_scheduling_column_order') } catch { /* session only */ }
+              }}>Reset column order</button>
+              <p className="text-xs font-semibold border-t pt-2">Show / hide columns</p>
               {ALL_COLUMNS.map(col => (
                 <label key={col.key} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted py-1" title={col.title}>
                   <input type="checkbox" checked={isColumnVisible(col.key)} onChange={() => toggleColumn(col.key)} />
@@ -3625,6 +3671,7 @@ export function Scheduling() {
             style={{ color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[ganttStyle.table_font_family], fontSize: ganttStyle.table_font_size }}
           >
             <colgroup>
+              <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
               <col style={{ width: 32 }} />
               {isColumnVisible('code') && <col style={{ width: columnWidths.code }} />}
               {isColumnVisible('wbs') && <col style={{ width: columnWidths.wbs }} />}
@@ -3662,12 +3709,14 @@ export function Scheduling() {
               {isColumnVisible('eac') && <col style={{ width: columnWidths.eac }} />}
               {isColumnVisible('etc') && <col style={{ width: columnWidths.etc }} />}
               {visibleUdfDefinitions.map(d => <col key={d.id} style={{ width: '9rem' }} />)}
+              </OrderedColumns>
             </colgroup>
             <thead>
               <tr
                 style={{ height: 36, fontSize: ganttStyle.header_font_size, fontFamily: FONT_FAMILY_CSS[ganttStyle.header_font_family] }}
                 className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide sticky top-0"
               >
+                <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
                 <th className="px-2 py-2.5 no-print">
                   <input
                     type="checkbox"
@@ -3722,6 +3771,7 @@ export function Scheduling() {
                 {visibleUdfDefinitions.map(d => (
                   <th key={d.id} className="px-3 py-2.5 whitespace-nowrap" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
                 ))}
+                </OrderedColumns>
               </tr>
             </thead>
             <tbody>
@@ -3751,6 +3801,7 @@ export function Scheduling() {
                   }}
                   className={`hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${expandedId === a.id ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : ''}`}
                 >
+                  <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
                   <td className="px-2 py-1 no-print">
                     <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
                   </td>
@@ -4096,6 +4147,7 @@ export function Scheduling() {
                       onSave={payload => setUdfValue(d.id, a.id, payload)}
                     />
                   ))}
+                  </OrderedColumns>
                 </tr>
                 )
               })}
@@ -4326,7 +4378,7 @@ export function Scheduling() {
       />
     )}
     {printMounted && printTarget === 'schedule' && activeTab === 'schedule' && (
-      <SchedulingPrintView
+      <SchedulingPrintView columnOrder={orderedColumnKeys}
         activities={visibleActivities}
         relationships={relationships}
         resourceAssignments={resourceAssignments}
@@ -4386,7 +4438,7 @@ export function Scheduling() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-6">
-            <SchedulingPrintView
+            <SchedulingPrintView columnOrder={orderedColumnKeys}
               preview
               activities={visibleActivities}
               relationships={relationships}

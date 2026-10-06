@@ -61,7 +61,7 @@ class CostElement(Base, TimestampMixin):
     # already use elsewhere in this model. Replaces the old rev_a_baseline field (which
     # froze once at creation and could never be re-baselined) — a real Cost Baseline,
     # deliberately assigned, is the correct mechanism for "the approved figure."
-    bl_budget: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    bl_budget: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
     # Physical progress assessment (0-100) — a manual progress estimate, the standard
     # technique for Earned Value without a network-schedule integration: EV = BAC x
     # pct_complete. forecast/variance/cpi/eac/etc/vac/tcpi/cost_per_m2 are all computed at

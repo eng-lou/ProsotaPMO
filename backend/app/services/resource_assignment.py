@@ -128,6 +128,8 @@ async def create_assignment(db: AsyncSession, data: ResourceAssignmentCreate) ->
 
     assignment = ResourceAssignment(**data.model_dump())
     db.add(assignment)
+    if activity.p6_data:
+        activity.p6_data = {**activity.p6_data, "_resource_plan_edited": True}
     await db.commit()
     await db.refresh(assignment)
     await cost_sync.sync_cost_element_from_resources(db, activity.id)
@@ -145,6 +147,10 @@ async def update_assignment(
     fields = data.model_dump(exclude_unset=True)
     for field, value in fields.items():
         setattr(assignment, field, value)
+    if {"utilisation_pct", "quantity", "resource_id"}.intersection(fields):
+        if activity.p6_data:
+            activity.p6_data = {**activity.p6_data, "_resource_plan_edited": True}
+        assignment.p6_data = {k: v for k, v in (assignment.p6_data or {}).items() if k in {"ObjectId", "GUID"} or k.startswith("Actual")} or None
     if "utilisation_pct" in fields:
         # A hand edit unlinks this assignment from P6's own exact imported
         # hours (planned_hours) — same "an explicit edit overrides the
@@ -166,5 +172,7 @@ async def delete_assignment(db: AsyncSession, assignment_id: uuid.UUID) -> None:
     await _require_live_schedule_period(db, activity.schedule_period_id)
 
     await db.delete(assignment)
+    if activity.p6_data:
+        activity.p6_data = {**activity.p6_data, "_resource_plan_edited": True}
     await db.commit()
     await cost_sync.sync_cost_element_from_resources(db, activity.id)

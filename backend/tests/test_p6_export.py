@@ -318,26 +318,10 @@ async def test_nested_wbs_branch_stays_nested_under_its_own_real_parent(
     assert envelope_el.findtext("p6:ParentObjectId", namespaces=ns) == building_id
 
 
-async def test_no_baseline_project_is_exported(
+async def test_assigned_baseline_project_is_exported(
     client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
 ):
-    """A <BaselineProject> was added 2026-09-06 (per Maro: a re-imported
-    exported project's own BL1 Start/Finish just mirrored the live dates
-    in P6, since this export never wrote a real baseline) but every
-    attempt at it — a minimal version, an ObjectId-linked version, and a
-    version matching a real P6 baseline export's full field set — crashed
-    P6's own "Flat" re-import identically (NullReferenceException), with
-    zero change in behavior despite substantially different content. That
-    points at re-importing a baseline through this import path being
-    unsupported at all, not a fixable field-shape bug, so the feature was
-    reverted (per Maro: "revert the 3rd [complaint]... will try") rather
-    than keep guessing against a crash with no diagnostic detail and no
-    local P6 install to iterate against. Name/ObjectId-code split and
-    real AC/EV export (the other two complaints from the same session)
-    are unaffected and stay in. Revisit only with either a real P6
-    reference for a *re-imported* (not originally-exported) baseline
-    project, or a way to capture more than a bare NullReferenceException
-    from P6's own importer."""
+    """Assigned baseline is exported with a resolvable project reference."""
     await _create_activity(client, project, live_schedule_period, "Piling", duration_hours=8)
 
     baseline_resp = await client.post("/api/v1/schedule-baselines/", json={
@@ -352,9 +336,10 @@ async def test_no_baseline_project_is_exported(
     assert resp.status_code == 200, resp.text
     root = ET.fromstring(resp.text)
     ns = {"p6": "http://xmlns.oracle.com/Primavera/P6Professional/V24.12/API/BusinessObjects"}
-    assert root.find("p6:BaselineProject", ns) is None
+    baseline = root.find("p6:BaselineProject", ns)
+    assert baseline is not None
     project_el = root.find("p6:Project", ns)
-    assert project_el.find("p6:CurrentBaselineProjectObjectId", ns) is None
+    assert project_el.findtext("p6:CurrentBaselineProjectObjectId", namespaces=ns) == baseline.findtext("p6:ObjectId", namespaces=ns)
 
 
 async def test_physical_percent_complete_is_exported(

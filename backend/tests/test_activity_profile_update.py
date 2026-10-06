@@ -22,7 +22,7 @@ class ActivityProfileUpdateTests(unittest.IsolatedAsyncioTestCase):
             id=uuid.uuid4(), project_id=uuid.uuid4(), schedule_period_id=uuid.uuid4(),
             code="A-001", animation_profile_id=uuid.uuid4(),
         )
-        self.db = SimpleNamespace(commit=AsyncMock())
+        self.db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
         self.mocks = {}
         for name in ("get_activity", "_require_live_schedule_period",
                      "_validate_animation_profile_in_project", "_attach_evm_fields",
@@ -39,6 +39,7 @@ class ActivityProfileUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.mocks["_require_live_schedule_period"].assert_awaited_once_with(self.db, self.activity.schedule_period_id)
         self.mocks["_validate_animation_profile_in_project"].assert_awaited_once_with(self.db, profile_id, self.activity.project_id)
         self.db.commit.assert_awaited_once()
+        self.db.refresh.assert_awaited_once_with(self.activity)
         self.mocks["_attach_evm_fields"].assert_awaited_once_with(self.db, [self.activity])
         self.mocks["_recompute_hierarchy"].assert_not_awaited()
         self.cpm.assert_not_awaited()

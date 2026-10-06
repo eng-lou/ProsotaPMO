@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -20,6 +20,9 @@ class Activity(Base, TimestampMixin):
     # what makes it recognisably "the same activity, more mature" across a
     # Working Schedule and a Recovery Schedule forked from it).
     __table_args__ = (UniqueConstraint("schedule_variant_id", "code", name="uq_activities_schedule_variant_code"),)
+
+    # Original scalar P6 fields and native import values for lossless export.
+    p6_data: Mapped[dict | None] = mapped_column(JSONB)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(20), nullable=False)

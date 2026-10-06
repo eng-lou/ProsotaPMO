@@ -75,6 +75,9 @@ def compute_assignment_budget_raw(
     own cost is shown as its own line (Resource Usage/Tracking, a
     CostRateLine) — those still round individually, same as any other
     displayed money figure."""
+    source = getattr(assignment, "p6_data", None) or {}
+    if source.get("PlannedCost") is not None:
+        return Decimal(source["PlannedCost"])
     rate = Decimal(str(resource.rate))
 
     # subcontractor/cost: both price as a flat lump sum (2026-07-08, per Maro —

@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -39,6 +39,7 @@ class ScheduleBaseline(Base, TimestampMixin):
 
     __tablename__ = "schedule_baselines"
 
+    p6_data: Mapped[dict | None] = mapped_column(JSONB)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Was `period_id` until the schedule-variants split (2026-07-07, per Maro —
     # docs/SCHEDULE_VARIANTS_PLAN.md) — a baseline belongs to a schedule, not a
@@ -76,6 +77,7 @@ class ScheduleBaselineActivity(Base):
 
     __tablename__ = "schedule_baseline_activities"
 
+    budget: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     baseline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("schedule_baselines.id", ondelete="CASCADE"), nullable=False, index=True

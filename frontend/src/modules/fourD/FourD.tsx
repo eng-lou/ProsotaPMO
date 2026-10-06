@@ -1,3 +1,4 @@
+import { applyActivityProfiles } from './applyActivityProfiles'
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
 import { IntegratedIfcImportDialog } from './IntegratedIfcImportDialog'
@@ -360,6 +361,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setResources(resourcesRes.data)
       setResourceAssignments(assignmentsRes.data)
       setCalendars(calendarsRes.data)
+      return activitiesRes.data
     } finally {
       if (requestId === scheduleRequestRef.current) setScheduleLoading(false)
     }
@@ -5541,14 +5543,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleApplyScheduleProfiles = async (ids: string[], profileId: string | null) => {
     const selectedIds = new Set(ids)
     const targets = activities.filter(a => selectedIds.has(a.id) && a.activity_type !== 'wbs_summary' && a.animation_profile_id !== profileId)
-    let failed = 0
-    for (let offset = 0; offset < targets.length; offset += 8) {
-      const results = await Promise.allSettled(targets.slice(offset, offset + 8).map(a =>
-        api.patch(`/api/v1/activities/${a.id}`, { animation_profile_id: profileId })))
-      failed += results.filter(r => r.status === 'rejected').length
-    }
-    await refreshSchedule()
-    if (failed) throw new Error(`${failed} of ${targets.length} profile changes failed. Successful changes were saved; retry to finish.`)
+    await applyActivityProfiles(targets, profileId,
+      (id, profile) => api.patch(`/api/v1/activities/${id}`, { animation_profile_id: profile }),
+      refreshSchedule,
+    )
   }
   const handleUpdateScheduleWindowActivity = async (activityId: string, field: ScheduleWindowEditableField, value: string) => {
     let payload: Record<string, unknown>
