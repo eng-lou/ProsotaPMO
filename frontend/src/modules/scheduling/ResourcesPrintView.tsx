@@ -1,3 +1,4 @@
+import type { ResourceSeries } from './resourceSeries'
 import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import type { ProjectLetterhead } from '@/lib/letterhead'
@@ -10,6 +11,8 @@ import type { AssignmentRow } from './useResourcesTabData'
 import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
+  trackingSeries: ResourceSeries[]
+  profileSeries: ResourceSeries[]
   tables: Set<ResourcesPrintTable>
   projectName: string
   letterhead: ProjectLetterhead | null
@@ -38,7 +41,7 @@ interface Props {
 export function ResourcesPrintView({
   tables, projectName, letterhead, printFonts, resources, calendars, printGroups, bucketLabels,
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
-  actualsHistory,
+  actualsHistory, trackingSeries, profileSeries,
 }: Props) {
   if (tables.size === 0) return null
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -52,9 +55,9 @@ export function ResourcesPrintView({
     <div className="print-only p-8" style={{ fontFamily: FONT_FAMILY_CSS[printFonts.fontFamily], fontSize: printFonts.fontSize }}>
       {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={tokens} />}
       {tables.has('pool') && <ResourcePoolPrintView resources={resources} calendars={calendars} />}
-      {tables.has('tracking') && <ResourceTrackingPrintView groups={printGroups} bucketLabels={bucketLabels} unit={unit} />}
+      {tables.has('tracking') && <ResourceTrackingPrintView series={trackingSeries} groups={printGroups} bucketLabels={bucketLabels} unit={unit} />}
       {tables.has('profile') && (
-        <ResourceUsageProfilePrintView
+        <ResourceUsageProfilePrintView series={profileSeries}
           trackedResources={trackedResources} assignmentsByResource={assignmentsByResource}
           buckets={buckets} spreadByResource={spreadByResource} selectedActivityIds={selectedActivityIds} unit={unit}
           dataDate={dataDate} actualsHistory={actualsHistory}

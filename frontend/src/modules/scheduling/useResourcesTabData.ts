@@ -247,6 +247,8 @@ export function computeUsageProfileBars(
 }
 
 export interface UsageProfileSeries {
+  actualByAssignment: Map<string, (number | null)[]>
+  evByAssignment: Map<string, (number | null)[]>
   estimatedPhasing: boolean
   budgetValues: number[]
   actualValues: (number | null)[]
@@ -279,6 +281,8 @@ export function computeUsageProfileSeries(
   selectedActivityIds: Set<string>, unit: 'hours' | 'days' | 'cost', dataDate: Date,
   history: ActualsHistoryItem[],
 ): UsageProfileSeries {
+  const actualByAssignment = new Map<string, (number | null)[]>()
+  const evByAssignment = new Map<string, (number | null)[]>()
   let estimatedPhasing = false
   const budgetValues = buckets.map(() => 0)
   const capacityByBucket = buckets.map(() => 0)
@@ -308,14 +312,14 @@ export function computeUsageProfileSeries(
   // above; avoids double-counting an activity's own actual/EV if it
   // somehow had more than one time-based assignment.
   const seenActivityIds = new Set<string>()
-  const activityRows: { activity: AssignmentRow['activity']; resource: Resource }[] = []
+  const activityRows: { activity: AssignmentRow['activity']; resource: Resource; assignmentId: string }[] = []
   for (const resource of trackedResources) {
     const rows = (assignmentsByResource.get(resource.id) ?? [])
       .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
     for (const row of rows) {
       if (seenActivityIds.has(row.activity.id)) continue
       seenActivityIds.add(row.activity.id)
-      activityRows.push({ activity: row.activity, resource })
+      activityRows.push({ activity: row.activity, resource, assignmentId: row.assignment.id })
     }
   }
 
@@ -330,57 +334,66 @@ export function computeUsageProfileSeries(
 
   const dataDateTime = dataDate.getTime()
 
-  for (const { activity, resource } of activityRows) {
-    const points = (historyByActivity.get(activity.id) ?? []).filter(p => p.time <= dataDateTime)
-    if (points.length === 0) {
-      const start = activity.actual_start ?? activity.start
-      const finish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : dataDate.toISOString())
-      if (!start || !finish) continue
-      for (const [raw, values] of [[activity.ac, actualValues], [activity.ev, evValues]] as const) {
-        if (raw == null) continue
-        const phased = profileElapsedTotal(Number(raw), new Date(start), new Date(finish), dataDate, buckets)
-        phased.forEach((value, i) => {
+  for (const { activity, resource, assignmentId } of activityRows) {
+    const rowActual: (number | null)[] = buckets.map(() => null)
+    const rowEv: (number | null)[] = buckets.map(() => null)
+    const phaseActivity = (actualValues: (number | null)[], evValues: (number | null)[]) => {
+      const points = (historyByActivity.get(activity.id) ?? []).filter(p => p.time <= dataDateTime)
+      if (points.length === 0) {
+        const start = activity.actual_start ?? activity.start
+        const finish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : dataDate.toISOString())
+        if (!start || !finish) return
+        for (const [raw, values] of [[activity.ac, actualValues], [activity.ev, evValues]] as const) {
+          if (raw == null) continue
+          const phased = profileElapsedTotal(Number(raw), new Date(start), new Date(finish), dataDate, buckets)
+          phased.forEach((value, i) => {
+            if (value === null) return
+            values[i] = (values[i] ?? 0) + costToUnit(value, resource, unit)
+            if (value !== 0) estimatedPhasing = true
+          })
+        }
+        return
+      }
+
+      const live: HistoryPoint | null = activity.ac != null || activity.ev != null
+        ? { time: dataDateTime, ac: activity.ac != null ? Number(activity.ac) : points[points.length - 1].ac, ev: activity.ev !== null ? Number(activity.ev) : null }
+        : null
+      const allPoints = live ? [...points, live] : points
+      if (allPoints.length === 0) return
+
+      for (const [field, values] of [['ac', actualValues], ['ev', evValues]] as const) {
+        const metricPoints = allPoints.filter(point => point[field] !== null)
+        if (!metricPoints.length) continue
+        const first = metricPoints[0]
+        const firstValue = first[field]!
+        const start = activity.actual_start ?? activity.start
+        const completedFinish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : null)
+        const initialEnd = Math.min(first.time, completedFinish ? new Date(completedFinish).getTime() : first.time)
+        // The first snapshot is cumulative, not a transaction dated that day.
+        // Reconstruct only that opening balance; later captured deltas keep
+        // their reporting dates, including late costs after physical completion.
+        const initial = start
+          ? profileElapsedTotal(firstValue, new Date(start), new Date(initialEnd), dataDate, buckets)
+          : buckets.map(bucket => bucket.start.getTime() <= first.time && first.time < bucket.end.getTime() ? firstValue : null)
+        initial.forEach((value, i) => {
           if (value === null) return
           values[i] = (values[i] ?? 0) + costToUnit(value, resource, unit)
           if (value !== 0) estimatedPhasing = true
         })
-      }
-      continue
-    }
-
-    const live: HistoryPoint | null = activity.ac != null || activity.ev != null
-      ? { time: dataDateTime, ac: activity.ac != null ? Number(activity.ac) : points[points.length - 1].ac, ev: activity.ev !== null ? Number(activity.ev) : null }
-      : null
-    const allPoints = live ? [...points, live] : points
-    if (allPoints.length === 0) continue
-
-    for (const [field, values] of [['ac', actualValues], ['ev', evValues]] as const) {
-      const metricPoints = allPoints.filter(point => point[field] !== null)
-      if (!metricPoints.length) continue
-      const first = metricPoints[0]
-      const firstValue = first[field]!
-      const start = activity.actual_start ?? activity.start
-      const completedFinish = activity.actual_finish ?? (activity.status === 'completed' ? activity.finish : null)
-      const initialEnd = Math.min(first.time, completedFinish ? new Date(completedFinish).getTime() : first.time)
-      // The first snapshot is cumulative, not a transaction dated that day.
-      // Reconstruct only that opening balance; later captured deltas keep
-      // their reporting dates, including late costs after physical completion.
-      const initial = start
-        ? profileElapsedTotal(firstValue, new Date(start), new Date(initialEnd), dataDate, buckets)
-        : buckets.map(bucket => bucket.start.getTime() <= first.time && first.time < bucket.end.getTime() ? firstValue : null)
-      initial.forEach((value, i) => {
-        if (value === null) return
-        values[i] = (values[i] ?? 0) + costToUnit(value, resource, unit)
-        if (value !== 0) estimatedPhasing = true
-      })
-      for (let j = 1; j < metricPoints.length; j++) {
-        const point = metricPoints[j]
-        const delta = point[field]! - metricPoints[j - 1][field]!
-        const index = buckets.findIndex(bucket => bucket.start.getTime() <= point.time && point.time < bucket.end.getTime())
-        if (index >= 0) values[index] = (values[index] ?? 0) + costToUnit(delta, resource, unit)
+        for (let j = 1; j < metricPoints.length; j++) {
+          const point = metricPoints[j]
+          const delta = point[field]! - metricPoints[j - 1][field]!
+          const index = buckets.findIndex(bucket => bucket.start.getTime() <= point.time && point.time < bucket.end.getTime())
+          if (index >= 0) values[index] = (values[index] ?? 0) + costToUnit(delta, resource, unit)
+        }
       }
     }
+    phaseActivity(rowActual, rowEv)
+    actualByAssignment.set(assignmentId, rowActual)
+    evByAssignment.set(assignmentId, rowEv)
+    rowActual.forEach((v, i) => { if (v !== null) actualValues[i] = (actualValues[i] ?? 0) + v })
+    rowEv.forEach((v, i) => { if (v !== null) evValues[i] = (evValues[i] ?? 0) + v })
   }
 
-  return { budgetValues, actualValues, evValues, estimatedPhasing, limitValue: capacityByBucket.reduce((m, c) => Math.max(m, c), 0) }
+  return { actualByAssignment, evByAssignment, budgetValues, actualValues, evValues, estimatedPhasing, limitValue: capacityByBucket.reduce((m, c) => Math.max(m, c), 0) }
 }

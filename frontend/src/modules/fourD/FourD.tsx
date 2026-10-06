@@ -1,3 +1,4 @@
+import { useResourceSeries } from '@/modules/scheduling/resourceSeries'
 import { applyActivityProfiles } from './applyActivityProfiles'
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
@@ -17,7 +18,7 @@ import { computePeriodBuckets, loadGanttZoom, saveGanttZoom, type GanttZoom } fr
 import { loadResourcesLayout } from '@/modules/scheduling/resourcesLayout'
 import { ResourceTrackingWidget } from '@/modules/scheduling/ResourceTrackingWidget'
 import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsageProfileWidget'
-import { computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
+import { computeUsageProfileSeries, computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, ActualsHistoryItem, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
 import { isBundle, packBundle, unpackBundle } from './fileBundle'
@@ -5728,6 +5729,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // fetch for why this needs the separate Cost Plan period, not the
   // schedule period already in scope here.
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
+  const [trackingSeries, setTrackingSeries] = useResourceSeries('prosota_tracking_series', ['budget'])
+  const [profileSeries, setProfileSeries] = useResourceSeries('prosota_profile_series', ['budget', 'actual', 'earned'])
+  const trackingFigures = useMemo(() => computeUsageProfileSeries(
+    resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, resourcesTabData.buckets,
+    resourcesTabData.spreadByResource, new Set(), 'hours',
+    period?.start_date ? new Date(period.start_date) : new Date(), actualsHistory,
+  ), [resourcesTabData, period?.start_date, actualsHistory])
   useEffect(() => {
     if (!selectedProject || !costPeriod) return
     let cancelled = false
@@ -6702,6 +6710,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'tracking':
         return (
           <ResourceTrackingWidget
+            series={trackingSeries} onSeriesChange={setTrackingSeries} figures={trackingFigures}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
             assignmentsByResource={resourcesTabData.assignmentsByResource}
@@ -6723,6 +6732,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'usage':
         return (
           <ResourceUsageProfileWidget
+            series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
             assignmentsByResource={resourcesTabData.assignmentsByResource}

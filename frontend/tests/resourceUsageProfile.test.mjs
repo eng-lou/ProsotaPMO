@@ -66,3 +66,35 @@ test('a single cumulative snapshot after completion is reconstructed before the 
  assert.equal(result.actualValues[4],0)
  assert.ok(Math.abs(sum(result.actualValues)-5900)<1e-8)
 })
+
+
+test('tracking assignment figures match profile totals in every unit', () => {
+  for (const unit of ['hours', 'days', 'cost']) {
+    const result = series(activity, [], buckets, unit)
+    assert.deepEqual(result.actualByAssignment.get('ra'), result.actualValues)
+    assert.deepEqual(result.evByAssignment.get('ra'), result.evValues)
+    assert.equal(result.actualByAssignment.get('ra')[5], null)
+  }
+})
+
+test('multiple assignments of one activity do not duplicate tracking actuals or earned value', () => {
+  const result = compute([resource], new Map([['r', [
+    { activity, assignment: { id: 'first' } },
+    { activity, assignment: { id: 'second' } },
+  ]]]), buckets, new Map(), new Set(), 'cost', new Date(2011, 4, 15), [])
+  assert.equal(result.actualByAssignment.has('second'), false)
+  assert.deepEqual(result.actualByAssignment.get('first'), result.actualValues)
+  assert.deepEqual(result.evByAssignment.get('first'), result.evValues)
+})
+
+test('tracking retains earned-only figures and recorded late actuals', () => {
+  const earnedOnly = series({ ...activity, ac: null })
+  assert.ok(earnedOnly.actualByAssignment.get('ra').every(v => v === null))
+  assert.ok(sum(earnedOnly.evByAssignment.get('ra')) > 0)
+  const result = series(activity, [
+    { linked_activity_id: 'a', baseline_date: '2011-02-01T00:00:00', ac: '2000', ev: '1600' },
+    { linked_activity_id: 'a', baseline_date: '2011-04-01T00:00:00', ac: '5900', ev: '4720' },
+  ])
+  assert.equal(result.actualByAssignment.get('ra')[3], 3900)
+  assert.deepEqual(result.actualByAssignment.get('ra'), result.actualValues)
+})

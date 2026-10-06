@@ -1,3 +1,4 @@
+import type { ResourceSeries } from './resourceSeries'
 import { budgetBarBackground, RESOURCE_USAGE_COLORS } from './ResourceUsageProfileWidget'
 import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
@@ -5,6 +6,7 @@ import type { ActualsHistoryItem, Resource } from './types'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 
 interface Props {
+  series: ResourceSeries[]
   trackedResources: Resource[]
   assignmentsByResource: Map<string, AssignmentRow[]>
   buckets: { start: Date; end: Date; label: string }[]
@@ -30,7 +32,7 @@ const GRIDLINE_COUNT = 4
 // be aligned in the same horizontal axis").
 export function ResourceUsageProfilePrintView({
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
-  actualsHistory,
+  actualsHistory, series,
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.
@@ -39,8 +41,8 @@ export function ResourceUsageProfilePrintView({
     dataDate ? new Date(dataDate) : new Date(), actualsHistory,
   )
   const maxValue = Math.max(
-    ...budgetValues, ...actualValues.filter((v): v is number => v !== null),
-    ...evValues.filter((v): v is number => v !== null), limitValue, 1,
+    ...(series.includes('budget') ? budgetValues : []), ...(series.includes('actual') ? actualValues.filter((v): v is number => v !== null) : []),
+    ...(series.includes('earned') ? evValues.filter((v): v is number => v !== null) : []), series.includes('budget') ? limitValue : 0, 1,
   ) * 1.1
   const axisLabel = unit === 'cost' ? '£' : unit === 'days' ? 'Days' : 'Hours'
   // Abbreviated, not full comma-formatted — see the screen widget's own
@@ -58,13 +60,13 @@ export function ResourceUsageProfilePrintView({
     <div className="mb-8">
       <p className="text-sm text-gray-500 mb-2">Resource Usage Profile · {trackedResources.length} resource{trackedResources.length === 1 ? '' : 's'}</p>
 
-{estimatedPhasing && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">Opening AC/EV totals are estimated across elapsed calendar time; later captured changes retain their reporting dates. Hours/days are cost-derived equivalents, not recorded timesheets.</p>}
+{estimatedPhasing && series.some(s => s !== 'budget') && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">Opening AC/EV totals are estimated across elapsed calendar time; later captured changes retain their reporting dates. Hours/days are cost-derived equivalents, not recorded timesheets.</p>}
       <div className="flex items-center gap-3 mb-3">
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit (capacity)</span>
+        {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>}
+        {series.includes('actual') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>}
+        {series.includes('earned') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>}
+        {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
+        {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit (capacity)</span>}
       </div>
 
       <div className="flex">
@@ -105,7 +107,7 @@ export function ResourceUsageProfilePrintView({
               const bottom = (value / maxValue) * CHART_HEIGHT
               return <div key={i} className="absolute left-0 right-0 border-t border-gray-100" style={{ bottom }} />
             })}
-            {limitValue > 0 && (
+            {series.includes('budget') && limitValue > 0 && (
               <div className="absolute left-0 right-0" style={{ bottom: (limitValue / maxValue) * CHART_HEIGHT, height: 1, backgroundColor: RESOURCE_USAGE_COLORS.limit }} />
             )}
             {budgetValues.map((budget, i) => {
@@ -119,8 +121,9 @@ export function ResourceUsageProfilePrintView({
               const segments: { value: number; color: string; slot: number }[] = [
                 { value: budget, color: budgetBarBackground(budget, limitValue), slot: 0 },
               ]
-              if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, slot: 1 })
-              if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, slot: 2 })
+              if (!series.includes('budget')) segments.length = 0
+              if (series.includes('actual') && actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, slot: 1 })
+              if (series.includes('earned') && ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, slot: 2 })
               const groupWidth = PRINT_PERIOD_COL_WIDTH - 8
               const gap = 1
               const segWidth = (groupWidth - gap * 2) / 3

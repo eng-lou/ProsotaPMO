@@ -1,3 +1,4 @@
+import { useResourceSeries } from './resourceSeries'
 import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
@@ -59,7 +60,7 @@ import {
   findNextOverallocatedTarget, levelTarget,
   type LevelingGranularity, type LevelingMode, type LevelingTarget,
 } from './resourceLeveling'
-import { computeUsageProfileBars, eachDate, indexSpread, usageUnitFactor, useResourcesTabData } from './useResourcesTabData'
+import { computeUsageProfileSeries, computeUsageProfileBars, eachDate, indexSpread, usageUnitFactor, useResourcesTabData } from './useResourcesTabData'
 import {
   ACTIVITY_TYPES, type Activity, type ActivityRelationship, type ActualsHistoryItem, type Calendar, type QualityReport,
   type Resource, type ResourceAssignment, type SchedulingFilter,
@@ -794,6 +795,8 @@ export function Scheduling() {
   // table owning its own. useResourcesTabData does the actual data
   // fetching/derivation once, shared by Tracking, Profile, and Print/Export.
   const [resourcesZoom, setResourcesZoom] = useState<GanttZoom>(loadGanttZoom)
+  const [trackingSeries, setTrackingSeries] = useResourceSeries('prosota_tracking_series', ['budget'])
+  const [profileSeries, setProfileSeries] = useResourceSeries('prosota_profile_series', ['budget', 'actual', 'earned'])
   const [resourcesUnit, setResourcesUnit] = useState<'hours' | 'days' | 'cost'>('hours')
   const [resourcesRangeStartOverride, setResourcesRangeStartOverride] = useState<Date | null>(null)
   const [resourcesRangeEndOverride, setResourcesRangeEndOverride] = useState<Date | null>(null)
@@ -932,6 +935,12 @@ export function Scheduling() {
   // its assignments match the current activity selection) is still
   // dropped entirely, same as before — collapse only ever hides rows that
   // do exist, it never manufactures a reason to hide a resource outright.
+  const trackingFigures = useMemo(() => computeUsageProfileSeries(
+    resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, resourcesTabData.buckets,
+    resourcesTabData.spreadByResource, new Set(), resourcesUnit,
+    period?.start_date ? new Date(period.start_date) : new Date(), actualsHistory,
+  ), [resourcesTabData, resourcesUnit, period?.start_date, actualsHistory])
+
   const resourcesPrintGroups: PrintResourceGroup[] = useMemo(() => printScopedTrackedResources.map(resource => {
     const allRows = resourcesTabData.assignmentsByResource.get(resource.id) ?? []
     const scopedRows = selectedActivityIds.size > 0 ? allRows.filter(row => selectedActivityIds.has(row.activity.id)) : allRows
@@ -959,22 +968,29 @@ export function Scheduling() {
     // collapsed-to-empty `rows` below — a collapsed resource's own header
     // total must still reflect its true summed hours, exactly as it does
     // on screen, even though its child rows are omitted from the table.
-    const scopedRowsWithHours = scopedRows.map(row => ({ row, bucketHours: bucketHoursFor(row.assignment.id) }))
+    const scopedRowsWithHours = scopedRows.map(row => ({ row, bucketHours: bucketHoursFor(row.assignment.id),
+      actual: trackingFigures.actualByAssignment.get(row.assignment.id) ?? resourcesTabData.buckets.map(() => null),
+      earned: trackingFigures.evByAssignment.get(row.assignment.id) ?? resourcesTabData.buckets.map(() => null),
+    }))
+    const rollupMetric = (key: 'actual' | 'earned') => resourcesTabData.buckets.map((_, i) => {
+      const values = scopedRowsWithHours.map(row => row[key][i]).filter((v): v is number => v !== null)
+      return values.length ? values.reduce((a, b) => a + b, 0) : null
+    })
     const rollup = resourcesTabData.buckets.map((_, i) => scopedRowsWithHours.reduce((sum, { bucketHours }) => sum + bucketHours[i], 0))
     const rowsWithHours = collapsedResourceIds.has(resource.id) ? [] : scopedRowsWithHours
     return {
       resourceName: resource.name,
-      bucketHours: rollup,
+      bucketHours: rollup, actual: rollupMetric('actual'), earned: rollupMetric('earned'),
       hasScopedRows,
-      rows: rowsWithHours.map(({ row, bucketHours }) => ({
+      rows: rowsWithHours.map(({ row, bucketHours, actual, earned }) => ({
         code: row.activity.code, name: row.activity.task_name,
         start: row.activity.start ? formatDateTime(row.activity.start, false) : null,
         finish: row.activity.finish ? formatDateTime(row.activity.finish, false) : null,
-        bucketHours,
+        bucketHours, actual, earned,
       })),
     }
   }).filter(group => group.hasScopedRows).map(({ hasScopedRows: _drop, ...group }) => group),
-  [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit, collapsedResourceIds])
+  [printScopedTrackedResources, resourcesTabData, selectedActivityIds, resourcesUnit, collapsedResourceIds, trackingFigures])
 
   const resourcesProfileBars = useMemo(
     () => computeUsageProfileBars(
@@ -3095,6 +3111,7 @@ export function Scheduling() {
             layoutPrefs={resourcesLayoutPrefs}
           />
           <ResourceTrackingWidget
+            series={trackingSeries} onSeriesChange={setTrackingSeries} figures={trackingFigures}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
             assignmentsByResource={resourcesTabData.assignmentsByResource}
@@ -3114,6 +3131,7 @@ export function Scheduling() {
             onLeftPaneWidthChange={setResourcesLeftPaneWidth}
           />
           <ResourceUsageProfileWidget
+            series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
             assignmentsByResource={resourcesTabData.assignmentsByResource}
@@ -4474,6 +4492,7 @@ export function Scheduling() {
         SchedulingPrintView/SchedulingQualityPrintView already do. */}
     {printMounted && activeTab === 'resources' && (
       <ResourcesPrintView
+        trackingSeries={trackingSeries} profileSeries={profileSeries}
         tables={resourcesPageSetupTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}
         trackedResources={printScopedTrackedResources} assignmentsByResource={resourcesTabData.assignmentsByResource}

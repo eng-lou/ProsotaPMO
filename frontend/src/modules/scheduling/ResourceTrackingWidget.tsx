@@ -1,3 +1,4 @@
+import { ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useTheme } from '@/lib/ThemeContext'
@@ -6,10 +7,13 @@ import { recalculateCosts, saveSpreadRange, type ResourceSpread } from '@/lib/re
 import { formatDateTime } from './dateTime'
 import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
 import { RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesLayoutPrefs } from './resourcesLayout'
-import { eachDate, type AssignmentRow } from './useResourcesTabData'
+import { eachDate, usageUnitFactor, type UsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
 import type { Calendar, Resource, ResourceAssignment } from './types'
 
 interface Props {
+  series: ResourceSeries[]
+  onSeriesChange: (next: ResourceSeries[]) => void
+  figures: UsageProfileSeries
   calendars: Calendar[]
   trackedResources: Resource[]
   assignmentsByResource: Map<string, AssignmentRow[]>
@@ -80,7 +84,6 @@ const OPTIONAL_COLUMNS: { key: OptionalColKey; label: string; width: number }[] 
   { key: 'utilisation', label: 'Utilisation %', width: 90 },
   { key: 'calendar', label: 'Calendar', width: 120 },
 ]
-const PERIOD_COL_WIDTH = 64
 const RESOURCE_HEADER_ROW_HEIGHT = 30
 const RESOURCE_CHILD_ROW_HEIGHT = 26
 
@@ -123,9 +126,22 @@ function ResourceTrackingWidgetImpl({
   calendars, trackedResources, assignmentsByResource: baseAssignmentsByResource, buckets, spreadByResource, loading,
   spreadFetchError, onRefetchResource, unit, layoutPrefs, selectedResourceIds, onToggleResourceSelected,
   selectedActivityIds, onToggleActivitySelected, collapsedIds, onToggleCollapsed,
-  onLeftPaneWidthChange,
+  onLeftPaneWidthChange, series, onSeriesChange, figures,
 }: Props) {
+  const PERIOD_COL_WIDTH = (unit === 'cost' ? 104 : 80) * series.length
   const { theme } = useTheme()
+  const resourceFigures = useMemo(() => {
+    const result = new Map<string, { actual: (number | null)[]; earned: (number | null)[] }>()
+    for (const resource of trackedResources) {
+      const rows = baseAssignmentsByResource.get(resource.id) ?? []
+      const sum = (map: Map<string, (number | null)[]>) => buckets.map((_, i) => {
+        const values = rows.map(row => map.get(row.assignment.id)?.[i] ?? null).filter((v): v is number => v !== null)
+        return values.length ? values.reduce((a, b) => a + b, 0) : null
+      })
+      result.set(resource.id, { actual: sum(figures.actualByAssignment), earned: sum(figures.evByAssignment) })
+    }
+    return result
+  }, [trackedResources, baseAssignmentsByResource, buckets, figures])
   const stickyBodyBg = theme === 'dark' ? '#0C1A2E' : '#ffffff'
   const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
   const [visibleOptionalCols, setVisibleOptionalCols] = useState<Set<OptionalColKey>>(loadVisibleOptionalCols)
@@ -229,17 +245,6 @@ function ResourceTrackingWidgetImpl({
   // "obviously assuming cost per resources are populated" (2026-07-10, per
   // Maro) — rate defaults to 0 if never set, so Cost view just shows £0
   // rather than needing special "not populated" handling.
-  const toDisplay = (hours: number, resource: Pick<Resource, 'max_hours_per_day' | 'rate'>): string => {
-    if (unit === 'hours') return hours === 0 ? '' : hours.toFixed(1).replace(/\.0$/, '')
-    const maxHoursPerDay = Number(resource.max_hours_per_day) || 8
-    if (unit === 'days') {
-      const days = hours / maxHoursPerDay
-      return days === 0 ? '' : days.toFixed(1).replace(/\.0$/, '')
-    }
-    const cost = (hours / maxHoursPerDay) * Number(resource.rate)
-    return cost === 0 ? '' : `£${cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-  }
-
   const bucketOverlapsSpan = (bucket: { start: Date; end: Date }, activity: AssignmentRow['activity']): boolean => {
     if (!activity.start || !activity.finish) return false
     return bucket.start < new Date(activity.finish) && bucket.end > new Date(activity.start)
@@ -491,7 +496,7 @@ function ResourceTrackingWidgetImpl({
   useLayoutEffect(() => {
     recomputeVisibleBucketRange()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, leftOffsets])
+  }, [buckets, leftOffsets, PERIOD_COL_WIDTH])
 
   // Debounced, not per-frame throttled — an earlier version recomputed on
   // every animation frame during an active scroll (up to ~60/sec), which
@@ -594,9 +599,11 @@ function ResourceTrackingWidgetImpl({
 
   return (
     <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 no-print [color-scheme:light] dark:[color-scheme:dark]">
+      {series.some(s => s !== 'budget') && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">AC/EV use the profile’s elapsed-time estimates where period records are unavailable. Hours/days are cost-derived equivalents. Values are activity totals, counted once on the first tracked assignment.</p>}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="font-bold text-sm dark:text-prosota-paper">Resource Tracking</div>
-        <div className="text-xs text-gray-400 dark:text-prosota-muted">Hours per period, per activity — double-click a cell to level it manually</div>
+        <div className="text-xs text-gray-400 dark:text-prosota-muted">{unit === 'cost' ? 'Cost' : unit === 'days' ? 'Days' : 'Hours'} per period — select Budgeted alone to edit values</div>
+        <ResourceSeriesControls selected={series} onChange={next => { setEditing(null); onSeriesChange(next) }} />
         {spreadFetchError && <div className="text-xs text-red-600 dark:text-red-400">{spreadFetchError}</div>}
         <div className="relative ml-auto">
           <button
@@ -720,14 +727,14 @@ function ResourceTrackingWidgetImpl({
                         {visibleBucketIndices.map(i => {
                           const demand = resourceBuckets?.demand[i] ?? 0
                           const capacity = resourceBuckets?.capacity[i] ?? 0
-                          const overallocated = demand > capacity && capacity > 0
+                          const overallocated = series.includes('budget') && demand > capacity && capacity > 0
                           return (
                             <td
                               key={i}
                               style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
                               className={`px-2 py-1.5 text-right ${overallocated ? 'text-red-300 font-bold' : ''}`}
                             >
-                              {toDisplay(demand, resource)}
+                              <ResourceFigures selected={series} budget={demand * usageUnitFactor(resource, unit)} actual={resourceFigures.get(resource.id)?.actual[i] ?? null} earned={resourceFigures.get(resource.id)?.earned[i] ?? null} unit={unit} />
                             </td>
                           )
                         })}
@@ -753,11 +760,11 @@ function ResourceTrackingWidgetImpl({
                       {visibleBucketIndices.map(i => {
                         const bucket = buckets[i]
                         const active = bucketOverlapsSpan(bucket, row.activity)
-                        if (!active) {
+                        if (!active && !series.some(s => s !== 'budget')) {
                           return <td key={i} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />
                         }
                         const hours = bucketData.hoursByAssignment.get(row.assignment.id)?.[i] ?? 0
-                        const isEditing = editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
+                        const isEditing = series.includes('budget') && editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
                         if (isEditing) {
                           return (
                             <td key={i} className="px-1 py-0.5 border-r border-gray-200 dark:border-prosota-line" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}>
@@ -779,12 +786,12 @@ function ResourceTrackingWidgetImpl({
                         return (
                           <td
                             key={i}
-                            onDoubleClick={() => startEdit(row.assignment, i, hours)}
-                            title="Double-click to edit — manual resource leveling"
+                            onDoubleClick={() => { if (series.length === 1 && series[0] === 'budget') startEdit(row.assignment, i, hours) }}
+                            title={series.length === 1 && series[0] === 'budget' ? "Double-click to edit — manual resource leveling" : "Select Budgeted alone to edit its values. Actuals and Earned Value are read-only."}
                             className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted cursor-pointer hover:bg-blue-50"
                             style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}
                           >
-                            {toDisplay(hours, resource)}
+                            <ResourceFigures selected={series} budget={hours * usageUnitFactor(resource, unit)} actual={figures.actualByAssignment.get(row.assignment.id)?.[i] ?? null} earned={figures.evByAssignment.get(row.assignment.id)?.[i] ?? null} unit={unit} />
                           </td>
                         )
                       })}

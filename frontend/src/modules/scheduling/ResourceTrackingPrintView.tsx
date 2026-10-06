@@ -1,21 +1,20 @@
+import { ResourceFigures, SERIES, type ResourceSeries } from './resourceSeries'
 import { Fragment } from 'react'
 import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 
 export interface PrintResourceGroup {
   resourceName: string
+  actual?: (number | null)[]
+  earned?: (number | null)[]
   bucketHours: number[]
-  rows: { code: string; name: string; start: string | null; finish: string | null; bucketHours: number[] }[]
+  rows: { code: string; name: string; start: string | null; finish: string | null; bucketHours: number[]; actual?: (number | null)[]; earned?: (number | null)[] }[]
 }
 
 interface Props {
+  series: ResourceSeries[]
   groups: PrintResourceGroup[]
   bucketLabels: string[]
   unit: 'hours' | 'days' | 'cost'
-}
-
-function fmt(value: number, unit: 'hours' | 'days' | 'cost'): string {
-  if (value === 0) return ''
-  return unit === 'cost' ? `£${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : value.toFixed(1).replace(/\.0$/, '')
 }
 
 // Content only — no letterhead header/footer or outer print-only wrapper of
@@ -26,19 +25,21 @@ function fmt(value: number, unit: 'hours' | 'days' | 'cost'): string {
 // same table-layout:fixed technique the on-screen widget already uses)
 // instead of auto-layout — so its period columns land under the exact same
 // horizontal position as Resource Usage Profile's chart bars below it.
-export function ResourceTrackingPrintView({ groups, bucketLabels, unit }: Props) {
+export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series }: Props) {
+  const periodWidth = PRINT_PERIOD_COL_WIDTH * series.length
   const codeWidth = 55, startWidth = 65, finishWidth = 65
   const nameWidth = PRINT_LEFT_PANE_WIDTH - codeWidth - startWidth - finishWidth
 
   return (
     <div className="mb-8">
-      <p className="text-sm text-gray-500 mb-4">Resource Tracking · {groups.length} resource{groups.length === 1 ? '' : 's'}</p>
+      <p className="text-sm text-gray-500 mb-4">Resource Tracking · {SERIES.filter(s => series.includes(s.key)).map(s => s.label).join(' / ')} · {unit} · {groups.length} resource{groups.length === 1 ? '' : 's'}</p>
 
-      <table className="border-collapse" style={{ tableLayout: 'fixed', width: PRINT_LEFT_PANE_WIDTH + RESOURCE_CHART_Y_AXIS_WIDTH + bucketLabels.length * PRINT_PERIOD_COL_WIDTH }}>
+      {series.some(s => s !== 'budget') && <p className="text-xs text-gray-500 mb-2">AC/EV use estimated elapsed-time phasing where period records are unavailable. Hours/days are cost-derived equivalents; activity totals are counted once on the first tracked assignment.</p>}
+      <table className="border-collapse" style={{ tableLayout: 'fixed', width: PRINT_LEFT_PANE_WIDTH + RESOURCE_CHART_Y_AXIS_WIDTH + bucketLabels.length * periodWidth }}>
         <colgroup>
           <col style={{ width: codeWidth }} /><col style={{ width: nameWidth }} /><col style={{ width: startWidth }} /><col style={{ width: finishWidth }} />
           <col style={{ width: RESOURCE_CHART_Y_AXIS_WIDTH }} />
-          {bucketLabels.map((_, i) => <col key={i} style={{ width: PRINT_PERIOD_COL_WIDTH }} />)}
+          {bucketLabels.map((_, i) => <col key={i} style={{ width: periodWidth }} />)}
         </colgroup>
         <thead>
           <tr className="text-left border-b-2 border-gray-400">
@@ -58,7 +59,7 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit }: Props)
               <tr className="border-b border-gray-300 font-bold bg-gray-100">
                 <td className="py-1 pr-2 truncate" colSpan={4}>{group.resourceName}</td>
                 <td />
-                {group.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right">{fmt(h, unit)}</td>)}
+                {group.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures selected={series} budget={h} actual={group.actual?.[i] ?? null} earned={group.earned?.[i] ?? null} unit={unit} /></td>)}
               </tr>
               {group.rows.map(row => (
                 <tr key={`${group.resourceName}-${row.code}`} className="border-b border-gray-200">
@@ -67,7 +68,7 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit }: Props)
                   <td className="py-1 pr-2 truncate">{row.start ?? '—'}</td>
                   <td className="py-1 pr-2 truncate">{row.finish ?? '—'}</td>
                   <td />
-                  {row.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right">{fmt(h, unit)}</td>)}
+                  {row.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures selected={series} budget={h} actual={row.actual?.[i] ?? null} earned={row.earned?.[i] ?? null} unit={unit} /></td>)}
                 </tr>
               ))}
             </Fragment>
