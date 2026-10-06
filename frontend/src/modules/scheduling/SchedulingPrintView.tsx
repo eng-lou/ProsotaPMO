@@ -25,15 +25,6 @@ import {
 // grows to fill any extra room on larger paper, which is exactly what was
 // asked for ("if in doubt, give more space to the gantt chart").
 //
-// Converts a position that's local to the gantt column (0-100, its own day
-// range) into one relative to the whole table, for the connector overlay —
-// as a CSS calc() string, not a plain percentage number, since the gantt
-// column's own width is itself a mixed unit (100% of the table minus the
-// data columns' fixed pixel width), not a fixed percentage anymore.
-function toTableX(colPct: number, dataWidthPx: number): string {
-  return `calc(${dataWidthPx}px + (100% - ${dataWidthPx}px) * ${colPct / 100})`
-}
-
 interface Props {
   lookups?: PrintLookups
   activities: Activity[]
@@ -202,23 +193,6 @@ function xGeometryPct(start: string | null, finish: string | null, isMilestone: 
 // table's real rendered pixel width (see the file-level comment).
 const STUB_PX = CONNECTOR_STUB
 
-// No browser API can tell JS how many rows actually land on one printed
-// page — window.print() blocks the JS thread for the whole print flow, and
-// even a 'beforeprint' listener measures 0 real width at that point (see the
-// SchedulingPrintView file-level comment). So "same page" can only ever be
-// approximated: this is a conservative floor tuned against the smallest
-// paper size this app is realistically printed on (A4/Letter landscape,
-// this app's own 1.3in @page bottom margin, repeating header) — two
-// activities within this many rows of each other are safe to connect on
-// virtually any paper size; farther apart, a page break becomes plausible
-// enough that drawing the line risks a connector running diagonally through
-// unrelated bars on the page(s) in between (2026-07-14, per Maro: "something
-// broke... gantt chart... print version only" — screenshot showed exactly
-// that zigzag). Trade-off, accepted: on larger paper (A3/A2/A1), some
-// genuinely same-page long-distance connectors are now skipped rather than
-// drawn — strictly better than drawing them wrong.
-const PLAUSIBLE_ROWS_PER_PRINT_PAGE = 10
-
 // Adds a fixed pixel offset to an already-resolved CSS position (a plain
 // percentage, or another calc()/min()/max() expression) — used to build the
 // stub jogs below without ever needing to know the base's actual pixel value.
@@ -226,40 +200,19 @@ function plusPx(base: string, px: number): string {
   return px === 0 ? base : `calc(${base} + ${px}px)`
 }
 
-// Purely a routing heuristic ("is the target clearly ahead, or basically
-// same-x/backward") — evaluated on the LOCAL gantt-column percentages
-// (0-100), before conversion to table-wide CSS strings via toTableX, since
-// that conversion is a strictly increasing function of the local percentage
-// — comparing the local values gives the same ordering a comparison of the
-// (unresolvable-in-JS) table-wide values would. Doesn't need to precisely
-// match STUB_PX, just needs to be a small percentage. Same branch condition
-// as GanttChart.tsx's own elbowPath (a full stub-width gap required before
-// taking the simple route) — same-date milestone-to-milestone links
-// intentionally get the loop-out "S" route, same as on-screen (2026-07-05,
-// per Maro: wanted print to match the on-screen zigzag, not a plain
-// vertical line).
+// Decide routing in the Gantt cell's local percentage coordinates.
 function isForwardRoute(x1LocalPct: number, y1: number, x2LocalPct: number, y2: number): boolean {
   const routeThresholdPct = 0.5
   return x2LocalPct >= x1LocalPct + routeThresholdPct || (y1 === y2 && x2LocalPct >= x1LocalPct)
 }
 
-// A connector's elbow route as a list of straight segments (x as a CSS
-// length-percentage expression, y in real pixels) rather than one SVG path
-// string — plain positioned <div>s handle a %-x/px-y mix natively, whereas
-// an SVG viewBox scaled non-uniformly to fake that mix would also warp
-// stroke widths (2026-07-05, per Maro — see the file-level comment). Same
-// routing logic as GanttChart.tsx's own elbowPath (stub out, across, stub
-// in), just emitting segments instead of a `d` string. x1/x2 are already
-// table-wide CSS positions (see toTableX) — forward/backward is decided by
-// the caller via isForwardRoute, using the local percentages, since a
-// resolved calc() string can't be compared numerically in JS. Each 'h'
-// segment's two x's aren't assumed to be in left-to-right order either —
-// the renderer uses CSS min()/max() to sort them at layout time.
+// Route with percentage X positions and fixed pixel stubs. The resulting
+// vertical coordinates are split into row-local pieces before rendering.
 type Segment =
   | { kind: 'h'; x1: string; x2: string; y: number }
   | { kind: 'v'; x: string; yStart: number; yEnd: number }
 
-function elbowSegments(x1: string, y1: number, x2: string, y2: number, forward: boolean, dataWidthPx: number): Segment[] {
+function elbowSegments(x1: string, y1: number, x2: string, y2: number, forward: boolean): Segment[] {
   if (forward) {
     const midX = plusPx(x1, STUB_PX)
     return [
@@ -269,13 +222,7 @@ function elbowSegments(x1: string, y1: number, x2: string, y2: number, forward: 
     ]
   }
   const outX = `min(100%, ${plusPx(x1, STUB_PX)})`
-  // Clamped to the gantt column's own left edge (a literal, known pixel
-  // value now — see toTableX — not a percentage). Without this, a stub
-  // subtracted from an x that's already close to that edge (e.g. two
-  // early-dated, nearly same-date activities) pushes the route left of it,
-  // spilling the connector visibly into the data columns (2026-07-05, per
-  // Maro).
-  const inX = `max(${dataWidthPx}px, ${plusPx(x2, -STUB_PX)})`
+  const inX = `max(0px, ${plusPx(x2, -STUB_PX)})`
   const midY = (y1 + y2) / 2
   return [
     { kind: 'h', x1, x2: outX, y: y1 },
@@ -501,10 +448,8 @@ const PRINT_COLUMNS: PrintColumnDef[] = [
 // just rendered as plain positioned <div>s (x in %, y in real pixels) rather
 // than an SVG path — an SVG viewBox scaled non-uniformly to fake that same
 // %-x/px-y mix would also warp stroke widths unevenly between the
-// horizontal and vertical segments. Known trade-off: connector Y-positions
-// are computed from row index * GANTT_ROW_HEIGHT (real page-break gaps
-// between rows on different printed pages aren't accounted for) — accurate
-// within a page, approximate across a page boundary. Baseline ghost bars
+// horizontal and vertical segments. Routes are clipped into row-local pieces
+// so each piece follows its row through pagination. Baseline ghost bars
 // still aren't rendered in print (a baseline "ghost" comparison mark isn't
 // the same kind of cross-row line a dependency connector is, and wasn't
 // asked for here).
@@ -552,11 +497,6 @@ export function SchedulingPrintView({
   const printFontScale = printFontSize / PRINT_FONT_SIZE_BASELINE
   const activityWidth = (columnWidths.activity ?? 224) * printFontScale
   const udfWidth = udfColumnWidth * printFontScale
-  const totalDataWidth = (
-    activityWidth
-    + columns.reduce((sum, c) => sum + printColumnWidth(c.key, columnWidths, ganttStyle.show_time_of_day, printFontScale), 0)
-    + udfDefinitions.length * udfWidth
-  ) || 1
   const colSpanCount = columns.length + udfDefinitions.length + 2
 
   const { rangeStart, totalDays } = useMemo(
@@ -590,6 +530,43 @@ export function SchedulingPrintView({
   // its vertical position is known the instant the row order is known.
   const rowIndexById = useMemo(() => new Map(activities.map((a, i) => [a.id, i])), [activities])
 
+  // Split each route into row-local pieces. Every piece paginates with its
+  // own table row, including repeated headers and browser page-break gaps.
+  const connectorRows = useMemo(() => {
+    const rows: { key: string; segment: Segment; color: string }[][] = activities.map(() => [])
+    if (!ganttStyle.show_connectors) return rows
+    for (const r of relationships) {
+      const pred = rowIndexById.get(r.predecessor_id)
+      const succ = rowIndexById.get(r.successor_id)
+      const p = geometryById.get(r.predecessor_id)
+      const q = geometryById.get(r.successor_id)
+      if (pred === undefined || succ === undefined || !p || !q) continue
+      const x1 = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? p.leftPct : p.rightPct
+      const x2 = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? q.rightPct : q.leftPct
+      const y1 = pred * GANTT_ROW_HEIGHT + BAR_CENTER_Y
+      const y2 = succ * GANTT_ROW_HEIGHT + BAR_CENTER_Y
+      const color = criticalById.get(r.predecessor_id) && criticalById.get(r.successor_id) ? ganttStyle.critical_color : '#94a3b8'
+      const segments = elbowSegments(`${x1}%`, y1, `${x2}%`, y2, isForwardRoute(x1, y1, x2, y2))
+      segments.forEach((segment, index) => {
+        const key = `${r.id}-${index}`
+        if (segment.kind === 'h') {
+          const row = Math.floor(segment.y / GANTT_ROW_HEIGHT)
+          rows[row]?.push({ key, color, segment: { ...segment, y: segment.y - row * GANTT_ROW_HEIGHT } })
+        } else {
+          const first = Math.floor(segment.yStart / GANTT_ROW_HEIGHT)
+          const last = Math.min(rows.length - 1, Math.floor(segment.yEnd / GANTT_ROW_HEIGHT))
+          for (let row = first; row <= last; row++) {
+            const top = row * GANTT_ROW_HEIGHT
+            const yStart = Math.max(segment.yStart - top, 0)
+            const yEnd = Math.min(segment.yEnd - top, GANTT_ROW_HEIGHT)
+            if (yEnd > yStart) rows[row].push({ key, color, segment: { ...segment, yStart, yEnd } })
+          }
+        }
+      })
+    }
+    return rows
+  }, [activities, relationships, rowIndexById, geometryById, criticalById, ganttStyle.show_connectors, ganttStyle.critical_color])
+
   // Explicit fontSize on every header/data cell — not left to inherit from
   // the <table>'s own style — plus a hard height+overflow cap matching
   // HEADER_HEIGHT/GANTT_ROW_HEIGHT (2026-07-06, per Maro: print_font_size
@@ -618,49 +595,6 @@ export function SchedulingPrintView({
       </p>
 
       <div className="relative">
-        {/* Connector lines overlay — sits directly above the <table> (not the
-            outer letterhead+count wrapper), so its origin lines up with the
-            table's own top-left with no extra offset to account for. Each
-            segment is its own positioned <div> (x as a table-wide CSS
-            position via toTableX, y in real pixels) — see elbowSegments and
-            the file-level comment for why this can't be pixel-measured or
-            drawn as one SVG path. */}
-        {ganttStyle.show_connectors && relationships.map(r => {
-          const predIndex = rowIndexById.get(r.predecessor_id)
-          const succIndex = rowIndexById.get(r.successor_id)
-          const predGeo = geometryById.get(r.predecessor_id)
-          const succGeo = geometryById.get(r.successor_id)
-          if (predIndex === undefined || succIndex === undefined || !predGeo || !succGeo) return null
-          if (Math.abs(predIndex - succIndex) > PLAUSIBLE_ROWS_PER_PRINT_PAGE) return null
-          const predCenterY = HEADER_HEIGHT + predIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
-          const succCenterY = HEADER_HEIGHT + succIndex * GANTT_ROW_HEIGHT + BAR_CENTER_Y
-          const x1LocalPct = r.relationship_type === 'SS' || r.relationship_type === 'SF' ? predGeo.leftPct : predGeo.rightPct
-          const x2LocalPct = r.relationship_type === 'FF' || r.relationship_type === 'SF' ? succGeo.rightPct : succGeo.leftPct
-          const forward = isForwardRoute(x1LocalPct, predCenterY, x2LocalPct, succCenterY)
-          const x1 = toTableX(x1LocalPct, totalDataWidth)
-          const x2 = toTableX(x2LocalPct, totalDataWidth)
-          const critical = criticalById.get(r.predecessor_id) && criticalById.get(r.successor_id)
-          const color = critical ? ganttStyle.critical_color : '#94a3b8'
-          return elbowSegments(x1, predCenterY, x2, succCenterY, forward, totalDataWidth).map((seg, i) => seg.kind === 'h' ? (
-            // left/width via CSS min()/max() rather than Math.min/abs — seg.x1
-            // and seg.x2 can be calc() strings (a fixed-pixel stub applied to
-            // a percentage base), so which one is actually smaller can only
-            // be resolved by the browser at layout time, not by JS.
-            <div
-              key={`${r.id}-${i}`} className="absolute pointer-events-none"
-              style={{
-                left: `min(${seg.x1}, ${seg.x2})`, width: `calc(max(${seg.x1}, ${seg.x2}) - min(${seg.x1}, ${seg.x2}))`,
-                top: seg.y, height: 1, backgroundColor: color,
-              }}
-            />
-          ) : (
-            <div
-              key={`${r.id}-${i}`} className="absolute pointer-events-none"
-              style={{ left: seg.x, top: seg.yStart, height: Math.max(seg.yEnd - seg.yStart, 1), width: 1, backgroundColor: color }}
-            />
-          ))
-        })}
-
       <table
         className="border-collapse w-full"
         style={{ tableLayout: 'fixed', color: ganttStyle.table_font_color, fontFamily: FONT_FAMILY_CSS[printFontFamily], fontSize: printFontSize }}
@@ -797,6 +731,15 @@ export function SchedulingPrintView({
                       number matching the <tr>'s own explicit height removes the
                       ambiguity entirely. */}
                   <div className="relative" style={{ width: '100%', height: GANTT_ROW_HEIGHT }}>
+                    {connectorRows[rowIndex].map(({ key, segment: seg, color }) => (
+                      <div key={key} className="absolute pointer-events-none" style={seg.kind === 'h' ? {
+                        left: `min(${seg.x1}, ${seg.x2})`,
+                        width: `calc(max(${seg.x1}, ${seg.x2}) - min(${seg.x1}, ${seg.x2}))`,
+                        top: seg.y, height: 1, backgroundColor: color,
+                      } : {
+                        left: seg.x, top: seg.yStart, height: seg.yEnd - seg.yStart, width: 1, backgroundColor: color,
+                      }} />
+                    ))}
                     {todayOffsetPct !== null && (
                       <div className="absolute inset-y-0 border-l-[1.5px] border-dashed" style={{ left: `${todayOffsetPct}%`, borderColor: '#f59e0b' }} />
                     )}

@@ -3731,7 +3731,7 @@ export function Scheduling() {
           >
             <colgroup>
               <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
-              <col style={{ width: 32 }} />
+              <col style={{ width: 48 }} />
               {isColumnVisible('code') && <col style={{ width: columnWidths.code }} />}
               {isColumnVisible('wbs') && <col style={{ width: columnWidths.wbs }} />}
               <col style={{ width: columnWidths.activity }} />
@@ -3776,7 +3776,7 @@ export function Scheduling() {
                 className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide sticky top-0"
               >
                 <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
-                <th className="px-2 py-2.5 no-print">
+                <th className="pl-6 pr-1 py-2.5 no-print">
                   <input
                     type="checkbox"
                     checked={visibleActivities.length > 0 && selectedIds.size === visibleActivities.length}
@@ -3882,8 +3882,32 @@ export function Scheduling() {
                   className={`hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${expandedId === a.id ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : ''}`}
                 >
                   <OrderedColumns sourceKeys={["selection", ...sourceColumnKeys]} order={["selection", ...displayedColumnKeys]}>
-                  <td className="px-2 py-1 no-print">
-                    <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
+                  <td className="px-1 py-1 no-print">
+                    <div className="flex items-center gap-1 whitespace-nowrap">
+                      <button
+                        type="button" draggable={!movingRow && !editingCell}
+                        disabled={movingRow || !!editingCell}
+                        aria-label={`Drag to reorder ${a.task_name}`}
+                        title="Drag above or below another row under the same parent. Restores manual order."
+                        className="inline-flex h-5 w-4 shrink-0 items-center justify-center rounded cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 dark:text-prosota-muted dark:hover:text-prosota-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-30"
+                        onClick={event => event.stopPropagation()}
+                        onDragStart={event => {
+                          event.stopPropagation()
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('text/plain', a.id)
+                          setDraggedRow(a)
+                          setRowDrop(null)
+                        }}
+                        onDragEnd={() => { setDraggedRow(null); setRowDrop(null); dragPointerY.current = null }}
+                      >
+                        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
+                          <circle cx="3" cy="3" r="1" /><circle cx="7" cy="3" r="1" />
+                          <circle cx="3" cy="7" r="1" /><circle cx="7" cy="7" r="1" />
+                          <circle cx="3" cy="11" r="1" /><circle cx="7" cy="11" r="1" />
+                        </svg>
+                      </button>
+                      <input className="shrink-0" type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelected(a.id)} />
+                    </div>
                   </td>
                   {isColumnVisible('code') && (
                     <td className="px-3 py-1 text-gray-500 dark:text-prosota-muted whitespace-nowrap" onDoubleClick={() => startEdit(a, 'code')}>
@@ -3901,22 +3925,6 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
                   <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
-                    <button
-                      type="button" draggable={!movingRow && !editingCell}
-                      disabled={movingRow || !!editingCell}
-                      aria-label={`Drag to reorder ${a.task_name}`}
-                      title="Drag above or below another row under the same parent. Restores manual order."
-                      className="mr-1 cursor-grab active:cursor-grabbing text-gray-400 dark:text-prosota-muted disabled:opacity-30"
-                      onClick={event => event.stopPropagation()}
-                      onDragStart={event => {
-                        event.stopPropagation()
-                        event.dataTransfer.effectAllowed = 'move'
-                        event.dataTransfer.setData('text/plain', a.id)
-                        setDraggedRow(a)
-                        setRowDrop(null)
-                      }}
-                      onDragEnd={() => { setDraggedRow(null); setRowDrop(null); dragPointerY.current = null }}
-                    >⠿</button>
                     {editingField === 'task_name' ? (
                       <input
                         autoFocus
