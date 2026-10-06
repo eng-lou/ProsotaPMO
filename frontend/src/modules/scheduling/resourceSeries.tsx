@@ -7,6 +7,11 @@ export const SERIES: { key: ResourceSeries; label: string; short: string }[] = [
   { key: 'earned', label: 'Earned Value', short: 'EV' },
 ]
 
+// Tracking and profile use the same time scale even with independent series selections.
+export function resourcePeriodWidth(unit: 'hours' | 'days' | 'cost', seriesCount: number, print = false) {
+  return (print ? 60 : unit === 'cost' ? 104 : 80) * Math.max(1, seriesCount)
+}
+
 export function useResourceSeries(key: string, defaults: ResourceSeries[]) {
   const [selected, setSelected] = useState<ResourceSeries[]>(() => {
     try {

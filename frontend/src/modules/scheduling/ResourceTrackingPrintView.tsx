@@ -1,6 +1,6 @@
-import { ResourceFigures, SERIES, type ResourceSeries } from './resourceSeries'
+import { resourcePeriodWidth, ResourceFigures, SERIES, type ResourceSeries } from './resourceSeries'
 import { Fragment } from 'react'
-import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
+import { PRINT_LEFT_PANE_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 
 export interface PrintResourceGroup {
   resourceName: string
@@ -26,7 +26,7 @@ interface Props {
 // instead of auto-layout — so its period columns land under the exact same
 // horizontal position as Resource Usage Profile's chart bars below it.
 export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series }: Props) {
-  const periodWidth = PRINT_PERIOD_COL_WIDTH * series.length
+  const periodWidth = resourcePeriodWidth(unit, series.length, true)
   const codeWidth = 55, startWidth = 65, finishWidth = 65
   const nameWidth = PRINT_LEFT_PANE_WIDTH - codeWidth - startWidth - finishWidth
 
@@ -50,7 +50,7 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series }
             {/* Blank — matches Resource Usage Profile's own y-axis gutter
                 below, so both tables' period columns line up. */}
             <th />
-            {bucketLabels.map((label, i) => <th key={i} className="py-1 pr-2 text-right truncate">{label}</th>)}
+            {bucketLabels.map((label, i) => <th key={i} className="py-1 pr-2 text-center truncate">{label}</th>)}
           </tr>
         </thead>
         <tbody>

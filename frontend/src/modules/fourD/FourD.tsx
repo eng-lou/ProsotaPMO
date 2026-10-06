@@ -1,4 +1,4 @@
-import { useResourceSeries } from '@/modules/scheduling/resourceSeries'
+import { resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
 import { applyActivityProfiles } from './applyActivityProfiles'
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
@@ -6732,6 +6732,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'usage':
         return (
           <ResourceUsageProfileWidget
+            periodWidth={resourcePeriodWidth('hours', trackingSeries.length)}
             series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}

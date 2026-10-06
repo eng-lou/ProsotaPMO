@@ -1,4 +1,4 @@
-import type { ResourceSeries } from './resourceSeries'
+import { resourcePeriodWidth, type ResourceSeries } from './resourceSeries'
 import { PrintLetterheadFooter, PrintLetterheadHeader } from '@/components/PrintLetterhead'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import type { ProjectLetterhead } from '@/lib/letterhead'
@@ -57,7 +57,7 @@ export function ResourcesPrintView({
       {tables.has('pool') && <ResourcePoolPrintView resources={resources} calendars={calendars} />}
       {tables.has('tracking') && <ResourceTrackingPrintView series={trackingSeries} groups={printGroups} bucketLabels={bucketLabels} unit={unit} />}
       {tables.has('profile') && (
-        <ResourceUsageProfilePrintView series={profileSeries}
+        <ResourceUsageProfilePrintView series={profileSeries} periodWidth={resourcePeriodWidth(unit, trackingSeries.length, true)}
           trackedResources={trackedResources} assignmentsByResource={assignmentsByResource}
           buckets={buckets} spreadByResource={spreadByResource} selectedActivityIds={selectedActivityIds} unit={unit}
           dataDate={dataDate} actualsHistory={actualsHistory}

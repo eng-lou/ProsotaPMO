@@ -1,4 +1,4 @@
-import { useResourceSeries } from './resourceSeries'
+import { resourcePeriodWidth, useResourceSeries } from './resourceSeries'
 import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
@@ -3131,6 +3131,7 @@ export function Scheduling() {
             onLeftPaneWidthChange={setResourcesLeftPaneWidth}
           />
           <ResourceUsageProfileWidget
+            periodWidth={resourcePeriodWidth(resourcesUnit, trackingSeries.length)}
             series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}

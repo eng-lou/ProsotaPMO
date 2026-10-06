@@ -8,6 +8,7 @@ import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTab
 import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
+  periodWidth: number
   series: ResourceSeries[]
   onSeriesChange: (next: ResourceSeries[]) => void
   calendars: Calendar[]
@@ -64,7 +65,6 @@ function loadVisibleCols(): Set<OptionalColKey> {
   }
 }
 
-const PERIOD_COL_WIDTH = 64
 const CHART_HEIGHT_MIN = 180
 const RESOURCE_ROW_HEIGHT = 26
 
@@ -96,7 +96,7 @@ export function budgetBarBackground(budget: number, limit: number): string {
 function ResourceUsageProfileWidgetImpl({
   calendars, trackedResources, assignmentsByResource, buckets, spreadByResource, loading, layoutPrefs, unit,
   selectedResourceIds, onToggleResourceSelected, selectedActivityIds, dataDate, actualsHistory,
-  leftPaneWidth, series, onSeriesChange,
+  leftPaneWidth, series, onSeriesChange, periodWidth: PERIOD_COL_WIDTH,
 }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [visibleCols, setVisibleCols] = useState<Set<OptionalColKey>>(loadVisibleCols)
@@ -172,7 +172,7 @@ function ResourceUsageProfileWidgetImpl({
     observer.observe(element)
     return () => observer.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, loading])
+  }, [buckets, loading, PERIOD_COL_WIDTH])
 
   // Debounced, not per-frame throttled — see ResourceTrackingWidget's own
   // handleMainScroll for why (2026-07-14, per Maro: "scrolls are

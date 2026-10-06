@@ -1,11 +1,12 @@
 import type { ResourceSeries } from './resourceSeries'
 import { budgetBarBackground, RESOURCE_USAGE_COLORS } from './ResourceUsageProfileWidget'
-import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
+import { PRINT_LEFT_PANE_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
 import type { ActualsHistoryItem, Resource } from './types'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 
 interface Props {
+  periodWidth: number
   series: ResourceSeries[]
   trackedResources: Resource[]
   assignmentsByResource: Map<string, AssignmentRow[]>
@@ -32,7 +33,7 @@ const GRIDLINE_COUNT = 4
 // be aligned in the same horizontal axis").
 export function ResourceUsageProfilePrintView({
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
-  actualsHistory, series,
+  actualsHistory, series, periodWidth: PRINT_PERIOD_COL_WIDTH,
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.

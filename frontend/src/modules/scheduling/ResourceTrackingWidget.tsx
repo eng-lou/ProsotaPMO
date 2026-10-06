@@ -1,4 +1,4 @@
-import { ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
+import { resourcePeriodWidth, ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useTheme } from '@/lib/ThemeContext'
@@ -128,7 +128,7 @@ function ResourceTrackingWidgetImpl({
   selectedActivityIds, onToggleActivitySelected, collapsedIds, onToggleCollapsed,
   onLeftPaneWidthChange, series, onSeriesChange, figures,
 }: Props) {
-  const PERIOD_COL_WIDTH = (unit === 'cost' ? 104 : 80) * series.length
+  const PERIOD_COL_WIDTH = resourcePeriodWidth(unit, series.length)
   const { theme } = useTheme()
   const resourceFigures = useMemo(() => {
     const result = new Map<string, { actual: (number | null)[]; earned: (number | null)[] }>()
@@ -682,7 +682,7 @@ function ResourceTrackingWidgetImpl({
                       the table's total scrollable width never changes. */}
                   {leadingSpacerWidth > 0 && <th className="border-r border-b border-gray-200 dark:border-prosota-line" />}
                   {visibleBucketIndices.map(i => (
-                    <th key={i} style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }} className="px-2 py-1.5 border-r border-b border-gray-200 dark:border-prosota-line text-right">{buckets[i].label}</th>
+                    <th key={i} style={{ position: 'sticky', top: 0, zIndex: 2, background: stickyHeaderBg }} className="px-2 py-1.5 border-r border-b border-gray-200 dark:border-prosota-line text-center">{buckets[i].label}</th>
                   ))}
                   {trailingSpacerWidth > 0 && <th className="border-r border-b border-gray-200 dark:border-prosota-line" />}
                 </tr>
