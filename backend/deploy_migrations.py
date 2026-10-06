@@ -46,7 +46,10 @@ def prepare_database(connection, *, production: bool) -> None:
 
 def main() -> None:
     # Require the deployment's explicit URL; never fall back to a local .env.
-    database_url = os.environ.get("DATABASE_URL")
+    # Match Settings' case-insensitive environment lookup. Linux preserves key
+    # casing, and existing deployments use DATABASE_url as well as DATABASE_URL.
+    environment = {key.lower(): value for key, value in os.environ.items()}
+    database_url = environment.get("database_url")
     if not database_url:
         raise RuntimeError("DATABASE_URL must be set for the backend build.")
     engine = create_engine(database_url, poolclass=pool.NullPool, connect_args={"connect_timeout": 10})

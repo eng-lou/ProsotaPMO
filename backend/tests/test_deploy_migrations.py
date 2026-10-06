@@ -1,5 +1,6 @@
 import os
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -53,6 +54,21 @@ def test_upgrade_previous_schema_preserves_rows_and_is_repeatable():
 
 
 def test_build_requires_explicit_database_url(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr("deploy_migrations.os.environ", {})
     with pytest.raises(RuntimeError, match="DATABASE_URL must be set"):
         main()
+
+
+@pytest.mark.parametrize("name", ["DATABASE_URL", "DATABASE_url", "database_url"])
+def test_build_accepts_runtime_database_variable_casing(monkeypatch, name):
+    url = "postgresql+psycopg://example.invalid/test"
+    # A plain mapping reproduces Linux case sensitivity even on Windows.
+    monkeypatch.setattr("deploy_migrations.os.environ", {name: url, "VERCEL_ENV": "production"})
+    factory = MagicMock()
+    prepare = MagicMock()
+    monkeypatch.setattr("deploy_migrations.create_engine", factory)
+    monkeypatch.setattr("deploy_migrations.prepare_database", prepare)
+    main()
+    assert factory.call_args.args == (url,)
+    prepare.assert_called_once_with(factory.return_value.begin.return_value.__enter__.return_value, production=True)
+    factory.return_value.dispose.assert_called_once()
