@@ -1,4 +1,4 @@
-import { resourcePeriodWidth, useResourceSeries } from './resourceSeries'
+import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } from './resourceSeries'
 import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
@@ -795,6 +795,8 @@ export function Scheduling() {
   // table owning its own. useResourcesTabData does the actual data
   // fetching/derivation once, shared by Tracking, Profile, and Print/Export.
   const [resourcesZoom, setResourcesZoom] = useState<GanttZoom>(loadGanttZoom)
+  const [trackingOverallocation, setTrackingOverallocation] = useOverallocationPreference('prosota_tracking_overallocation')
+  const [profileOverallocation, setProfileOverallocation] = useOverallocationPreference('prosota_profile_overallocation')
   const [trackingSeries, setTrackingSeries] = useResourceSeries('prosota_tracking_series', ['budget'])
   const [profileSeries, setProfileSeries] = useResourceSeries('prosota_profile_series', ['budget', 'actual', 'earned'])
   const [resourcesUnit, setResourcesUnit] = useState<'hours' | 'days' | 'cost'>('hours')
@@ -806,6 +808,12 @@ export function Scheduling() {
     saveResourcesLayout(next)
   }
   const [resourcesLayoutOpen, setResourcesLayoutOpen] = useState(false)
+  const [resourcesPrintHeightScale, setResourcesPrintHeightScale] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('prosota_resources_print_height_scale') ?? '1')
+      return Number.isFinite(saved) ? Math.min(2, Math.max(0.5, saved)) : 1
+    } catch { return 1 }
+  })
   const [resourcesPrintFonts, setResourcesPrintFontsState] = useState(loadResourcesPrintFonts)
   const saveResourcesPrintFontsPrefs = (next: typeof resourcesPrintFonts) => {
     setResourcesPrintFontsState(next)
@@ -946,7 +954,7 @@ export function Scheduling() {
     const scopedRows = selectedActivityIds.size > 0 ? allRows.filter(row => selectedActivityIds.has(row.activity.id)) : allRows
     const hasScopedRows = scopedRows.length > 0
     const spread = resourcesTabData.spreadByResource.get(resource.id)
-    const { hoursByAssignmentDate } = indexSpread(spread)
+    const { hoursByAssignmentDate, capacityByDate } = indexSpread(spread)
     // Print/export mirror whatever unit is currently selected on screen
     // (2026-07-10, per Maro) — same per-resource factor as the screen
     // widget's own toDisplay/computeUsageProfileBars.
@@ -980,6 +988,7 @@ export function Scheduling() {
     const rowsWithHours = collapsedResourceIds.has(resource.id) ? [] : scopedRowsWithHours
     return {
       resourceName: resource.name,
+      capacity: resourcesTabData.buckets.map(bucket => eachDate(bucket.start, bucket.end).reduce((sum, date) => sum + (capacityByDate.get(date) ?? 0) * factor, 0)),
       bucketHours: rollup, actual: rollupMetric('actual'), earned: rollupMetric('earned'),
       hasScopedRows,
       rows: rowsWithHours.map(({ row, bucketHours, actual, earned }) => ({
@@ -3062,7 +3071,7 @@ export function Scheduling() {
                     <span className="text-gray-400 dark:text-prosota-muted">Usage Profile legend:</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Has Actuals</span>
-                    <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>
+                    {profileOverallocation && profileSeries.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
                     <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit</span>
                   </div>
                 )}
@@ -3086,6 +3095,19 @@ export function Scheduling() {
                       onChange={e => saveResourcesPrintFontsPrefs({ ...resourcesPrintFonts, fontSize: Number(e.target.value) || DEFAULT_RESOURCES_PRINT_FONTS.fontSize })}
                       className="w-14 border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs"
                     />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-prosota-muted">
+                    Vertical spacing
+                    <select value={resourcesPrintHeightScale} onChange={e => {
+                      const value = Number(e.target.value)
+                      setResourcesPrintHeightScale(value)
+                      try { localStorage.setItem('prosota_resources_print_height_scale', String(value)) } catch { /* Optional preference. */ }
+                    }} className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-xs">
+                      <option value={0.5}>Compact</option>
+                      <option value={1}>Comfortable</option>
+                      <option value={1.5}>Spacious</option>
+                      <option value={2}>Extra spacious</option>
+                    </select>
                   </label>
                   <button onClick={() => saveResourcesPrintFontsPrefs(DEFAULT_RESOURCES_PRINT_FONTS)} className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">
                     Reset to defaults
@@ -3111,6 +3133,7 @@ export function Scheduling() {
             layoutPrefs={resourcesLayoutPrefs}
           />
           <ResourceTrackingWidget
+            showOverallocation={trackingOverallocation} onOverallocationChange={setTrackingOverallocation}
             series={trackingSeries} onSeriesChange={setTrackingSeries} figures={trackingFigures}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
@@ -3131,6 +3154,7 @@ export function Scheduling() {
             onLeftPaneWidthChange={setResourcesLeftPaneWidth}
           />
           <ResourceUsageProfileWidget
+            showOverallocation={profileOverallocation} onOverallocationChange={setProfileOverallocation}
             periodWidth={resourcePeriodWidth(resourcesUnit, trackingSeries.length)}
             series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}
@@ -4493,6 +4517,8 @@ export function Scheduling() {
         SchedulingPrintView/SchedulingQualityPrintView already do. */}
     {printMounted && activeTab === 'resources' && (
       <ResourcesPrintView
+        trackingOverallocation={trackingOverallocation} profileOverallocation={profileOverallocation}
+        heightScale={resourcesPrintHeightScale}
         trackingSeries={trackingSeries} profileSeries={profileSeries}
         tables={resourcesPageSetupTables} projectName={selectedProject.name} letterhead={letterhead} printFonts={resourcesPrintFonts}
         resources={printScopedResources} calendars={calendars} printGroups={resourcesPrintGroups} bucketLabels={resourcesTabData.buckets.map(b => b.label)}

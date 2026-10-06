@@ -6,11 +6,14 @@ import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { ResourcePoolPrintView } from './ResourcePoolPrintView'
 import { ResourceTrackingPrintView, type PrintResourceGroup } from './ResourceTrackingPrintView'
 import { ResourceUsageProfilePrintView } from './ResourceUsageProfilePrintView'
-import type { ResourcesPrintFontPrefs, ResourcesPrintTable } from './resourcesLayout'
+import { PRINT_LEFT_PANE_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesPrintFontPrefs, type ResourcesPrintTable } from './resourcesLayout'
 import type { AssignmentRow } from './useResourcesTabData'
 import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
+  trackingOverallocation: boolean
+  profileOverallocation: boolean
+  heightScale: number
   trackingSeries: ResourceSeries[]
   profileSeries: ResourceSeries[]
   tables: Set<ResourcesPrintTable>
@@ -41,9 +44,16 @@ interface Props {
 export function ResourcesPrintView({
   tables, projectName, letterhead, printFonts, resources, calendars, printGroups, bucketLabels,
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
-  actualsHistory, trackingSeries, profileSeries,
+  actualsHistory, trackingSeries, profileSeries, heightScale, trackingOverallocation, profileOverallocation,
 }: Props) {
   if (tables.size === 0) return null
+  const periodWidth = resourcePeriodWidth(unit, trackingSeries.length, true)
+  // A wide timeline is shrunk by the browser to fit paper. Compensate only
+  // vertically, keeping every period and the shared horizontal alignment.
+  const timelineWidth = PRINT_LEFT_PANE_WIDTH + RESOURCE_CHART_Y_AXIS_WIDTH + buckets.length * periodWidth
+  const verticalScale = Math.max(1, timelineWidth / 1100) * heightScale
+  const rowHeight = Math.round(24 * verticalScale)
+  const chartHeight = Math.round(320 * verticalScale)
   const printedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   const tokens = {
     project: projectName, module: 'Resources',
@@ -55,9 +65,9 @@ export function ResourcesPrintView({
     <div className="print-only p-8" style={{ fontFamily: FONT_FAMILY_CSS[printFonts.fontFamily], fontSize: printFonts.fontSize }}>
       {letterhead && <PrintLetterheadHeader letterhead={letterhead} tokens={tokens} />}
       {tables.has('pool') && <ResourcePoolPrintView resources={resources} calendars={calendars} />}
-      {tables.has('tracking') && <ResourceTrackingPrintView series={trackingSeries} groups={printGroups} bucketLabels={bucketLabels} unit={unit} />}
+      {tables.has('tracking') && <ResourceTrackingPrintView showOverallocation={trackingOverallocation} rowHeight={rowHeight} series={trackingSeries} groups={printGroups} bucketLabels={bucketLabels} unit={unit} />}
       {tables.has('profile') && (
-        <ResourceUsageProfilePrintView series={profileSeries} periodWidth={resourcePeriodWidth(unit, trackingSeries.length, true)}
+        <ResourceUsageProfilePrintView showOverallocation={profileOverallocation} chartHeight={chartHeight} series={profileSeries} periodWidth={periodWidth}
           trackedResources={trackedResources} assignmentsByResource={assignmentsByResource}
           buckets={buckets} spreadByResource={spreadByResource} selectedActivityIds={selectedActivityIds} unit={unit}
           dataDate={dataDate} actualsHistory={actualsHistory}

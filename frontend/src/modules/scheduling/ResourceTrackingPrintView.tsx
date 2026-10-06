@@ -3,6 +3,7 @@ import { Fragment } from 'react'
 import { PRINT_LEFT_PANE_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 
 export interface PrintResourceGroup {
+  capacity?: number[]
   resourceName: string
   actual?: (number | null)[]
   earned?: (number | null)[]
@@ -11,6 +12,8 @@ export interface PrintResourceGroup {
 }
 
 interface Props {
+  showOverallocation: boolean
+  rowHeight: number
   series: ResourceSeries[]
   groups: PrintResourceGroup[]
   bucketLabels: string[]
@@ -25,7 +28,7 @@ interface Props {
 // same table-layout:fixed technique the on-screen widget already uses)
 // instead of auto-layout — so its period columns land under the exact same
 // horizontal position as Resource Usage Profile's chart bars below it.
-export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series }: Props) {
+export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series, rowHeight, showOverallocation }: Props) {
   const periodWidth = resourcePeriodWidth(unit, series.length, true)
   const codeWidth = 55, startWidth = 65, finishWidth = 65
   const nameWidth = PRINT_LEFT_PANE_WIDTH - codeWidth - startWidth - finishWidth
@@ -56,13 +59,13 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series }
         <tbody>
           {groups.map(group => (
             <Fragment key={group.resourceName}>
-              <tr className="border-b border-gray-300 font-bold bg-gray-100">
+              <tr style={{ height: rowHeight, breakInside: 'avoid' }} className="border-b border-gray-300 font-bold bg-gray-100">
                 <td className="py-1 pr-2 truncate" colSpan={4}>{group.resourceName}</td>
                 <td />
-                {group.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures selected={series} budget={h} actual={group.actual?.[i] ?? null} earned={group.earned?.[i] ?? null} unit={unit} /></td>)}
+                {group.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures overallocated={showOverallocation && (group.capacity?.[i] ?? 0) > 0 && h > group.capacity![i]} selected={series} budget={h} actual={group.actual?.[i] ?? null} earned={group.earned?.[i] ?? null} unit={unit} /></td>)}
               </tr>
               {group.rows.map(row => (
-                <tr key={`${group.resourceName}-${row.code}`} className="border-b border-gray-200">
+                <tr key={`${group.resourceName}-${row.code}`} style={{ height: rowHeight, breakInside: 'avoid' }} className="border-b border-gray-200">
                   <td className="py-1 pr-2 font-mono truncate">{row.code}</td>
                   <td className="py-1 pr-2 truncate">{row.name}</td>
                   <td className="py-1 pr-2 truncate">{row.start ?? '—'}</td>

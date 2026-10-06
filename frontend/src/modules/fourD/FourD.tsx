@@ -1,4 +1,4 @@
-import { resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
+import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
 import { applyActivityProfiles } from './applyActivityProfiles'
 import { ActivityProfileMapper } from './ActivityProfileMapper'
 import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
@@ -5729,6 +5729,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // fetch for why this needs the separate Cost Plan period, not the
   // schedule period already in scope here.
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
+  const [trackingOverallocation, setTrackingOverallocation] = useOverallocationPreference('prosota_tracking_overallocation')
+  const [profileOverallocation, setProfileOverallocation] = useOverallocationPreference('prosota_profile_overallocation')
   const [trackingSeries, setTrackingSeries] = useResourceSeries('prosota_tracking_series', ['budget'])
   const [profileSeries, setProfileSeries] = useResourceSeries('prosota_profile_series', ['budget', 'actual', 'earned'])
   const trackingFigures = useMemo(() => computeUsageProfileSeries(
@@ -6710,6 +6712,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'tracking':
         return (
           <ResourceTrackingWidget
+            showOverallocation={trackingOverallocation} onOverallocationChange={setTrackingOverallocation}
             series={trackingSeries} onSeriesChange={setTrackingSeries} figures={trackingFigures}
             calendars={calendars}
             trackedResources={resourcesTabData.trackedResources}
@@ -6732,6 +6735,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'usage':
         return (
           <ResourceUsageProfileWidget
+            showOverallocation={profileOverallocation} onOverallocationChange={setProfileOverallocation}
             periodWidth={resourcePeriodWidth('hours', trackingSeries.length)}
             series={profileSeries} onSeriesChange={setProfileSeries}
             calendars={calendars}

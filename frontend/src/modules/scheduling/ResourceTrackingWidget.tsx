@@ -1,4 +1,4 @@
-import { resourcePeriodWidth, ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
+import { OverallocationControl, resourcePeriodWidth, ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useTheme } from '@/lib/ThemeContext'
@@ -11,6 +11,8 @@ import { eachDate, usageUnitFactor, type UsageProfileSeries, type AssignmentRow 
 import type { Calendar, Resource, ResourceAssignment } from './types'
 
 interface Props {
+  showOverallocation: boolean
+  onOverallocationChange: (enabled: boolean) => void
   series: ResourceSeries[]
   onSeriesChange: (next: ResourceSeries[]) => void
   figures: UsageProfileSeries
@@ -126,7 +128,7 @@ function ResourceTrackingWidgetImpl({
   calendars, trackedResources, assignmentsByResource: baseAssignmentsByResource, buckets, spreadByResource, loading,
   spreadFetchError, onRefetchResource, unit, layoutPrefs, selectedResourceIds, onToggleResourceSelected,
   selectedActivityIds, onToggleActivitySelected, collapsedIds, onToggleCollapsed,
-  onLeftPaneWidthChange, series, onSeriesChange, figures,
+  onLeftPaneWidthChange, series, onSeriesChange, figures, showOverallocation, onOverallocationChange,
 }: Props) {
   const PERIOD_COL_WIDTH = resourcePeriodWidth(unit, series.length)
   const { theme } = useTheme()
@@ -604,6 +606,7 @@ function ResourceTrackingWidgetImpl({
         <div className="font-bold text-sm dark:text-prosota-paper">Resource Tracking</div>
         <div className="text-xs text-gray-400 dark:text-prosota-muted">{unit === 'cost' ? 'Cost' : unit === 'days' ? 'Days' : 'Hours'} per period — select Budgeted alone to edit values</div>
         <ResourceSeriesControls selected={series} onChange={next => { setEditing(null); onSeriesChange(next) }} />
+        <OverallocationControl enabled={showOverallocation} onChange={onOverallocationChange} />
         {spreadFetchError && <div className="text-xs text-red-600 dark:text-red-400">{spreadFetchError}</div>}
         <div className="relative ml-auto">
           <button
@@ -727,14 +730,14 @@ function ResourceTrackingWidgetImpl({
                         {visibleBucketIndices.map(i => {
                           const demand = resourceBuckets?.demand[i] ?? 0
                           const capacity = resourceBuckets?.capacity[i] ?? 0
-                          const overallocated = series.includes('budget') && demand > capacity && capacity > 0
+                          const overallocated = showOverallocation && series.includes('budget') && demand > capacity && capacity > 0
                           return (
                             <td
                               key={i}
                               style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
-                              className={`px-2 py-1.5 text-right ${overallocated ? 'text-red-300 font-bold' : ''}`}
+                              className="px-2 py-1.5 text-right"
                             >
-                              <ResourceFigures selected={series} budget={demand * usageUnitFactor(resource, unit)} actual={resourceFigures.get(resource.id)?.actual[i] ?? null} earned={resourceFigures.get(resource.id)?.earned[i] ?? null} unit={unit} />
+                              <ResourceFigures overallocated={overallocated} selected={series} budget={demand * usageUnitFactor(resource, unit)} actual={resourceFigures.get(resource.id)?.actual[i] ?? null} earned={resourceFigures.get(resource.id)?.earned[i] ?? null} unit={unit} />
                             </td>
                           )
                         })}

@@ -1,4 +1,4 @@
-import { ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
+import { OverallocationControl, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
@@ -8,6 +8,8 @@ import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTab
 import type { ActualsHistoryItem, Calendar, Resource } from './types'
 
 interface Props {
+  showOverallocation: boolean
+  onOverallocationChange: (enabled: boolean) => void
   periodWidth: number
   series: ResourceSeries[]
   onSeriesChange: (next: ResourceSeries[]) => void
@@ -96,7 +98,7 @@ export function budgetBarBackground(budget: number, limit: number): string {
 function ResourceUsageProfileWidgetImpl({
   calendars, trackedResources, assignmentsByResource, buckets, spreadByResource, loading, layoutPrefs, unit,
   selectedResourceIds, onToggleResourceSelected, selectedActivityIds, dataDate, actualsHistory,
-  leftPaneWidth, series, onSeriesChange, periodWidth: PERIOD_COL_WIDTH,
+  leftPaneWidth, series, onSeriesChange, showOverallocation, onOverallocationChange, periodWidth: PERIOD_COL_WIDTH,
 }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [visibleCols, setVisibleCols] = useState<Set<OptionalColKey>>(loadVisibleCols)
@@ -323,6 +325,7 @@ function ResourceUsageProfileWidgetImpl({
         <div className="font-bold text-sm dark:text-prosota-paper">Resource Usage Profile</div>
         <div className="text-xs text-gray-400 dark:text-prosota-muted">Selected {unit} per period vs capacity (Limit)</div>
         <ResourceSeriesControls selected={series} onChange={onSeriesChange} />
+        <OverallocationControl enabled={showOverallocation} onChange={onOverallocationChange} />
         <div className="relative ml-auto">
           <button
             onClick={() => setColumnsMenuOpen(o => !o)}
@@ -411,7 +414,7 @@ function ResourceUsageProfileWidgetImpl({
               {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>}
               {series.includes('actual') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>}
               {series.includes('earned') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>}
-              {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
+              {showOverallocation && series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
               {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-gray-900 dark:bg-prosota-paper" />Limit</span>}
             </div>
             {/* mt-2 — the topmost y-axis gridline label sits at
@@ -508,7 +511,7 @@ function ResourceUsageProfileWidgetImpl({
                     const actual = actualValues[i]
                     const ev = evValues[i]
                     const segments: { value: number; color: string; label: string; slot: number }[] = [
-                      { value: budget, color: budgetBarBackground(budget, limitValue), label: 'Budget', slot: 0 },
+                      { value: budget, color: showOverallocation ? budgetBarBackground(budget, limitValue) : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget', slot: 0 },
                     ]
                     if (!series.includes('budget')) segments.length = 0
                     if (series.includes('actual') && actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual', slot: 1 })

@@ -6,6 +6,8 @@ import type { ActualsHistoryItem, Resource } from './types'
 import type { ResourceSpread } from '@/lib/resourceAssignmentSpread'
 
 interface Props {
+  showOverallocation: boolean
+  chartHeight: number
   periodWidth: number
   series: ResourceSeries[]
   trackedResources: Resource[]
@@ -18,7 +20,6 @@ interface Props {
   actualsHistory: ActualsHistoryItem[]
 }
 
-const CHART_HEIGHT = 160
 const GRIDLINE_COUNT = 4
 
 // Content only — see ResourceTrackingPrintView.tsx's own note; the shared
@@ -33,7 +34,7 @@ const GRIDLINE_COUNT = 4
 // be aligned in the same horizontal axis").
 export function ResourceUsageProfilePrintView({
   trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
-  actualsHistory, series, periodWidth: PRINT_PERIOD_COL_WIDTH,
+  actualsHistory, series, showOverallocation, periodWidth: PRINT_PERIOD_COL_WIDTH, chartHeight: CHART_HEIGHT,
 }: Props) {
   // Falls back to today, not null — see ResourceUsageProfileWidget.tsx's own
   // matching comment for the real project this was found on.
@@ -58,7 +59,7 @@ export function ResourceUsageProfilePrintView({
   }
 
   return (
-    <div className="mb-8">
+    <div className="mb-8" style={{ breakInside: 'avoid' }}>
       <p className="text-sm text-gray-500 mb-2">Resource Usage Profile · {trackedResources.length} resource{trackedResources.length === 1 ? '' : 's'}</p>
 
 {estimatedPhasing && series.some(s => s !== 'budget') && <p className="text-xs text-gray-500 dark:text-prosota-muted mb-2">Opening AC/EV totals are estimated across elapsed calendar time; later captured changes retain their reporting dates. Hours/days are cost-derived equivalents, not recorded timesheets.</p>}
@@ -66,7 +67,7 @@ export function ResourceUsageProfilePrintView({
         {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>}
         {series.includes('actual') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>}
         {series.includes('earned') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.ev }} />Earned Value</span>}
-        {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
+        {showOverallocation && series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.overallocated }} />Overallocated</span>}
         {series.includes('budget') && <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ backgroundColor: RESOURCE_USAGE_COLORS.limit }} />Limit (capacity)</span>}
       </div>
 
@@ -120,7 +121,7 @@ export function ResourceUsageProfilePrintView({
               // a given bucket, or a Budget-only bucket's bar balloons to
               // the full group width next to a genuinely three-series one.
               const segments: { value: number; color: string; slot: number }[] = [
-                { value: budget, color: budgetBarBackground(budget, limitValue), slot: 0 },
+                { value: budget, color: showOverallocation ? budgetBarBackground(budget, limitValue) : RESOURCE_USAGE_COLORS.budgeted, slot: 0 },
               ]
               if (!series.includes('budget')) segments.length = 0
               if (series.includes('actual') && actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, slot: 1 })
