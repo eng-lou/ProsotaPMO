@@ -33,7 +33,7 @@ export function ResourceSeriesControls({ selected, onChange }: { selected: Resou
 }
 
 export function formatResourceFigure(value: number | null, unit: 'hours' | 'days' | 'cost') {
-  if (value === null) return '—'
+  if (value === null) return ''
   return unit === 'cost' ? `£${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : value.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }
 
