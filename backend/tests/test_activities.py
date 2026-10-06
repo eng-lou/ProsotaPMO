@@ -647,3 +647,26 @@ async def test_partial_progress_does_not_shrink_finish(
     resp = await client.patch(f"/api/v1/activities/{activity['id']}", json={"duration_hours": 160})
     assert resp.status_code == 200
     assert resp.json()["finish"] != planned_finish
+
+@pytest.mark.parametrize('direction, expected', [('before', ['C', 'A', 'A child', 'B']), ('after', ['A', 'A child', 'C', 'B'])])
+async def test_move_directly_to_target_preserves_subtree_and_dates(client, project, live_schedule_period, direction, expected):
+    a = await _create(client, project, live_schedule_period, task_name='A')
+    await _create(client, project, live_schedule_period, task_name='A child', parent_id=a['id'])
+    await _create(client, project, live_schedule_period, task_name='B')
+    c = await _create(client, project, live_schedule_period, task_name='C')
+    params = {'project_id': str(project.id), 'schedule_period_id': str(live_schedule_period.id)}
+    before = (await client.get('/api/v1/activities/', params=params)).json()
+    response = await client.post(f"/api/v1/activities/{c['id']}/move", json={'direction': direction, 'target_id': a['id']})
+    assert response.status_code == 200, response.text
+    after = (await client.get('/api/v1/activities/', params=params)).json()
+    assert [a['task_name'] for a in after] == expected
+    assert {a['id']: (a['parent_id'], a['start'], a['finish']) for a in before} == {a['id']: (a['parent_id'], a['start'], a['finish']) for a in after}
+
+
+async def test_move_target_rejects_other_parent_and_missing_target(client, project, live_schedule_period):
+    a = await _create(client, project, live_schedule_period, task_name='A')
+    child = await _create(client, project, live_schedule_period, task_name='Child', parent_id=a['id'])
+    b = await _create(client, project, live_schedule_period, task_name='B')
+    for body in ({'direction': 'before', 'target_id': child['id']}, {'direction': 'after'}, {'direction': 'up', 'target_id': a['id']}):
+        response = await client.post(f"/api/v1/activities/{b['id']}/move", json=body)
+        assert response.status_code == 422, response.text

@@ -99,7 +99,7 @@ async def move_activity(
     """Moves an activity up or down among its current siblings (display order/
     WBS numbering only — indent/outdent, a parent_id change, is the separate
     lever for hierarchy level)."""
-    return await svc.move_activity(db, activity_id, data.direction)
+    return await svc.move_activity(db, activity_id, data.direction, data.target_id)
 
 
 @router.patch("/{activity_id}/actuals", response_model=ActivityResponse)

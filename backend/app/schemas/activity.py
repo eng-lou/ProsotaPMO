@@ -243,7 +243,14 @@ class ActivityMoveRequest(BaseModel):
     """Reorders an activity among its current siblings — see
     app/services/activity.py:move_activity. Display order/WBS numbering only,
     not hierarchy level (that's parent_id, via indent/outdent)."""
-    direction: Literal["up", "down"]
+    direction: Literal["up", "down", "before", "after"]
+    target_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if (self.direction in ("before", "after")) != (self.target_id is not None):
+            raise ValueError("target_id is required only for before/after moves")
+        return self
 
 
 class SetDataDateRequest(BaseModel):

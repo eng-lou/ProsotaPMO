@@ -1,4 +1,4 @@
-import { RESOURCE_USAGE_COLORS } from './ResourceUsageProfileWidget'
+import { budgetBarBackground, RESOURCE_USAGE_COLORS } from './ResourceUsageProfileWidget'
 import { PRINT_LEFT_PANE_WIDTH, PRINT_PERIOD_COL_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 import { computeUsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
 import type { ActualsHistoryItem, Resource } from './types'
@@ -111,14 +111,13 @@ export function ResourceUsageProfilePrintView({
             {budgetValues.map((budget, i) => {
               const actual = actualValues[i]
               const ev = evValues[i]
-              const overallocated = budget > limitValue && limitValue > 0
               // Fixed 3-slot layout — see ResourceUsageProfileWidget.tsx's
               // own matching comment (2026-09-10, per Maro): slot width
               // must not depend on how many series happen to have data in
               // a given bucket, or a Budget-only bucket's bar balloons to
               // the full group width next to a genuinely three-series one.
               const segments: { value: number; color: string; slot: number }[] = [
-                { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, slot: 0 },
+                { value: budget, color: budgetBarBackground(budget, limitValue), slot: 0 },
               ]
               if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, slot: 1 })
               if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, slot: 2 })
@@ -130,7 +129,7 @@ export function ResourceUsageProfilePrintView({
                   {segments.map(seg => (
                     <div
                       key={seg.slot}
-                      style={{ left: seg.slot * (segWidth + gap), width: segWidth, bottom: 0, height: (seg.value / maxValue) * CHART_HEIGHT, backgroundColor: seg.color }}
+                      style={{ left: seg.slot * (segWidth + gap), width: segWidth, bottom: 0, height: (seg.value / maxValue) * CHART_HEIGHT, background: seg.color }}
                       className="absolute"
                     />
                   ))}

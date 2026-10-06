@@ -1768,6 +1768,36 @@ export function Scheduling() {
   // since reconciling ~140 rows of bars on every scroll tick is too slow to
   // track a native scroll gesture smoothly (2026-07-05, per Maro).
   const leftPaneRef = useRef<HTMLDivElement>(null)
+  const [draggedRow, setDraggedRow] = useState<Activity | null>(null)
+  const [rowDrop, setRowDrop] = useState<{ id: string; direction: 'before' | 'after' } | null>(null)
+  const [movingRow, setMovingRow] = useState(false)
+  const dragPointerY = useRef<number | null>(null)
+  useEffect(() => {
+    if (!draggedRow) return
+    let frame = 0
+    const trackPointer = (event: DragEvent) => {
+      const rect = leftPaneRef.current?.getBoundingClientRect()
+      dragPointerY.current = rect && event.clientX >= rect.left && event.clientX <= rect.right
+        && event.clientY >= rect.top - 32 && event.clientY <= rect.bottom + 32 ? event.clientY : null
+      if (dragPointerY.current === null) setRowDrop(null)
+    }
+    document.addEventListener('dragover', trackPointer)
+    const scroll = () => {
+      const pane = leftPaneRef.current
+      const y = dragPointerY.current
+      if (pane && y !== null) {
+        const rect = pane.getBoundingClientRect()
+        const speed = y < rect.top + 64 ? -14 : y > rect.bottom - 64 ? 14 : 0
+        if (speed) pane.scrollTop += speed
+      }
+      frame = requestAnimationFrame(scroll)
+    }
+    frame = requestAnimationFrame(scroll)
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('dragover', trackPointer)
+    }
+  }, [draggedRow])
   const ganttRef = useRef<GanttChartHandle>(null)
 
   const initialProjectData = useRef<{
@@ -2342,6 +2372,25 @@ export function Scheduling() {
   const handleMoveDown = async (activity: Activity) => {
     await api.post(`/api/v1/activities/${activity.id}/move`, { direction: 'down' })
     await refresh()
+  }
+
+  const dropActivityRow = async (target: Activity, direction: 'before' | 'after') => {
+    const source = draggedRow
+    setDraggedRow(null)
+    setRowDrop(null)
+    dragPointerY.current = null
+    if (!source || movingRow || source.id === target.id || source.parent_id !== target.parent_id) return
+    setMovingRow(true)
+    try {
+      await api.post(`/api/v1/activities/${source.id}/move`, { direction, target_id: target.id })
+      setSortColumn(null)
+      await refresh()
+    } catch (err) {
+      window.alert(axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
+        ? err.response.data.detail : 'Could not move this row. Please retry.')
+    } finally {
+      setMovingRow(false)
+    }
   }
 
   const startEdit = (a: Activity, field: EditableField) => {
@@ -3794,7 +3843,26 @@ export function Scheduling() {
                 return (
                 <tr
                   key={a.id}
+                  onDragOver={event => {
+                    if (!draggedRow || movingRow) return
+                    dragPointerY.current = event.clientY
+                    if (draggedRow.id === a.id || draggedRow.parent_id !== a.parent_id) {
+                      setRowDrop(null)
+                      return
+                    }
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'move'
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    setRowDrop({ id: a.id, direction: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after' })
+                  }}
+                  onDrop={event => {
+                    if (!rowDrop || rowDrop.id !== a.id) return
+                    event.preventDefault()
+                    void dropActivityRow(a, rowDrop.direction)
+                  }}
                   style={{
+                    outline: rowDrop?.id === a.id ? '2px solid #2E7DF7' : undefined,
+                    outlineOffset: -2,
                     height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a),
                     // box-shadow, not a real border-bottom — SchedulingPrintView.tsx
                     // already found and documented this exact failure mode: a real
@@ -3807,7 +3875,9 @@ export function Scheduling() {
                     // "the gantt and activity table in the onscreen are misaligning
                     // again" — worse the deeper into a long schedule you scroll,
                     // matching accumulated drift rather than a one-off offset).
-                    boxShadow: rowIndex === visibleActivities.length - 1 ? undefined : 'inset 0 -1px 0 #f3f4f6',
+                    boxShadow: rowDrop?.id === a.id
+                      ? `inset 0 ${rowDrop.direction === 'before' ? 3 : -3}px 0 #3DD6EE`
+                      : rowIndex === visibleActivities.length - 1 ? undefined : 'inset 0 -1px 0 #f3f4f6',
                   }}
                   className={`hover:bg-gray-50 dark:hover:bg-prosota-panel2 ${expandedId === a.id ? 'bg-blue-50/50 dark:bg-prosota-azure/10' : ''}`}
                 >
@@ -3831,6 +3901,22 @@ export function Scheduling() {
                   )}
                   {isColumnVisible('wbs') && <td className="px-3 py-1 text-gray-400 dark:text-prosota-muted whitespace-nowrap">{a.wbs_path ?? '—'}</td>}
                   <td className="px-3 py-1" style={{ paddingLeft: 12 + depthOf(a) * 16 }}>
+                    <button
+                      type="button" draggable={!movingRow && !editingCell}
+                      disabled={movingRow || !!editingCell}
+                      aria-label={`Drag to reorder ${a.task_name}`}
+                      title="Drag above or below another row under the same parent. Restores manual order."
+                      className="mr-1 cursor-grab active:cursor-grabbing text-gray-400 dark:text-prosota-muted disabled:opacity-30"
+                      onClick={event => event.stopPropagation()}
+                      onDragStart={event => {
+                        event.stopPropagation()
+                        event.dataTransfer.effectAllowed = 'move'
+                        event.dataTransfer.setData('text/plain', a.id)
+                        setDraggedRow(a)
+                        setRowDrop(null)
+                      }}
+                      onDragEnd={() => { setDraggedRow(null); setRowDrop(null); dragPointerY.current = null }}
+                    >⠿</button>
                     {editingField === 'task_name' ? (
                       <input
                         autoFocus

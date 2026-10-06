@@ -748,7 +748,7 @@ async def _next_sibling_sort_order_after(
     return insert_at
 
 
-async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down"]) -> Activity:
+async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down", "before", "after"], target_id: uuid.UUID | None = None) -> Activity:
     """Reorder an activity among its current siblings — display order and WBS
     numbering only, never hierarchy level (that's indent/outdent, a parent_id
     change) and never CPM dates/float (sort_order doesn't feed the CPM engine
@@ -774,16 +774,21 @@ async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Lit
     )
     siblings = list(result.scalars().all())
     siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
+    if direction in ("before", "after"):
+        target = next((s for s in siblings if s.id == target_id), None)
+        if target is None:
+            raise HTTPException(status_code=422, detail="Drop onto a row under the same parent in this schedule.")
+        if target.id != activity.id:
+            siblings.remove(activity)
+            target_index = siblings.index(target) + (1 if direction == "after" else 0)
+            siblings.insert(target_index, activity)
+    else:
+        current_index = next(i for i, s in enumerate(siblings) if s.id == activity.id)
+        target_index = current_index - 1 if direction == "up" else current_index + 1
+        if 0 <= target_index < len(siblings):
+            siblings[current_index], siblings[target_index] = siblings[target_index], siblings[current_index]
     for index, sibling in enumerate(siblings):
         sibling.sort_order = index
-
-    current_index = next(i for i, s in enumerate(siblings) if s.id == activity.id)
-    target_index = current_index - 1 if direction == "up" else current_index + 1
-    if 0 <= target_index < len(siblings):
-        siblings[current_index].sort_order, siblings[target_index].sort_order = (
-            siblings[target_index].sort_order,
-            siblings[current_index].sort_order,
-        )
 
     await db.commit()
     await _recompute_hierarchy(db, activity.schedule_period_id)

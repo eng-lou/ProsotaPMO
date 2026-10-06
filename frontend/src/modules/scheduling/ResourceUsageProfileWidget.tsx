@@ -69,6 +69,12 @@ export const RESOURCE_USAGE_COLORS = {
   budgeted: '#eab308', actual: '#22c55e', ev: '#8b5cf6', overallocated: '#ef4444', limit: '#111827',
 }
 
+export function budgetBarBackground(budget: number, limit: number): string {
+  if (limit <= 0 || budget <= limit) return RESOURCE_USAGE_COLORS.budgeted
+  const boundary = (limit / budget) * 100
+  return `linear-gradient(to top, ${RESOURCE_USAGE_COLORS.budgeted} ${boundary}%, ${RESOURCE_USAGE_COLORS.overallocated} ${boundary}%)`
+}
+
 // P6's own "Resource Usage Profile" — the resource histogram (Rita Mulcahy
 // PMP Exam Prep 11th ed., Ch.6 "Resource Histograms": "a bar chart
 // illustrating the number of resources needed per time period... allows a
@@ -153,8 +159,17 @@ function ResourceUsageProfileWidgetImpl({
 
   useLayoutEffect(() => {
     recomputeVisibleBucketRange()
+    syncChartScroll('chart')
+    const element = chartScrollRef.current
+    if (!element) return
+    const observer = new ResizeObserver(() => {
+      recomputeVisibleBucketRange()
+      syncChartScroll('chart')
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets])
+  }, [buckets, loading])
 
   // Debounced, not per-frame throttled — see ResourceTrackingWidget's own
   // handleMainScroll for why (2026-07-14, per Maro: "scrolls are
@@ -170,10 +185,8 @@ function ResourceUsageProfileWidgetImpl({
     }, 150)
   }
 
-  useEffect(() => {
-    window.addEventListener('resize', recomputeVisibleBucketRange)
-    return () => window.removeEventListener('resize', recomputeVisibleBucketRange)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    if (scrollDebounceRef.current !== null) clearTimeout(scrollDebounceRef.current)
   }, [])
 
   // Clamped to the CURRENT buckets.length, not just trusted as-is (real bug
@@ -387,7 +400,9 @@ function ResourceUsageProfileWidgetImpl({
             </div>
           </div>
 
-          <div ref={chartWrapRef} className="flex-1 flex flex-col">
+          {/* Allow the chart to shrink to the viewport, so its contents scroll
+              instead of stretching this flex item beyond the visible panel. */}
+          <div ref={chartWrapRef} className="min-w-0 flex-1 flex flex-col">
             <div className="flex items-center gap-3 mb-2 px-3 pt-3 text-gray-500 dark:text-prosota-muted">
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.budgeted }} />Budgeted</span>
               <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RESOURCE_USAGE_COLORS.actual }} />Actual</span>
@@ -401,7 +416,7 @@ function ResourceUsageProfileWidgetImpl({
                 partway above this row's own top edge, colliding with the
                 legend row directly above; a little breathing room here
                 keeps it clear regardless of exact font size/line height. */}
-            <div className="flex flex-1 mt-2">
+            <div className="min-w-0 flex flex-1 mt-2">
               {/* Y-axis gutter — fixed, doesn't scroll with the chart, mirrors
                   the x-axis's own period labels below (2026-07-09, per Maro:
                   "add y axis fields, e.g in x axis you have the time
@@ -451,7 +466,7 @@ function ResourceUsageProfileWidgetImpl({
               <div
                 ref={chartScrollRef}
                 onScroll={handleChartScroll}
-                className="flex-1 overflow-x-auto pb-3 rt-hide-scrollbar"
+                className="min-w-0 flex-1 overflow-x-auto pb-3 rt-hide-scrollbar"
               >
                 <div className="relative" style={{ height: chartHeight, width: buckets.length * PERIOD_COL_WIDTH }}>
                   {Array.from({ length: gridlineCount + 1 }, (_, i) => {
@@ -467,8 +482,8 @@ function ResourceUsageProfileWidgetImpl({
                     />
                   )}
                   {visibleBucketIndices.map(i => {
-                    // Budget always shows (red instead of amber once its own
-                    // demand exceeds capacity — unrelated to Actual/EV,
+                    // Budget stays amber below capacity; only its excess is
+                    // red — unrelated to Actual/EV,
                     // which never "overallocate" against a capacity Limit).
                     // Actual and EV both only show for a bucket that's
                     // actually elapsed and has a real recorded delta —
@@ -488,9 +503,8 @@ function ResourceUsageProfileWidgetImpl({
                     const budget = budgetValues[i]
                     const actual = actualValues[i]
                     const ev = evValues[i]
-                    const overallocated = budget > limitValue && limitValue > 0
                     const segments: { value: number; color: string; label: string; slot: number }[] = [
-                      { value: budget, color: overallocated ? RESOURCE_USAGE_COLORS.overallocated : RESOURCE_USAGE_COLORS.budgeted, label: 'Budget', slot: 0 },
+                      { value: budget, color: budgetBarBackground(budget, limitValue), label: 'Budget', slot: 0 },
                     ]
                     if (actual !== null) segments.push({ value: actual, color: RESOURCE_USAGE_COLORS.actual, label: 'Actual', slot: 1 })
                     if (ev !== null) segments.push({ value: ev, color: RESOURCE_USAGE_COLORS.ev, label: 'Earned Value', slot: 2 })
@@ -508,7 +522,7 @@ function ResourceUsageProfileWidgetImpl({
                             style={{
                               left: seg.slot * (segWidth + gap), width: segWidth,
                               bottom: 0, height: (seg.value / maxValue) * chartHeight,
-                              backgroundColor: seg.color,
+                              background: seg.color,
                             }}
                           />
                         ))}
@@ -543,7 +557,7 @@ function ResourceUsageProfileWidgetImpl({
             actually start. */}
         <div className="flex border-t border-gray-200 dark:border-prosota-line">
           <div style={{ width: leftPaneWidth, flexShrink: 0 }} />
-          <div ref={footerScrollRef} onScroll={() => syncChartScroll('footer')} className="flex-1" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+          <div ref={footerScrollRef} onScroll={() => syncChartScroll('footer')} className="min-w-0 flex-1" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
             <div style={{ width: buckets.length * PERIOD_COL_WIDTH, height: 14 }} />
           </div>
         </div>
