@@ -50,6 +50,19 @@ npm run dev
 
 Requires a local PostgreSQL 16 instance and an Auth0 tenant configured via environment variables.
 
+## Vercel database migrations
+
+The backend service build runs `deploy_migrations.py` using its configured
+`DATABASE_URL`. Production builds (`VERCEL_ENV=production`) apply Alembic upgrades
+under a PostgreSQL transaction lock before deployment. Connection, migration or
+schema-version failures fail the build. The Dockerfile is not used by the Vercel
+Python service, so its startup migration command does not cover Vercel deployments.
+
+Preview builds only check the schema version and never upgrade a potentially
+shared production database. Use a separate preview database and apply
+`alembic upgrade head` to it before deploying a preview containing schema changes.
+Production credentials must be available to the backend build as well as runtime.
+
 ## Testing
 
 ```

@@ -516,7 +516,7 @@ async def test_delete_summary_cascades_to_children(
 
 
 async def test_bulk_delete_activities(
-    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod
+    client: AsyncClient, project: Project, live_schedule_period: SchedulePeriod, live_period
 ):
     """POST /activities/bulk-delete (2026-09-03, per Maro: multi-select
     delete on a large real schedule was slow — see
@@ -534,6 +534,23 @@ async def test_bulk_delete_activities(
     for activity_id in (a["id"], a_child["id"], b["id"]):
         resp = await client.get(f"/api/v1/activities/{activity_id}")
         assert resp.status_code == 404
+
+    # The schedule grid reloads these collections after deleting its final row.
+    # An empty schedule is a successful response, not a load failure.
+    for path, params in (
+        ("activities", {"project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id)}),
+        ("activity-relationships", {"schedule_period_id": str(live_schedule_period.id)}),
+        ("resource-assignments", {"schedule_period_id": str(live_schedule_period.id)}),
+    ):
+        response = await client.get(f"/api/v1/{path}/", params=params)
+        assert response.status_code == 200, response.text
+        assert response.json() == []
+
+    response = await client.get("/api/v1/dashboard/overview", params={
+        "project_id": str(project.id), "period_id": str(live_period.id),
+        "schedule_period_id": str(live_schedule_period.id),
+    })
+    assert response.status_code == 200, response.text
 
 
 async def test_delete_without_cascade_promotes_children(

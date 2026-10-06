@@ -1,6 +1,7 @@
 import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
+import { scheduleLoadError } from './scheduleLoadError'
 import { lazyPanel } from '@/components/LazyPanel'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
@@ -609,6 +610,7 @@ export function Scheduling() {
   const [modelElementLinks, setModelElementLinks] = useState<ModelElementLink[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   // expandedId now drives one unified activity-detail panel (fields + Logic +
   // Resources + Reassessment) — single click on an activity's name opens it;
   // "+ Add Activity" just creates a blank row and jumps straight here too
@@ -1811,13 +1813,14 @@ export function Scheduling() {
       setCalendars(calendarRes.data)
       setResources(resourceRes.data)
       setModelElementLinks(links)
-    }).catch(() => {
-      if (!controller.signal.aborted) setError('Failed to load schedule')
+      setError(null)
+    }).catch((err) => {
+      if (!controller.signal.aborted) setError(scheduleLoadError(err))
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [selectedProject?.id, period, activeVariant?.project_id])
+  }, [selectedProject?.id, period, activeVariant?.project_id, loadAttempt])
 
   // Delayed/At Risk are computed badges, not stored fields — consistent with how
   // Cost Plan's variance-band fix went (never expose a derivable value as manual
@@ -2111,6 +2114,7 @@ export function Scheduling() {
     setCalendars(calendarsRes.data)
     setResources(resourcesRes.data)
     setResourceAssignments(assignmentsRes.data)
+    setError(null)
   }
 
   // buildResourceRecipe's own ResourceRecipeActivity expects real numbers
@@ -2668,7 +2672,13 @@ export function Scheduling() {
       </div>
 
       {(error || periodError) && (
-        <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
+        <div role="alert" className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">
+          {error ?? periodError}
+          <button className="ml-3 underline" onClick={() => {
+            if (periodError) void refetchPeriod()
+            setLoadAttempt(attempt => attempt + 1)
+          }}>Retry</button>
+        </div>
       )}
 
       <div className="mb-5 flex items-center gap-1 border-b border-gray-200 dark:border-prosota-line no-print">
@@ -4163,7 +4173,7 @@ export function Scheduling() {
                     // — that's sized for a real activity row, not this placeholder message.
                     style={{ height: 'auto', overflow: 'visible' }}
                   >
-                    {activities.length === 0
+                    {error || periodError ? 'Schedule data could not be loaded. Use Retry above.' : activities.length === 0
                       ? 'No activities yet for this period. Add the first one above.'
                       : 'No activities match your search/filters.'}
                   </td>

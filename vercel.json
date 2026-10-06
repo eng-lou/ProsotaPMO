@@ -15,6 +15,7 @@
         },
         "backend": {
             "root": "backend",
+            "buildCommand": "uv run --no-project --with-requirements requirements.txt python deploy_migrations.py",
             "entrypoint": "app/main.py"
         }
     },
