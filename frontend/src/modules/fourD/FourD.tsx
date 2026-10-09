@@ -1,3 +1,4 @@
+import { assembleEquipment } from './equipmentAssembly'
 import { useEquipmentRigs } from './useEquipmentRigs'
 import { EquipmentPanel } from './EquipmentPanel'
 import { EquipmentTracks } from './EquipmentTracks'
@@ -2930,6 +2931,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // elsewhere in this file.
   const [sectionBoxTool, setSectionBoxTool] = useState<SectionBoxTool>('resize')
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+  const hiddenAssemblyBackups = useRef(new Set<string>())
+  useEffect(() => {
+    const sourceIds = new Set<string>()
+    for (const o of sceneObjects) o.object.traverse(node => {
+      const sources = node.userData.prosotaEquipmentSources
+      if (Array.isArray(sources)) sources.forEach(id => { if (typeof id === 'string') sourceIds.add(id) })
+    })
+    const backups = sceneObjects.filter(o => o.fileId && sourceIds.has(o.fileId) && !hiddenAssemblyBackups.current.has(o.id))
+    if (backups.length) {
+      backups.forEach(o => hiddenAssemblyBackups.current.add(o.id))
+      setHiddenIds(prev => new Set([...prev, ...backups.map(o => o.id)]))
+    }
+  }, [sceneObjects])
+
   // Hide-by-sub-element (2026-07-11, for Collections) — see Viewport3D.tsx's
   // own Props doc comment on why this is a composite-key Set<string>, not a
   // flat Set<number> the way selectedExpressIds is.
@@ -4126,6 +4141,31 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!existing) return
     if (kind === 'ifc') await performUnloadIfc(existing.id)
     else performUnloadMesh(existing.id)
+  }
+
+  const handleAssembleEquipment = async (names: string[], label: string) => {
+    if (!selectedProject) throw new Error('Select a project first')
+    const projectId = selectedProject.id
+    const name = `${label.trim().replace(/[^a-zA-Z0-9 _-]/g, '_')}.glb`
+    const files = await listModel3DFiles(projectId)
+    if (files.some(f => f.name === name) || sceneObjects.some(o => o.name === name)) throw new Error('Choose a unique equipment name')
+    const parts = names.map(n => {
+      const matches = sceneObjects.filter(o => o.kind === 'mesh' && o.name === n)
+      if (matches.length !== 1 || !matches[0].fileId) throw new Error(`Save imports and use unique names first: ${n}`)
+      return matches[0]
+    })
+    const group = assembleEquipment(parts, name)
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js')
+    const bytes = await new GLTFExporter().parseAsync(group, { binary: true, onlyVisible: false })
+    const file = new File([bytes as ArrayBuffer], name, { type: 'model/gltf-binary' })
+    const object = await loadModel3DFile(file)
+    const saved = await uploadModel3DFile(projectId, name, 'mesh', settings.upAxis, file, () => {})
+    if (restoreStartedForProjectIdRef.current !== projectId) throw new Error('Assembly saved in the previous project. Open that project to use it.')
+    const id = crypto.randomUUID(); object.name = name; object.userData.sceneObjectId = id
+    setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: settings.upAxis, object, fileId: saved.id }])
+    setHiddenIds(prev => new Set([...prev, ...parts.map(p => p.id)]))
+    setDataTab('3d')
+    return name
   }
 
   const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string, includeAnimation: boolean = true) => {
@@ -7359,7 +7399,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <div className="flex-1 overflow-y-auto">
         <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={sceneObjects} rigs={equipment.rigs}
           busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
-          onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
+          onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
         <ElementRigPanel
           elementParents={elementParents}
           error={elementParentError}

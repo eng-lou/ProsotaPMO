@@ -10,7 +10,8 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek }: {
+export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble }: {
+  onAssemble?: (names: string[], name: string) => Promise<string>
   projectId: string; objects: { name: string; kind: string; object: THREE.Object3D }[]; rigs: EquipmentRig[]
   busy: boolean; error: string | null; runtimeError: string | null; dateRef: React.MutableRefObject<Date | null>
   onSave: (r: EquipmentRig) => Promise<boolean>; onRemove: (r: EquipmentRig) => Promise<void>
@@ -19,6 +20,9 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   onPreview: (p: { model: string; values: Record<string, number>; time: number | null } | null) => void
   onSeek: (d: Date) => void
 }) {
+  const [assemblyParts, setAssemblyParts] = useState<string[]>([])
+  const [assemblyName, setAssemblyName] = useState('Equipment')
+  const [assembling, setAssembling] = useState(false)
   const [model, setModel] = useState('')
   const [draft, setDraft] = useState<EquipmentRig | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -68,13 +72,26 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   </select>
   const joint = draft?.definition.joints[jointIndex]
   const follower = draft?.definition.followers[followerIndex]
-  return <fieldset disabled={busy} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
+  return <fieldset disabled={busy || assembling} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
     <strong>Equipment Controls</strong>
     <p className="text-gray-500 dark:text-prosota-muted">Animate rigid parts inside an imported model. Use its root transform or path to move the whole machine.</p>
     <select aria-label="Equipment model" className={input} disabled={dirty || busy} value={model} onChange={e => { setModel(e.target.value); onDraft(null); onPreview(null); setNotice(null) }}>
       <option value="">Select equipment model…</option>
       {objects.filter(o => o.kind === 'mesh').map((o, i) => <option key={i} value={o.name}>{o.name}</option>)}
     </select>
+    {onAssemble && <details><summary>Assemble separate imports</summary>
+      <p>Select the parts of one machine. Saves an assembled copy at the current pose; originals remain as hidden backups. Existing links and animations stay with the originals.</p>
+      <input aria-label="Assembly name" className={input} value={assemblyName} onChange={e => setAssemblyName(e.target.value)} />
+      <button className={button} disabled={dirty} onClick={() => setAssemblyParts(objects.filter(o => o.kind === 'mesh').map(o => o.name))}>Select all imports</button>
+      <button className={button} onClick={() => setAssemblyParts([])}>Clear</button>
+      <div className="max-h-48 overflow-y-auto">{objects.filter(o => o.kind === 'mesh').map((o, i) => <label key={i} className="flex gap-2"><input type="checkbox" checked={assemblyParts.includes(o.name)} onChange={e => setAssemblyParts(p => e.target.checked ? [...p, o.name] : p.filter(n => n !== o.name))} />{o.name}</label>)}</div>
+      <button className={button} disabled={dirty || assemblyParts.length < 2 || !assemblyName.trim()} onClick={async () => {
+        setAssembling(true); setNotice('Saving assembled equipment…')
+        try { const name = await onAssemble(assemblyParts, assemblyName); setModel(name); onDraft(null); onPreview(null); setNotice('Assembly saved. Click Create equipment rig to configure its controls.'); setAssemblyParts([]) }
+        catch (e) { setNotice((e as Error).message) }
+        finally { setAssembling(false) }
+      }}>{assembling ? 'Assembling…' : `Assemble ${assemblyParts.length} imports`}</button>
+    </details>}
     {(error || runtimeError || notice) && <p role="status" className="text-amber-700 dark:text-amber-300 break-words">{error || runtimeError || notice}</p>}
     {model && !draft && <button className={button} onClick={() => change({ id: '', project_id: projectId, model_ref: model, name: model, version: 1, definition: emptyEquipment() })}>Create equipment rig</button>}
     {draft && <>

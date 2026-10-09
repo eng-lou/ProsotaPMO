@@ -96,3 +96,16 @@ may require rebinding. Presets do not contain geometry or Unreal assets.
 The actual Unreal backhoe's mesh export and numerical pivot/limit calibration have
 not been imported into Prosota by this implementation. Configure its exported rigid
 parts using the workflow above; the feature does not claim a pre-calibrated backhoe.
+
+## Assembling separate imports (2026-10-09)
+In Rigging > Equipment Controls > Assemble separate imports, enter a unique name,
+select the machine's imports (Select all is available), then Assemble. This saves
+one GLB with individually addressable parts at their current world positions.
+It selects the new import; click Create equipment rig, then configure controls,
+joints and cylinder followers normally. No Blender re-export is required.
+
+Original files are retained and hidden, including after reload. Show All can
+reveal these backups. The new copy does not inherit schedule links, paths or
+keyframes from the source files. Configure those on the assembled equipment.
+Assembly requires saved imports with unique filenames and rigid, non-animated
+geometry. Zero-scale or sheared root transforms are rejected with a message.

@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * as THREE from 'three'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const { THREE, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * from './src/modules/fourD/equipmentAssembly'; export * as THREE from 'three'; export { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'; export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
+const { THREE, GLTFExporter, GLTFLoader, assembleEquipment, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
 const near = (a, b) => assert.ok(Math.abs(a-b)<1e-7, `${a} != ${b}`)
 function setup() {
  const root = new THREE.Group(); root.name = 'Backhoe'
@@ -58,3 +58,42 @@ test('native mesh nesting composes once and cleanup restores original hierarchy'
 test('zero-scale schedule root does not corrupt internal bind pose',()=>{
  const {root,def}=setup();root.scale.setScalar(0);const rig=bindEquipment(root,def);root.scale.setScalar(1);rig.evaluate(null,{lift:1,curl:0});near(root.children[2].position.y,3)
 })
+
+test('assembly preserves world placement, distinct parts and original parents', () => {
+ const parent=new THREE.Group(); parent.rotation.x=Math.PI/2; parent.position.set(4,5,6)
+ const a=new THREE.Mesh(new THREE.BoxGeometry(),new THREE.MeshStandardMaterial()); a.position.set(1,2,3); parent.add(a)
+ const b=new THREE.Group(); b.position.set(9,8,7); const child=new THREE.Mesh(new THREE.BoxGeometry(),new THREE.MeshStandardMaterial()); b.add(child)
+ a.userData.circular=a
+ const root=assembleEquipment([{name:'Boom.glb',object:a,fileId:'a'},{name:'Bucket.glb',object:b,fileId:'b'}],'Loader')
+ root.updateWorldMatrix(true,true)
+ assert.equal(a.parent,parent); assert.equal(b.children[0],child)
+ assert.equal(root.children.length,2); assert.equal(root.children[0].name,'Boom.glb')
+ a.matrixWorld.elements.forEach((v,i)=>near(v,root.children[0].matrixWorld.elements[i]))
+ assert.deepEqual(root.userData.prosotaEquipmentSources,['a','b'])
+ assert.deepEqual(root.children[0].userData,{})
+ const def=emptyEquipment();def.controls=[{id:'c',name:'Lift',value:0,rest:0,keys:[]}]
+ def.joints=[{id:'j',name:'Lift',node:[...equipmentNodes(root).keys()][1],parent:null,control:'c',kind:'slide',pivot:[0,0,0],axis:[1,0,0],minimum:0,maximum:5,response:[[0,0],[1,1]]}]
+ const runtime=bindEquipment(root,def);runtime.evaluate(null,{c:1});near(root.children[0].position.x,10);runtime.restore();near(root.children[0].position.x,5)
+})
+test('assembly rejects singular and animated imports',()=>{
+ const a=new THREE.Group(),b=new THREE.Group();a.scale.setScalar(0)
+ assert.throws(()=>assembleEquipment([{name:'a',object:a},{name:'b',object:b}],'X'),/zero scale/)
+ a.scale.setScalar(1);a.animations=[new THREE.AnimationClip('clip',1,[])]
+ assert.throws(()=>assembleEquipment([{name:'a',object:a},{name:'b',object:b}],'X'),/embedded animation/)
+})
+
+test('assembled GLB reload preserves backup references and riggable part transforms', async()=>{
+ globalThis.FileReader=class {
+  readAsArrayBuffer(blob){blob.arrayBuffer().then(value=>{this.result=value;this.onloadend?.()})}
+  readAsDataURL(blob){blob.arrayBuffer().then(value=>{this.result='data:application/octet-stream;base64,'+Buffer.from(value).toString('base64');this.onloadend?.()})}
+ }
+ const a=new THREE.Mesh(new THREE.BoxGeometry(),new THREE.MeshStandardMaterial()),b=a.clone();b.position.x=3
+ const assembly=assembleEquipment([{name:'Boom.glb',object:a,fileId:'a'},{name:'Bucket.glb',object:b,fileId:'b'}],'Loader')
+ const bytes=await new GLTFExporter().parseAsync(assembly,{binary:true,onlyVisible:false})
+ const loaded=(await new GLTFLoader().parseAsync(bytes,'')).scene
+ const group=loaded.children[0]
+ assert.deepEqual(group.userData.prosotaEquipmentSources,['a','b'])
+ assert.equal(group.children.length,2);near(group.children[1].position.x,3)
+ assert.ok([...equipmentNodes(loaded).keys()].some(k=>k.includes('Bucketglb')))
+})
+

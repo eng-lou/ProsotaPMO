@@ -6873,3 +6873,11 @@ previous playhead; immediate input handling plus reading the live date ref fixes
 that. API testing caught a duplicate-create rollback expiring shared session
 objects; insertion now uses a savepoint. See EQUIPMENT_CONTROLS.md for setup,
 coordinate conventions, reuse and the distinction from Unreal physics simulation.
+
+### 2026-10-09 — Assemble equipment from separate imports
+- Added Rigging assembly picker: selected imports become a persisted GLB without
+  merging meshes or changing source parents. World transforms include axis correction.
+- Kept original files as hidden backups, with source file IDs embedded in the GLB
+  to hide backups after reload. Save errors propagate to the panel.
+- Verified rigid pose preservation, controls on assembled parts, invalid transform
+  rejection and GLB export/reload metadata; production build passed.
