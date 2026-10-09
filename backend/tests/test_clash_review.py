@@ -119,6 +119,8 @@ async def test_other_user_cannot_share_or_read_private_runs(client, project, oth
     try:
         assert (await client.get(f"/api/v1/clash-review/{test['id']}/runs")).status_code == 404
         assert (await client.post(f"/api/v1/clash-review/{test['id']}/reports", json={"run_id": first["run_id"], "result_ids": [first["test"]["results"][0]["id"]]})).status_code == 404
+        assert (await client.post(f"/api/v1/clash-review/{test['id']}/run-upload")).status_code == 404
+        assert (await client.post(f"/api/v1/clash-review/{test['id']}/uploaded-runs", json={"upload_id": first['run_id']})).status_code == 404
         assert (await client.delete(f"/api/v1/clash-tests/{test['id']}")).status_code == 404
     finally:
         app.dependency_overrides[get_db_user] = previous
@@ -251,3 +253,57 @@ def test_clash_migration_upgrade_and_downgrade():
         finally:
             transaction.rollback()
     engine.dispose()
+
+
+async def test_large_run_direct_storage_transfer(client, project, monkeypatch):
+    import uuid
+    from app.services import object_storage, clash_transfer
+    test = await setup(client, project)
+    request = payload(test)
+    # Well over the inline body limit, without changing clash coverage.
+    request['warnings'] = ['x' * 3_100_000]
+    body = gzip.compress(json.dumps(request).encode())
+    saved = {}
+    monkeypatch.setattr(object_storage, 'presigned_put_url', lambda key, *a, **kw: 'https://storage.test/' + key)
+    monkeypatch.setattr(object_storage, 'head_object_size', lambda key: len(body))
+    monkeypatch.setattr(object_storage, 'download_to_path', lambda key, path: path.write_bytes(body))
+    monkeypatch.setattr(object_storage, 'delete_object', lambda key: saved.update(deleted=key))
+    monkeypatch.setattr(object_storage, 'upload_bytes', lambda key, data, *a: saved.update({key: data}))
+    monkeypatch.setattr(object_storage, 'presigned_get_url', lambda key, **kw: 'https://storage.test/' + key)
+    upload = (await client.post(f"/api/v1/clash-review/{test['id']}/run-upload")).json()
+    assert 'clash-uploads/' in upload['upload_url']
+    response = await client.post(f"/api/v1/clash-review/{test['id']}/uploaded-runs", json={'upload_id': upload['upload_id']})
+    assert response.status_code == 201, response.text
+    assert len(response.json()['test']['results']) == 2
+    run_id = response.json()['run_id']
+    assert saved['deleted'].endswith(upload['upload_id'] + '.gz')
+    detail = (await client.get(f"/api/v1/clash-review/{test['id']}/runs/{run_id}")).json()
+    assert 'snapshot_url' in detail
+    key = detail['snapshot_url'].removeprefix('https://storage.test/')
+    decoded = json.loads(gzip.decompress(saved[key]))
+    assert len(decoded['results']) == 2 and decoded['warnings'] == request['warnings']
+    # Oversized or corrupt uploads cannot alter an existing run.
+    monkeypatch.setattr(object_storage, 'head_object_size', lambda key: clash_transfer.MAX_COMPRESSED + 1)
+    rejected = await client.post(f"/api/v1/clash-review/{test['id']}/uploaded-runs", json={'upload_id': str(uuid.uuid4())})
+    assert rejected.status_code == 413
+
+
+def test_clash_transfer_bounded_decompression():
+    import pytest
+    from fastapi import HTTPException
+    from app.services.clash_transfer import unpack
+    assert unpack(gzip.compress(b'valid'), 10) == b'valid'
+    with pytest.raises(HTTPException):
+        unpack(gzip.compress(b'x' * 100), 10)
+    with pytest.raises(HTTPException):
+        unpack(b'not gzip')
+
+
+async def test_large_result_listing_accepts_storage_envelope(client, project, monkeypatch):
+    from app.services import clash_transfer
+    test = await setup(client, project)
+    await run(client, test)
+    monkeypatch.setattr(clash_transfer, 'response_payload', lambda value, key: {'snapshot_url': 'https://storage.test/results.gz'})
+    response = await client.get('/api/v1/clash-tests/', params={'project_id': str(project.id)})
+    assert response.status_code == 200
+    assert response.json()['snapshot_url'].endswith('results.gz')

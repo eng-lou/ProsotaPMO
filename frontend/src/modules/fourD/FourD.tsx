@@ -1,4 +1,4 @@
-import { packGeometry, geometryFingerprint } from './clashSnapshot'
+import { packGeometry, geometryFingerprint, compressClashUpload, readClashTransfer } from './clashSnapshot'
 import type { ClashRunOptions } from './clashTests'
 import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
 import { applyActivityProfiles } from './applyActivityProfiles'
@@ -3307,12 +3307,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         models: sceneObjects.map(o => o.name), warnings, checked_keys: [...refs.keys()], metres_per_unit: options.metresPerUnit,
         geometry_fingerprint: await geometryFingerprint(geometry), geometry_z: await packGeometry(geometry.filter(g => keys.has(g.key))), test_updated_at: test.updated_at,
       }
-      if (new Blob([JSON.stringify(payload)]).size > 2900000) throw new Error('Clash snapshot is too large for one report (3 MB). Narrow the collections and run again; previous results are preserved.')
+      let uploadId: string | undefined
+      if (new Blob([JSON.stringify(payload)]).size > 2800000) {
+        const body = await compressClashUpload(payload)
+        if (body.size > 80000000) throw new Error('Clash evidence exceeds 80 MB compressed. Previous results are preserved.')
+        const transfer = (await api.post(`/api/v1/clash-review/${test.id}/run-upload`, {}, { signal: controller.signal })).data
+        const uploaded = await fetch(transfer.upload_url, { method: 'PUT', headers: { 'Content-Type': 'application/gzip' }, body, signal: controller.signal })
+        if (!uploaded.ok) throw new Error('Clash evidence upload failed. Retry the test; previous results are preserved.')
+        uploadId = transfer.upload_id
+      }
       controller.signal.throwIfAborted()
       clashCommitting.current = true
       setClashRunProgress({ testId: test.id, done: a.length, total: a.length, saving: true })
-      const response = await api.post<{ test: ClashTest }>(`/api/v1/clash-review/${test.id}/runs`, payload)
-      const updated = response.data.test
+      const response = uploadId
+        ? await api.post<{ test: ClashTest }>(`/api/v1/clash-review/${test.id}/uploaded-runs`, { upload_id: uploadId })
+        : await api.post<{ test: ClashTest }>(`/api/v1/clash-review/${test.id}/runs`, payload)
+      const updated = (await readClashTransfer(response.data)).test
       if (clashProject.current === runProject) setClashTests(prev => prev.map(t => t.id === test.id ? updated : t))
       return updated
     } catch (err) {

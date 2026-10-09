@@ -17,8 +17,10 @@ from app.models.project import Project
 from app.models.clash_test import ClashTest
 from app.models.clash_result import ClashResult
 from app.models.clash_run import ClashRun, ClashReport
-from app.schemas.clash_review import RunRequest, ReportRequest, ReportComment, EmailRequest, IssueRequest
+from app.schemas.clash_review import RunRequest, ReportRequest, ReportComment, EmailRequest, IssueRequest, UploadedRunRequest
 from app.services.clash_test import replace_results
+from app.services import clash_transfer, object_storage
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/clash-review", tags=["clash-review"])
 public_router = APIRouter(prefix="/public/clash-reports", tags=["shared-clashes"])
@@ -29,11 +31,44 @@ from app.services.clash_access import owned_test
 
 def limited_payload(value):
     if len(json.dumps(value, separators=(",", ":")).encode()) > 3_000_000:
-        raise HTTPException(413, "Clash snapshot exceeds 3 MB. Use smaller collections or share fewer clashes.")
+        raise HTTPException(413, "This run requires direct storage upload. Refresh Prosota and retry.")
 
 
 @router.post("/{test_id}/runs", status_code=201)
 async def save_run(test_id: uuid.UUID, data: RunRequest, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    limited_payload(data.model_dump(mode="json"))
+    return await persist_run(test_id, data, db, user)
+
+
+@router.post("/{test_id}/run-upload")
+async def prepare_run_upload(test_id: uuid.UUID, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    await owned_test(db, test_id, user)
+    upload_id = uuid.uuid4()
+    key = f"clash-uploads/{user.id}/{test_id}/{upload_id}.gz"
+    return {"upload_id": upload_id, "upload_url": object_storage.presigned_put_url(key, "application/gzip", expires_in=900)}
+
+
+@router.post("/{test_id}/uploaded-runs", status_code=201)
+async def save_uploaded_run(test_id: uuid.UUID, data: UploadedRunRequest, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    await owned_test(db, test_id, user)
+    key = f"clash-uploads/{user.id}/{test_id}/{data.upload_id}.gz"
+    raw = await run_in_threadpool(clash_transfer.read_upload, key)
+    from pydantic import ValidationError
+    try:
+        parsed = RunRequest.model_validate_json(raw)
+    except ValidationError as error:
+        raise HTTPException(422, "Invalid clash run upload") from error
+    result = await persist_run(test_id, parsed, db, user)
+    # Committed successfully: upload is no longer needed. Cleanup failure must
+    # not turn a saved run into a misleading client error.
+    try:
+        await run_in_threadpool(object_storage.delete_object, key)
+    except Exception:
+        pass
+    return await run_in_threadpool(clash_transfer.response_payload, {"test": result["test"].model_dump(mode="json"), "run_id": result["run_id"]}, f"clash-responses/{test_id}/{result['run_id']}.gz")
+
+
+async def persist_run(test_id, data, db, user):
     test = await owned_test(db, test_id, user, lock=True)
     if not data.complete or data.expected != data.resolved + data.excluded:
         raise HTTPException(422, "Incomplete run: previous results have been preserved")
@@ -60,17 +95,15 @@ async def save_run(test_id: uuid.UUID, data: RunRequest, db: AsyncSession = Depe
     keys_in_pairs = {f"{p.element_a_source_kind}:{p.element_a_ref}" for p in data.pairs} | {f"{p.element_b_source_kind}:{p.element_b_ref}" for p in data.pairs}
     if not keys_in_pairs.issubset(data.checked_keys):
         raise HTTPException(422, "Clash results include untested elements")
-    payload = data.model_dump(mode="json")
-    limited_payload(payload)
     keys = {f"{p.element_a_source_kind}:{p.element_a_ref}" for p in data.pairs} | {f"{p.element_b_source_kind}:{p.element_b_ref}" for p in data.pairs}
     geometry_items = data.geometry
     if data.geometry_z:
         try:
             raw = base64.b64decode(data.geometry_z, validate=True)
             decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
-            unpacked = decoder.decompress(raw, 50_000_001)
-            if len(unpacked) > 50_000_000 or not decoder.eof or decoder.unused_data:
-                raise ValueError("Geometry exceeds 50 MB or is incomplete")
+            unpacked = decoder.decompress(raw, 200_000_001)
+            if len(unpacked) > 200_000_000 or not decoder.eof or decoder.unused_data:
+                raise ValueError("Geometry exceeds 200 MB or is incomplete")
             from pydantic import TypeAdapter
             from app.schemas.clash_review import ElementGeometry
             geometry_items = TypeAdapter(list[ElementGeometry]).validate_json(unpacked)
@@ -178,7 +211,7 @@ async def read_report(token: str, response: Response, db: AsyncSession = Depends
     report = await available_report(db, token)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
-    return {"snapshot": report.snapshot, "expires_at": report.expires_at, "allow_comments": report.allow_comments, "comments": report.comments}
+    return await run_in_threadpool(clash_transfer.response_payload, {"snapshot": report.snapshot, "expires_at": report.expires_at.isoformat(), "allow_comments": report.allow_comments, "comments": report.comments}, f"clash-report-responses/{report.id}.gz")
 
 
 @public_router.post("/{token}/comments", status_code=201)
@@ -260,7 +293,7 @@ async def get_run(test_id: uuid.UUID, run_id: uuid.UUID, db: AsyncSession = Depe
     run = await db.get(ClashRun, run_id)
     if not run or run.clash_test_id != test_id:
         raise HTTPException(404, "Run not found")
-    return {"id": str(run.id), **run.snapshot}
+    return await run_in_threadpool(clash_transfer.response_payload, {"id": str(run.id), **run.snapshot}, f"clash-run-responses/{test_id}/{run.id}.gz")
 
 
 @router.get("/{test_id}/results/{result_id}/latest-run")
@@ -269,4 +302,4 @@ async def latest_result_run(test_id: uuid.UUID, result_id: uuid.UUID, db: AsyncS
     run = (await db.execute(select(ClashRun).where(ClashRun.clash_test_id == test_id, ClashRun.snapshot['results'].contains([{"id": str(result_id)}])).order_by(ClashRun.created_at.desc()).limit(1))).scalar_one_or_none()
     if not run:
         raise HTTPException(404, "Run this test again to capture a review viewport")
-    return {"id": str(run.id), **run.snapshot}
+    return await run_in_threadpool(clash_transfer.response_payload, {"id": str(run.id), **run.snapshot}, f"clash-run-responses/{test_id}/{run.id}.gz")

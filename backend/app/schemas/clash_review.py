@@ -39,7 +39,7 @@ class RunRequest(BaseModel):
     warnings: list[str] = Field(default_factory=list, max_length=100)
     geometry: list[ElementGeometry] = Field(default_factory=list, max_length=10000)
     geometry_fingerprint: str = Field(default="", max_length=64, pattern=r"^[0-9a-f]{0,64}$")
-    geometry_z: str | None = Field(default=None, max_length=2900000)
+    geometry_z: str | None = Field(default=None, max_length=200000000)
     member_ids: list[uuid.UUID] = Field(max_length=100000)
     checked_keys: list[str] = Field(max_length=100000)
     metres_per_unit: float = Field(default=1, gt=0, le=1000, allow_inf_nan=False)
@@ -82,3 +82,7 @@ class IssueRequest(BaseModel):
     period_id: uuid.UUID
     owner: str = Field(default="", max_length=200)
     due_date: date | None = None
+
+
+class UploadedRunRequest(BaseModel):
+    upload_id: uuid.UUID

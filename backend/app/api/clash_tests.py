@@ -14,14 +14,17 @@ from app.services import clash_test as svc
 router = APIRouter(prefix="/clash-tests", tags=["clash-tests"])
 
 
-@router.get("/", response_model=list[ClashTestResponse])
+@router.get("/")
 async def list_clash_tests(
     project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_db_user),
-) -> list:
+) -> list | dict:
     await owned_project(db, project_id, user)
-    return await svc.list_clash_tests(db, project_id)
+    from app.services.clash_transfer import response_payload
+    from starlette.concurrency import run_in_threadpool
+    rows = await svc.list_clash_tests(db, project_id)
+    return await run_in_threadpool(response_payload, [row.model_dump(mode="json") for row in rows], f"clash-test-responses/{project_id}.gz")
 
 
 @router.post("/", response_model=ClashTestResponse, status_code=201)

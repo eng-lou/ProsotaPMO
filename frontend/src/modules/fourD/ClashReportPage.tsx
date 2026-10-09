@@ -1,4 +1,4 @@
-import { unpackSnapshot } from './clashSnapshot'
+import { unpackSnapshot, readClashTransfer } from './clashSnapshot'
 import { useEffect, useState } from 'react'
 import { ClashViewport } from './ClashViewport'
 import type { ClashRunSnapshot } from './clashTests'
@@ -15,7 +15,7 @@ export function ClashReportPage() {
     const abort = new AbortController()
     fetch(endpoint, { signal: abort.signal, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' }).then(async response => {
       if (!response.ok) throw new Error('This report has expired, was revoked, or is unavailable.')
-      const value = await response.json(); value.snapshot = await unpackSnapshot(value.snapshot); setReport(value); setSelected(value.snapshot.results[0]?.id ?? '')
+      const value = await readClashTransfer<any>(await response.json()); value.snapshot = await unpackSnapshot(value.snapshot); setReport(value); setSelected(value.snapshot.results[0]?.id ?? '')
     }).catch(e => { if (e.name !== 'AbortError') setError(e.message) })
     return () => abort.abort()
   }, [endpoint])
@@ -25,7 +25,7 @@ export function ClashReportPage() {
     try {
       const response = await fetch(endpoint + '/comments', { method: 'POST', credentials: 'omit', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, text, result_id: selected }) })
       if (!response.ok) throw new Error('Comment could not be saved. The link may have expired or comments may be disabled.')
-      const value = await response.json(); setReport(r => r && ({ ...r, comments: value.comments })); setText('')
+      const value = await readClashTransfer<any>(await response.json()); setReport(r => r && ({ ...r, comments: value.comments })); setText('')
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
   return <main className="clash-report min-h-screen bg-slate-950 text-slate-100 p-6" style={{ colorScheme: 'dark' }}>

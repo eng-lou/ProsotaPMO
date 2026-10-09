@@ -6821,3 +6821,10 @@ Added external reports with selected-only validated geometry, immutable snapshot
 - Read all geometry pieces of an IFC element, including already materialized pieces. Capture only referenced triangles within the draw range, compacting unused vertices and ignoring trailing vertices that WebGL does not draw.
 - Invalid referenced vertices/indices and invalid world transforms still stop a run with specific diagnostics; they are not silently omitted or marked clash-free.
 - Ten geometry tests and TypeScript validation passed. The user's exact AR/ST model run remains to be checked once its source paths are supplied.
+
+
+### 2026-10-09 — Large clash evidence transport
+
+- Removed the requirement to narrow collections when a run exceeds the inline upload budget. Large runs use the existing R2 direct-upload workflow, with user/test-scoped upload keys and server-side validation before saving results.
+- Large run viewports, result lists and external report snapshots also use signed compressed downloads, avoiding the response-size failure after a successful save. External snapshots still include only selected geometry, and download URLs expire after 60 seconds.
+- Added regression coverage for a run exceeding 3 MB, reopened evidence fidelity, oversize rejection and bounded decompression. No schema migration is required.

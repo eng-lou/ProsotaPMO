@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { readClashTransfer } from './clashSnapshot'
 
 // Frontend for clash_test.py/clash_result.py's backend — Navisworks-style
 // Clash Detective (2026-07-12, per Maro). group_a_collection_id/
@@ -54,7 +55,7 @@ export interface ClashResultPair {
 
 export async function listClashTests(projectId: string): Promise<ClashTest[]> {
   const res = await api.get<ClashTest[]>('/api/v1/clash-tests/', { params: { project_id: projectId } })
-  return res.data
+  return readClashTransfer(res.data)
 }
 
 export async function createClashTest(data: {

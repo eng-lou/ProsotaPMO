@@ -25,7 +25,7 @@ Updated 9 October 2026.
 
 ## External access boundary
 
-The public `/clash-report#TOKEN` page requires no Prosota account. The token is random, stored only as a SHA-256 hash server-side, and checked for expiry/revocation on every report/comment request. The public route never fetches the original IFC/model file or grants access to project APIs.
+The public `/clash-report#TOKEN` page requires no Prosota account. The token is random, stored only as a SHA-256 hash server-side, and checked for expiry/revocation on every report/comment request. A large report download URL already issued can remain usable for at most 60 seconds after revocation. The public route never fetches the original IFC/model file or grants access to project APIs.
 
 The server selects only the chosen result records, current review notes and their geometry from a saved run. Mesh data is restricted to validated triangle positions and indices, compressed for transport; textures, object scripts, source files, unselected elements, model inventory, private review history and linked issue data are excluded. Optional context means other elements already included in that report. Plain mesh imports represent whole-file elements, so sharing one includes its mesh geometry; this is stated before sharing.
 
@@ -46,7 +46,7 @@ Without SMTP configuration, Copy link and Open email app work; Send email return
 
 ## Bounds and explicit limitations
 
-Snapshots are capped at 3 MB compressed request size and 50 MB decompressed geometry. Oversized snapshots fail with guidance to narrow collections and leave earlier results intact. Scene units are explicit: align mixed-unit models before testing. Visible scope respects whole-object/mesh visibility, not section-plane clipping. Level slices and independently skinned/instanced plain mesh imports require supported static geometry first. Hard tests include touching; no penetration-depth measurement is claimed. A containment marker is the overlap-box centre, not a calculated penetration centroid.
+Runs larger than 2.8 MB use a direct, authenticated R2 upload rather than passing geometry through the function request body. Large saved runs, result lists and selected external reports download through short-lived signed R2 URLs. Uploads are bounded at 80 MB compressed, 220 MB expanded run JSON and 200 MB expanded geometry. Validation and result updates remain atomic. The existing R2 configuration and upload/download CORS rules are required; no new database migration is needed. Temporary upload objects under `clash-uploads/` should have an R2 expiry lifecycle rule to clean up cancelled uploads. Successful uploads are deleted after saving. Scene units are explicit: align mixed-unit models before testing. Visible scope respects whole-object/mesh visibility, not section-plane clipping. Level slices and independently skinned/instanced plain mesh imports require supported static geometry first. Hard tests include touching; no penetration-depth measurement is claimed. A containment marker is the overlap-box centre, not a calculated penetration centroid.
 
 Run history shows the latest 50 runs; older snapshots remain saved and can still be located for a clash's inspection. Report geometry is immutable and restricted at the data level, not just hidden visually.
 
