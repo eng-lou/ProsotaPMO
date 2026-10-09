@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { readIfcClashMeshes, captureMeshTriangles } from './clashMeshCapture'
 import type { IfcModelHandle } from './ifcModel'
 import type { ClashSnapshotElement, GeometryResult } from './clashGeometry'
 
@@ -54,8 +55,7 @@ export async function resolveMembersToElements(
       if (matches.length > 1) throw new Error(`Element ${member.element_label} appears in multiple loaded models. Use an unambiguous collection before testing.`)
       if (matches.length === 1) {
         const { handle, id, name } = matches[0]
-        const mesh = ifc.ensureMaterialized(handle.object, id)
-        if (mesh) meshes.push(mesh)
+        meshes.push(...readIfcClashMeshes(handle.object, id))
         ref = qualifyRefs ? encodeRef(name, decoded.ref) : decoded.ref
         if (qualifyRefs) {
           let levels = storeyMaps.get(handle)
@@ -73,20 +73,14 @@ export function captureClashGeometry(elements: ResolvedClashElement[]): ClashSna
   // Capture all world transforms/vertices synchronously before yielding to the worker.
   // Later animation or camera interaction cannot change the geometry being tested.
   return [...new Map(elements.map(el => [clashKey(el.ref), el])).values()].map(el => ({
-    key: clashKey(el.ref), meshes: el.meshes.map(mesh => {
-      if (mesh instanceof THREE.SkinnedMesh || mesh instanceof THREE.InstancedMesh) throw new Error('Skinned/instanced mesh imports must be converted to static geometry before clash testing.')
-      mesh.updateWorldMatrix(true, false)
-      const position = mesh.geometry.getAttribute('position')
-      if (!position) throw new Error(`No geometry for ${el.ref.label}`)
-      const positions: number[] = []
-      const v = new THREE.Vector3()
-      for (let i = 0; i < position.count; i++) { v.fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld); positions.push(v.x, v.y, v.z) }
-      const index = mesh.geometry.getIndex()
-      const indices = index ? Array.from(index.array) : Array.from({ length: position.count }, (_, i) => i)
-      if (indices.length % 3 || positions.some(n => !Number.isFinite(n))) throw new Error(`Invalid triangle geometry for ${el.ref.label}`)
-      return { positions, indices }
+    key: clashKey(el.ref), meshes: el.meshes.flatMap(mesh => {
+      const geometry = captureMeshTriangles(mesh, el.ref.label)
+      return geometry ? [geometry] : []
     }),
-  }))
+  })).map(element => {
+    if (!element.meshes.length) throw new Error(`No rendered triangles for ${element.key}. No results were changed.`)
+    return element
+  })
 }
 
 export function computeClashesInWorker(elements: ClashSnapshotElement[], aKeys: string[], bKeys: string[], kind: 'hard' | 'clearance', tolerance: number, metresPerUnit: number, signal?: AbortSignal, onProgress?: (done: number, total: number) => void): Promise<GeometryResult> {

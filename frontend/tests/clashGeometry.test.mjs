@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/clashGeometry'; export * as THREE from 'three'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const { computeClashes, THREE } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/clashGeometry'; export * from './src/modules/fourD/clashMeshCapture'; export * as THREE from 'three'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
+const { computeClashes, captureMeshTriangles, readIfcClashMeshes, THREE } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
 function element(key, size, x = 0) {
   const g = new THREE.BoxGeometry(size, size, size); g.translate(x, 0, 0)
   return { key, meshes: [{ positions: Array.from(g.attributes.position.array), indices: Array.from(g.index.array) }] }
@@ -38,4 +38,49 @@ test('invalid tolerance is rejected', () => assert.throws(() => run(element('a',
 test('overlapping bounding boxes do not create a false clearance clash', () => {
   const sphere = (key, x, y) => { const g = new THREE.SphereGeometry(1, 12, 8); g.translate(x, y, 0); return { key, meshes: [{ positions: Array.from(g.attributes.position.array), indices: Array.from(g.index.array) }] } }
   assert.equal(run(sphere('a', 0, 0), sphere('b', 1.6, 1.6), 'clearance', 50).hits.length, 0)
+})
+
+
+test('capture ignores unused invalid vertices and trailing non-triangle capacity', () => {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0, NaN,NaN,NaN], 3))
+  const result = captureMeshTriangles(new THREE.Mesh(geometry), 'wall')
+  assert.deepEqual(result.indices, [0,1,2])
+  assert.equal(result.positions.length, 9)
+  geometry.setIndex([0,1,2,3,3,3]); geometry.setDrawRange(0, 3)
+  assert.deepEqual(captureMeshTriangles(new THREE.Mesh(geometry), 'wall'), result)
+  geometry.setDrawRange(0, 6)
+  assert.throws(() => captureMeshTriangles(new THREE.Mesh(geometry), 'wall'), /Invalid referenced vertex/)
+})
+
+test('batched IFC capture preserves zero-scale matrices and all geometry pieces without materialization', () => {
+  const root = new THREE.Group(); root.position.set(10, 0, 0)
+  const geometry = new THREE.BoxGeometry(1, 1, 1)
+  const batchMesh = new THREE.BatchedMesh(2, 48, 72, new THREE.MeshBasicMaterial())
+  root.add(batchMesh)
+  const geometryId = batchMesh.addGeometry(geometry)
+  const first = batchMesh.addInstance(geometryId), second = batchMesh.addInstance(geometryId)
+  const collapsed = new THREE.Matrix4().makeScale(0, 1, 1)
+  collapsed.setPosition(2, 0, 0)
+  batchMesh.setMatrixAt(first, collapsed)
+  batchMesh.setMatrixAt(second, new THREE.Matrix4().makeTranslation(5, 0, 0))
+  batchMesh.setVisibleAt(second, false)
+  root.userData.batch = { mesh: batchMesh, geometryById: new Map([[geometryId, geometry]]), byExpressId: new Map([[42, [first, second].map(instanceId => ({ geometryId, instanceId, colorAlpha: 1 }))]]) }
+  const meshes = readIfcClashMeshes(root, 42)
+  assert.equal(meshes.length, 2)
+  assert.equal(root.children.length, 1)
+  assert.equal(meshes[1].visible, false)
+  const captured = meshes.map(mesh => captureMeshTriangles(mesh, 'wall'))
+  assert.ok(captured.every(g => g.positions.every(Number.isFinite)))
+  assert.equal(captured[0].positions[0], 12)
+  assert.ok(captured[1].positions[0] >= 14.5)
+  // The former materialization path cannot represent this matrix as TRS.
+  const oldMesh = new THREE.Mesh(geometry); oldMesh.applyMatrix4(collapsed); oldMesh.updateMatrixWorld()
+  assert.ok(oldMesh.matrixWorld.elements.some(v => !Number.isFinite(v)))
+})
+
+test('capture rejects out-of-range indices rather than reporting incomplete geometry as clean', () => {
+  const geometry = new THREE.BoxGeometry(1, 1, 1)
+  geometry.setIndex([0,1,9999])
+  assert.throws(() => captureMeshTriangles(new THREE.Mesh(geometry), 'wall'), /Invalid triangle index/)
 })

@@ -6813,3 +6813,11 @@ Replaced the clash engine's eager Cartesian pair allocation with a spatial candi
 Added verified run history, resolved/reopened lifecycle, review audit notes, filtered/bulk triage, grouping, focused A/B inspection with saved camera positions, issue creation and sampled timeline dates. Preserved legacy approvals when model qualification is unambiguous. Partial/visible runs cannot resolve unchecked pairs.
 
 Added external reports with selected-only validated geometry, immutable snapshots, random hashed bearer tokens, expiry, revocation and optional comments. Public routes are separate from authenticated project APIs. Email uses configured STARTTLS SMTP; copy-link/email-draft alternatives remain available without service configuration. See `CLASH_REVIEW_AND_SHARING.md` for deployment requirements and explicit geometry limits.
+
+
+### 2026-10-09 — Clash geometry capture regression
+
+- Replaced IFC materialization during clash reads with non-mutating batch proxies using the exact current instance matrix. Zero-scale matrices can become NaN when decomposed into a regular mesh's rotation/scale; a regression reproduces this and confirms the reader preserves finite world vertices.
+- Read all geometry pieces of an IFC element, including already materialized pieces. Capture only referenced triangles within the draw range, compacting unused vertices and ignoring trailing vertices that WebGL does not draw.
+- Invalid referenced vertices/indices and invalid world transforms still stop a run with specific diagnostics; they are not silently omitted or marked clash-free.
+- Ten geometry tests and TypeScript validation passed. The user's exact AR/ST model run remains to be checked once its source paths are supplied.
