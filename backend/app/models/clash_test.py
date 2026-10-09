@@ -11,26 +11,11 @@ from app.models.base import Base, TimestampMixin
 
 
 class ClashTest(Base, TimestampMixin):
-    """A Navisworks-style Clash Detective test (2026-07-12, per Maro): two
-    Collections (app/models/collection.py) stand in for Navisworks'
-    "Selection Set A"/"Selection Set B" — every selection-set resolution
-    machinery Collections already have (GUID-based, survives reloads) is
-    reused as-is rather than inventing a second selection concept.
-
-    Geometry only ever exists in the browser in this app (IFC parsing is
-    client-side WASM, see frontend/src/modules/fourD/ifcModel.ts) — this
-    table and ClashResult exist purely to persist the test definition and
-    its last-run results, not to compute anything server-side. "Running" a
-    test is a frontend action (frontend/src/modules/fourD/sceneClash.ts)
-    that reads whatever the viewport is currently showing — including
-    whatever Mode A/B/C animation has applied for the current timeline
-    position — then bulk-replaces this test's ClashResult rows via
-    PUT /api/v1/clash-tests/{id}/results. There is deliberately no
-    date-range/sweep concept here: scrubbing the timeline and re-running
-    IS the 4D-awareness, for free, rather than a second engine.
-
-    tolerance_mm only matters for test_type="clearance" (a "hard" test's
-    tolerance is implicitly 0 — actual geometric penetration)."""
+    """Saved collection comparison settings. Geometry is evaluated in a browser
+    worker against a frozen scene snapshot. Complete, verified runs and scoped
+    external reports are retained separately in ClashRun and ClashReport.
+    A sampled date sweep creates one immutable run for each requested date.
+    """
 
     __tablename__ = "clash_tests"
 

@@ -111,7 +111,7 @@ async def test_replace_results_preserves_status_for_pairs_that_still_clash(clien
     assert patch_resp.json()["status"] == "approved"
 
     # Re-run: wall-1/pipe-1 still clashes (should keep its approved status +
-    # comment), wall-2/pipe-2 no longer does (should be dropped), a new
+    # comment), wall-2/pipe-2 no longer does (must be retained by the legacy endpoint), a new
     # wall-3/pipe-3 clash appears (should insert as "new").
     second_run = (await client.put(
         f"/api/v1/clash-tests/{created['id']}/results",
@@ -119,7 +119,7 @@ async def test_replace_results_preserves_status_for_pairs_that_still_clash(clien
     )).json()
     results_by_pair = {(r["element_a_ref"], r["element_b_ref"]): r for r in second_run["results"]}
 
-    assert set(results_by_pair.keys()) == {("wall-1", "pipe-1"), ("wall-3", "pipe-3")}
+    assert set(results_by_pair.keys()) == {("wall-1", "pipe-1"), ("wall-2", "pipe-2"), ("wall-3", "pipe-3")}
     preserved = results_by_pair[("wall-1", "pipe-1")]
     assert preserved["id"] == result_id
     assert preserved["status"] == "approved"

@@ -157,3 +157,5 @@ __all__ = [
     "ProgressVarianceResult",
     "PoeConversation",
 ]
+
+from app.models.clash_run import ClashRun, ClashReport

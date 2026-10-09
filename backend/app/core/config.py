@@ -8,6 +8,12 @@ class Settings(BaseSettings):
 
     # psycopg3 handles both sync (Alembic) and async (app) with the same URL scheme
     database_url: str = "postgresql+psycopg://postgres:password@localhost:5432/prosotapmo"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    public_app_url: str = ""
     secret_key: str = "change-me-in-production"
     environment: str = "development"
     auth0_domain: str = ""

@@ -32,6 +32,7 @@ import { ProjectSelector } from './modules/projects/ProjectSelector'
 // main-thread work to every navigation click anywhere in the app once 4D
 // had been opened in the tab. FourD's only prop is `active`, so it now
 // re-renders only when that actually flips.
+const ClashReportPage = lazy(() => import('./modules/fourD/ClashReportPage').then(m => ({ default: m.ClashReportPage })))
 const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: memo(m.FourD) })))
 const Scheduling = lazy(() => import('./modules/scheduling/Scheduling').then(m => ({ default: m.Scheduling })))
 const Dashboard = lazy(() => import('./modules/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -240,7 +241,7 @@ function AuthGate() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AuthGate />
+      {window.location.pathname === '/clash-report' ? <Suspense fallback={<p>Loading report…</p>}><ClashReportPage /></Suspense> : <AuthGate />}
     </ThemeProvider>
   )
 }

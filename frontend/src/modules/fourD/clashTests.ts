@@ -15,8 +15,12 @@ export interface ClashResult {
   element_b_source_kind: 'ifc' | 'mesh'
   element_b_ref: string
   element_b_label: string
+  element_metadata?: { a?: { model: string; type: string; level: string }; b?: { model: string; type: string; level: string } }
+  clash_point?: [number, number, number] | null
   distance_mm: number | null
-  status: 'new' | 'reviewed' | 'approved'
+  status: 'new' | 'active' | 'reviewed' | 'approved' | 'resolved' | 'reopened'
+  review_history?: { at: string; before: { status: string; comment: string | null }; changes: { status?: string; comment?: string } }[]
+  issue_id?: string | null
   comment: string | null
   created_at: string
   updated_at: string
@@ -43,6 +47,8 @@ export interface ClashResultPair {
   element_b_source_kind: 'ifc' | 'mesh'
   element_b_ref: string
   element_b_label: string
+  element_metadata?: { a?: { model: string; type: string; level: string }; b?: { model: string; type: string; level: string } }
+  clash_point?: [number, number, number] | null
   distance_mm: number | null
 }
 
@@ -84,9 +90,42 @@ export async function replaceClashResults(clashTestId: string, pairs: ClashResul
 }
 
 export async function updateClashResult(id: string, data: {
-  status?: 'new' | 'reviewed' | 'approved'
+  status?: 'new' | 'active' | 'reviewed' | 'approved' | 'resolved' | 'reopened'
   comment?: string | null
 }): Promise<ClashResult> {
   const res = await api.patch<ClashResult>(`/api/v1/clash-results/${id}`, data)
   return res.data
+}
+
+export interface ClashRunOptions {
+  scope: 'all' | 'visible'
+  metresPerUnit: number
+  date?: string
+  endDate?: string
+  stepDays?: number
+}
+export interface ClashRunSnapshot {
+  id: string
+  name: string
+  test_type: string
+  tolerance_mm: number
+  collection_a_id?: string
+  collection_b_id?: string
+  geometry_fingerprint?: string
+  metres_per_unit?: number
+  result_count?: number
+  run_at: string
+  scope: string
+  timeline_date: string | null
+  expected: number
+  resolved: number
+  excluded: number
+  warnings: string[]
+  results: ClashResult[]
+  viewpoints?: Record<string, import('./ClashViewport').ClashViewpoint>
+  geometry_z?: string
+  geometry?: import('./clashGeometry').ClashSnapshotElement[]
+}
+export async function listClashRuns(id: string): Promise<ClashRunSnapshot[]> {
+  return (await api.get(`/api/v1/clash-review/${id}/runs`)).data
 }

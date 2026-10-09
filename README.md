@@ -14,6 +14,11 @@ Built by [Prosota Ltd](https://prosota.com), founded by Louis Oghenemaro (Maro) 
 - **4D / BIM** — federated IFC models (plus GLB/OBJ/FBX) linked to schedule activities and played back on a timeline: Generate Schedule builds a sequenced programme straight from multiple discipline IFCs (levels merged by elevation and geometry, never by storey name); reusable animation profiles (fall, pop, grow, colour/opacity, domino offsets); section boxes, cinematic cameras, perspective/orthographic views; a Realistic Materials render mode with sun/sky lighting, shadows, AO and per-material mapping/colour; image capture and video export at chosen timeline points.
 - Every capability cross-links back to the Activities that drive it — a risk can point at the cost line and the schedule activity it actually threatens, not live in its own silo.
 
+Resource Tracking and Profile support selectable Budgeted, Actuals and Earned
+Value figures, optional overallocation highlighting, aligned timelines, and
+adjustable print spacing. See [resource display and print notes](docs/RESOURCE_DISPLAY_AND_PRINT.md)
+for controls, calculation limits and validation.
+
 ## Tech stack
 
 | Layer | Technology |
@@ -75,3 +80,5 @@ CI runs the full backend test suite against a real Postgres service container on
 ## License
 
 Proprietary — © Prosota Ltd. All rights reserved.
+
+Clash detection and external review: [workflow, sharing and SMTP setup](docs/CLASH_REVIEW_AND_SHARING.md).

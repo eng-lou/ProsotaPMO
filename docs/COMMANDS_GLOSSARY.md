@@ -181,3 +181,17 @@ three.js's `renderer.info.render.triangles` and `.calls` count the triangles and
 
 ### `git diff --stat` as a safety check (2026-10-02)
 Shows how many lines changed in each file. A file that suddenly showed ~1,800 changed lines when only ~100 were edited revealed that a PowerShell command had garbled the file's special characters. It was caught and restored before committing. Edit files with the editor or Python, not PowerShell's `Get-Content`/`Set-Content`.
+
+
+### Resource phasing regression tests (2026-10-06)
+From `frontend`, run `node --test tests/resourceUsageProfile.test.mjs`.
+The tests bundle the real calculation with esbuild and stub the API import, so
+no production requests occur. They check historical AC/EV phasing, totals across
+units and zoom ranges, duplicate assignments, and agreement between Tracking
+assignment figures and Profile totals. They do not verify print appearance.
+
+### Row-move regression tests (2026-10-06)
+From `backend`, run `.venv/Scripts/python.exe -m pytest tests/test_activities.py -k move -q`.
+This exercises direct before/after moves and existing up/down moves, including
+parent validation and preservation of dates and subtrees. Backend test sessions
+must not run concurrently against the shared test database.

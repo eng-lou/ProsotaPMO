@@ -1,3 +1,5 @@
+import { packGeometry, geometryFingerprint } from './clashSnapshot'
+import type { ClashRunOptions } from './clashTests'
 import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
 import { applyActivityProfiles } from './applyActivityProfiles'
 import { ActivityProfileMapper } from './ActivityProfileMapper'
@@ -103,11 +105,11 @@ import { SiteContextPanel } from './SiteContextPanel'
 import { createAnnotation, deleteAnnotation, listAnnotations, updateAnnotation, type Annotation, type AnnotationKind, type AnnotationUpdate } from './annotations'
 import { AnnotationsPanel } from './AnnotationsPanel'
 import {
-  createClashTest, deleteClashTest, listClashTests, replaceClashResults, updateClashResult,
+  createClashTest, deleteClashTest, listClashTests, updateClashResult,
   type ClashResult, type ClashResultPair, type ClashTest,
 } from './clashTests'
 import { ClashDetectionPanel } from './ClashDetectionPanel'
-import { resolveMembersToElements, findClashes, type ClashSceneObject } from './sceneClash'
+import { resolveMembersToElements, captureClashGeometry, computeClashesInWorker, clashKey, effectivelyVisible, decodeClashRef, type ClashSceneObject } from './sceneClash'
 import { listSiteCaptures, uploadSiteCapture, convertSiteCapture, downloadSiteCapture, deleteSiteCapture, type SiteCapture, type SiteCaptureKind } from './siteCaptures'
 import {
   createProgressVarianceTest, deleteProgressVarianceTest, listProgressVarianceTests,
@@ -2373,7 +2375,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   // Dockable Clash Detective panel (2026-07-12) — same shared-side-dock
   // treatment as every panel above.
-  const [clashPanelOpen, setClashPanelOpen] = useState(() => loadPanelOpen(CLASH_PANEL_OPEN_KEY, false))
+  const [clashPanelOpen, setClashPanelOpen] = useState(() => loadPanelOpen(CLASH_PANEL_OPEN_KEY, false) || new URLSearchParams(window.location.search).has('clash_test'))
   const toggleClashPanel = () => {
     setClashPanelOpen(prev => {
       const next = !prev
@@ -3189,7 +3191,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // exist across a re-run.
   const [clashTests, setClashTests] = useState<ClashTest[]>([])
   const [clashError, setClashError] = useState<string | null>(null)
-  const [clashRunProgress, setClashRunProgress] = useState<{ testId: string; done: number; total: number } | null>(null)
+  const clashCommitting = useRef(false)
+  const clashProject = useRef(selectedProject?.id)
+  clashProject.current = selectedProject?.id
+  const clashSweepCancelled = useRef(false)
+  const clashSweeping = useRef(false)
+  const clashAbort = useRef<AbortController | null>(null)
+  useEffect(() => () => clashAbort.current?.abort(), [selectedProject?.id])
+  const [clashRunProgress, setClashRunProgress] = useState<{ testId: string; done: number; total: number; saving?: boolean } | null>(null)
   useEffect(() => {
     if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
@@ -3212,6 +3221,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setClashTests(prev => [...prev, created])
     } catch (err) {
       setClashError(clashErrorMessage(err, 'Failed to create clash test'))
+      throw err
     }
   }
 
@@ -3234,6 +3244,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       )))
     } catch (err) {
       setClashError(clashErrorMessage(err, 'Failed to update clash result'))
+      throw err
     }
   }
 
@@ -3249,40 +3260,67 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // same as before this refactor — this only pulls the actual compute-and-
   // submit logic out into something callable either way.
   const runClashTestFor = async (
-    test: { id: string; test_type: 'hard' | 'clearance'; tolerance_mm: number },
+    test: { id: string; test_type: 'hard' | 'clearance'; tolerance_mm: number; updated_at?: string },
     collectionA: { id: string; members: CollectionMember[] },
     collectionB: { id: string; members: CollectionMember[] },
+    options: ClashRunOptions = { scope: 'all', metresPerUnit: 1 },
   ): Promise<ClashTest | undefined> => {
+    if (clashAbort.current) { setClashError('A clash test is already running. Cancel it or wait for completion.'); return }
+    const runProject = selectedProject?.id
+    const controller = new AbortController()
+    clashAbort.current = controller
     setClashError(null)
     setClashRunProgress({ testId: test.id, done: 0, total: 0 })
     try {
+      if ([...collectionA.members, ...collectionB.members].some(m => m.source_kind === 'ifc_split')) throw new Error('This collection contains level slices. Use their original IFC elements; previous results have been preserved.')
+      if (!collectionA.members.length || !collectionB.members.length) throw new Error('Both collections need elements before a run can be verified.')
+      const date = options.date ? new Date(options.date) : timelineDateRef.current
+      if (date) {
+        handleSeekTimelineTo(date)
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      }
       const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
-      // Clash Detective doesn't understand level-slices yet (2026-07-15,
-      // deliberately out of scope for that feature's own first pass — see
-      // elementSplitTargets.ts's own header) — filtered out here rather
-      // than widening sceneClash.ts's own real/mesh-only element type, so a
-      // slice-containing Collection degrades to "clash-test its non-slice
-      // members" instead of a type error or a runtime crash.
-      const nonSplitMembers = (members: CollectionMember[]) =>
-        members.filter((m): m is typeof m & { source_kind: 'ifc' | 'mesh' } => m.source_kind !== 'ifc_split')
-      const elementsA = await resolveMembersToElements(nonSplitMembers(collectionA.members), clashSceneObjects, ifcHandles)
-      const selfTest = collectionA.id === collectionB.id
-      const elementsB = selfTest ? elementsA : await resolveMembersToElements(nonSplitMembers(collectionB.members), clashSceneObjects, ifcHandles)
-      const found = await findClashes(elementsA, elementsB, test.test_type, test.tolerance_mm, selfTest, (done, total) => {
-        setClashRunProgress({ testId: test.id, done, total })
+      const membersA = collectionA.members as (CollectionMember & { source_kind: 'ifc' | 'mesh' })[]
+      const membersB = collectionB.members as (CollectionMember & { source_kind: 'ifc' | 'mesh' })[]
+      const allA = await resolveMembersToElements(membersA, clashSceneObjects, ifcHandles, true)
+      const allB = collectionA.id === collectionB.id ? allA : await resolveMembersToElements(membersB, clashSceneObjects, ifcHandles, true)
+      const expected = membersA.length + membersB.length
+      if (allA.length + allB.length !== expected) throw new Error(`Incomplete geometry: ${allA.length + allB.length} of ${expected} collection members resolved. Load the missing models before running. Previous results preserved.`)
+      const filter = (elements: typeof allA) => options.scope === 'visible'
+        ? elements.map(e => ({ ...e, meshes: e.meshes.filter(effectivelyVisible) })).filter(e => e.meshes.length) : elements
+      const a = filter(allA), b = filter(allB)
+      if (!a.length || !b.length) throw new Error('No visible geometry in one of the collections. No results were changed.')
+      if (controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError')
+      const geometry = captureClashGeometry([...a, ...b])
+      const capturedDate = timelineDateRef.current?.toISOString() ?? null
+      const { hits, warnings } = await computeClashesInWorker(geometry, a.map(e => clashKey(e.ref)), b.map(e => clashKey(e.ref)), test.test_type, test.tolerance_mm, options.metresPerUnit, controller.signal,
+        (done, total) => setClashRunProgress({ testId: test.id, done, total }))
+      const refs = new Map([...a, ...b].map(e => [clashKey(e.ref), e.ref]))
+      const pairs: ClashResultPair[] = hits.map(h => {
+        const a = refs.get(h.a)!, b = refs.get(h.b)!
+        return { element_a_source_kind: a.sourceKind, element_a_ref: a.ref, element_a_label: a.label,
+          element_b_source_kind: b.sourceKind, element_b_ref: b.ref, element_b_label: b.label, distance_mm: h.distanceMm, clash_point: h.point, element_metadata: { a: a.metadata, b: b.metadata } }
       })
-      const pairs: ClashResultPair[] = found.map(f => ({
-        element_a_source_kind: f.elementA.sourceKind, element_a_ref: f.elementA.ref, element_a_label: f.elementA.label,
-        element_b_source_kind: f.elementB.sourceKind, element_b_ref: f.elementB.ref, element_b_label: f.elementB.label,
-        distance_mm: f.distanceMm,
-      }))
-      const updated = await replaceClashResults(test.id, pairs)
-      setClashTests(prev => prev.map(t => (t.id === test.id ? updated : t)))
+      const keys = new Set(hits.flatMap(h => [h.a, h.b]))
+      const payload = { pairs, scope: options.scope, timeline_date: capturedDate,
+        member_ids: [...new Set([...membersA, ...membersB].map(m => m.id))], expected, resolved: a.length + b.length, excluded: expected - a.length - b.length, complete: true,
+        models: sceneObjects.map(o => o.name), warnings, checked_keys: [...refs.keys()], metres_per_unit: options.metresPerUnit,
+        geometry_fingerprint: await geometryFingerprint(geometry), geometry_z: await packGeometry(geometry.filter(g => keys.has(g.key))), test_updated_at: test.updated_at,
+      }
+      if (new Blob([JSON.stringify(payload)]).size > 2900000) throw new Error('Clash snapshot is too large for one report (3 MB). Narrow the collections and run again; previous results are preserved.')
+      controller.signal.throwIfAborted()
+      clashCommitting.current = true
+      setClashRunProgress({ testId: test.id, done: a.length, total: a.length, saving: true })
+      const response = await api.post<{ test: ClashTest }>(`/api/v1/clash-review/${test.id}/runs`, payload)
+      const updated = response.data.test
+      if (clashProject.current === runProject) setClashTests(prev => prev.map(t => t.id === test.id ? updated : t))
       return updated
     } catch (err) {
-      setClashError(clashErrorMessage(err, 'Failed to run clash test'))
+      if (clashProject.current === runProject) setClashError(controller.signal.aborted && !clashCommitting.current ? 'Run cancelled. Previous results preserved.' : clashErrorMessage(err, 'Could not confirm the save. Refresh run history before retrying.'))
       return undefined
     } finally {
+      clashAbort.current = null
+      clashCommitting.current = false
       setClashRunProgress(null)
     }
   }
@@ -3293,16 +3331,37 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // (see aiFourDBridge.tsx) can report real results back without racing
   // React's own async state-update timing to read setClashTests' effect
   // back out of the `clashTests` closure.
-  const handleRunClashTest = async (testId: string): Promise<ClashTest | undefined> => {
+  const handleRunClashTest = async (testId: string, options?: ClashRunOptions): Promise<ClashTest | undefined> => {
     const test = clashTests.find(t => t.id === testId)
     if (!test) return undefined
     const collectionA = collections.find(c => c.id === test.group_a_collection_id)
     const collectionB = collections.find(c => c.id === test.group_b_collection_id)
     if (!collectionA || !collectionB) {
-      setClashError('One of this test\'s Collections no longer exists — pick new ones (delete and recreate the test)')
+      setClashError('One of this test\'s Collections no longer exists — edit the test to choose available collections')
       return undefined
     }
-    return runClashTestFor(test, collectionA, collectionB)
+    if (clashSweeping.current) { setClashError('A date-range run is already in progress.'); return }
+    if (options?.date && options.endDate) {
+      const start = new Date(options.date).getTime(), end = new Date(options.endDate).getTime()
+      const step = (options.stepDays ?? 1) * 86400000
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(step) || step < 86400000 || end < start || Math.ceil((end - start) / step) > 30) {
+        setClashError('Choose a valid date range with at most 31 sample dates and a step of at least one day.'); return
+      }
+      clashSweeping.current = true; clashSweepCancelled.current = false
+      let updated: ClashTest | undefined = test
+      const dates: number[] = []
+      for (let date = start; date < end; date += step) dates.push(date)
+      dates.push(end)
+      try {
+        for (const date of dates) {
+          if (clashSweepCancelled.current) break
+          updated = await runClashTestFor(updated!, collectionA, collectionB, { ...options, date: new Date(date).toISOString() })
+          if (!updated) break
+        }
+        return updated
+      } finally { clashSweeping.current = false }
+    }
+    return runClashTestFor(test, collectionA, collectionB, options)
   }
 
   const handleSelectClashPair = async (
@@ -3310,8 +3369,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     elementB: { source_kind: 'ifc' | 'mesh'; ref: string },
   ) => {
     const refs = [
-      { source_kind: elementA.source_kind, element_ref: elementA.ref },
-      { source_kind: elementB.source_kind, element_ref: elementB.ref },
+      { source_kind: elementA.source_kind, element_ref: decodeClashRef(elementA.ref).ref },
+      { source_kind: elementB.source_kind, element_ref: decodeClashRef(elementB.ref).ref },
     ]
     const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
     if (objectIds.size === 0 && expressIds.size === 0) return
@@ -3333,7 +3392,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const refs = new Map<string, 'ifc' | 'mesh'>()
     for (const test of clashTests) {
       for (const r of test.results) {
-        if (r.status === 'approved') continue
+        if (r.status === 'approved' || r.status === 'resolved') continue
         refs.set(r.element_a_ref, r.element_a_source_kind)
         refs.set(r.element_b_ref, r.element_b_source_kind)
       }
@@ -3351,7 +3410,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           if (sceneObject) next[ref] = sceneObject.id
         } else if (ifcModel) {
           for (const handle of ifcHandles) {
-            const expressId = ifcModel.getExpressIdFromGuid(handle, ref)
+            const modelName = decodeClashRef(ref).model
+            if (modelName && sceneObjects.find(o => o.object === handle.object)?.name !== modelName) continue
+            const expressId = ifcModel.getExpressIdFromGuid(handle, decodeClashRef(ref).ref)
             if (expressId !== undefined) { next[ref] = `ifc-${handle.modelID}::${expressId}`; break }
           }
         }
@@ -3366,7 +3427,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const map = new Map<string, boolean>()
     for (const test of clashTests) {
       for (const r of test.results) {
-        if (r.status === 'approved') continue
+        if (r.status === 'approved' || r.status === 'resolved') continue
         const keyA = clashRefKeys[r.element_a_ref]
         const keyB = clashRefKeys[r.element_b_ref]
         if (keyA) map.set(keyA, true)
@@ -7216,6 +7277,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           clashTests={clashTests}
           error={clashError}
           runProgress={clashRunProgress}
+          onChanged={updated => setClashTests(prev => prev.map(t => t.id === updated.id ? updated : t))}
+          onCancelRun={() => { clashSweepCancelled.current = true; if (!clashCommitting.current) clashAbort.current?.abort() }}
           onCreate={handleCreateClashTest}
           onDelete={handleDeleteClashTest}
           onRun={handleRunClashTest}

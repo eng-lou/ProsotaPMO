@@ -6739,3 +6739,77 @@ clearing, cross-project rejection and baseline protection. A temporary browser
 harness using synthetic data passed five interaction checks for range selection,
 bulk profiles, assignment counts and unlink actions. No production data was
 changed. These changes have not been committed or deployed in this session.
+
+
+## 2026-10-06 — Resource figures, aligned printouts and row dragging
+
+The resource display work is pushed to `main` through `6771597`. The detailed
+current behaviour and limits are recorded in
+[Resource display and printing](RESOURCE_DISPLAY_AND_PRINT.md).
+
+**Resource figures need both selection and a shared calculation.** Tracking now
+shows any combination of Budgeted, Actuals and Earned Value; Profile has its own
+independent selection. Both remember preferences and carry them into print.
+Tracking uses the same AC/EV phasing as Profile. Missing figures are blank, with
+B/A/EV labels retained when multiple series are shown. Actual recorded zeros
+remain visible. Actuals and earned values are read-only; budget-only mode retains
+manual levelling.
+
+**Cumulative totals are not period transactions.** Earlier work had shown AC/EV
+only in the data-date month despite completed activities carrying older totals.
+Opening cumulative values are now estimated over elapsed work dates, while later
+recorded changes stay at their reporting dates. Hours/days remain cost-derived
+equivalents, and an activity's totals are counted once on its first tracked
+assignment. This is not a resource-by-resource actuals ledger. Keep that caveat
+visible rather than presenting estimated history as recorded timesheets.
+
+**Consistency includes geometry.** Expanding Tracking to fit B/A/EV made it wider
+than Profile. A shared period-width calculation now aligns them at every zoom,
+including weeks, on screen and in print. The profile scrollbar also needed its
+flex containers constrained with `min-w-0`; otherwise the chart could grow beyond
+the viewport instead of scrolling. The two widgets retain independent scrolling.
+
+**Print height is a separate choice from time scale.** Maro explicitly chose to
+keep the full timeline across one page's width instead of splitting it into date
+sections. Printed rows and the chart now grow vertically relative to timeline
+width, with Compact/Comfortable/Spacious/Extra spacious controls in Page Setup.
+The calculation compensates for shrink-to-fit; it does not know the actual paper
+area and does not guarantee a single vertical page on every printer setting.
+
+**Overallocation is optional presentation.** Each widget has its own saved Show
+overallocation toggle, mirrored in print. With it enabled, only demand above the
+capacity line is red in Profile; Tracking highlights the overallocated budget
+rollup. With it disabled, values remain and red disappears. Actuals/EV are not
+coloured red simply because the budget exceeds capacity.
+
+**Drag handles belong beside selection controls.** Direct sibling reordering
+worked, but putting the grip before the activity-name block added a separate
+line and looked poor. It now sits left of the checkbox. Summary children follow
+their parent; dates and hierarchy are preserved. Print dependency connectors
+were also moved from a table-wide overlay to row-local pieces, allowing browser
+pagination to carry line segments with their bars.
+
+**Validation:** frontend builds passed; 9 backend move tests and 10 resource
+phasing/reconciliation tests passed. Maro confirmed dragging and timeline
+alignment work. The latest vertical-spacing and overallocation print appearance
+still needs visual verification across paper sizes. A successful push is not
+confirmation of a successful production deployment.
+
+**Commit trail (all pushed):**
+
+- `f8ff576`: resource table theme and cumulative AC/EV phasing.
+- `6ebd76e`: row dragging, excess-only red, profile scrollbar layout.
+- `4a69bb2`: drag handle beside checkbox and row-local print connectors.
+- `2d59a2e`: Budgeted/Actuals/EV selectors and tracking reconciliation.
+- `8afeef6`: blank unavailable resource figures.
+- `73337fe`: common Tracking/Profile period widths.
+- `6771597`: optional overallocation and taller resource print layout.
+
+
+## 2026-10-09 — Clash review and scoped external reports
+
+Replaced the clash engine's eager Cartesian pair allocation with a spatial candidate sweep in a cancellable worker. Added closed-solid containment, exact clearance threshold checks, same-element exclusion, model-qualified IFC references and frozen geometry snapshots. Existing ambiguous/missing collection geometry now fails explicitly, preserving prior results.
+
+Added verified run history, resolved/reopened lifecycle, review audit notes, filtered/bulk triage, grouping, focused A/B inspection with saved camera positions, issue creation and sampled timeline dates. Preserved legacy approvals when model qualification is unambiguous. Partial/visible runs cannot resolve unchecked pairs.
+
+Added external reports with selected-only validated geometry, immutable snapshots, random hashed bearer tokens, expiry, revocation and optional comments. Public routes are separate from authenticated project APIs. Email uses configured STARTTLS SMTP; copy-link/email-draft alternatives remain available without service configuration. See `CLASH_REVIEW_AND_SHARING.md` for deployment requirements and explicit geometry limits.

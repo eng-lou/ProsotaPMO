@@ -7,7 +7,19 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ElementMetadata(BaseModel):
+    model: str = Field(default="", max_length=300)
+    type: str = Field(default="", max_length=100)
+    level: str = Field(default="", max_length=300)
+
+
+class PairMetadata(BaseModel):
+    a: ElementMetadata | None = None
+    b: ElementMetadata | None = None
+
+
 class ClashResultPair(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     """One clashing pair as computed client-side, submitted in bulk to
     PUT /api/v1/clash-tests/{id}/results — see ClashResult's own docstring
     on why this is a replace, not a plain create."""
@@ -18,7 +30,9 @@ class ClashResultPair(BaseModel):
     element_b_source_kind: Literal["ifc", "mesh"]
     element_b_ref: str = Field(min_length=1, max_length=300)
     element_b_label: str = Field(min_length=1, max_length=300)
-    distance_mm: float | None = None
+    element_metadata: PairMetadata = Field(default_factory=PairMetadata)
+    clash_point: tuple[float, float, float] | None = None
+    distance_mm: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class ClashResultResponse(BaseModel):
@@ -32,16 +46,20 @@ class ClashResultResponse(BaseModel):
     element_b_source_kind: Literal["ifc", "mesh"]
     element_b_ref: str
     element_b_label: str
+    element_metadata: PairMetadata = Field(default_factory=PairMetadata)
+    clash_point: tuple[float, float, float] | None = None
     distance_mm: float | None
-    status: Literal["new", "reviewed", "approved"]
+    status: Literal["new", "active", "reviewed", "approved", "resolved", "reopened"]
     comment: str | None
+    issue_id: uuid.UUID | None = None
+    review_history: list[dict] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
 
 class ClashResultUpdate(BaseModel):
-    status: Literal["new", "reviewed", "approved"] | None = None
-    comment: str | None = None
+    status: Literal["new", "active", "reviewed", "approved", "resolved", "reopened"] | None = None
+    comment: str | None = Field(default=None, max_length=4000)
 
 
 class ClashTestBase(BaseModel):
@@ -49,7 +67,7 @@ class ClashTestBase(BaseModel):
     group_a_collection_id: uuid.UUID
     group_b_collection_id: uuid.UUID
     test_type: Literal["hard", "clearance"] = "hard"
-    tolerance_mm: float = 0.0
+    tolerance_mm: float = Field(default=0, ge=0, le=1000000, allow_inf_nan=False)
 
 
 class ClashTestCreate(ClashTestBase):
@@ -61,7 +79,7 @@ class ClashTestUpdate(BaseModel):
     group_a_collection_id: uuid.UUID | None = None
     group_b_collection_id: uuid.UUID | None = None
     test_type: Literal["hard", "clearance"] | None = None
-    tolerance_mm: float | None = None
+    tolerance_mm: float | None = Field(default=None, ge=0, le=1000000, allow_inf_nan=False)
 
 
 class ClashTestResponse(ClashTestBase):

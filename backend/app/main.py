@@ -195,3 +195,7 @@ app.include_router(feedback_tickets_router, prefix="/api/v1", dependencies=_auth
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+from app.api.clash_review import router as clash_review_router, public_router as public_clash_router
+app.include_router(clash_review_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(public_clash_router, prefix="/api/v1")
