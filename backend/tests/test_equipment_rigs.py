@@ -89,3 +89,18 @@ async def test_equipment_migration(db):
         assert sync.execute(text("SELECT to_regclass('equipment_rigs')")).scalar() is None
     await connection.run_sync(run)
     await db.rollback()
+
+
+async def test_moving_group_members_roundtrip_and_validation(client, project):
+    d = definition()
+    d['joints'][0]['members'] = ['/1:ArmRight', '/2:Crossbar']
+    response = await create(client, project, d)
+    assert response.status_code == 201, response.text
+    rig = response.json()
+    assert rig['definition']['joints'][0]['members'] == d['joints'][0]['members']
+    for members in [['/0:Boom'], ['/0:Boom/0:Bolt'], ['']]:
+        invalid = deepcopy(d)
+        invalid['joints'][0]['members'] = members
+        result = await client.put(f"/api/v1/equipment-rigs/{rig['id']}", json={
+            'version': rig['version'], 'name': rig['name'], 'definition': invalid})
+        assert result.status_code == 422, result.text

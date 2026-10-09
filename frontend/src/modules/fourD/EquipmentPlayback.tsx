@@ -1,9 +1,11 @@
+import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import type * as THREE from 'three'
 import { bindEquipment, equipmentNodes, type EquipmentRig } from './equipmentRig'
 
-export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError }: {
+export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, visual }: {
+  visual?: EquipmentVisualState | null
   rigs: EquipmentRig[]; objects: { name: string; kind: string; object: THREE.Object3D }[]
   dateRef: React.MutableRefObject<Date | null>
   preview: { model: string; values: Record<string, number>; time: number | null } | null
@@ -11,6 +13,7 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError }: 
 }) {
   const bindings = useRef<{ rig: EquipmentRig; runtime: ReturnType<typeof bindEquipment> }[]>([])
   const last = useRef<{ time: number | null; preview: typeof preview } | null>(null)
+  const lastVisual = useRef<typeof visual>(undefined)
   const { invalidate } = useThree()
   useEffect(() => {
     const next: typeof bindings.current = []
@@ -26,12 +29,16 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError }: 
     bindings.current = next; last.current = null; onError(errors.join('; ') || null); invalidate()
     return () => { next.forEach(b => b.runtime.restore()); bindings.current = [] }
   }, [rigs, objects, onError, invalidate])
-  useEffect(() => { invalidate() }, [preview, invalidate])
+  useEffect(() => { invalidate() }, [preview, visual, invalidate])
   useFrame(() => {
     const time = dateRef.current?.getTime() ?? null
-    if (last.current?.time === time && last.current.preview === preview) return
+    if (last.current?.time === time && last.current.preview === preview && lastVisual.current === visual) return
+    lastVisual.current = visual
     last.current = { time, preview }
-    for (const { rig, runtime } of bindings.current) runtime.evaluate(time, preview?.model === rig.model_ref && preview.time === time ? preview.values : {})
+    for (const { rig, runtime } of bindings.current) {
+      if (visual?.model === rig.model_ref) runtime.evaluate(null, Object.fromEntries(rig.definition.controls.map(c=>[c.id,c.rest])), visual.joint && visual.mode==='pose' ? {[visual.joint]:visual.amount} : {})
+      else runtime.evaluate(time, preview?.model === rig.model_ref && preview.time === time ? preview.values : {})
+    }
   })
   return null
 }

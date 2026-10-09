@@ -1,3 +1,5 @@
+import { EquipmentSetup } from './EquipmentSetup'
+import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useMemo, useState } from 'react'
 import type * as THREE from 'three'
 import { controlValue, emptyEquipment, equipmentNodes, validateEquipment, type EquipmentDefinition, type EquipmentRig, type Vec3 } from './equipmentRig'
@@ -10,7 +12,8 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble }: {
+export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual }: {
+  onVisual?: (state: EquipmentVisualState | null) => void
   onAssemble?: (names: string[], name: string) => Promise<string>
   projectId: string; objects: { name: string; kind: string; object: THREE.Object3D }[]; rigs: EquipmentRig[]
   busy: boolean; error: string | null; runtimeError: string | null; dateRef: React.MutableRefObject<Date | null>
@@ -20,6 +23,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   onPreview: (p: { model: string; values: Record<string, number>; time: number | null } | null) => void
   onSeek: (d: Date) => void
 }) {
+  const [tab, setTab] = useState<'setup' | 'animate'>('setup')
   const [assemblyParts, setAssemblyParts] = useState<string[]>([])
   const [assemblyName, setAssemblyName] = useState('Equipment')
   const [assembling, setAssembling] = useState(false)
@@ -31,6 +35,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   const [preview, setPreview] = useState<Record<string, number>>({})
   const [jointIndex, setJointIndex] = useState(0)
   const [followerIndex, setFollowerIndex] = useState(0)
+  useEffect(() => () => onVisual?.(null), [onVisual])
   const object = objects.find(o => o.name === model && o.kind === 'mesh')
   const nodes = useMemo(() => object ? equipmentNodes(object.object) : new Map<string, THREE.Object3D>(), [object?.object])
   const saved = rigs.find(r => r.model_ref === model)
@@ -102,10 +107,14 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
         {saved && <button className={button} disabled={busy || dirty} onClick={() => { if (window.confirm('Remove this equipment rig and its control keyframes? Imported geometry will remain.')) void onRemove(saved) }}>Remove rig</button>}
       </div>
       {dirty && <p>Unsaved changes — save before closing this panel.</p>}
+      <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>setTab('setup')}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>
+      {tab==='setup' && onVisual && <EquipmentSetup disabled={busy || assembling} key={model} rig={draft} object={object?.object} onChange={change} onState={onVisual} />}
+      {tab==='animate' && <>
       <label className="block">Playhead (local time)<input aria-label="Equipment playhead" className={input} type="datetime-local" step="0.001" value={localTime(new Date(time))} onInput={e => { const d = new Date(e.currentTarget.value); if (Number.isFinite(d.getTime())) { dateRef.current = d; setTime(d.getTime()); onSeek(d) } }} /></label>
       {draft.definition.controls.map(c => {
         const value = preview[c.id] ?? controlValue(c, time)
         return <div key={c.id} className="border rounded border-gray-200 dark:border-prosota-line p-2 space-y-1">
+          {!draft.definition.joints.some(j=>j.control===c.id) && <p className="text-amber-700 dark:text-amber-300">Unconfigured — assign a group in Setup.</p>}
           <input aria-label="Control name" className={input} value={c.name} onChange={e => edit(d => { d.controls.find(x => x.id === c.id)!.name = e.target.value })} />
           <div className="flex items-center gap-1"><input aria-label={c.name} className="min-w-0 flex-1" type="range" min="0" max="1" step="0.001" value={value} onChange={e => { const v = Number(e.target.value); const values = { ...preview, [c.id]: v }; setPreview(values); onPreview({ model, values, time }); edit(d => { d.controls.find(x => x.id === c.id)!.value = values[c.id] }) }} />
             <input aria-label={`${c.name} value`} className={`${input} !w-16`} type="number" min="0" max="1" step="0.001" value={Number(value.toFixed(3))} onChange={e => { const v = Math.max(0, Math.min(1, Number(e.target.value))); const values = { ...preview, [c.id]: v }; setPreview(values); onPreview({ model, values, time }); edit(d => { d.controls.find(x => x.id === c.id)!.value = values[c.id] }) }} />
@@ -129,6 +138,8 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
           </details>
         </div>
       })}
+      </>}
+      {tab==='setup' && <details><summary className="font-semibold">Advanced joints, controls & cylinders</summary>
       <div className="flex flex-wrap gap-1"><button className={button} onClick={() => edit(d => { d.controls.push({ id: uid(), name: 'New control', value: 0, rest: 0, keys: [] }) })}>+ Control</button>
         <button className={button} onClick={() => edit(d => { for (const name of ['Left stabiliser', 'Right stabiliser', 'Boom lift', 'Dipper extension', 'Bucket curl', 'Rear swing', 'Loader lift', 'Front bucket tilt']) if (!d.controls.some(c => c.name === name)) d.controls.push({ id: uid(), name, value: name === 'Rear swing' ? .5 : 0, rest: name === 'Rear swing' ? .5 : 0, keys: [] }) })}>Backhoe control names</button></div>
       <details className="space-y-2"><summary className="font-semibold">Joint setup ({draft.definition.joints.length})</summary>
@@ -163,6 +174,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
         </div>}
         <button className={button} onClick={() => { setFollowerIndex(draft.definition.followers.length); edit(d => { d.followers.push({ id: uid(), name: 'Cylinder', barrel: '', piston: '', base_node: '', tip_node: '', base_point: [0, 0, 0], tip_point: [0, 0, 1] }) }) }}>+ Cylinder</button>
       </details>
+      </details>}
       <div className="space-y-1"><button className={button} onClick={() => {
         try {
           validate(); const def = structuredClone(draft.definition); def.controls.forEach(c => { c.keys = []; c.value = c.rest })

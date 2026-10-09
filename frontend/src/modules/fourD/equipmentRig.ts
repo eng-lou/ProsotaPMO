@@ -4,7 +4,7 @@ export type Vec3 = [number, number, number]
 export interface EquipmentKey { date: string; value: number; interpolation: 'linear' | 'smooth' | 'hold' }
 export interface EquipmentControl { id: string; name: string; value: number; rest: number; keys: EquipmentKey[] }
 export interface EquipmentJoint {
-  id: string; name: string; node: string; parent: string | null; control: string
+  id: string; name: string; node: string; members?: string[]; parent: string | null; control: string
   kind: 'hinge' | 'slide'; pivot: Vec3; axis: Vec3; minimum: number; maximum: number; response: [number, number][]
 }
 export interface EquipmentFollower { id: string; name: string; barrel: string; piston: string; base_node: string; tip_node: string; base_point: Vec3; tip_point: Vec3 }
@@ -50,6 +50,8 @@ function responseAt(points: [number, number][], value: number) {
   return points[points.length - 1][1]
 }
 
+export const jointNodes = (j: EquipmentJoint) => [j.node, ...(j.members ?? [])]
+
 export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, THREE.Object3D>) {
   if (def.schema_version !== 1 || !Array.isArray(def.controls) || !Array.isArray(def.joints) || !Array.isArray(def.followers)) throw new Error('Unsupported equipment preset')
   if (def.controls.length > 100 || def.joints.length > 200 || def.followers.length > 100) throw new Error('Equipment definition is too large')
@@ -66,12 +68,14 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     if (new Set(c.keys.map(k => Date.parse(k.date))).size !== c.keys.length) throw new Error('Duplicate keyframe time')
     if (c.keys.some(k => !Number.isFinite(Date.parse(k.date)) || !unit(k.value) || !['linear', 'smooth', 'hold'].includes(k.interpolation))) throw new Error('Invalid control keyframe')
   }
-  const drivers = [...def.joints.map(j => j.node), ...def.followers.flatMap(f => [f.barrel, f.piston])]
+  const drivers = [...def.joints.flatMap(jointNodes), ...def.followers.flatMap(f => [f.barrel, f.piston])]
   if (new Set(drivers).size !== drivers.length || drivers.some(n => !n)) throw new Error('Each part needs one driver; leave the equipment root for paths/transforms')
   const requireNode = (node: string) => { if (nodes && !nodes.has(node)) throw new Error(`Part missing from model: ${node}`) }
   drivers.forEach(requireNode)
   const jointMap = new Map(def.joints.map(j => [j.id, j]))
   for (const j of def.joints) {
+    if (j.members && (!Array.isArray(j.members) || j.members.length > 500 || j.members.some(n => typeof n !== 'string' || !n || n.length > 2000))) throw new Error('Invalid group parts')
+    if (jointNodes(j).some(n => jointNodes(j).some(a => n !== a && n.startsWith(a + '/')))) throw new Error('Select a part or its children, not both')
     if (!def.controls.some(c => c.id === j.control)) throw new Error(`Choose a control for ${j.name}`)
     if (!vector(j.axis) || Math.hypot(...j.axis) < 1e-6 || !vector(j.pivot) || !finite(j.minimum) || !finite(j.maximum) || !['hinge', 'slide'].includes(j.kind)) throw new Error(`Invalid joint settings: ${j.name}`)
     if (!Array.isArray(j.response) || j.response.length < 2 || j.response[0][0] !== 0 || j.response[j.response.length - 1][0] !== 1 || j.response.some((p, i) => !unit(p[0]) || !unit(p[1]) || (i > 0 && p[0] <= j.response[i - 1][0]))) throw new Error(`Invalid response curve: ${j.name}`)
@@ -84,7 +88,7 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     }
     // A driven ancestor must be in the mechanical chain, otherwise it would have
     // ambiguous ownership of the child's transform. Sibling meshes are supported.
-    for (const a of def.joints) if (j.node.startsWith(a.node + '/') && !seen.has(a.id)) throw new Error(`${j.name} must inherit from its driven ancestor ${a.name}`)
+    for (const a of def.joints) if (jointNodes(j).some(n => jointNodes(a).some(p => n.startsWith(p + '/'))) && !seen.has(a.id)) throw new Error(`${j.name} must inherit from its driven ancestor ${a.name}`)
   }
   const followerNodes = def.followers.flatMap(f => [f.barrel, f.piston])
   for (const f of def.followers) {
@@ -110,7 +114,7 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
   const applyMatrix = (node: THREE.Object3D, matrix: THREE.Matrix4) => {
     matrix.decompose(node.position, node.quaternion, node.scale); node.updateMatrix()
   }
-  const driven = new Set([...definition.joints.map(j => j.node), ...definition.followers.flatMap(f => [f.barrel, f.piston])])
+  const driven = new Set([...definition.joints.flatMap(jointNodes), ...definition.followers.flatMap(f => [f.barrel, f.piston])])
   const controls = new Map(definition.controls.map(c => [c.id, c]))
   const byId = new Map(definition.joints.map(j => [j.id, j]))
   const restore = () => { for (const key of driven) applyMatrix(nodes.get(key)!, locals.get(key)!) }
@@ -118,7 +122,7 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
   for (const f of definition.followers) if (worldPoint(f.base_node, f.base_point, rest).distanceTo(worldPoint(f.tip_node, f.tip_point, rest)) < 1e-8) throw new Error(`Cylinder ${f.name} needs two distinct attachment points`)
   return {
     restore,
-    evaluate(time: number | null, overrides: Record<string, number> = {}) {
+    evaluate(time: number | null, overrides: Record<string, number> = {}, poses: Record<string, number> = {}) {
       restore()
       const deltas = new Map<string, THREE.Matrix4>()
       const values = new Map(definition.controls.map(c => [c.id, overrides[c.id] ?? controlValue(c, time)]))
@@ -126,7 +130,7 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
         if (deltas.has(j.id)) return deltas.get(j.id)!
         const c = controls.get(j.control)!
         const value = values.get(c.id)!
-        const amount = (j.maximum - j.minimum) * (responseAt(j.response, value) - responseAt(j.response, c.rest))
+        const amount = poses[j.id] ?? (j.maximum - j.minimum) * (responseAt(j.response, value) - responseAt(j.response, c.rest))
         const axis = new THREE.Vector3(...j.axis).normalize()
         const own = j.kind === 'slide'
           ? new THREE.Matrix4().makeTranslation(...axis.multiplyScalar(amount).toArray() as Vec3)
@@ -135,7 +139,7 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
         deltas.set(j.id, result); return result
       }
       const desired = new Map<string, THREE.Matrix4>()
-      for (const j of definition.joints) desired.set(j.node, delta(j).clone().multiply(rest.get(j.node)!))
+      for (const j of definition.joints) for (const node of jointNodes(j)) desired.set(node, delta(j).clone().multiply(rest.get(node)!))
       // Node paths are parent-first. Propagate inherited transforms for un-driven nodes.
       const matrices = new Map<string, THREE.Matrix4>([['', new THREE.Matrix4()]])
       for (const [key] of nodes) {

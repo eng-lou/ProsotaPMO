@@ -109,3 +109,35 @@ reveal these backups. The new copy does not inherit schedule links, paths or
 keyframes from the source files. Configure those on the assembled equipment.
 Assembly requires saved imports with unique filenames and rigid, non-animated
 geometry. Zero-scale or sheared root transforms are rejected with a message.
+
+
+## Visual setup (2026-10-10)
+Equipment Controls now separates **Setup** from **Animate**. Existing rigs remain
+compatible; each joint can also hold multiple member parts in its JSON definition.
+No database migration is needed for this optional field.
+
+1. Select an equipment model and create a rig if needed. In Setup, click a visible
+   part in the viewport. Ctrl/Cmd-click adds/removes parts. Selected parts have
+   amber outlines; use Isolate selection, Hide selection and Show all parts to
+   reach internal components. These visibility changes are temporary to Setup.
+2. Enter a meaningful name and Create moving group. The selected parts share one
+   joint and a new control; they are not merged or reparented. Parts cannot belong
+   to competing joints. Existing groups appear in the equipment hierarchy.
+3. Place pivot in viewport: click a hinge surface or drag the translation arrows.
+   Choose X/Y/Z for the rotation or slide axis; arbitrary axes and precise values
+   remain under Advanced joints, controls & cylinders.
+4. Pose with gizmo or use the offset slider. Set 0 position and Set 1 position,
+   then Apply travel limits. The imported pose (offset zero) must lie within the
+   two distinct endpoints. The control's rest value is calculated automatically.
+   Recalibrating shared or keyed controls requires the advanced setup instead.
+5. Set Parent group, or Pick parent in viewport. A child inherits the parent
+   group's motion. Highlight group and children shows the affected assemblies.
+6. Save rig & keys. Switch to Animate for the 0–1 sliders and keyframes.
+   Unassigned controls are explicitly marked Unconfigured. Setup always evaluates
+   other groups at rest; temporary poses do not write animation keyframes.
+
+Cylinder followers still use the advanced attachment fields. The visual tools
+assist manual calibration; they do not infer a machine's mechanical hinges.
+Browser verification used a synthetic two-part model: multi-selection, group
+creation, surface pivot placement, rotation gizmo drag, light/dark appearance,
+travel limits, save and switch to Animate. The user's loader was not calibrated.

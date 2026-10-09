@@ -205,3 +205,11 @@ In **Rigging**, Equipment Controls binds named 0–1 sliders to internal rigid p
 reusable preset** and **Import preset** cover authoring and animation. The Timeline's
 Equipment control tracks support seek, drag-to-retime and selected-key deletion.
 See [Equipment Controls](EQUIPMENT_CONTROLS.md) for calibration and model requirements.
+
+
+### Visual equipment setup (2026-10-10)
+**Setup**: click/Ctrl-click parts, **Create moving group**, **Place pivot in
+viewport**, choose an axis, **Pose with gizmo**, **Set 0 position**, **Set 1 position**,
+then **Apply travel limits**. **Parent group** / **Pick parent in viewport** builds
+the hierarchy. **Animate** contains the completed control sliders and keys.
+**Advanced joints, controls & cylinders** retains precise numeric configuration.

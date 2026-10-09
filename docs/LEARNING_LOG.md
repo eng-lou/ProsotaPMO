@@ -6881,3 +6881,14 @@ coordinate conventions, reuse and the distinction from Unreal physics simulation
   to hide backups after reload. Save errors propagate to the panel.
 - Verified rigid pose preservation, controls on assembled parts, invalid transform
   rejection and GLB export/reload metadata; production build passed.
+
+
+### 2026-10-10 — Visual equipment rigging
+- Replaced filename-first setup with viewport part selection, temporary isolate/
+  hide, named multi-part moving groups, hierarchy highlighting and parent picking.
+- Added pivot translation and axis-aligned pose gizmos; travel endpoints calibrate
+  normalized controls. Setup holds other groups at rest and is separate from Animate.
+- Joint member lists are validated on client/server and use the same rigid delta;
+  duplicate ownership, hierarchy cycles and overlapping nested members are rejected.
+- Verified 13 frontend tests, 5 equipment API tests, browser interactions on a
+  synthetic model and the production build. Existing rigs remain compatible.

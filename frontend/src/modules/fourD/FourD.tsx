@@ -1,3 +1,4 @@
+import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { assembleEquipment } from './equipmentAssembly'
 import { useEquipmentRigs } from './useEquipmentRigs'
 import { EquipmentPanel } from './EquipmentPanel'
@@ -1829,6 +1830,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // resolve every keyframed object each frame regardless of selection).
   const elementKeyframes = useElementKeyframes(selectedProject?.id)
   const equipment = useEquipmentRigs(selectedProject?.id)
+  const [equipmentVisual, setEquipmentVisual] = useState<EquipmentVisualState | null>(null)
+  useEffect(() => {
+    if (equipmentVisual) { setSelectedObjectIds(new Set()); setActiveObjectId(null) }
+  }, [equipmentVisual?.model])
   const [equipmentEditing, setEquipmentEditing] = useState(false)
   const [equipmentDraft, setEquipmentDraft] = useState<EquipmentRig | null>(null)
   const [equipmentPreview, setEquipmentPreview] = useState<{ model: string; values: Record<string, number>; time: number | null } | null>(null)
@@ -7399,7 +7404,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <div className="flex-1 overflow-y-auto">
         <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={sceneObjects} rigs={equipment.rigs}
           busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
-          onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
+          onVisual={setEquipmentVisual} onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
         <ElementRigPanel
           elementParents={elementParents}
           error={elementParentError}
@@ -7447,7 +7452,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // duplicating the entire prop list.
   const viewport3DElement = (
     <Viewport3D
-      equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
+      equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
       importedObjects={viewportObjects}

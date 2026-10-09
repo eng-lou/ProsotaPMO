@@ -97,3 +97,19 @@ test('assembled GLB reload preserves backup references and riggable part transfo
  assert.ok([...equipmentNodes(loaded).keys()].some(k=>k.includes('Bucketglb')))
 })
 
+test('multi-part group shares a rigid delta and carries child joints once',()=>{
+ const {root,def,keys}=setup();def.joints=def.joints.slice(0,2)
+ def.joints[0].members=[keys[2]]
+ const rt=bindEquipment(root,def);rt.evaluate(null,{lift:1,curl:0})
+ near(root.children[2].position.x,0);near(root.children[2].position.y,3)
+ near(root.children[1].position.x,0);near(root.children[1].position.y,2)
+ rt.evaluate(null,{lift:0,curl:0},{boom:45})
+ near(root.children[2].position.x,3/Math.sqrt(2));near(root.children[2].position.y,3/Math.sqrt(2))
+ rt.restore();near(root.children[2].position.x,3);near(root.children[2].position.y,0)
+})
+test('group members reject duplicate ownership and ancestor overlap',()=>{
+ const {root,def,keys}=setup();def.joints[0].members=[keys[1]]
+ assert.throws(()=>bindEquipment(root,def),/one driver/)
+ def.joints[0].members=[keys[0]+'/0:Child']
+ assert.throws(()=>validateEquipment(def),/children/)
+})

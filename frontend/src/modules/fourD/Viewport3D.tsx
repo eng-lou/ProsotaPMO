@@ -1,3 +1,4 @@
+import { EquipmentVisualEditor, type EquipmentVisualState } from './EquipmentVisualEditor'
 import { EquipmentPlayback } from './EquipmentPlayback'
 import type { EquipmentRig } from './equipmentRig'
 import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
@@ -574,6 +575,7 @@ export function computeSunPosition(sunAzimuth: number, sunElevation: number, mod
 }
 
 interface Props {
+  equipmentVisual?: EquipmentVisualState | null
   equipmentRigs: EquipmentRig[]
   equipmentPreview: { model: string; values: Record<string, number>; time: number | null } | null
   onEquipmentError: (error: string | null) => void
@@ -5218,7 +5220,7 @@ function ClippingSetup() {
 // re-renders both.
 
 export function Viewport3D({
-  equipmentRigs, equipmentPreview, onEquipmentError,
+  equipmentRigs, equipmentPreview, onEquipmentError, equipmentVisual,
   settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
@@ -7316,7 +7318,8 @@ export function Viewport3D({
             showClashColors={settings.showClashColors}
             renderMode={settings.renderMode}
           />
-          <EquipmentPlayback rigs={equipmentRigs} objects={timelineSceneObjects} dateRef={timelineDateRef} preview={equipmentPreview} onError={onEquipmentError} />
+          <EquipmentVisualEditor state={equipmentVisual ?? null} objects={timelineSceneObjects} />
+          <EquipmentPlayback visual={equipmentVisual} rigs={equipmentRigs} objects={timelineSceneObjects} dateRef={timelineDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
           <PathGizmos
             paths={paths}
@@ -7461,7 +7464,7 @@ export function Viewport3D({
             one of the box's own per-face cone handles could land on this
             gizmo's own arm instead, especially in Scale mode, matching
             the reported "scales the whole thing" symptom exactly. */}
-        {activeObject && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
+        {activeObject && !equipmentVisual && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
           <TransformControls
             object={activeObject.object}
             mode={gizmoMode}
