@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/clashGeometry'; export * from './src/modules/fourD/clashMeshCapture'; export * as THREE from 'three'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const { computeClashes, captureMeshTriangles, readIfcClashMeshes, THREE } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/clashGeometry'; export * from './src/modules/fourD/clashPrint'; export * from './src/modules/fourD/clashMeshCapture'; export * as THREE from 'three'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
+const { captureClashPrintImage, computeClashes, captureMeshTriangles, readIfcClashMeshes, THREE } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
 function element(key, size, x = 0) {
   const g = new THREE.BoxGeometry(size, size, size); g.translate(x, 0, 0)
   return { key, meshes: [{ positions: Array.from(g.attributes.position.array), indices: Array.from(g.index.array) }] }
@@ -83,4 +83,14 @@ test('capture rejects out-of-range indices rather than reporting incomplete geom
   const geometry = new THREE.BoxGeometry(1, 1, 1)
   geometry.setIndex([0,1,9999])
   assert.throws(() => captureMeshTriangles(new THREE.Mesh(geometry), 'wall'), /Invalid triangle index/)
+})
+
+
+test('print snapshot retains screen aspect ratio and pixels independently of later canvas resizing', () => {
+  const canvas = { width: 1600, height: 900, toDataURL: () => 'data:image/png;base64,screen-frame' }
+  const image = {}
+  captureClashPrintImage(canvas, image)
+  canvas.width = 900; canvas.height = 1100
+  assert.equal(image.width / image.height, 1600 / 900)
+  assert.equal(image.src, 'data:image/png;base64,screen-frame')
 })

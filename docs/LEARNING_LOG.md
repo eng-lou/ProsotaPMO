@@ -6842,3 +6842,10 @@ Added external reports with selected-only validated geometry, immutable snapshot
 - Added a sender-controlled option to include other saved clash elements as context. Selected results and their notes remain scoped; extra geometry is included only when requested in the sharing dialog.
 - Removed the ineffective context checkbox from reports containing only the active pair. The viewer now displays a context element count, frames included context when enabled, and uses clearer ghost shading. Existing report snapshots remain unchanged.
 - Regression tests verify selected-only sharing remains the default and optional context never adds unselected result records.
+
+
+### 2026-10-09 — Clash report print framing
+
+- Print uses a cached image of the latest rendered viewport instead of the live WebGL canvas. Print-layout resizing cannot crop or shift the camera view, and image dimensions preserve its screen aspect ratio with contain scaling.
+- The cache updates after rendered frames and ignores print frames. Interactive controls/help are hidden in print, and the preview is kept together on the page.
+- Production build and 11 geometry/print regression tests passed. Browser verification confirmed a loaded full-size print image (1440 × 432) with no console errors.
