@@ -3302,7 +3302,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           element_b_source_kind: b.sourceKind, element_b_ref: b.ref, element_b_label: b.label, distance_mm: h.distanceMm, clash_point: h.point, element_metadata: { a: a.metadata, b: b.metadata } }
       })
       const keys = new Set(hits.flatMap(h => [h.a, h.b]))
-      const payload = { pairs, scope: options.scope, timeline_date: capturedDate,
+      const payload = { pairs, scope: options.scope, timeline_date: capturedDate, up_axis: settings.upAxis, background_color: settings.backgroundColor,
         member_ids: [...new Set([...membersA, ...membersB].map(m => m.id))], expected, resolved: a.length + b.length, excluded: expected - a.length - b.length, complete: true,
         models: sceneObjects.map(o => o.name), warnings, checked_keys: [...refs.keys()], metres_per_unit: options.metresPerUnit,
         geometry_fingerprint: await geometryFingerprint(geometry), geometry_z: await packGeometry(geometry.filter(g => keys.has(g.key))), test_updated_at: test.updated_at,
@@ -7283,6 +7283,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleClashPanelDock, onClose: toggleClashPanel,
       content: (
         <ClashDetectionPanel
+          upAxis={settings.upAxis}
+          backgroundColor={settings.backgroundColor}
           collections={collections}
           clashTests={clashTests}
           error={clashError}

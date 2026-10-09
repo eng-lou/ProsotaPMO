@@ -106,6 +106,8 @@ export interface ClashRunOptions {
   stepDays?: number
 }
 export interface ClashRunSnapshot {
+  up_axis?: 'y' | 'z'
+  background_color?: string
   id: string
   name: string
   test_type: string

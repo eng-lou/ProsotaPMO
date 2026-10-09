@@ -307,3 +307,20 @@ async def test_large_result_listing_accepts_storage_envelope(client, project, mo
     response = await client.get('/api/v1/clash-tests/', params={'project_id': str(project.id)})
     assert response.status_code == 200
     assert response.json()['snapshot_url'].endswith('results.gz')
+
+
+async def test_preview_settings_survive_run_and_share(client, project):
+    test = await setup(client, project)
+    request = payload(test)
+    request.update(up_axis='z', background_color='#e2e2e2')
+    saved = (await client.post(f"/api/v1/clash-review/{test['id']}/runs", json=request)).json()
+    report = (await client.post(f"/api/v1/clash-review/{test['id']}/reports", json={'run_id': saved['run_id'], 'result_ids': [saved['test']['results'][0]['id']], 'up_axis': 'y', 'background_color': '#000000'})).json()
+    shared = (await client.get('/api/v1/public/clash-reports/' + report['token'])).json()['snapshot']
+    assert shared['up_axis'] == 'z' and shared['background_color'] == '#e2e2e2'
+
+async def test_legacy_run_preview_uses_sharing_settings(client, project):
+    test = await setup(client, project)
+    saved = await run(client, test)
+    report = (await client.post(f"/api/v1/clash-review/{test['id']}/reports", json={'run_id': saved['run_id'], 'result_ids': [saved['test']['results'][0]['id']], 'up_axis': 'z', 'background_color': '#eeeeee'})).json()
+    shared = (await client.get('/api/v1/public/clash-reports/' + report['token'])).json()['snapshot']
+    assert shared['up_axis'] == 'z' and shared['background_color'] == '#eeeeee'

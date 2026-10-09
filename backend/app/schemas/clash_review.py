@@ -28,6 +28,8 @@ class ElementGeometry(BaseModel):
 
 
 class RunRequest(BaseModel):
+    up_axis: Literal["y", "z"] | None = None
+    background_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     pairs: list[ClashResultPair] = Field(max_length=10000)
     scope: Literal["all", "visible"]
     timeline_date: str | None = Field(default=None, max_length=60)
@@ -60,6 +62,8 @@ class Viewpoint(BaseModel):
 
 
 class ReportRequest(BaseModel):
+    up_axis: Literal["y", "z"] | None = None
+    background_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     run_id: uuid.UUID
     result_ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)
     viewpoints: dict[uuid.UUID, Viewpoint] = Field(default_factory=dict, max_length=1000)

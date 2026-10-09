@@ -116,6 +116,7 @@ async def persist_run(test_id, data, db, user):
         raise HTTPException(422, "Geometry must contain exactly the tested clash elements")
     response = await replace_results(db, test_id, data.pairs, commit=False, checked_keys=set(data.checked_keys))
     snapshot = {
+        "up_axis": data.up_axis, "background_color": data.background_color,
         "name": test.name, "test_type": test.test_type, "tolerance_mm": test.tolerance_mm,
         "run_at": test.last_run_at.isoformat(), "scope": data.scope, "timeline_date": data.timeline_date,
         "expected": data.expected, "resolved": data.resolved, "excluded": data.excluded,
@@ -165,6 +166,8 @@ async def share_report(test_id: uuid.UUID, data: ReportRequest, db: AsyncSession
     snapshot.update(results=results, geometry=selected_geometry)
     if {g["key"] for g in snapshot["geometry"]} != keys:
         raise HTTPException(422, "This run has no complete geometry snapshot. Run the test again.")
+    snapshot["up_axis"] = snapshot.get("up_axis") or data.up_axis
+    snapshot["background_color"] = snapshot.get("background_color") or data.background_color
     snapshot["viewpoints"] = {str(k): v.model_dump() for k, v in data.viewpoints.items() if str(k) in ids}
     snapshot.pop("geometry")
     snapshot["geometry_z"] = base64.b64encode(gzip.compress(json.dumps(selected_geometry, separators=(",", ":")).encode())).decode()

@@ -6828,3 +6828,10 @@ Added external reports with selected-only validated geometry, immutable snapshot
 - Removed the requirement to narrow collections when a run exceeds the inline upload budget. Large runs use the existing R2 direct-upload workflow, with user/test-scoped upload keys and server-side validation before saving results.
 - Large run viewports, result lists and external report snapshots also use signed compressed downloads, avoiding the response-size failure after a successful save. External snapshots still include only selected geometry, and download URLs expire after 60 seconds.
 - Added regression coverage for a run exceeding 3 MB, reopened evidence fidelity, oversize rejection and bounded decompression. No schema migration is required.
+
+
+### 2026-10-09 — Visible clash sharing and consistent preview
+
+- Send report now opens a centred dialog rather than expanding below a potentially long result list. Loading, errors, generated links and email controls are visible inside that dialog.
+- Clash previews use the main viewport's up axis and background. Saved runs and reports retain those settings; old runs receive current viewport settings when shared. Frame pair resets to the correct up-axis framing.
+- Browser fixture verified opening the dialog, generating a mock link and rendering the light-background preview without console errors. Backend regressions cover saved settings and legacy-run sharing defaults.
