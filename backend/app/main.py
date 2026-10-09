@@ -199,3 +199,6 @@ async def health() -> dict:
 from app.api.clash_review import router as clash_review_router, public_router as public_clash_router
 app.include_router(clash_review_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(public_clash_router, prefix="/api/v1")
+
+from app.api.equipment_rigs import router as equipment_rigs_router
+app.include_router(equipment_rigs_router, prefix='/api/v1', dependencies=_auth_approved)

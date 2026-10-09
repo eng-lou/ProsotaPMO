@@ -6849,3 +6849,27 @@ Added external reports with selected-only validated geometry, immutable snapshot
 - Print uses a cached image of the latest rendered viewport instead of the live WebGL canvas. Print-layout resizing cannot crop or shift the camera view, and image dimensions preserve its screen aspect ratio with contain scaling.
 - The cache updates after rendered frames and ignores print frames. Interactive controls/help are hidden in print, and the preview is kept together on the page.
 - Production build and 11 geometry/print regression tests passed. Browser verification confirmed a loaded full-size print image (1440 × 432) with no console errors.
+
+
+## 2026-10-09 — Rigid equipment controls
+
+Added Equipment Controls to Rigging: internal model-part bindings, hinge/slide
+joints, normalized named inputs, shared drivers, response curves and hydraulic
+barrel/piston followers. Each control has independent exact-time keys with linear,
+smooth or hold interpolation; the Timeline provides seek/drag/delete tracks.
+Equipment keys extend the timeline range without requiring schedule activities.
+Whole-machine paths/transforms remain independent of internal articulation.
+
+Definitions and keys persist in owner-scoped, optimistic-versioned equipment rigs
+(migration e8c395fd0123). JSON presets carry setup without project animation.
+Validation rejects cycles, missing references, duplicate drivers and follower
+feedback. Rest matrices are reconstructed in model-local space, avoiding corruption
+when a schedule has temporarily scaled the equipment root to zero. Evaluation is
+absolute, supports reverse scrubbing, and restores imported local transforms on
+unbind. Comparison panes mirror internal articulation.
+
+Browser testing caught a datetime-local input commit issue that put a key at the
+previous playhead; immediate input handling plus reading the live date ref fixes
+that. API testing caught a duplicate-create rollback expiring shared session
+objects; insertion now uses a savepoint. See EQUIPMENT_CONTROLS.md for setup,
+coordinate conventions, reuse and the distinction from Unreal physics simulation.

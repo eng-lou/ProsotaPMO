@@ -1,3 +1,5 @@
+import { EquipmentPlayback } from './EquipmentPlayback'
+import type { EquipmentRig } from './equipmentRig'
 import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
@@ -572,6 +574,9 @@ export function computeSunPosition(sunAzimuth: number, sunElevation: number, mod
 }
 
 interface Props {
+  equipmentRigs: EquipmentRig[]
+  equipmentPreview: { model: string; values: Record<string, number>; time: number | null } | null
+  onEquipmentError: (error: string | null) => void
   settings: ViewerSettings
   importedObjects: ImportedObject[]
   // Bumped by FourD.tsx on every committed transform (gizmo drag AND
@@ -5213,6 +5218,7 @@ function ClippingSetup() {
 // re-renders both.
 
 export function Viewport3D({
+  equipmentRigs, equipmentPreview, onEquipmentError,
   settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
@@ -7310,6 +7316,7 @@ export function Viewport3D({
             showClashColors={settings.showClashColors}
             renderMode={settings.renderMode}
           />
+          <EquipmentPlayback rigs={equipmentRigs} objects={timelineSceneObjects} dateRef={timelineDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
           <PathGizmos
             paths={paths}

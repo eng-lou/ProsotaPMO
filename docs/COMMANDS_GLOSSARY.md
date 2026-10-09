@@ -195,3 +195,13 @@ From `backend`, run `.venv/Scripts/python.exe -m pytest tests/test_activities.py
 This exercises direct before/after moves and existing up/down moves, including
 parent validation and preservation of dates and subtrees. Backend test sessions
 must not run concurrently against the shared test database.
+
+
+## Equipment Controls (2026-10-09)
+
+In **Rigging**, Equipment Controls binds named 0–1 sliders to internal rigid parts.
+**Create equipment rig**, **+ Control**, **Backhoe control names**, **Joint setup**,
+**Hydraulic cylinders**, **◆ Key**, **Rest pose**, **Save rig & keys**, **Export
+reusable preset** and **Import preset** cover authoring and animation. The Timeline's
+Equipment control tracks support seek, drag-to-retime and selected-key deletion.
+See [Equipment Controls](EQUIPMENT_CONTROLS.md) for calibration and model requirements.

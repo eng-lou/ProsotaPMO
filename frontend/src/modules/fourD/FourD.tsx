@@ -1,3 +1,7 @@
+import { useEquipmentRigs } from './useEquipmentRigs'
+import { EquipmentPanel } from './EquipmentPanel'
+import { EquipmentTracks } from './EquipmentTracks'
+import type { EquipmentRig } from './equipmentRig'
 import { packGeometry, geometryFingerprint, compressClashUpload, readClashTransfer } from './clashSnapshot'
 import type { ClashRunOptions } from './clashTests'
 import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } from '@/modules/scheduling/resourceSeries'
@@ -1823,6 +1827,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // full set (the former to show which fields are keyed, the latter to
   // resolve every keyframed object each frame regardless of selection).
   const elementKeyframes = useElementKeyframes(selectedProject?.id)
+  const equipment = useEquipmentRigs(selectedProject?.id)
+  const [equipmentEditing, setEquipmentEditing] = useState(false)
+  const [equipmentDraft, setEquipmentDraft] = useState<EquipmentRig | null>(null)
+  const [equipmentPreview, setEquipmentPreview] = useState<{ model: string; values: Record<string, number>; time: number | null } | null>(null)
+  const [equipmentRuntimeError, setEquipmentRuntimeError] = useState<string | null>(null)
+  const playbackEquipment = useMemo(() => equipmentDraft
+    ? [...equipment.rigs.filter(r => r.model_ref !== equipmentDraft.model_ref), equipmentDraft]
+    : equipment.rigs, [equipment.rigs, equipmentDraft])
+  useEffect(() => { setEquipmentDraft(null); setEquipmentPreview(null) }, [selectedProject?.id])
+  const equipmentRange = useMemo(() => {
+    const times = playbackEquipment.flatMap(r => r.definition.controls.flatMap(c => c.keys.map(k => Date.parse(k.date)))).filter(Number.isFinite)
+    return times.length ? { start: new Date(times.reduce((a, b) => Math.min(a, b), Infinity)), end: new Date(times.reduce((a, b) => Math.max(a, b), -Infinity)) } : null
+  }, [playbackEquipment])
+
   const timelineDateRef = useRef<Date | null>(null)
   // Publishes every timelineDateRef change to the Gantt/Activity Table
   // windows (2026-08-29, per Maro: "when the animation plays or gets
@@ -1904,8 +1922,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // scrub (self-contained local state inside TimelineWindow, untouched by
   // this) worked fine.
   const timelineRange = useMemo(
-    () => padDegenerateRange(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes))),
-    [activities, elementKeyframes.keyframes],
+    () => padDegenerateRange(unionRanges(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes)), equipmentRange)),
+    [activities, elementKeyframes.keyframes, equipmentRange],
   )
   // Seeds the shared "current date" the moment there's anything to seed it
   // from — schedule or keyframes — falling back to today if there's neither
@@ -6828,6 +6846,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'timeline':
         return (
           <TimelineWindow
+            equipmentTracks={<EquipmentTracks rigs={equipment.rigs} start={timelineRange?.start ?? null} end={timelineRange?.end ?? null} onSeek={handleSeekTimelineTo} onSave={equipment.save} disabled={equipment.busy || equipmentEditing} />}
             scheduleStart={timelineRange?.start ?? null}
             scheduleEnd={timelineRange?.end ?? null}
             dateRef={timelineDateRef}
@@ -6935,6 +6954,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const config = paneConfigs[index]
     return (
       <ComparisonViewportPane
+        equipmentRigs={playbackEquipment}
         key={index}
         importedObjects={paneObjects}
         transformTick={transformTick}
@@ -7336,6 +7356,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       id: 'rigging', label: 'Rigging', dock: rigPanelDock,
       onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
       content: (
+        <div className="flex-1 overflow-y-auto">
+        <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={sceneObjects} rigs={equipment.rigs}
+          busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
+          onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
         <ElementRigPanel
           elementParents={elementParents}
           error={elementParentError}
@@ -7345,6 +7369,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onSetParent={handleSetElementParent}
           onClearParent={handleClearElementParent}
         />
+        </div>
       ),
     })
   }
@@ -7382,6 +7407,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // duplicating the entire prop list.
   const viewport3DElement = (
     <Viewport3D
+      equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
       importedObjects={viewportObjects}

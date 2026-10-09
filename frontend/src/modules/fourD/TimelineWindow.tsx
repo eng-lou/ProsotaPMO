@@ -12,6 +12,7 @@ import { dateFromTimelineValue, formatTimelineValue, FPS_OPTIONS, type TimeDispl
 import type { Zone } from './zones'
 
 interface Props {
+  equipmentTracks?: React.ReactNode
   scheduleStart: Date | null
   scheduleEnd: Date | null
   // Shared with Viewport3D's TimelinePlayback (2026-07-11) — this component
@@ -128,6 +129,7 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // per real second, continuously advanced via requestAnimationFrame while
 // playing rather than pre-baking discrete keyframes onto each object.
 export function TimelineWindow({
+  equipmentTracks,
   scheduleStart, scheduleEnd, dateRef, onDateChange, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
@@ -589,6 +591,7 @@ export function TimelineWindow({
         <span className="text-xs text-gray-700 dark:text-prosota-muted font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span>{formatTimelineValue(effectiveEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
       </div>
+      {equipmentTracks}
       <AnimationActorsList
         scheduleStart={scheduleStart}
         scheduleEnd={effectiveEnd}

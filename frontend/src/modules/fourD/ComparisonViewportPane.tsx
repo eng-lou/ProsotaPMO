@@ -1,3 +1,5 @@
+import { EquipmentPoseMirror } from './EquipmentPlayback'
+import type { EquipmentRig } from './equipmentRig'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
@@ -35,6 +37,7 @@ import {
 } from './Viewport3D'
 
 interface Props {
+  equipmentRigs: EquipmentRig[]
   importedObjects: ImportedObject[]
   // Same fix as Viewport3D.tsx's own transformTick prop (2026-09-02) — see
   // that file's Props header for the full "why."
@@ -308,7 +311,7 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 // feature this module has beyond the header controls below stays owned by
 // the one real Viewport3D.
 export function ComparisonViewportPane({
-  importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
+  equipmentRigs, importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
   environmentUrl, environmentBackground, whiteBackground, orthographic, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
   renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
@@ -744,6 +747,7 @@ export function ComparisonViewportPane({
               <primitive object={object} visible={visible} />
             </group>
           ))}
+          <EquipmentPoseMirror rigs={equipmentRigs} sources={timelineSceneObjects} targets={clonedSceneObjects} />
           <TimelinePlayback
             dateRef={timelineDateRef}
             sceneObjects={clonedSceneObjects}
