@@ -162,10 +162,11 @@ async def share_report(test_id: uuid.UUID, data: ReportRequest, db: AsyncSession
     # The model inventory is deliberately omitted from external reports.
     snapshot["warnings"] = ["Open/non-manifold surfaces may not support containment detection. See the run geometry limitations."] if snapshot.get("warnings") else []
     run_geometry = json.loads(gzip.decompress(base64.b64decode(run.snapshot["geometry_z"])))
-    selected_geometry = [g for g in run_geometry if g["key"] in keys]
+    selected_geometry = [g for g in run_geometry if data.include_context or g["key"] in keys]
     snapshot.update(results=results, geometry=selected_geometry)
-    if {g["key"] for g in snapshot["geometry"]} != keys:
+    if not keys.issubset({g["key"] for g in snapshot["geometry"]}):
         raise HTTPException(422, "This run has no complete geometry snapshot. Run the test again.")
+    snapshot["context_element_count"] = sum(g["key"] not in keys for g in selected_geometry)
     snapshot["up_axis"] = snapshot.get("up_axis") or data.up_axis
     snapshot["background_color"] = snapshot.get("background_color") or data.background_color
     snapshot["viewpoints"] = {str(k): v.model_dump() for k, v in data.viewpoints.items() if str(k) in ids}

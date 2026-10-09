@@ -62,6 +62,7 @@ class Viewpoint(BaseModel):
 
 
 class ReportRequest(BaseModel):
+    include_context: bool = False
     up_axis: Literal["y", "z"] | None = None
     background_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     run_id: uuid.UUID

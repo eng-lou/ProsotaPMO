@@ -324,3 +324,16 @@ async def test_legacy_run_preview_uses_sharing_settings(client, project):
     report = (await client.post(f"/api/v1/clash-review/{test['id']}/reports", json={'run_id': saved['run_id'], 'result_ids': [saved['test']['results'][0]['id']], 'up_axis': 'z', 'background_color': '#eeeeee'})).json()
     shared = (await client.get('/api/v1/public/clash-reports/' + report['token'])).json()['snapshot']
     assert shared['up_axis'] == 'z' and shared['background_color'] == '#eeeeee'
+
+
+async def test_report_context_is_opt_in_and_never_adds_unselected_results(client, project):
+    test = await setup(client, project)
+    saved = await run(client, test)
+    chosen = saved['test']['results'][0]
+    response = await client.post(f"/api/v1/clash-review/{test['id']}/reports", json={'run_id': saved['run_id'], 'result_ids': [chosen['id']], 'include_context': True})
+    assert response.status_code == 201, response.text
+    snapshot = (await client.get('/api/v1/public/clash-reports/' + response.json()['token'])).json()['snapshot']
+    geometry = json.loads(gzip.decompress(base64.b64decode(snapshot['geometry_z'])))
+    assert {g['key'] for g in geometry} == {'ifc:a', 'ifc:b', 'ifc:c', 'ifc:d'}
+    assert snapshot['context_element_count'] == 2
+    assert [r['id'] for r in snapshot['results']] == [chosen['id']]

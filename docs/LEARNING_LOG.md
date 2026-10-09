@@ -6835,3 +6835,10 @@ Added external reports with selected-only validated geometry, immutable snapshot
 - Send report now opens a centred dialog rather than expanding below a potentially long result list. Loading, errors, generated links and email controls are visible inside that dialog.
 - Clash previews use the main viewport's up axis and background. Saved runs and reports retain those settings; old runs receive current viewport settings when shared. Frame pair resets to the correct up-axis framing.
 - Browser fixture verified opening the dialog, generating a mock link and rendering the light-background preview without console errors. Backend regressions cover saved settings and legacy-run sharing defaults.
+
+
+### 2026-10-09 — Explicit context in shared clash reports
+
+- Added a sender-controlled option to include other saved clash elements as context. Selected results and their notes remain scoped; extra geometry is included only when requested in the sharing dialog.
+- Removed the ineffective context checkbox from reports containing only the active pair. The viewer now displays a context element count, frames included context when enabled, and uses clearer ghost shading. Existing report snapshots remain unchanged.
+- Regression tests verify selected-only sharing remains the default and optional context never adds unselected result records.
