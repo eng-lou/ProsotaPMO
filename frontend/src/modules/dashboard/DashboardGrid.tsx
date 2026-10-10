@@ -335,7 +335,14 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
   const availableByCategory = WIDGET_CATEGORIES
     .map(category => [category, availableToAdd.filter(([, def]) => def.category === category)] as const)
     .filter(([, items]) => items.length > 0)
-  const containerHeight = Math.max(200, ...widgets.map(w => pixelRect(containerWidth, w.x, w.y, w.w, w.h).top + pixelRect(containerWidth, w.x, w.y, w.w, w.h).height)) + MARGIN
+  const displayWidgets = compact(widgets.map(w => {
+    if (w.widget_type !== 'kpi_strip') return w
+    const width = pixelRect(containerWidth, w.x, w.y, w.w, w.h).width
+    const columns = Math.max(1, Math.floor((width - 12) / 152))
+    const minHeight = 60 + Math.ceil(7 / columns) * 110
+    return { ...w, h: Math.max(w.h, Math.ceil((minHeight + MARGIN) / (ROW_HEIGHT + MARGIN))) }
+  }))
+  const containerHeight = Math.max(200, ...displayWidgets.map(w => pixelRect(containerWidth, w.x, w.y, w.w, w.h).top + pixelRect(containerWidth, w.x, w.y, w.w, w.h).height)) + MARGIN
 
   if (configLoading || !seeded) {
     return <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
@@ -417,7 +424,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
         {widgets.length === 0 && (
           <div className="text-xs text-gray-400 dark:text-prosota-muted py-4">No widgets on the board — use "+ Add Widget" above.</div>
         )}
-        {widgets.map(w => {
+        {displayWidgets.map(w => {
           const isDragging = drag?.id === w.id
           const rect = isDragging && livePixels ? livePixels : pixelRect(containerWidth, w.x, w.y, w.w, w.h)
           return (
@@ -567,7 +574,7 @@ export function DashboardGrid({ projectId, widgetProps }: DashboardGridProps) {
                 />
               )}
             </div>
-            <div className={`dashboard-widget-modal-content flex-1 min-h-0 overflow-auto p-4 ${expandedWidget.widget_type === 'milestone_timeline' ? 'flex flex-col justify-center' : ''}`}>
+            <div className={`dashboard-widget-modal-content flex-1 min-h-0 overflow-auto p-4 ${expandedWidget.widget_type === 'milestone_timeline' ? 'flex flex-col' : ''}`}>
               {WIDGET_REGISTRY[expandedWidget.widget_type]
                 ? <MemoWidget renderFn={WIDGET_REGISTRY[expandedWidget.widget_type].render} widgetProps={widgetProps} filterConditions={expandedWidget.filter} filterMatchMode={expandedWidget.filter_match_mode} />
                 : <span className="text-xs text-gray-400 dark:text-prosota-muted">Unknown widget</span>}

@@ -51,7 +51,7 @@ const ROW_STEP_PX = 84
 // own max-width (140px) plus a little breathing room, so two labels that
 // would otherwise touch still count as "colliding" and get stacked.
 const LABEL_FOOTPRINT_PX = 150
-const BASE_MIN_HEIGHT = 190
+const EDGE_PADDING = 80
 
 // A real interval timeline — a dated axis with regular tick marks running
 // underneath (per Maro: "single line is stupid, timeline intervalled with
@@ -77,9 +77,9 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataD
     const observer = new ResizeObserver(update)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [])
+  }, [milestones.length > 0])
 
-  const dated = milestones.filter(m => m.finish !== null)
+  const dated = milestones.filter(m => m.finish !== null && Number.isFinite(new Date(m.finish).getTime()))
 
   if (dated.length === 0) {
     return <div className="text-xs text-gray-400 dark:text-prosota-muted py-8 text-center">No milestones yet.</div>
@@ -117,7 +117,7 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataD
 
   const rowRightEdgePx: number[] = []
   const rows = positioned.map(({ m, left }) => {
-    const centerPx = (left / 100) * width
+    const centerPx = (left / 100) * Math.max(1, width - EDGE_PADDING * 2)
     let row = 0
     while (rowRightEdgePx[row] !== undefined && centerPx - LABEL_FOOTPRINT_PX / 2 < rowRightEdgePx[row]) {
       row++
@@ -128,20 +128,20 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataD
 
   const maxRow = rows.reduce((max, r) => Math.max(max, r.row), 0)
 
+  const axisTop = 110 + maxRow * ROW_STEP_PX
+  const leftPx = (percent: number) => EDGE_PADDING + percent / 100 * Math.max(1, width - EDGE_PADDING * 2)
+
   return (
     <div
       ref={containerRef}
-      className="relative pb-12"
-      style={{ minHeight: BASE_MIN_HEIGHT + maxRow * ROW_STEP_PX, paddingTop: 64 + maxRow * ROW_STEP_PX }}
+      className="relative w-full shrink-0"
+      style={{ height: axisTop + 60, minHeight: axisTop + 60 }}
     >
-      <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-gray-200" />
+      <div className="absolute h-0.5 bg-gray-200 dark:bg-prosota-line" style={{ left: EDGE_PADDING, right: EDGE_PADDING, top: axisTop }} />
 
-      {/* Calendar interval ticks — below the axis, purely a scale reference.
-          Anchored at the axis's own vertical centre (top-1/2, zero-height
-          wrapper) rather than translated onto it, same "position by anchor,
-          not by straddling the line" fix as the milestones below. */}
+      {/* Calendar ticks share the explicit axis position below all label rows. */}
       {ticks.map((t, i) => (
-        <div key={i} className="absolute top-1/2" style={{ left: `${positionOf(t)}%` }}>
+        <div key={i} className="absolute" style={{ left: leftPx(positionOf(t)), top: axisTop }}>
           <span className="absolute top-2 left-1/2 -translate-x-1/2 block w-px h-3 bg-gray-300" />
           {/* 2026-09-07, per Maro: "bolden the x axis text, looks too
               faint" — was text-gray-400/muted, same weight as ordinary
@@ -165,7 +165,7 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataD
         const left = positionOf(t)
         if (left < 0 || left > 100) return null
         return (
-          <div className="absolute inset-y-0 border-l-2 border-dashed border-prosota-amber/70" style={{ left: `${left}%` }}>
+          <div className="absolute border-l-2 border-dashed border-prosota-amber/70" style={{ left: leftPx(left), top: 0, height: axisTop }}>
             <div className="absolute top-0 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-prosota-amber whitespace-nowrap">
               Data Date
             </div>
@@ -173,17 +173,12 @@ export function MilestoneTrack({ milestones, onMilestoneClick, selectedId, dataD
         )
       })()}
 
-      {/* Milestones — above the axis, positioned by real date. Anchored at
-          the axis's own vertical centre (a zero-height wrapper, same trick
-          as the ticks above) with bottom-offset children stacking upward
-          from there; a milestone in a colliding cluster gets pushed up a
-          further row * ROW_STEP_PX so its dot+label sit clear of the
-          cluster below it instead of overlapping into unreadable text. */}
+      {/* Labels stack upward from the axis, with room reserved for every row. */}
       {rows.map(({ m, left, row }) => (
         <div
           key={m.id}
-          className={`absolute top-1/2 ${onMilestoneClick ? 'cursor-pointer' : ''}`}
-          style={{ left: `${left}%`, transform: 'translateX(-50%)' }}
+          className={`absolute ${onMilestoneClick ? 'cursor-pointer' : ''}`}
+          style={{ left: leftPx(left), top: axisTop, transform: 'translateX(-50%)' }}
           onClick={onMilestoneClick ? () => onMilestoneClick(m.id) : undefined}
         >
           <span

@@ -146,7 +146,7 @@ export function KpiStripWidget({ data }: WidgetProps) {
     ['Cost CPI', <span className={kpis.cpi !== null && Number(kpis.cpi) < 1 ? 'text-orange-600' : 'text-gray-900 dark:text-prosota-paper'}>{kpis.cpi !== null ? Number(kpis.cpi).toFixed(2) : '—'}</span>],
   ]
   return (
-    <div className="grid grid-cols-4 gap-3 h-full overflow-auto">
+    <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
       {tiles.map(([label, value, extra]) => (
         <div key={label} className="bg-gray-50 dark:bg-prosota-panel2 rounded-lg p-3">
           <div className="text-xs text-gray-400 dark:text-prosota-muted uppercase tracking-wide mb-1">{label}</div>
@@ -186,7 +186,7 @@ export function KpiStripWidget({ data }: WidgetProps) {
 // performance has blanked out"). Reunioned here instead, back to the same
 // non-WBS-summary, non-archived scope _schedule_buckets always used.
 const SCHEDULE_PERFORMANCE_LEGEND
-  = 'On-Time — not on the critical path and not late. At Risk — on the critical path (zero float), hasn’t slipped yet. Delayed — already past its baseline finish.'
+  = 'On-Time — not on the critical path and not late. At Risk — on the critical path (zero float), hasn’t slipped yet. Delayed — finish later than baseline.'
 
 export function SchedulePerformanceWidget({ data, filterConditions, filterMatchMode, crossFilter, onCrossFilterClick }: WidgetProps) {
   const activities: { id: string; variance_days: number | null; is_critical: boolean | null }[] = [
@@ -218,7 +218,7 @@ export function SchedulePerformanceWidget({ data, filterConditions, filterMatchM
         return (
         <div
           key={label}
-          className={`-mx-1 rounded px-1 py-0.5 ${c.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${c.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
+          className={`rounded px-1 py-0.5 ${c.onClick ? CROSS_FILTER_ROW_CLASS : ''} ${c.selected ? CROSS_FILTER_SELECTED_CLASS : ''}`}
           onClick={c.onClick}
         >
           <div className="flex justify-between mb-0.5">
@@ -292,7 +292,7 @@ export function MilestoneTimelineWidget({ data, filterConditions, filterMatchMod
     // clipping just that one label off the rendered area while its dot
     // (24px lower) still fit. Sizing to real content height instead of
     // h-full fixes both at once.
-    <div className="overflow-auto pt-4">
+    <div className="min-w-0 pt-4">
       <MilestoneTrack
         milestones={milestones}
         onMilestoneClick={onCrossFilterClick ? id => onCrossFilterClick(`activity:${id}`, 'activity', [id]) : undefined}
@@ -991,6 +991,12 @@ export function IcdOpenItemsTrendWidget({ projectId }: WidgetProps) {
 }
 
 export function RiskExposureWidget({ data }: WidgetProps) {
+  if (!data.risk_exposure.some(b => Number(b.emv_cost) !== 0)) return (
+    <div className="h-full flex flex-col items-center justify-center text-center p-6 text-sm text-gray-500 dark:text-prosota-muted">
+      <p className="font-semibold">No net cost exposure</p>
+      <p className="mt-2 text-xs">There is no non-zero exposure to plot for this scope. Review probability and cost impacts in the Risk Register.</p>
+    </div>
+  )
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data.risk_exposure.map(b => ({ ...b, magnitude: Math.abs(Number(b.emv_cost)) }))}>

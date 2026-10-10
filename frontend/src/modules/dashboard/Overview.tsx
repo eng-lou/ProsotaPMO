@@ -152,8 +152,19 @@ function ProjectOverview() {
         Couldn’t refresh the dashboard. Showing the previous results.{' '}
         <button className="underline" onClick={() => setRetryCount(c => c + 1)}>Retry</button>
       </div>}
-      <div className="no-print flex items-center justify-end">
-        <div className="flex items-center gap-3 text-sm">
+      <div className="rounded-lg border border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel p-4 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-prosota-paper">Project controls snapshot</h2>
+          <p className="mt-1 text-xs text-gray-500 dark:text-prosota-muted">
+            Data date: {formatDate(data.project_info.data_date)} · {data.project_info.total_activities} activities · {data.project_info.has_baseline ? 'Baseline assigned' : 'No baseline assigned'}
+          </p>
+          <p className="mt-1 text-xs text-gray-500 dark:text-prosota-muted">{wbsNodeId ? wbsNodes.find(a => a.id === wbsNodeId)?.task_name : 'Whole schedule'}{crossFilterSeed ? ' · Related-record filter active on supported widgets' : ''}</p>
+        </div>
+        <button disabled={loading} onClick={() => setRetryCount(c => c + 1)} className="no-print text-xs px-3 py-2 rounded border border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50">{loading ? 'Refreshing…' : 'Refresh figures'}</button>
+      </div>
+      <div className="no-print flex flex-wrap items-center justify-between gap-3">
+        <div className="text-xs text-gray-500 dark:text-prosota-muted">Drag widget headers to arrange · Expand a widget to print or export</div>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
           {/* 2026-09-02, per Maro: "using the general wbs filter at the top
               right just messed up the whole dashboard... the filter edits on
               the critical activities one was just wiped" — this used to gate
