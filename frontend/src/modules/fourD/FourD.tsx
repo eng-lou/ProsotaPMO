@@ -1,3 +1,6 @@
+import { undoHistory } from '@/lib/undoHistory'
+import { captureTransform, restoreTransform, type TransformSnapshot } from './transformUndo'
+import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { assembleEquipment } from './equipmentAssembly'
 import { useEquipmentRigs } from './useEquipmentRigs'
@@ -301,6 +304,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // first one — once you've opened /4d in a session, switching projects
   // still refreshes its data as before; only the "never opened it at all"
   // case is what this closes.
+  const undoRevision = useUndoRefresh()
   const [hasEverBeenActive, setHasEverBeenActive] = useState(active)
   useEffect(() => {
     if (active) setHasEverBeenActive(true)
@@ -420,6 +424,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // activities above — a link survives across periods/re-imports as long as
   // the same element_ref (GlobalId or filename) comes back, per the
   // backend's own persistence model.
+  useEffect(() => { if (undoRevision) refreshSchedule() }, [undoRevision])
+
   const [modelElementLinks, setModelElementLinks] = useState<ModelElementLink[]>([])
   const [linkError, setLinkError] = useState<string | null>(null)
   useEffect(() => {
@@ -427,7 +433,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listModelElementLinks(selectedProject.id).then(links => { if (!cancelled) setModelElementLinks(links) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const handleLinkElement = async (
     sourceKind: ModelElementLinkSourceKind, elementRef: string, elementLabel: string, activityId: string, profileId: string | null = null,
@@ -535,7 +541,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listSectionBoxes(selectedProject.id).then(boxes => { if (!cancelled) setSectionBoxes(boxes) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   // Seeds a new box around whatever's currently the "active" whole object
   // (Transform panel's own target — see activeSceneObject below) — matches
@@ -735,7 +741,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listCollections(selectedProject.id).then(cs => { if (!cancelled) setCollections(cs) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   // "Split an element by level" (2026-07-15, per Maro) — project-scoped,
   // persisted server-side (element_split.py). Same fetch-on-project-change
@@ -748,7 +754,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listElementSplits(selectedProject.id).then(s => { if (!cancelled) setElementSplits(s) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
   const refreshElementSplits = () => {
     if (!selectedProject) return
     listElementSplits(selectedProject.id).then(setElementSplits)
@@ -1008,7 +1014,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     listPaths(selectedProject.id).then(ps => { if (!cancelled) setPaths(ps) })
     listPathFollowers(selectedProject.id).then(fs => { if (!cancelled) setPathFollowers(fs) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const pathErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -1139,7 +1145,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listZones(selectedProject.id).then(zs => { if (!cancelled) setZones(zs) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   // shape (2026-07-30, per Maro: "the radial zone for things like crane
   // clearance etc") — fixed at creation, see zone.py's own docstring for
@@ -1242,7 +1248,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listRadialCharts(selectedProject.id).then(cs => { if (!cancelled) setRadialCharts(cs) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const handleCreateRadialChart = async () => {
     if (!selectedProject) return
@@ -1341,7 +1347,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listTimelineStrips(selectedProject.id).then(s => { if (!cancelled) setTimelineStrips(s) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const handleCreateTimelineStrip = async () => {
     if (!selectedProject) return
@@ -1392,7 +1398,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     getSiteContext(selectedProject.id).then(s => { if (!cancelled) setSiteContext(s) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const handleUpdateSiteContext = async (patch: Partial<Omit<SiteContext, 'id' | 'project_id' | 'created_at' | 'updated_at'>>) => {
     if (!siteContext || !selectedProject) return
@@ -1492,7 +1498,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listAnnotations(selectedProject.id).then(as => { if (!cancelled) setAnnotations(as) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   // Default icon per kind (2026-07-12) — Placemark keeps the pin, Comment
   // defaults to its own speech-bubble glyph — immediately visually
@@ -1613,7 +1619,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listCameraViews(selectedProject.id).then(views => { if (!cancelled) setCameraViews(views) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   // viewport_state (2026-07-20, per Maro: "capture not just orbit angle but
   // contextual visibility as well") — the same 5 pieces of state
@@ -1707,7 +1713,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listCameras(selectedProject.id).then(list => { if (!cancelled) setCameras(list) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const handleAddCamera = async (pose: CameraPose) => {
     if (!selectedProject) return
@@ -2529,7 +2535,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listMeasurements(selectedProject.id).then(ms => { if (!cancelled) setMeasurements(ms) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const measurementErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -3242,7 +3248,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listClashTests(selectedProject.id).then(ts => { if (!cancelled) setClashTests(ts) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const clashErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -3514,7 +3520,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     listSiteCaptures(selectedProject.id).then(cs => { if (!cancelled) setSiteCaptures(cs) })
     listProgressVarianceTests(selectedProject.id).then(ts => { if (!cancelled) setProgressVarianceTests(ts) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const progressVarianceErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -6080,7 +6086,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     let cancelled = false
     listElementParents(selectedProject.id).then(eps => { if (!cancelled) setElementParents(eps) })
     return () => { cancelled = true }
-  }, [selectedProject, hasEverBeenActive])
+  }, [selectedProject, hasEverBeenActive, undoRevision])
 
   const elementParentErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
@@ -6341,7 +6347,53 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     })
   }
 
+  const transformUndoOwner = useRef({})
+  const transformBefore = useRef<{ object: Object3D; state: TransformSnapshot }[]>([])
+  const transformGesture = useRef<object>({})
+  useEffect(() => {
+    if (!active || equipmentVisual) return
+    const capture = () => {
+      const targets = new Set<Object3D>()
+      if (activeTransformObject) targets.add(activeTransformObject)
+      for (const row of sceneObjects) if (selectedObjectIds.has(row.id) && row.id !== activeObjectId) targets.add(row.object)
+      transformBefore.current = [...targets].map(object => ({ object, state: captureTransform(object) }))
+    }
+    const pointer = () => { transformGesture.current = {}; capture() }
+    const focus = () => { transformGesture.current = {}; capture() }
+    const key = (e: KeyboardEvent) => { if (!e.ctrlKey && !e.metaKey) capture() }
+    capture()
+    window.addEventListener('pointerdown', pointer, true)
+    window.addEventListener('focusin', focus, true)
+    window.addEventListener('keydown', key, true)
+    return () => {
+      window.removeEventListener('pointerdown', pointer, true)
+      window.removeEventListener('focusin', focus, true)
+      window.removeEventListener('keydown', key, true)
+    }
+  }, [active, activeTransformObject, activeObjectId, selectedObjectIds, sceneObjects, equipmentVisual])
+  useEffect(() => () => undoHistory.remove(transformUndoOwner.current), [selectedProject?.id])
+
+  const recordTransformUndo = () => {
+    if (undoHistory.busy || !active || equipmentVisual || !transformBefore.current.length) return
+    const before = transformBefore.current
+    const after = before.map(row => ({ object: row.object, state: captureTransform(row.object) }))
+    if (JSON.stringify(before.map(x => x.state)) === JSON.stringify(after.map(x => x.state))) return
+    const project = selectedProject?.id
+    const apply = (rows: typeof before) => {
+      if (undoHistory.scope !== project) throw new Error('The project has changed.')
+      if (rows.some(row => !row.object.parent)) throw new Error('An edited object has been unloaded. Reload it before undoing.')
+      for (const row of rows) restoreTransform(row.object, row.state)
+      transformBefore.current = rows.map(row => ({ object: row.object, state: captureTransform(row.object) }))
+      setTransformTick(t => t + 1)
+      persistActiveTransform()
+      for (const row of sceneObjects) if (rows.some(x => x.object === row.object) && row.id !== activeObjectId) persistSiblingTransform(row)
+    }
+    undoHistory.record({ label: `transform ${before.length} element${before.length === 1 ? '' : 's'}`, owner: transformUndoOwner.current, group: transformGesture.current, undo: () => apply(before), redo: () => apply(after) })
+    transformBefore.current = after
+  }
+
   const handleTransformChange = () => {
+    recordTransformUndo()
     setTransformTick(t => t + 1)
     persistActiveTransform()
     // Every other selected object moved right alongside the active one

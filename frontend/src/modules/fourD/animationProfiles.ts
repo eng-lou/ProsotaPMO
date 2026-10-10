@@ -1,3 +1,4 @@
+import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 
@@ -135,6 +136,7 @@ export const BUILTIN_PRESETS: { name: string; config: AnimationProfileConfig }[]
 ]
 
 export function useAnimationProfiles(projectId: string | undefined) {
+  const undoRevision = useUndoRefresh()
   const [profiles, setProfiles] = useState<AnimationProfile[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -152,7 +154,7 @@ export function useAnimationProfiles(projectId: string | undefined) {
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId])
+  }, [projectId, undoRevision])
 
   const create = async (name: string, config: AnimationProfileConfig): Promise<AnimationProfile> => {
     const { data } = await api.post<AnimationProfile>('/api/v1/animation-profiles/', { project_id: projectId, name, config })

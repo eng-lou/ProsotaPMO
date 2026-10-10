@@ -1,8 +1,10 @@
+import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import type { EquipmentRig } from './equipmentRig'
 
 export function useEquipmentRigs(projectId?: string) {
+  const undoRevision = useUndoRefresh()
   const [rigs, setRigs] = useState<EquipmentRig[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -14,7 +16,7 @@ export function useEquipmentRigs(projectId?: string) {
     if (projectId) api.get<EquipmentRig[]>('/api/v1/equipment-rigs/', { params: { project_id: projectId } })
       .then(r => { if (!cancelled) setRigs(r.data) }).catch(e => { if (!cancelled) setError(message(e)) })
     return () => { cancelled = true }
-  }, [projectId])
+  }, [projectId, undoRevision])
   const save = async (rig: EquipmentRig) => {
     if (!projectId || busy) return false
     setBusy(true); setError(null)

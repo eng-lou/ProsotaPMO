@@ -6901,3 +6901,16 @@ coordinate conventions, reuse and the distinction from Unreal physics simulation
   rotate equipment geometry. Hide object transforms/material tools for this target.
 - Browser checked Rotate drag, Local orientation, typed rotation and save on the
   synthetic equipment fixture. 14 frontend and 5 API tests passed; build passed.
+
+
+## 2026-10-10 — Shared edit undo
+
+User asked for Ctrl+Z generally, with group moves and schedule duration as examples,
+and explicitly capped history at 10 steps. Added a shared bounded command history,
+sidebar controls and keyboard shortcuts. Supported saved field edits are captured
+at the API boundary using declared update fields; replay refreshes the current
+records and refuses detected newer edits. Local 3D transforms retain numeric poses
+for the whole selection and coalesce a drag. Use TransformControls object-change,
+not general change events, to avoid replaying group deltas during camera/UI updates;
+reset its delta origin when a new drag begins after undo. Equipment drafts use the
+same history. Text fields keep native undo. See UNDO.md for operation boundaries.

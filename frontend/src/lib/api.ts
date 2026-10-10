@@ -1,3 +1,4 @@
+import { installApiUndo } from './apiUndo'
 import axios from 'axios'
 
 // Every call site already includes the full `/api/v1/...` path itself
@@ -37,6 +38,8 @@ export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '',
   timeout: REQUEST_TIMEOUT_MS,
 })
+
+installApiUndo(api)
 
 // Large file downloads (2026-09-30, per Maro: "reloading models is still a
 // very big issue... a few always gets left out" — two ~100MB+ IFC files

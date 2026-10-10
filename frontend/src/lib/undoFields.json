@@ -1,0 +1,534 @@
+{
+  "activities": {
+    "method": "patch",
+    "fields": [
+      "task_name",
+      "code",
+      "activity_type",
+      "parent_id",
+      "duration_hours",
+      "actual_start",
+      "actual_finish",
+      "suspend_date",
+      "resume_date",
+      "pct_complete",
+      "status",
+      "commentary",
+      "constraint_type",
+      "constraint_date",
+      "calendar_id",
+      "last_reviewed_date",
+      "animation_profile_id"
+    ]
+  },
+  "activity-relationships": {
+    "method": "patch",
+    "fields": [
+      "relationship_type",
+      "lag_hours"
+    ]
+  },
+  "activity-steps": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "is_complete"
+    ]
+  },
+  "animation-profiles": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "config"
+    ]
+  },
+  "annotations": {
+    "method": "patch",
+    "fields": [
+      "position_x",
+      "position_y",
+      "position_z",
+      "source_kind",
+      "element_ref",
+      "text",
+      "icon",
+      "visible",
+      "has_background",
+      "background_color",
+      "background_opacity",
+      "border_color",
+      "thick_border",
+      "text_color",
+      "font_size",
+      "hide_closer_than",
+      "hide_farther_than",
+      "box_shape",
+      "leader_offset_x",
+      "leader_offset_y",
+      "leader_offset_z",
+      "leader_visible",
+      "animate",
+      "animation_loop",
+      "leader_dot_radius",
+      "leader_color",
+      "leader_rotation",
+      "leader_scale",
+      "placemark_scale",
+      "placemark_rotation"
+    ]
+  },
+  "calendars": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "is_project_default",
+      "day_start_time",
+      "day_end_time",
+      "works_monday",
+      "works_tuesday",
+      "works_wednesday",
+      "works_thursday",
+      "works_friday",
+      "works_saturday",
+      "works_sunday",
+      "whole_day_scheduling"
+    ]
+  },
+  "calendar-breaks": {
+    "method": "patch",
+    "fields": [
+      "label",
+      "start_time",
+      "end_time"
+    ]
+  },
+  "calendar-exceptions": {
+    "method": "patch",
+    "fields": [
+      "label",
+      "start_date",
+      "end_date",
+      "is_working",
+      "start_time",
+      "end_time"
+    ]
+  },
+  "cameras": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "base_position_x",
+      "base_position_y",
+      "base_position_z",
+      "base_target_x",
+      "base_target_y",
+      "base_target_z",
+      "base_focal_length",
+      "base_clip_start",
+      "base_clip_end"
+    ]
+  },
+  "camera-views": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "position_x",
+      "position_y",
+      "position_z",
+      "target_x",
+      "target_y",
+      "target_z",
+      "viewport_state",
+      "thumbnail_data_url"
+    ]
+  },
+  "clash-results": {
+    "method": "patch",
+    "fields": [
+      "status",
+      "comment"
+    ]
+  },
+  "clash-tests": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "group_a_collection_id",
+      "group_b_collection_id",
+      "test_type",
+      "tolerance_mm"
+    ]
+  },
+  "collections": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "parent_collection_id"
+    ]
+  },
+  "cost-commitments": {
+    "method": "patch",
+    "fields": [
+      "po_reference",
+      "description",
+      "amount"
+    ]
+  },
+  "cost-elements": {
+    "method": "patch",
+    "fields": [
+      "element_type",
+      "rate",
+      "element_group",
+      "description",
+      "cost_owner",
+      "status",
+      "scope_note",
+      "variance_commentary",
+      "qs_signoff_name",
+      "qs_signoff_date",
+      "budget",
+      "actuals",
+      "pct_complete",
+      "last_reviewed_date",
+      "comparison_cost"
+    ]
+  },
+  "cost-rate-lines": {
+    "method": "patch",
+    "fields": [
+      "description",
+      "qty",
+      "unit",
+      "rate"
+    ]
+  },
+  "cost-variance-criteria": {
+    "method": "patch",
+    "fields": [
+      "label",
+      "min_pct",
+      "max_pct",
+      "description"
+    ]
+  },
+  "dashboard-layouts": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "config"
+    ]
+  },
+  "dock-layouts": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "config"
+    ]
+  },
+  "element-splits": {
+    "method": "patch",
+    "fields": [
+      "cut_elevations_m"
+    ]
+  },
+  "equipment-rigs": {
+    "method": "put",
+    "fields": [
+      "version",
+      "name",
+      "definition"
+    ]
+  },
+  "gantt-layouts": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "style"
+    ]
+  },
+  "icd-action-items": {
+    "method": "patch",
+    "fields": [
+      "description",
+      "owner",
+      "due_date",
+      "status",
+      "pct_complete"
+    ]
+  },
+  "icd-items": {
+    "method": "patch",
+    "fields": [
+      "title",
+      "description",
+      "status",
+      "priority",
+      "raised_by",
+      "owner",
+      "raised_date",
+      "due_date",
+      "closed_date",
+      "resolution",
+      "last_reviewed_date",
+      "cost_impact",
+      "schedule_impact_days",
+      "change_type",
+      "ccb_decision",
+      "rejection_reason",
+      "contract_reference",
+      "cost_claim",
+      "eot_claim_days",
+      "quality_impact",
+      "decision_maker",
+      "required_by",
+      "if_late_consequence",
+      "severity"
+    ]
+  },
+  "measurements": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "visible"
+    ]
+  },
+  "model-element-links": {
+    "method": "patch",
+    "fields": [
+      "animation_profile_id"
+    ]
+  },
+  "paths": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "points",
+      "closed",
+      "visible",
+      "color",
+      "line_style",
+      "show_arrow",
+      "show_label",
+      "line_width",
+      "dash_size",
+      "gap_size",
+      "animate",
+      "animation_loop"
+    ]
+  },
+  "path-followers": {
+    "method": "patch",
+    "fields": [
+      "path_id",
+      "orient_to_path",
+      "heading_offset_deg"
+    ]
+  },
+  "progress-variance-results": {
+    "method": "patch",
+    "fields": [
+      "status",
+      "comment"
+    ]
+  },
+  "progress-variance-tests": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "group_a_collection_id",
+      "site_capture_id",
+      "min_coverage_percent"
+    ]
+  },
+  "radial-charts": {
+    "method": "patch",
+    "fields": [
+      "title",
+      "visible",
+      "position_x_pct",
+      "position_y_pct",
+      "radius_px",
+      "thickness_px",
+      "border_color",
+      "track_color",
+      "progress_color",
+      "fill_color",
+      "text_color",
+      "center_mode",
+      "udf_field_definition_id",
+      "udf_value",
+      "scope_mode",
+      "wbs_node_activity_id",
+      "font_size",
+      "viewport_slot"
+    ]
+  },
+  "resources": {
+    "method": "patch",
+    "fields": [
+      "resource_type",
+      "name",
+      "role",
+      "unit",
+      "rate",
+      "max_hours_per_day",
+      "calendar_id",
+      "discipline",
+      "company",
+      "skill_level",
+      "category",
+      "cost_type",
+      "members"
+    ]
+  },
+  "resource-assignments": {
+    "method": "patch",
+    "fields": [
+      "role",
+      "quantity",
+      "utilisation_pct"
+    ]
+  },
+  "risks": {
+    "method": "patch",
+    "fields": [
+      "title",
+      "category",
+      "area",
+      "status",
+      "risk_owner",
+      "date_raised",
+      "date_closed",
+      "expected_impact_date",
+      "last_reviewed_date",
+      "cause",
+      "effect",
+      "rationale",
+      "risk_type",
+      "response_strategy",
+      "probability",
+      "impact",
+      "probability_residual",
+      "impact_residual",
+      "rating_narrative",
+      "cost_min",
+      "cost_most_likely",
+      "cost_max",
+      "schedule_min_days",
+      "schedule_most_likely_days",
+      "schedule_max_days",
+      "mitigation_status",
+      "contingency_plan",
+      "fallback_plan"
+    ]
+  },
+  "risk-mitigation-actions": {
+    "method": "patch",
+    "fields": [
+      "description",
+      "owner",
+      "due_date",
+      "status",
+      "pct_complete"
+    ]
+  },
+  "schedule-subprojects": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "owning_party_org_id",
+      "root_wbs_id"
+    ]
+  },
+  "scheduling-filters": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "match_mode",
+      "conditions"
+    ]
+  },
+  "scheduling-highlights": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "match_mode",
+      "conditions"
+    ]
+  },
+  "scheduling-quality-criteria": {
+    "method": "patch",
+    "fields": [
+      "threshold"
+    ]
+  },
+  "section-boxes": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "min_x",
+      "min_y",
+      "min_z",
+      "max_x",
+      "max_y",
+      "max_z",
+      "rot_x",
+      "rot_y",
+      "rot_z",
+      "active",
+      "visible"
+    ]
+  },
+  "site-captures": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "captured_at",
+      "force_visible"
+    ]
+  },
+  "timeline-strips": {
+    "method": "patch",
+    "fields": [
+      "title",
+      "visible",
+      "position_x_pct",
+      "position_y_pct",
+      "width_px",
+      "height_px",
+      "background_color",
+      "band_border_color",
+      "text_color",
+      "playhead_color",
+      "font_size",
+      "scope_mode",
+      "udf_field_definition_id",
+      "udf_value",
+      "wbs_node_activity_id",
+      "viewport_slot"
+    ]
+  },
+  "zones": {
+    "method": "patch",
+    "fields": [
+      "name",
+      "shape",
+      "points",
+      "radius",
+      "elevation",
+      "fill_color",
+      "fill_opacity",
+      "border_color",
+      "border_width",
+      "border_style",
+      "border_dash_size",
+      "border_gap_size",
+      "visible",
+      "animate",
+      "animation_loop",
+      "animation_mode",
+      "label_font_size"
+    ]
+  }
+}

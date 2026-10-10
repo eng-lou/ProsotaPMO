@@ -7469,7 +7469,10 @@ export function Viewport3D({
             object={activeObject.object}
             mode={gizmoMode}
             space={gizmoMode === 'scale' ? 'local' : gizmoSpace}
-            onChange={handleGizmoChange}
+            onMouseDown={() => {
+              lastActiveTransformRef.current = { position: activeObject.object.position.clone(), quaternion: activeObject.object.quaternion.clone(), scale: activeObject.object.scale.clone() }
+            }}
+            onObjectChange={handleGizmoChange}
             // Tagged isPathGizmo (2026-07-12 fix, per Maro: "pick in
             // viewport is very bad" — picking a wrong point) — the gizmo's
             // own arrow/ring handle meshes are real, raycastable Object3Ds

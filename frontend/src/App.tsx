@@ -1,3 +1,4 @@
+import { useUndoRefresh } from './lib/useUndoRefresh'
 import { memo, lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
@@ -94,6 +95,7 @@ function PersistentFourD() {
 }
 
 function AuthenticatedApp() {
+  const undoRevision = useUndoRefresh()
   const { selectedProject } = useProject()
 
   // A SINGLE <BrowserRouter> for the whole app, not one recreated per branch
@@ -121,7 +123,7 @@ function AuthenticatedApp() {
               <Route> individually and doesn't repeat the same fallback
               markup five times. */}
           <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>}>
-            <Routes>
+            <Routes key={undoRevision}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/projects" element={<ProjectSelector />} />
               <Route path="/dashboard" element={<Dashboard />} />

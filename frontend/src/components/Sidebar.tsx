@@ -1,3 +1,4 @@
+import { UndoControls } from './UndoControls'
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
@@ -92,6 +93,7 @@ export function Sidebar() {
       </nav>
 
       <div className="px-4 py-4 border-t border-gray-200 dark:border-prosota-line">
+        <UndoControls />
         <button
           onClick={toggleTheme}
           title="Switch between light and dark mode"

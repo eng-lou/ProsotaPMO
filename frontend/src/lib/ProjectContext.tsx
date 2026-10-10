@@ -1,4 +1,5 @@
-import { createContext, useContext, useState } from 'react'
+import { undoHistory } from './undoHistory'
+import { createContext, useContext, useLayoutEffect, useState } from 'react'
 
 export interface Project {
   id: string
@@ -27,6 +28,8 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       return null
     }
   })
+
+  useLayoutEffect(() => { undoHistory.setScope(selectedProject?.id ?? '') }, [selectedProject?.id])
 
   const selectProject = (project: Project) => {
     setSelectedProject(project)

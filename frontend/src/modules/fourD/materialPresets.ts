@@ -1,3 +1,4 @@
+import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import { useEffect, useState } from 'react'
 import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
@@ -90,6 +91,7 @@ async function uploadTextures(files: Partial<Record<TextureSlot, Blob>>): Promis
 // entry applied on demand to whichever element/object is currently active,
 // not "the one active look" for the whole project.
 export function useMaterialPresets(projectId: string | undefined) {
+  const undoRevision = useUndoRefresh()
   const [presets, setPresets] = useState<MaterialPreset[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -108,7 +110,7 @@ export function useMaterialPresets(projectId: string | undefined) {
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId])
+  }, [projectId, undoRevision])
 
   const create = async (name: string, files: Partial<Record<TextureSlot, Blob>>): Promise<MaterialPreset> => {
     const textures = await uploadTextures(files)

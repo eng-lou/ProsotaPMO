@@ -1,6 +1,7 @@
+import { undoHistory } from '@/lib/undoHistory'
 import { EquipmentSetup } from './EquipmentSetup'
 import type { EquipmentVisualState } from './EquipmentVisualEditor'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type * as THREE from 'three'
 import { controlValue, emptyEquipment, equipmentNodes, validateEquipment, type EquipmentDefinition, type EquipmentRig, type Vec3 } from './equipmentRig'
 
@@ -23,12 +24,17 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   onPreview: (p: { model: string; values: Record<string, number>; time: number | null } | null) => void
   onSeek: (d: Date) => void
 }) {
+  const owner = useRef({})
+  const gesture = useRef<object | undefined>()
+  const fieldGesture = useRef<object | undefined>()
+  const [restoreRevision, setRestoreRevision] = useState(0)
   const [tab, setTab] = useState<'setup' | 'animate'>('setup')
   const [assemblyParts, setAssemblyParts] = useState<string[]>([])
   const [assemblyName, setAssemblyName] = useState('Equipment')
   const [assembling, setAssembling] = useState(false)
   const [model, setModel] = useState('')
   const [draft, setDraft] = useState<EquipmentRig | null>(null)
+  const draftRef = useRef(draft); draftRef.current = draft
   const [dirty, setDirty] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [time, setTime] = useState(dateRef.current?.getTime() ?? Date.now())
@@ -49,7 +55,35 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   useEffect(() => { setPreview({}); onPreview(null) }, [time, onPreview])
   useEffect(() => { onEditing(dirty) }, [dirty, onEditing])
   useEffect(() => () => { onDraft(null); onPreview(null); onEditing(false) }, [onDraft, onPreview, onEditing])
+  const restoreRef = useRef<(value: EquipmentRig | null) => void>(() => {})
+  restoreRef.current = next => {
+    setDraft(next); draftRef.current = next; setDirty(JSON.stringify(next) !== JSON.stringify(saved ?? null)); setPreview({}); onPreview(null)
+    setRestoreRevision(n => n + 1)
+    try { if (next) validateEquipment(next.definition, nodes); onDraft(next); setNotice(null) }
+    catch (e) { onDraft(null); setNotice(`Finish setup: ${(e as Error).message}`) }
+  }
+  useEffect(() => {
+    const start = () => { gesture.current = {} }
+    const end = () => { gesture.current = undefined }
+    const focus = () => { fieldGesture.current = {} }
+    window.addEventListener('pointerdown', start, true)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    window.addEventListener('focusin', focus)
+    return () => {
+      window.removeEventListener('pointerdown', start, true); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); window.removeEventListener('focusin', focus)
+      undoHistory.remove(owner.current)
+    }
+  }, [])
+  useEffect(() => { undoHistory.remove(owner.current) }, [model])
   const change = (next: EquipmentRig) => {
+    const before = structuredClone(draftRef.current), after = structuredClone(next)
+    const field = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement
+    if (JSON.stringify(before) !== JSON.stringify(after)) undoHistory.record({
+      label: 'equipment rig edit', owner: owner.current, group: gesture.current ?? (field ? fieldGesture.current : undefined),
+      undo: () => restoreRef.current(before), redo: () => restoreRef.current(after),
+    })
+    draftRef.current = next
     setDraft(next); setDirty(true); setNotice(null)
     try { validateEquipment(next.definition, nodes); onDraft(next) }
     catch (e) { setNotice(`Finish setup: ${(e as Error).message}`) }
@@ -67,7 +101,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   const save = async () => {
     try {
       validate()
-      if (await onSave(draft!)) { setDirty(false); onDraft(null); setNotice('Equipment saved'); onPreview(null) }
+      if (await onSave(draft!)) { undoHistory.remove(owner.current); setDirty(false); onDraft(null); setNotice('Equipment saved'); onPreview(null) }
     } catch (e) { setNotice((e as Error).message) }
   }
   const nodePicker = (value: string, changeNode: (v: string) => void, allowRoot = false) => <select aria-label="Model part" className={input} value={value} onChange={e => changeNode(e.target.value)}>
@@ -103,12 +137,12 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
       <label className="block">Equipment name<input className={input} value={draft.name} onChange={e => change({ ...draft, name: e.target.value })} /></label>
       <div className="flex flex-wrap gap-1">
         <button className={button} disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rig & keys'}</button>
-        <button className={button} disabled={busy || !dirty} onClick={() => { setDirty(false); setDraft(saved ? structuredClone(saved) : null); onDraft(null); onPreview(null) }}>Discard edits</button>
+        <button className={button} disabled={busy || !dirty} onClick={() => { undoHistory.remove(owner.current); setDirty(false); setDraft(saved ? structuredClone(saved) : null); onDraft(null); onPreview(null) }}>Discard edits</button>
         {saved && <button className={button} disabled={busy || dirty} onClick={() => { if (window.confirm('Remove this equipment rig and its control keyframes? Imported geometry will remain.')) void onRemove(saved) }}>Remove rig</button>}
       </div>
       {dirty && <p>Unsaved changes — save before closing this panel.</p>}
       <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>setTab('setup')}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>
-      {tab==='setup' && onVisual && <EquipmentSetup disabled={busy || assembling} key={model} rig={draft} object={object?.object} onChange={change} onState={onVisual} />}
+      {tab==='setup' && onVisual && <EquipmentSetup disabled={busy || assembling} key={`${model}:${restoreRevision}`} rig={draft} object={object?.object} onChange={change} onState={onVisual} />}
       {tab==='animate' && <>
       <label className="block">Playhead (local time)<input aria-label="Equipment playhead" className={input} type="datetime-local" step="0.001" value={localTime(new Date(time))} onInput={e => { const d = new Date(e.currentTarget.value); if (Number.isFinite(d.getTime())) { dateRef.current = d; setTime(d.getTime()); onSeek(d) } }} /></label>
       {draft.definition.controls.map(c => {
