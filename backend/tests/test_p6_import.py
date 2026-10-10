@@ -319,6 +319,12 @@ async def test_import_root_dates_udf_and_baseline(db: AsyncSession, project: Pro
     assert root.task_name == "Multi Branch Project"
     assert root.wbs_role == "P"
 
+    # Snapshot imports must initialise display days without running CPM.
+    slab = next(a for a in activities if a.task_name == "Pour Slab")
+    frame = next(a for a in activities if a.task_name == "Erect Frame")
+    assert slab.duration_days == Decimal("1")
+    assert frame.duration_days == Decimal("2")
+
     block_a = next(a for a in activities if a.task_name == "Block A")
     block_b = next(a for a in activities if a.task_name == "Block B")
     assert block_a.parent_id == root.id and block_a.wbs_role == "W"

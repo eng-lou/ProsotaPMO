@@ -6914,3 +6914,8 @@ for the whole selection and coalesce a drag. Use TransformControls object-change
 not general change events, to avoid replaying group deltas during camera/UI updates;
 reset its delta origin when a new drag begins after undo. Equipment drafts use the
 same history. Text fields keep native undo. See UNDO.md for operation boundaries.
+
+
+## 2026-10-10 — P6 snapshot duration display
+
+Melrose MN1020 imports 120 hours correctly, but snapshot import bypasses CPM and left duration_days empty. The activity form then echoed that blank as null hours on save, allowing later CPM to collapse the task and advance successors. Initialise display days during import, derive leaf display days on reads for existing imports, and initialise the editor from authoritative hours using the activity calendar. Preserve imported dates; do not run CPM just to populate a display field. Verified with the original Melrose XML and synthetic import regression. Already overwritten hours require an explicit correction or fresh import, not automatic restoration from stale P6 metadata.

@@ -127,6 +127,15 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
         calendar = lookup.resolve(a)
+        # P6 snapshots preserve dates without running CPM. Derive the leaf
+        # display duration from hours even when the stored display cache is empty.
+        if a.activity_type != "wbs_summary":
+            from sqlalchemy.orm.attributes import set_committed_value
+            hours_per_day = lookup.hours_per_day(calendar)
+            set_committed_value(a, "duration_days", (
+                (a.duration_hours / hours_per_day).quantize(Decimal("0.01"))
+                if a.duration_hours is not None and hours_per_day > 0 else None
+            ))
         pv_start = a.bl_start if a.bl_start is not None and a.bl_finish is not None else a.start
         pv_finish = a.bl_finish if a.bl_start is not None and a.bl_finish is not None else a.finish
         fraction = elapsed_duration_fraction(lookup, calendar, pv_start, pv_finish, data_date)

@@ -467,7 +467,13 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
             schedule_variant_id=variant.id, schedule_period_id=period.id,
             task_name=pa.name[:500], activity_type=pa.activity_type, parent_id=parent_real_id,
             sort_order=activity_sort_counter,
-            duration_hours=duration_hours, pct_complete=pa.pct_complete,
+            duration_hours=duration_hours,
+            duration_days=(duration_hours / (
+                next((_net_hours_per_day(c.day_start, c.day_end, c.breaks)
+                      for c in parsed.calendars if c.object_id == pa.calendar_object_id),
+                     default_hours_per_day) or default_hours_per_day
+            )).quantize(Decimal("0.01")),
+            pct_complete=pa.pct_complete,
             p6_data=pa.source_fields,
             # start/finish (2026-09-04, per Maro — a real historical import
             # showed PV=£0 for every activity, even long-completed ones):

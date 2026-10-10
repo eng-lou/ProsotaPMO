@@ -37,12 +37,14 @@ export interface ActivityFormValues {
   resume_date: string
 }
 
-function toFormValues(activity: Activity | null): ActivityFormValues {
+export function toFormValues(activity: Activity | null, calendarLookup: CalendarLookup): ActivityFormValues {
   return {
     task_name: activity?.task_name ?? '',
     activity_type: activity?.activity_type ?? 'task',
     status: activity?.status ?? 'planned',
-    duration_days: activity?.duration_days?.toString() ?? '',
+    duration_days: activity?.duration_hours != null && activity.activity_type !== 'wbs_summary'
+      ? String(Number(activity.duration_hours) / resolveHoursPerDay(activity, calendarLookup))
+      : activity?.duration_days?.toString() ?? '',
     pct_complete: activity?.pct_complete ?? '',
     constraint_type: activity?.constraint_type ?? '',
     constraint_date: toDatetimeLocalValue(activity?.constraint_date),
@@ -129,7 +131,7 @@ const STATUS_OPTION_LABELS: Record<Activity['status'], string> = {
 
 export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded = false }: Props) {
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
-  const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity))
+  const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity, calendarLookup))
   const [values, setValues] = useState<ActivityFormValues>(initialValues)
   const [submitting, setSubmitting] = useState(false)
   const [reassessmentNote, setReassessmentNote] = useState('')
