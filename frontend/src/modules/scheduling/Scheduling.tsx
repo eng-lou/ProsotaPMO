@@ -479,7 +479,7 @@ function ResizableTh({
 export function formatMoney(value: string | null) {
   if (value === null) return '—'
   const n = Number(value)
-  return n < 0 ? `-£${Math.abs(n).toLocaleString()}` : `£${n.toLocaleString()}`
+  return n < 0 ? `-£${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `£${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
 export function formatRatio(value: string | null) {

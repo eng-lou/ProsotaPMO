@@ -747,13 +747,14 @@ async def import_pmxml(db: AsyncSession, project_id: uuid.UUID, parsed: ParsedP6
     # "if there are multiple in P6, its clear which baseline is assigned...
     # it should also be assigned on import") — matched via
     # CurrentBaselineProjectObjectId when the file says so explicitly, else
-    # the sole baseline when there's only one (equally unambiguous). Two or
+    # the sole baseline only for older files omitting the assignment field.
+    # An explicitly empty field means current project, not the saved baseline. Two or
     # more baselines with no explicit "current" marker are left unassigned
     # rather than guessed, same as everywhere else in this import.
     assign_baseline_id: uuid.UUID | None = None
     if parsed.current_baseline_object_id is not None:
         assign_baseline_id = real_baseline_id_by_object_id.get(parsed.current_baseline_object_id)
-    elif len(imported_baseline_ids) == 1:
+    elif not parsed.baseline_assignment_specified and len(imported_baseline_ids) == 1:
         assign_baseline_id = imported_baseline_ids[0]
     if assign_baseline_id is not None:
         await schedule_baseline.assign_baseline(db, assign_baseline_id)

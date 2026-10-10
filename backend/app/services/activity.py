@@ -123,6 +123,16 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             activity = edited_activities[assignment.activity_id]
             lookup = calendar_lookups[activity.project_id]
             edited_budgets[activity.id] += compute_assignment_budget_raw(resource, activity, assignment, lookup.hours_per_day(lookup.resolve(activity)))
+    # P6 can estimate ETC from remaining activity costs instead of CPI.
+    # Resolve the imported WBS policy (including the project root) for each leaf.
+    forecast_policies = {
+        row.id: (row.parent_id, row.policy)
+        for row in (await db.execute(select(
+            Activity.id, Activity.parent_id,
+            Activity.p6_data["EarnedValueETCComputeType"].as_string().label("policy"),
+        ).where(Activity.schedule_period_id.in_(period_ids),
+                Activity.activity_type == "wbs_summary"))).all()
+    }
     for a in activities:
         data_date = data_dates[a.schedule_period_id]
         lookup = calendar_lookups[a.project_id]
@@ -159,8 +169,9 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
             def source_sum(keys):
                 values = [Decimal(source[k]) for k in keys if source.get(k) is not None]
                 return sum(values, Decimal(0)) if values else None
+            imported_budget = source_sum(("PlannedLaborCost", "PlannedNonLaborCost", "PlannedMaterialCost", "PlannedExpenseCost"))
             element = SimpleNamespace(
-                budget=edited_budgets[a.id] if a.id in edited_budgets else element.budget if element is not None else source_sum(("PlannedLaborCost", "PlannedNonLaborCost", "PlannedMaterialCost", "PlannedExpenseCost")),
+                budget=edited_budgets[a.id] if a.id in edited_budgets else imported_budget if imported_budget is not None else element.budget if element is not None else None,
                 bl_budget=element.bl_budget if element is not None and element.bl_budget is not None else baseline_budgets.get(a.id),
                 actuals=element.actuals if element is not None else source_sum(("ActualLaborCost", "ActualNonLaborCost", "ActualMaterialCost", "ActualExpenseCost")),
                 pct_complete=a.pct_complete,
@@ -170,6 +181,22 @@ async def _attach_evm_fields(db: AsyncSession, activities: list[Activity]) -> No
                 setattr(a, field, None)
             continue
         evm = compute_schedule_linked_evm(element, pv_start, pv_finish, data_date, lookup, calendar, eac_methods[a.project_id])
+        parent_id, policy, seen = a.parent_id, None, set()
+        while parent_id in forecast_policies and parent_id not in seen:
+            seen.add(parent_id)
+            parent_id, policy = forecast_policies[parent_id]
+            if policy:
+                break
+        # Preserve the supplied remaining-cost estimate while the imported
+        # progress/resource plan is unchanged. Later edits use live formulas.
+        if (source and policy == "ETC = Remaining Cost for Activity"
+                and not source.get("_resource_plan_edited")
+                and a.pct_complete == Decimal(source.get("PercentComplete") or 0) * 100
+                and evm["ac"] == source_sum(("ActualLaborCost", "ActualNonLaborCost", "ActualMaterialCost", "ActualExpenseCost"))):
+            remaining = source_sum(("RemainingLaborCost", "RemainingNonLaborCost", "RemainingMaterialCost", "RemainingExpenseCost"))
+            if remaining is not None:
+                evm["etc"] = remaining
+                evm["eac"] = remaining + (evm["ac"] or Decimal(0))
         for field in _EVM_FIELDS:
             setattr(a, field, evm[field])
 
@@ -224,11 +251,21 @@ def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | N
     itself a WBS summary, that node's own already-computed rollup) is
     visited before the node itself, standing in for a real post-order walk
     without a second recursive traversal."""
+    # Keep unrounded additive amounts through intermediate WBS levels.
+    # Otherwise each branch loses fractions of a penny before the root sums it.
+    raw_bac = {a.id: a.bac for a in ordered}
+    raw_baseline = {a.id: a.bl_budget for a in ordered}
+    raw_forecasts = {
+        field: {a.id: getattr(a, field) if getattr(a, field) is not None else a.bac for a in ordered}
+        for field in ("eac", "etc")
+    }
     for a in reversed(ordered):
         if a.activity_type != "wbs_summary":
             continue
         kids = children.get(a.id, [])
-        bac = _sum_if_any([k.bac for k in kids])
+        present_bac = [raw_bac[k.id] for k in kids if raw_bac[k.id] is not None]
+        raw_bac[a.id] = sum(present_bac, Decimal(0)) if present_bac else None
+        bac = raw_bac[a.id].quantize(Decimal("0.01")) if raw_bac[a.id] is not None else None
         ac = _sum_if_any([k.ac for k in kids])
         pv = _sum_if_any([k.pv for k in kids])
         ev = _sum_if_any([k.ev for k in kids])
@@ -242,14 +279,18 @@ def _rollup_wbs_evm_fields(ordered: list[Activity], children: dict[uuid.UUID | N
         # (it's already counted in the summed bac above; excluding it here
         # too would understate the rolled-up EAC for exactly the same
         # subtree that's still fully budgeted).
-        rolled["eac"] = _sum_if_any([k.eac if k.eac is not None else k.bac for k in kids])
-        rolled["etc"] = _sum_if_any([k.etc if k.etc is not None else k.bac for k in kids])
+        for field, amounts in raw_forecasts.items():
+            present = [amounts[k.id] for k in kids if amounts[k.id] is not None]
+            amounts[a.id] = sum(present, Decimal(0)) if present else None
+            rolled[field] = amounts[a.id].quantize(Decimal("0.01")) if amounts[a.id] is not None else None
         # bl_budget (2026-09-07, per Maro: "also capture column for BL
         # Budget") — genuinely additive like bac/ac/pv/ev above, not a
         # ratio, so a straight sum; a child with no captured baseline
         # simply doesn't contribute (_sum_if_any's own "None only if
         # every value is None" rule), same as bac's own summing.
-        rolled["bl_budget"] = _sum_if_any([k.bl_budget for k in kids])
+        present_baseline = [raw_baseline[k.id] for k in kids if raw_baseline[k.id] is not None]
+        raw_baseline[a.id] = sum(present_baseline, Decimal(0)) if present_baseline else None
+        rolled["bl_budget"] = raw_baseline[a.id].quantize(Decimal("0.01")) if raw_baseline[a.id] is not None else None
         for field, value in rolled.items():
             setattr(a, field, value)
 

@@ -304,6 +304,7 @@ class ParsedP6Schedule:
     # own object_id. None when P6 itself has nothing assigned (or the field
     # is simply empty in this file).
     current_baseline_object_id: str | None = None
+    baseline_assignment_specified: bool = False
     data_time: time | None = None
     project_fields: dict[str, str] = field(default_factory=dict)
     enterprise_xml: list[str] = field(default_factory=list)
@@ -690,6 +691,7 @@ def parse_pmxml(data: bytes) -> ParsedP6Schedule:
     # one being imported here).
     project_object_id = _text(project_el, "ObjectId")
     out.current_baseline_object_id = _text(project_el, "CurrentBaselineProjectObjectId")
+    out.baseline_assignment_specified = project_el.find(_tag("CurrentBaselineProjectObjectId")) is not None
     for bp_el in root.findall(_tag("BaselineProject")):
         if _text(bp_el, "OriginalProjectObjectId") != project_object_id:
             continue
