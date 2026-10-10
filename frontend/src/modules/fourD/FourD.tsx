@@ -8013,6 +8013,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
       <div className="flex flex-1 min-h-0">
         <PropertiesPanel
+          equipmentPivot={equipmentVisual?.joint && equipmentVisual.pivot && sceneObjects.find(o=>o.name===equipmentVisual.model)
+            ? {state:equipmentVisual,root:sceneObjects.find(o=>o.name===equipmentVisual.model)!.object} : null}
           open={propertiesOpen}
           onToggle={toggleProperties}
           settings={settings}

@@ -1,3 +1,5 @@
+import { EquipmentPivotControls } from './EquipmentPivotControls'
+import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { ColorPickerPopover, normalizeHex } from '@/components/ColorPickerPopover'
@@ -20,6 +22,7 @@ interface ActiveObject {
 }
 
 interface Props {
+  equipmentPivot?: { state: EquipmentVisualState; root: THREE.Object3D } | null
   open: boolean
   onToggle: () => void
   settings: ViewerSettings
@@ -170,7 +173,7 @@ function SectionHeader({ label }: { label: string }) {
 export function PropertiesPanel({
   open, onToggle, settings, onSettingsChange, realisticPanelOpen, onOpenRealisticPanel,
   environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
+  equipmentPivot, activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
   materialPresets, materialPresetsLoading, onApplyMaterialPreset,
   onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
   linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
@@ -457,7 +460,8 @@ export function PropertiesPanel({
         </div>
       </Row>
 
-      {activeObject && (
+      {equipmentPivot && <EquipmentPivotControls upAxis={settings.upAxis} state={equipmentPivot.state} root={equipmentPivot.root} mode={gizmoMode} space={gizmoSpace} onMode={onGizmoModeChange} onSpace={onGizmoSpaceChange} />}
+      {activeObject && !equipmentPivot && (
         <>
           <SectionHeader label={isElementTransform ? `Selected element (in ${activeObject.name || 'model'})` : `Selected: ${activeObject.name || 'Object'}`} />
           {/* Fixes a wrongly-guessed import axis without re-importing

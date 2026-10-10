@@ -20,7 +20,9 @@ export function EquipmentSetup({rig,object,onChange,onState,disabled=false}: {di
  const updateJoint=(patch:object)=>change(r=>Object.assign(r.definition.joints.find(j=>j.id===group)!,patch))
  useEffect(()=>{
   if(!object || disabled) {onState(null);return}
-  onState({model:rig.model_ref,selected,hidden,isolated,mode,joint:joint?.id,pivot:joint?.pivot,axis:joint?.axis,kind:joint?.kind,amount,
+  onState({model:rig.model_ref,selected,hidden,isolated,mode,joint:joint?.id,pivot:joint?.pivot,axis:joint?.axis,kind:joint?.kind,amount,rotation:joint?.pivot_rotation,label:joint?.name,
+   beginPivot:()=>{setMode('pivot');setAmount(0)},
+   rotatePivot:rotation=>{setMode('pivot');setAmount(0);const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation));updateJoint({pivot_rotation:rotation,axis:new THREE.Vector3(0,0,1).applyQuaternion(q).toArray()});},
    pick:(path,add,point)=>{
     if(mode==='pivot' && joint){updateJoint({pivot:point});return}
     if(mode==='parent' && joint){
@@ -29,7 +31,7 @@ export function EquipmentSetup({rig,object,onChange,onState,disabled=false}: {di
      updateJoint({parent:parent.id});setMode('select');return
     }
     setSelected(p=>add?(p.includes(path)?p.filter(n=>n!==path):[...p,path]):[path])
-   },movePivot:point=>updateJoint({pivot:point}),pose:setAmount})
+   },movePivot:point=>{setMode('pivot');setAmount(0);updateJoint({pivot:point})},pose:setAmount})
  },[disabled,object,rig.model_ref,rig.definition,selected,hidden,isolated,mode,amount,group,onState])
  useEffect(()=>()=>onState(null),[onState])
  const selectGroup=(id:string)=>{
@@ -82,7 +84,7 @@ export function EquipmentSetup({rig,object,onChange,onState,disabled=false}: {di
    <strong className="block">3. Place the pivot and choose an axis</strong>
    <button className={button} onClick={()=>{setMode('pivot');setAmount(0)}}>Place pivot in viewport</button>
    <p>Click the hinge surface or drag its arrows. Setup holds all other groups at their imported pose.</p>
-   <div className="flex gap-1">{(['X','Y','Z'] as const).map((axis,i)=><button key={axis} className={button} onClick={()=>{setAmount(0);updateJoint({axis:[i===0?1:0,i===1?1:0,i===2?1:0]})}}>{axis} axis</button>)}</div>
+   <div className="flex gap-1">{(['X','Y','Z'] as const).map((axis,i)=><button key={axis} className={button} onClick={()=>{setAmount(0);updateJoint({pivot_rotation:undefined,axis:[i===0?1:0,i===1?1:0,i===2?1:0]})}}>{axis} axis</button>)}</div>
    <p>Axis: {joint.axis.join(', ')} · Pivot: {joint.pivot.map(v=>v.toFixed(3)).join(', ')}</p>
    <strong className="block">4. Pose and set the travel limits</strong>
    <button className={button} onClick={()=>setMode('pose')}>Pose with gizmo</button>

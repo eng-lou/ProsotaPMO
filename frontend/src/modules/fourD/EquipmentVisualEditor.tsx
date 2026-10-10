@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { equipmentNodes, type Vec3 } from './equipmentRig'
 
 export interface EquipmentVisualState {
+  rotation?: Vec3; label?: string; beginPivot: () => void; rotatePivot: (rotation: Vec3) => void
   model: string; selected: string[]; hidden: string[]; isolated: string[] | null
   mode: 'select' | 'pivot' | 'pose' | 'parent'
   joint?: string; pivot?: Vec3; axis?: Vec3; kind?: 'hinge' | 'slide'; amount: number
@@ -12,7 +13,7 @@ export interface EquipmentVisualState {
   movePivot: (point: Vec3) => void; pose: (amount: number) => void
 }
 
-export function EquipmentVisualEditor({ state, objects }: { state: EquipmentVisualState | null; objects: {name: string; object: THREE.Object3D}[] }) {
+export function EquipmentVisualEditor({ state, objects, transformMode = 'translate', transformSpace = 'world' }: { transformMode?: 'translate'|'rotate'|'scale'; transformSpace?: 'local'|'world'; state: EquipmentVisualState | null; objects: {name: string; object: THREE.Object3D}[] }) {
   const { gl, camera, invalidate } = useThree()
   const root = objects.find(o => o.name === state?.model)?.object
   const nodes = useMemo(() => root ? equipmentNodes(root) : new Map<string, THREE.Object3D>(), [root])
@@ -71,7 +72,7 @@ export function EquipmentVisualEditor({ state, objects }: { state: EquipmentVisu
       root.updateWorldMatrix(true,false)
       marker.position.copy(root.localToWorld(new THREE.Vector3(...cfg.pivot)))
       root.getWorldQuaternion(baseQuaternion.current)
-      baseQuaternion.current.multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),new THREE.Vector3(...(cfg.axis ?? [0,0,1])).normalize()))
+      baseQuaternion.current.multiply(cfg.rotation ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...cfg.rotation)) : new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),new THREE.Vector3(...(cfg.axis ?? [0,0,1])).normalize()))
       marker.quaternion.copy(baseQuaternion.current)
       if(cfg.mode==='pose' && cfg.kind==='hinge') marker.rotateZ(THREE.MathUtils.degToRad(cfg.amount))
       if(cfg.mode==='pose' && cfg.kind==='slide') marker.position.copy(root.localToWorld(new THREE.Vector3(...cfg.pivot).add(new THREE.Vector3(...(cfg.axis ?? [0,0,1])).normalize().multiplyScalar(cfg.amount))))
@@ -83,13 +84,18 @@ export function EquipmentVisualEditor({ state, objects }: { state: EquipmentVisu
     {helpers.map(h=><primitive key={h.uuid} object={h} />)}
     {state.pivot && <><primitive object={marker} />
       {(state.mode==='pivot' || state.mode==='pose') && <TransformControls object={marker}
-        mode={state.mode==='pose' && state.kind==='hinge' ? 'rotate' : 'translate'}
-        space={state.mode==='pose' ? 'local' : 'world'} showX={state.mode!=='pose'} showY={state.mode!=='pose'} showZ
+        mode={state.mode==='pose' ? (state.kind==='hinge' ? 'rotate' : 'translate') : (transformMode==='rotate' ? 'rotate' : 'translate')}
+        space={state.mode==='pose' ? 'local' : transformSpace} showX={state.mode!=='pose'} showY={state.mode!=='pose'} showZ
         onMouseDown={()=>{dragging.current=true}}
         onObjectChange={()=>{
           const cfg=current.current
           if (!dragging.current || !cfg || !root) return
-          if (cfg.mode==='pivot') cfg.movePivot(root.worldToLocal(marker.position.clone()).toArray() as Vec3)
+          if (cfg.mode==='pivot') {
+            if(transformMode==='rotate') {
+              const local=root.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(marker.quaternion)
+              const e=new THREE.Euler().setFromQuaternion(local,'XYZ');cfg.rotatePivot([e.x,e.y,e.z])
+            } else cfg.movePivot(root.worldToLocal(marker.position.clone()).toArray() as Vec3)
+          }
           else if (cfg.kind==='hinge') {
             const q=baseQuaternion.current.clone().invert().multiply(marker.quaternion)
             cfg.pose(THREE.MathUtils.radToDeg(2*Math.atan2(q.z,q.w)))
@@ -101,7 +107,12 @@ export function EquipmentVisualEditor({ state, objects }: { state: EquipmentVisu
         onMouseUp={()=>{
           const cfg=current.current
           if(cfg && root) {
-            if(cfg.mode==='pivot') cfg.movePivot(root.worldToLocal(marker.position.clone()).toArray() as Vec3)
+            if (cfg.mode==='pivot') {
+            if(transformMode==='rotate') {
+              const local=root.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(marker.quaternion)
+              const e=new THREE.Euler().setFromQuaternion(local,'XYZ');cfg.rotatePivot([e.x,e.y,e.z])
+            } else cfg.movePivot(root.worldToLocal(marker.position.clone()).toArray() as Vec3)
+          }
             else if(cfg.kind==='hinge') {
               const q=baseQuaternion.current.clone().invert().multiply(marker.quaternion)
               cfg.pose(THREE.MathUtils.radToDeg(2*Math.atan2(q.z,q.w)))

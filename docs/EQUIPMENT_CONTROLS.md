@@ -141,3 +141,16 @@ assist manual calibration; they do not infer a machine's mechanical hinges.
 Browser verification used a synthetic two-part model: multi-selection, group
 creation, surface pivot placement, rotation gizmo drag, light/dark appearance,
 travel limits, save and switch to Animate. The user's loader was not calibrated.
+
+
+### Existing transform controls and equipment pivots (2026-10-10)
+Selecting a moving group in Setup makes the existing Properties transform panel
+edit that equipment pivot. Move translates it; Rotate changes its orientation
+without moving geometry. Global/Local affects the gizmo frame. Pivot and Pivot
+Rotation fields stay synchronized; the latter uses degrees. Values are in the
+equipment root's coordinates, and the oriented local Z direction is the joint
+axis. Scale and geometry baking are unavailable for the pivot target.
+The complete XYZ orientation is saved with the joint so local axes survive reload.
+Choosing an X/Y/Z preset or an advanced axis value replaces this orientation.
+Save rig & keys persists pivot changes. Pose with gizmo still tests group travel;
+clicking Move or Rotate in Properties returns to editing the pivot at rest.

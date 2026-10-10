@@ -7318,7 +7318,7 @@ export function Viewport3D({
             showClashColors={settings.showClashColors}
             renderMode={settings.renderMode}
           />
-          <EquipmentVisualEditor state={equipmentVisual ?? null} objects={timelineSceneObjects} />
+          <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={timelineSceneObjects} />
           <EquipmentPlayback visual={equipmentVisual} rigs={equipmentRigs} objects={timelineSceneObjects} dateRef={timelineDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
           <PathGizmos

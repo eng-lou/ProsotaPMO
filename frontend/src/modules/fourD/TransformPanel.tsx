@@ -76,6 +76,7 @@ export interface PivotRotationSupport {
 }
 
 interface Props {
+  pivotOnly?: boolean
   object: THREE.Object3D
   mode: GizmoMode
   onModeChange: (mode: GizmoMode) => void
@@ -241,7 +242,7 @@ function Field({ axisLabel, value, resetValue, suffix, locked, keyState, onChang
 // placement. See elementBaseline.ts for exactly where/how that snapshot is
 // captured (at import time, and re-captured by Apply Transform after a
 // bake, since 0/0/1 genuinely *becomes* the object's own baseline then).
-export function TransformPanel({ object, mode, onModeChange, space, onSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
+export function TransformPanel({ pivotOnly = false, object, mode, onModeChange, space, onSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, upAxis, pathProgress, lengthUnitToMetres, unitDisplay, keyframes, pivot, pivotRotation, onFieldChange }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({})
   const toggleLocked = (field: string) => setLocked(prev => ({ ...prev, [field]: !prev[field] }))
 
@@ -264,6 +265,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
         {(['translate', 'rotate', 'scale'] as GizmoMode[]).map(m => (
           <button
             key={m}
+            disabled={pivotOnly && m==='scale'}
             onClick={() => onModeChange(m)}
             className={`flex-1 text-[11px] px-1.5 py-1 rounded border font-medium ${
               mode === m ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-500 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
@@ -279,6 +281,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
       {mode !== 'scale' && (
         <div className="flex items-center gap-1.5 px-3 pb-1.5">
           <button
+            disabled={pivotOnly}
             onClick={() => onEditPivotChange(!editPivot)}
             title="Drag Move/Rotate to redefine the pivot itself instead of moving the object — the object stays put, only its origin (and this gizmo) moves"
             className={`flex-1 text-[10px] px-1.5 py-0.5 rounded border font-medium ${
@@ -462,6 +465,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
       {/* Fields always read X/Y/Z in that order; resolveDisplayAxis (upAxis.ts)
           is what actually points "Y"/"Z" at object.position.z/.y (Blender-
           style) instead of three.js's native .y/.z when upAxis is 'z'. */}
+      {!pivotOnly && <>
       <SectionLabel label="Location" />
       {pathProgress && (
         <p className="px-3 pb-1 text-[10px] text-gray-400 dark:text-prosota-muted">Position is driven by the bound path — edit points in the Paths panel.</p>
@@ -531,6 +535,7 @@ export function TransformPanel({ object, mode, onModeChange, space, onSpaceChang
           />
         )
       })}
+      </>}
       <div className="h-2" />
     </div>
   )

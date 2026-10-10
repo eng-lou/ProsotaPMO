@@ -6892,3 +6892,12 @@ coordinate conventions, reuse and the distinction from Unreal physics simulation
   duplicate ownership, hierarchy cycles and overlapping nested members are rejected.
 - Verified 13 frontend tests, 5 equipment API tests, browser interactions on a
   synthetic model and the production build. Existing rigs remain compatible.
+
+
+### 2026-10-10 — Reuse transform controls for equipment pivots
+- Connected the existing TransformPanel Move/Rotate and Global/Local controls to
+  the selected joint pivot, with synchronized position/rotation fields.
+- Preserve full pivot orientation and derive the hinge axis; editing does not
+  rotate equipment geometry. Hide object transforms/material tools for this target.
+- Browser checked Rotate drag, Local orientation, typed rotation and save on the
+  synthetic equipment fixture. 14 frontend and 5 API tests passed; build passed.

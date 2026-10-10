@@ -36,6 +36,7 @@ class Joint(Strict):
     parent: str | None = None
     control: str
     kind: Literal['hinge', 'slide']
+    pivot_rotation: tuple[float, float, float] | None = None
     pivot: tuple[float, float, float]
     axis: tuple[float, float, float]
     minimum: float = Field(ge=-1000000, le=1000000)

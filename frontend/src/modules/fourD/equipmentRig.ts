@@ -5,7 +5,7 @@ export interface EquipmentKey { date: string; value: number; interpolation: 'lin
 export interface EquipmentControl { id: string; name: string; value: number; rest: number; keys: EquipmentKey[] }
 export interface EquipmentJoint {
   id: string; name: string; node: string; members?: string[]; parent: string | null; control: string
-  kind: 'hinge' | 'slide'; pivot: Vec3; axis: Vec3; minimum: number; maximum: number; response: [number, number][]
+  kind: 'hinge' | 'slide'; pivot_rotation?: Vec3; pivot: Vec3; axis: Vec3; minimum: number; maximum: number; response: [number, number][]
 }
 export interface EquipmentFollower { id: string; name: string; barrel: string; piston: string; base_node: string; tip_node: string; base_point: Vec3; tip_point: Vec3 }
 export interface EquipmentDefinition { schema_version: 1; controls: EquipmentControl[]; joints: EquipmentJoint[]; followers: EquipmentFollower[] }
@@ -77,6 +77,7 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     if (j.members && (!Array.isArray(j.members) || j.members.length > 500 || j.members.some(n => typeof n !== 'string' || !n || n.length > 2000))) throw new Error('Invalid group parts')
     if (jointNodes(j).some(n => jointNodes(j).some(a => n !== a && n.startsWith(a + '/')))) throw new Error('Select a part or its children, not both')
     if (!def.controls.some(c => c.id === j.control)) throw new Error(`Choose a control for ${j.name}`)
+    if (j.pivot_rotation && !vector(j.pivot_rotation)) throw new Error('Invalid pivot orientation')
     if (!vector(j.axis) || Math.hypot(...j.axis) < 1e-6 || !vector(j.pivot) || !finite(j.minimum) || !finite(j.maximum) || !['hinge', 'slide'].includes(j.kind)) throw new Error(`Invalid joint settings: ${j.name}`)
     if (!Array.isArray(j.response) || j.response.length < 2 || j.response[0][0] !== 0 || j.response[j.response.length - 1][0] !== 1 || j.response.some((p, i) => !unit(p[0]) || !unit(p[1]) || (i > 0 && p[0] <= j.response[i - 1][0]))) throw new Error(`Invalid response curve: ${j.name}`)
     const seen = new Set([j.id]); let parent = j.parent

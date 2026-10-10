@@ -113,3 +113,15 @@ test('group members reject duplicate ownership and ancestor overlap',()=>{
  def.joints[0].members=[keys[0]+'/0:Child']
  assert.throws(()=>validateEquipment(def),/children/)
 })
+
+
+test('changing pivot orientation preserves rest pose and changes the motion axis',()=>{
+ const {root,def}=setup();def.joints=def.joints.slice(0,1)
+ def.joints[0].pivot_rotation=[Math.PI/2,0,0]
+ def.joints[0].axis=new THREE.Vector3(0,0,1).applyEuler(new THREE.Euler(...def.joints[0].pivot_rotation)).toArray()
+ const rt=bindEquipment(root,def);rt.evaluate(null,{lift:0});near(root.children[0].quaternion.angleTo(new THREE.Quaternion()),0)
+ rt.evaluate(null,{lift:1})
+ const expected=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,-1,0),Math.PI/2)
+ near(root.children[0].quaternion.angleTo(expected),0)
+ rt.restore();near(root.children[0].quaternion.angleTo(new THREE.Quaternion()),0)
+})

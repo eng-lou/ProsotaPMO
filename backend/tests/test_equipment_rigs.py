@@ -94,10 +94,12 @@ async def test_equipment_migration(db):
 async def test_moving_group_members_roundtrip_and_validation(client, project):
     d = definition()
     d['joints'][0]['members'] = ['/1:ArmRight', '/2:Crossbar']
+    d['joints'][0]['pivot_rotation'] = [0.1, 0.2, 0.3]
     response = await create(client, project, d)
     assert response.status_code == 201, response.text
     rig = response.json()
     assert rig['definition']['joints'][0]['members'] == d['joints'][0]['members']
+    assert rig['definition']['joints'][0]['pivot_rotation'] == [0.1, 0.2, 0.3]
     for members in [['/0:Boom'], ['/0:Boom/0:Bolt'], ['']]:
         invalid = deepcopy(d)
         invalid['joints'][0]['members'] = members
