@@ -51,53 +51,45 @@ export function hasAnchor(ctx: SiteContext): boolean {
   return ctx.lat !== null && ctx.lon !== null
 }
 
-// Coordinate parsing (2026-08-30, per Maro: "i need to also be able to
-// input the lattitude/longitude in this format too 51°21'30.86"N
-// 0°26'33.93"E") — the DMS (degrees/minutes/seconds) format Google Maps'
-// own "Copy coordinates" produces, alongside the plain decimal degrees
-// SiteContextPanel.tsx already accepted. A hemisphere letter (N/S/E/W) is
-// what actually identifies which token is lat vs lon — not its position in
-// the string — so parseCoordinatePair below works regardless of order.
-const DMS_TOKEN = /(-?\d+(?:\.\d+)?)\s*°\s*(\d+(?:\.\d+)?)\s*['′]\s*(\d+(?:\.\d+)?)\s*(?:["″])?\s*([NSEWnsew])?/g
+// Accept decimal degrees, decimal degrees with a hemisphere, and DMS.
+// Hemisphere-labelled pairs can be pasted into either coordinate field.
+const COORDINATE_TOKEN = /([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:°\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*(\d+(?:\.\d+)?)\s*["″]?\s*)?)?([NSEW])?/gi
 
-function dmsToDecimal(deg: number, min: number, sec: number, hemisphere?: string): number {
+type CoordinateAxis = 'lat' | 'lon'
+
+function tokenValue(match: RegExpMatchArray, axis?: CoordinateAxis): number | null {
+  const [, degrees, minutes, seconds, direction] = match
+  const hemisphere = direction?.toUpperCase()
+  if (axis === 'lat' && hemisphere && !'NS'.includes(hemisphere)) return null
+  if (axis === 'lon' && hemisphere && !'EW'.includes(hemisphere)) return null
+  const deg = Number(degrees), min = Number(minutes ?? 0), sec = Number(seconds ?? 0)
+  if (min >= 60 || sec >= 60) return null
   const magnitude = Math.abs(deg) + min / 60 + sec / 3600
-  const negative = deg < 0 || hemisphere === 'S' || hemisphere === 'W'
-  // Rounded to ~0.1m precision — an unrounded deg+min/60+sec/3600 division
-  // carries a long, meaningless-past-that-precision floating point tail.
-  return Math.round((negative ? -magnitude : magnitude) * 1e6) / 1e6
+  const limit = axis === 'lat' || hemisphere === 'N' || hemisphere === 'S' ? 90 : 180
+  if (!Number.isFinite(magnitude) || magnitude > limit) return null
+  // Reject a negative sign that contradicts an explicit north/east direction.
+  if (degrees.startsWith('-') && (hemisphere === 'N' || hemisphere === 'E')) return null
+  const negative = degrees.startsWith('-') || hemisphere === 'S' || hemisphere === 'W'
+  const value = negative ? -magnitude : magnitude
+  return minutes === undefined ? value : Math.round(value * 1e6) / 1e6
 }
 
-// A single coordinate for one field: a plain decimal ("51.358572") or one
-// full DMS token ("51°21'30.86"N"). Null if it's neither, whole-string only
-// (no trailing junk) so a pasted pair doesn't half-parse as garbage here.
-export function parseCoordinate(raw: string): number | null {
+export function parseCoordinate(raw: string, axis?: CoordinateAxis): number | null {
   const text = raw.trim()
-  if (text === '') return null
-  if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text)
-  DMS_TOKEN.lastIndex = 0
-  const match = DMS_TOKEN.exec(text)
-  if (!match || match[0] !== text) return null
-  const [, deg, min, sec, hemisphere] = match
-  return dmsToDecimal(Number(deg), Number(min), Number(sec), hemisphere?.toUpperCase())
+  const matches = [...text.matchAll(COORDINATE_TOKEN)]
+  if (matches.length !== 1 || matches[0][0].trim() !== text) return null
+  return tokenValue(matches[0], axis)
 }
 
-// A lat+lon pair pasted together into either field at once — the same
-// convenience as pasting straight out of Google Maps without splitting it
-// yourself first. Requires exactly two DMS tokens, one N/S and one E/W;
-// anything else (plain decimals, a single token, three+ tokens) isn't a
-// pair and is left to parseCoordinate/the caller instead.
 export function parseCoordinatePair(raw: string): { lat: number; lon: number } | null {
-  DMS_TOKEN.lastIndex = 0
-  const matches = [...raw.matchAll(DMS_TOKEN)]
-  if (matches.length !== 2) return null
+  const matches = [...raw.matchAll(COORDINATE_TOKEN)]
+  if (matches.length !== 2 || raw.replace(COORDINATE_TOKEN, '').replace(/[\s,;]/g, '') !== '') return null
   let lat: number | null = null
   let lon: number | null = null
-  for (const [, deg, min, sec, hemisphereRaw] of matches) {
-    const hemisphere = hemisphereRaw?.toUpperCase()
-    const value = dmsToDecimal(Number(deg), Number(min), Number(sec), hemisphere)
-    if (hemisphere === 'N' || hemisphere === 'S') lat = value
-    else if (hemisphere === 'E' || hemisphere === 'W') lon = value
+  for (const match of matches) {
+    const hemisphere = match[4]?.toUpperCase()
+    if (hemisphere === 'N' || hemisphere === 'S') lat = tokenValue(match, 'lat')
+    else if (hemisphere === 'E' || hemisphere === 'W') lon = tokenValue(match, 'lon')
   }
   return lat !== null && lon !== null ? { lat, lon } : null
 }

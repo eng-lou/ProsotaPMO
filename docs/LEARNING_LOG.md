@@ -6930,3 +6930,7 @@ The subsequent assigned-baseline screenshot confirms BAC 1,055,038.71 versus EAC
 ## 2026-10-10 — Reporting layout readability
 
 Milestone labels stacked upward from a vertically centred axis, but container height grew only by one row per collision; upper labels were clipped and the lower half stayed empty. Anchor the axis below all stacked rows, reserve a fixed label gutter on each side, and keep the data-date line above the axis. Browser verification: all 16 labels inside bounds at expanded and 500px compact sizes. KPI cards use available columns and a minimum display height without rewriting saved layouts; remove the schedule bars' negative-margin horizontal overflow. Overview shows data date, baseline state, scope and refresh; unquantified risk exposure has a clear empty state.
+
+## 2026-10-12 — Site Context decimal-degree paste
+
+The coordinate parser accepted plain decimals and full DMS but rejected decimal degrees with a degree symbol and hemisphere, such as 53.2907° N. The panel then silently restored the previous value (blank for a new anchor). Accept decimal-degree hemisphere notation and mixed labelled pairs, retain DMS support, validate axis/ranges/minutes/seconds, and preserve invalid drafts with a visible correction message. Regression tests cover the reported paste, south/west signs, DMS pairs, and invalid input.

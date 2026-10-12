@@ -65,6 +65,7 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
   // this panel's plain numeric fields.
   const [latDraft, setLatDraft] = useState(() => formatCoord(ctx.lat))
   const [lonDraft, setLonDraft] = useState(() => formatCoord(ctx.lon))
+  const [coordError, setCoordError] = useState<string | null>(null)
   useEffect(() => { setLatDraft(formatCoord(ctx.lat)) }, [ctx.lat])
   useEffect(() => { setLonDraft(formatCoord(ctx.lon)) }, [ctx.lon])
 
@@ -92,23 +93,24 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
   // A pair pasted into either field sets both at once (matching how
   // Google Maps' own "Copy coordinates" gives you both together); a single
   // coordinate — DMS or plain decimal — sets just the field it was typed
-  // into. Anything unparseable reverts the draft rather than sending
-  // garbage to onUpdate.
+  // into. Keep invalid drafts visible so the user can correct them.
   const commitLat = () => {
+    setCoordError(null)
     const pair = parseCoordinatePair(latDraft)
     if (pair) { onUpdate({ lat: pair.lat, lon: pair.lon }); setLatDraft(formatCoord(pair.lat)); setLonDraft(formatCoord(pair.lon)); return }
     if (latDraft.trim() === '') { onUpdate({ lat: null }); return }
-    const value = parseCoordinate(latDraft)
+    const value = parseCoordinate(latDraft, 'lat')
     if (value !== null) { onUpdate({ lat: value }); setLatDraft(formatCoord(value)) }
-    else setLatDraft(formatCoord(ctx.lat))
+    else setCoordError('Latitude: enter valid decimal degrees or DMS between -90 and 90.')
   }
   const commitLon = () => {
+    setCoordError(null)
     const pair = parseCoordinatePair(lonDraft)
     if (pair) { onUpdate({ lat: pair.lat, lon: pair.lon }); setLatDraft(formatCoord(pair.lat)); setLonDraft(formatCoord(pair.lon)); return }
     if (lonDraft.trim() === '') { onUpdate({ lon: null }); return }
-    const value = parseCoordinate(lonDraft)
+    const value = parseCoordinate(lonDraft, 'lon')
     if (value !== null) { onUpdate({ lon: value }); setLonDraft(formatCoord(value)) }
-    else setLonDraft(formatCoord(ctx.lon))
+    else setCoordError('Longitude: enter valid decimal degrees or DMS between -180 and 180.')
   }
 
   return (
@@ -193,8 +195,9 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
           </label>
         </div>
 
+        {coordError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{coordError}</p>}
         <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
-          The tiles land near the model automatically; nudge these until they line up. Either
+          Decimal degrees such as 53.2907° N are accepted. The tiles land near the model automatically; nudge these until they line up. Either
           lat/lon field also accepts a full DMS pair pasted in one go — e.g.
           51°21'30.86"N 0°26'33.93"E. Elevation is real-world height above the ellipsoid, in
           metres — leave at 0 for sea level.
