@@ -12,6 +12,23 @@ past session from git history.
 
 ---
 
+## 2026-10-13 — IFC wall contexts and scientific notation
+
+The clinic's source IFCs put wall axes and solid bodies in the same geometric
+context. Bonsai's context-based import could select axes, producing empty wall
+meshes even from the originals. Giving Body, Axis and Box separate subcontexts
+restored all 1,106 exported wall meshes in an isolated Bonsai import with its
+default settings. No wall geometry was replaced; all 1,080 architectural wall
+volumes still matched the source in independent IfcOpenShell checks.
+
+The exporter also emitted integer mantissas such as `1E-09`, which Synchro
+rejected. These now become `1.E-09`; quoted text and comments are preserved.
+Direct Synchro testing confirmed those lexical errors disappeared, but a
+separate resource import error remains at Excavation Crew. Changing its class
+or supplying optional quantity/consumption fields did not resolve it, so those
+experimental changes were not added to the exporter. Validation: 14 exporter
+tests, including real clinic fixtures, and the production frontend build passed.
+
 ## 2026-07-10 — 4D module: AO/camera/video, then a Blender detour and back
 
 **What got built:** finished the batch of 4D viewer features Maro asked

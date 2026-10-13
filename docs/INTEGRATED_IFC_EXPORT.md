@@ -148,3 +148,25 @@ The production Vite build includes the separate IFC export worker. Browser UI,
 large high-rise files and independent third-party IFC application interoperability
 need further validation. Validation of the fixture does not certify arbitrary
 input models or repair pre-existing source schema errors.
+
+### Representation contexts and STEP numbers (2026-10-13)
+
+Integrated exports give Body, Axis and Box representations their own named
+subcontexts when a source attaches them directly to the parent geometric
+context. Existing subcontexts are retained. This prevents context-based
+importers from choosing a wall axis instead of its solid; geometry items,
+placements and parent coordinate systems are unchanged. Both IFC2X3 and IFC4
+are covered by regression tests.
+
+The clinic export was imported with Bonsai 0.9.0 in Blender 5.1.1 using default
+geometry settings: all 1,106 walls had polygon meshes after this correction.
+An independent IfcOpenShell comparison also retained all 1,080 architectural
+wall volumes from the original source. Tests use local fixtures, not committed
+model files.
+
+STEP scientific notation now always has a decimal mantissa (`1.E-09`, not
+`1E-09`), without rewriting strings or comments. This removes the reported
+Synchro lexical errors. Synchro still rejects the separate native construction
+resource occurrence at Excavation Crew; full Synchro planning interoperability
+is not yet verified. Do not interpret the syntax correction as resolving that
+resource compatibility issue.

@@ -1,7 +1,13 @@
-import { IfcAPI, IFC2X3, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCSIUNIT, IFCCONVERSIONBASEDUNIT, IFCMONETARYUNIT, REF, REAL } from 'web-ifc'
+import { IfcAPI, IFC2X3, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCSIUNIT, IFCCONVERSIONBASEDUNIT, IFCMONETARYUNIT, IFCSHAPEREPRESENTATION, IFCGEOMETRICREPRESENTATIONCONTEXT, IFCGEOMETRICREPRESENTATIONSUBCONTEXT, REF, REAL } from 'web-ifc'
 import { buildPlanningStep, type IntegratedIfcData } from './integratedIfcData'
 
 export interface IfcExportSource { name: string; bytes: Uint8Array }
+
+// STEP requires a decimal mantissa. Preserve strings and comments verbatim.
+export function normalizeStepRealExponents(step: string): string {
+  return step.replace(/'(?:''|[^'])*'|\/\*[\s\S]*?\*\/|(?<![\w.])([+-]?\d+)[eE]([+-]?\d+)(?![\w.])/g,
+    (token, mantissa, exponent) => mantissa === undefined ? token : `${mantissa}.E${exponent}`)
+}
 
 // Work on private WASM models, never the live viewport's handles. This module is
 // loaded exclusively by the export worker (and by Node integration tests).
@@ -133,6 +139,31 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
         if (model !== destination) api.CloseModel(model)
       }
     }
+    // Some legacy files place Axis and Body in the same parent context.
+    // Context-based importers can then choose a curve instead of the solid.
+    // Separate their purposes without changing representation items/placements.
+    const contexts = new Map<string, number>()
+    for (const id of ids(destination, IFCSHAPEREPRESENTATION)) {
+      const representation = api.GetLine(destination, id)
+      const purpose = representation.RepresentationIdentifier?.value
+      if (!['Body', 'Axis', 'Box'].includes(purpose)) continue
+      const parent = api.GetLine(destination, representation.ContextOfItems.value)
+      if (parent.type !== IFCGEOMETRICREPRESENTATIONCONTEXT) continue
+      const key = `${parent.expressID}:${purpose}`
+      let contextId = contexts.get(key)
+      if (contextId === undefined) {
+        const context = api.CreateIfcEntity(destination, IFCGEOMETRICREPRESENTATIONSUBCONTEXT,
+          representation.RepresentationIdentifier, parent.ContextType, representation.ContextOfItems,
+          null, IFC2X3.IfcGeometricProjectionEnum.MODEL_VIEW, null)
+        context.expressID = ++maxId
+        api.WriteLine(destination, context)
+        contextId = context.expressID
+        contexts.set(key, contextId)
+      }
+      const raw = api.GetRawLineData(destination, id)
+      raw.arguments[0] = { type: REF, value: contextId }
+      api.WriteRawLineData(destination, raw)
+    }
     progress('Embedding schedule, resources and cost plan…')
     const project = api.GetLine(destination, projectId)
     const unitAssignment = api.GetLine(destination, project.UnitsInContext.value)
@@ -185,7 +216,7 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
     const original = new TextDecoder().decode(api.SaveModel(destination))
     const marker = original.lastIndexOf('ENDSEC;')
     if (marker < 0) throw new Error('Could not serialise the combined IFC.')
-    const output = new TextEncoder().encode(original.slice(0, marker) + planning.step + '\n' + original.slice(marker))
+    const output = new TextEncoder().encode(normalizeStepRealExponents(original.slice(0, marker) + planning.step + '\n' + original.slice(marker)))
     return { bytes: output, warnings: [...warnings, ...planning.warnings] }
   } finally {
     if (destination >= 0) api.CloseModel(destination)

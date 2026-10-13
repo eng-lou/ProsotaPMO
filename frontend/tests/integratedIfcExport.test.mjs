@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url)
 const W = require('web-ifc')
 const outfile = fileURLToPath(new URL(`.ifc-export-${process.pid}.cjs`, import.meta.url))
 await build({ entryPoints: [fileURLToPath(new URL('../src/modules/fourD/integratedIfcExport.ts', import.meta.url))], outfile, bundle: true, format: 'cjs', platform: 'node', external: ['web-ifc'] })
-const { exportIntegratedIfc } = require(outfile)
+const { exportIntegratedIfc, normalizeStepRealExponents } = require(outfile)
 rmSync(outfile)
 
 function source(name, wallGuid, { schema = 'IFC4', prefix = '$', offset = 0, projectGuid = '0000000000000000000000' } = {}) {
@@ -61,6 +61,29 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
   links: [{ activity_id: 'b', source_kind: 'ifc', element_ref: wallA }, { activity_id: 'a', source_kind: 'ifc', element_ref: wallB }] })
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
+
+for (const schema of ['IFC2X3', 'IFC4']) test(`${schema}: separate solid and axis contexts without changing geometry`, async () => withApi(async api => {
+  const input = source('axis-and-body.ifc', wallA, { schema })
+  input.bytes = new TextEncoder().encode(new TextDecoder().decode(input.bytes)
+    .replace('(#17));', '(#25,#17));')
+    .replace('#17=IFCSHAPEREPRESENTATION', "#24=IFCPOLYLINE((#4,#7));\n#25=IFCSHAPEREPRESENTATION(#5,'Axis','Curve3D',(#24));\n#17=IFCSHAPEREPRESENTATION"))
+  const result = await exportIntegratedIfc(api, [input], { ...data(), links: [] })
+  const model = api.OpenModel(result.bytes)
+  const reps = lines(api, model, W.IFCSHAPEREPRESENTATION)
+  const body = reps.find(r => r.RepresentationIdentifier.value === 'Body')
+  const axis = reps.find(r => r.RepresentationIdentifier.value === 'Axis')
+  assert.notEqual(body.ContextOfItems.value, axis.ContextOfItems.value)
+  for (const rep of [body, axis]) {
+    const context = api.GetLine(model, rep.ContextOfItems.value)
+    assert.equal(context.type, W.IFCGEOMETRICREPRESENTATIONSUBCONTEXT)
+    assert.equal(context.ContextIdentifier.value, rep.RepresentationIdentifier.value)
+    assert.equal(context.ParentContext.value, 5)
+    assert.equal(context.TargetView.value, 'MODEL_VIEW')
+  }
+  assert.equal(body.Items[0].value, 15)
+  assert.equal(axis.Items[0].value, 24)
+  assert.equal(api.LoadAllGeometry(model).size(), 1)
+}))
 
 function checkProductOutputs(api, model) {
   const outputs = lines(api, model, W.IFCRELASSIGNSTOPRODUCT).filter(r => r.Name.value === 'Prosota model elements')
@@ -238,3 +261,8 @@ test('copied high-precision REAL measures reach the browser writer as numbers', 
   assert.equal(api.LoadAllGeometry(m).size(), 2)
   api.CloseModel(m)
 }))
+
+test('STEP exponent normalization preserves quoted strings and comments', () => {
+  assert.equal(normalizeStepRealExponents("#1=X(1E-09,-2e+10,1.2E-9,'1E-09 and ''2e10''',/* 3E-9 */1E9);"),
+    "#1=X(1.E-09,-2.E+10,1.2E-9,'1E-09 and ''2e10''',/* 3E-9 */1.E9);")
+})
