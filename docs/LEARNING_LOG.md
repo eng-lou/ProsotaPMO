@@ -6934,3 +6934,7 @@ Milestone labels stacked upward from a vertically centred axis, but container he
 ## 2026-10-12 — Site Context decimal-degree paste
 
 The coordinate parser accepted plain decimals and full DMS but rejected decimal degrees with a degree symbol and hemisphere, such as 53.2907° N. The panel then silently restored the previous value (blank for a new anchor). Accept decimal-degree hemisphere notation and mixed labelled pairs, retain DMS support, validate axis/ranges/minutes/seconds, and preserve invalid drafts with a visible correction message. Regression tests cover the reported paste, south/west signs, DMS pairs, and invalid input.
+
+## 2026-10-13 — Browser IFC export and long decimal measures
+
+Reproduced the clinic IFC4 export error on IfcCartesianPoint #317674 in the browser worker using the converted architecture and structure sources. Node exports passed, but browser WASM rejected long decimal REAL literals retained as strings in NumberHandle.internalValue, surfacing an unhelpful undefined name error in the binding. Normalize copied REAL measures through their value setter to finite numeric values while preserving generated measure prototypes and reference remapping. Browser export now completes (33,523,904 bytes); 11 integration tests pass, including combined clinic geometry counts and a regression enforcing the browser numeric contract. Original source files are unchanged.

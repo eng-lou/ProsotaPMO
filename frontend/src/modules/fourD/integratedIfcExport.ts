@@ -1,4 +1,4 @@
-import { IfcAPI, IFC2X3, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCSIUNIT, IFCCONVERSIONBASEDUNIT, IFCMONETARYUNIT, REF } from 'web-ifc'
+import { IfcAPI, IFC2X3, IFCPROJECT, IFCPRODUCT, IFCROOT, IFCSIUNIT, IFCCONVERSIONBASEDUNIT, IFCMONETARYUNIT, REF, REAL } from 'web-ifc'
 import { buildPlanningStep, type IntegratedIfcData } from './integratedIfcData'
 
 export interface IfcExportSource { name: string; bytes: Uint8Array }
@@ -95,6 +95,15 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
               if (mapped == null) throw new Error(`"${source.name}" contains a dangling IFC reference #${value.value}.`)
               value.value = mapped
               return value
+            }
+            // web-ifc retains source REAL literals as strings internally. Its
+            // browser WASM writer requires a number for long decimal literals
+            // (e.g. IFC4 conversion output), although the Node writer accepts
+            // them. Use the measure setter to normalise both representations.
+            if (value.type === REAL && typeof value.internalValue === 'string') {
+              const numeric = Number(value.internalValue)
+              if (!Number.isFinite(numeric)) throw new Error(`"${source.name}" contains a non-finite IFC real value.`)
+              value.value = numeric
             }
             // Preserve generated measure prototypes/accessors. Only handles
             // need remapping; the schema-aware writer restores derived '*'

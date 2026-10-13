@@ -206,3 +206,35 @@ test('real IFC source retains its geometry when combined with a second copy', { 
   assert.equal(new Set(guids).size, guids.length)
   api.CloseModel(model)
 }))
+
+test('clinic architecture and converted structure combine without losing geometry', { skip: !process.env.PROSOTA_IFC_ARCH_FILE || !process.env.PROSOTA_IFC_TEST_FILE }, async () => withApi(async api => {
+  const sources = [process.env.PROSOTA_IFC_ARCH_FILE, process.env.PROSOTA_IFC_TEST_FILE].map(name => ({name, bytes:new Uint8Array(readFileSync(name))}))
+  let expectedGeometry = 0
+  for (const s of sources) { const m=api.OpenModel(s.bytes); expectedGeometry += api.LoadAllGeometry(m).size(); api.CloseModel(m) }
+  const d=data(); d.links=[]
+  const result=await exportIntegratedIfc(api,sources,d)
+  const m=api.OpenModel(result.bytes)
+  assert.equal(api.LoadAllGeometry(m).size(), expectedGeometry)
+  assert.equal(lines(api,m,W.IFCPROJECT).length,1)
+  api.CloseModel(m)
+}))
+
+test('copied high-precision REAL measures reach the browser writer as numbers', async () => withApi(async api => {
+  const second = source('converted.ifc', wallB)
+  second.bytes = new TextEncoder().encode(new TextDecoder().decode(second.bytes).replace('#7=IFCCARTESIANPOINT((0.,0.,0.));', '#7=IFCCARTESIANPOINT((-37.993750000000027,28.380000000000098,4.6799999999959017));'))
+  const originalWrite = api.WriteLine.bind(api)
+  const check = value => {
+    if (Array.isArray(value)) value.forEach(check)
+    else if (value && typeof value === 'object' && value.type === W.REAL && 'internalValue' in value) {
+      assert.equal(typeof value.internalValue, 'number', 'browser WASM rejects string REAL values')
+    }
+  }
+  api.WriteLine = (model, line) => { Object.values(line).forEach(check); originalWrite(model, line) }
+  const result = await exportIntegratedIfc(api, [source('first.ifc', wallA), second], data())
+  const m = api.OpenModel(result.bytes)
+  const wall = lines(api,m,W.IFCWALL).find(w=>w.GlobalId.value===wallB)
+  const point = api.GetLine(m,api.GetLine(m,api.GetLine(m,wall.ObjectPlacement.value).RelativePlacement.value).Location.value)
+  assert.deepEqual(point.Coordinates.map(v=>v.value), [-37.993750000000027,28.380000000000098,4.6799999999959017])
+  assert.equal(api.LoadAllGeometry(m).size(), 2)
+  api.CloseModel(m)
+}))
