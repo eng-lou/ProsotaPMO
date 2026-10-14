@@ -190,3 +190,22 @@ duplicate task-code warnings from the first import; original Revit user-field
 name warnings also remain. This verifies the reported import blocker, not full
 calendar, cost or 4D playback fidelity in Synchro. All 15 IFC integration tests
 (including both local clinic fixtures) and the production build passed.
+
+### Restored Synchro model assignments (2026-10-14)
+
+The initial compatibility option did not restore model-to-task assignments:
+the import counts above were not evidence of linked 3D resources. Commit
+`19bd0ae` had replaced the original `69d6176` process assignments with product
+outputs to correct Bonsai construction playback. Synchro's IFC2X3 reader
+requires the original process assignments, as also emitted by its own exporter.
+Synchro mode now emits those links; standard export retains product outputs.
+The representation-context and STEP-number fixes apply to both paths.
+
+A fresh installed Synchro import of the regenerated clinic created 75 tasks,
+80 dependency links, 3,849 resources and **3,664 assignments**. Resource Usage
+showed the linked model elements and their tasks. The integration suite also
+checks shared elements, duplicate-link deduplication and the separate standard
+output semantics. All 15 tests passed with both local clinic fixtures enabled.
+Nonvisual labour/equipment allocations still remain task properties in Synchro
+mode, and custom appearance profiles are not yet transferred as native Synchro
+profiles. This correction does not claim to resolve those separate limitations.

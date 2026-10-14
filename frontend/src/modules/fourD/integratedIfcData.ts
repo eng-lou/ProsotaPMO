@@ -187,14 +187,21 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     const set = byTask.get(task) ?? new Set<string>()
     set.add(`#${id}`); byTask.set(task, set)
   }
-  // Built elements are task OUTPUTS. AssignsToProcess means consumed input
-  // (e.g. demolition), which reverses construction playback in Bonsai.
+  // Synchro's IFC2X3 reader requires the process links used by our original
+  // exporter (69d6176) and Synchro's own IFC export. Keep this receiver-specific:
+  // Bonsai interprets those same links as consumed/demolished inputs.
+  if (data.compatibility === 'synchro') {
+    for (const [task, ids] of byTask) {
+      add('IFCRELASSIGNSTOPROCESS', ...root('Prosota model elements'), list([...ids]), '$', task, '$')
+    }
+  }
+  // Standard IFC construction links remain outputs for Bonsai playback.
   const byProduct = new Map<string, Set<string>>()
   for (const [task, ids] of byTask) for (const product of ids) {
     const producers = byProduct.get(product) ?? new Set<string>()
     producers.add(task); byProduct.set(product, producers)
   }
-  for (const [product, producers] of byProduct) {
+  for (const [product, producers] of data.compatibility === 'synchro' ? [] : byProduct) {
     add('IFCRELASSIGNSTOPRODUCT', ...root('Prosota model elements'), list([...producers]), '$', product)
   }
   if (missingLinks) warnings.push(`${missingLinks} activity/model links could not be resolved in the source IFCs.`)

@@ -62,8 +62,9 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
 
-test('Synchro mode preserves assignments as task properties without native resource occurrences', async () => withApi(async api => {
-  const input = { ...data(), compatibility: 'synchro', links: [] }
+test('Synchro restores original model-to-task links and preserves nonvisual resource data', async () => withApi(async api => {
+  const input = { ...data(), compatibility: 'synchro' }
+  input.links = [input.links[0], input.links[0], { ...input.links[0], activity_id: 'a' }]
   input.resources.push({ ...input.resources[0], id: 'crew', resource_type: 'crew', name: 'Excavation Crew' })
   input.assignments.push({ ...input.assignments[0], id: 'crew-assignment', resource_id: 'crew' })
   const result = await exportIntegratedIfc(api, [source('legacy.ifc', wallA, { schema: 'IFC2X3' })], input)
@@ -73,6 +74,14 @@ test('Synchro mode preserves assignments as task properties without native resou
   assert.equal(lines(api, model, W.IFCTASK).length, 2)
   assert.equal(lines(api, model, W.IFCRELSEQUENCE).length, 1)
   assert.equal(api.LoadAllGeometry(model).size(), 1)
+  assert.equal(lines(api, model, W.IFCRELASSIGNSTOPRODUCT).length, 0)
+  const modelLinks = lines(api, model, W.IFCRELASSIGNSTOPROCESS)
+  assert.equal(modelLinks.length, 2)
+  assert.deepEqual(modelLinks.map(r => api.GetLine(model, r.RelatingProcess.value).TaskId.value).sort(), ['a', 'b'])
+  for (const rel of modelLinks) {
+    assert.equal(rel.RelatedObjects.length, 1, 'duplicate model links are deduplicated')
+    assert.equal(api.GetLine(model, rel.RelatedObjects[0].value).GlobalId.value, wallA)
+  }
   const sets = lines(api, model, W.IFCPROPERTYSET).filter(p => p.Name.value.startsWith('Prosota_ResourceAssignment_'))
   assert.equal(sets.length, 2)
   for (const set of sets) {

@@ -12,6 +12,19 @@ past session from git history.
 
 ---
 
+## 2026-10-14 — Restore the proven Synchro model links
+
+Compared the working 5 October exporter (`69d6176`) with `19bd0ae`. The latter
+changed model links from process inputs to product outputs for Bonsai playback.
+The subsequent Synchro compatibility option avoided a resource import error
+but did not restore these links. A successful geometry/schedule import was not
+proof that assignments worked. Restored the original process links only for
+Synchro; standard IFC keeps Bonsai outputs and both retain the wall fixes.
+A clean Synchro import now created 3,664 model assignments, visible with their
+tasks in Resource Usage. All 15 IFC tests passed, including clinic fixtures.
+Native labour/equipment allocations and custom appearance profiles remain
+unresolved; do not describe the whole interoperability workflow as fixed.
+
 ## 2026-10-13 — IFC wall contexts and scientific notation
 
 The clinic's source IFCs put wall axes and solid bodies in the same geometric
