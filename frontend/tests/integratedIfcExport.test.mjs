@@ -62,6 +62,32 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
 
+test('Synchro mode preserves assignments as task properties without native resource occurrences', async () => withApi(async api => {
+  const input = { ...data(), compatibility: 'synchro', links: [] }
+  input.resources.push({ ...input.resources[0], id: 'crew', resource_type: 'crew', name: 'Excavation Crew' })
+  input.assignments.push({ ...input.assignments[0], id: 'crew-assignment', resource_id: 'crew' })
+  const result = await exportIntegratedIfc(api, [source('legacy.ifc', wallA, { schema: 'IFC2X3' })], input)
+  const model = api.OpenModel(result.bytes)
+  assert.equal(lines(api, model, W.IFCLABORRESOURCE).length, 0)
+  assert.equal(lines(api, model, W.IFCCREWRESOURCE).length, 0)
+  assert.equal(lines(api, model, W.IFCTASK).length, 2)
+  assert.equal(lines(api, model, W.IFCRELSEQUENCE).length, 1)
+  assert.equal(api.LoadAllGeometry(model).size(), 1)
+  const sets = lines(api, model, W.IFCPROPERTYSET).filter(p => p.Name.value.startsWith('Prosota_ResourceAssignment_'))
+  assert.equal(sets.length, 2)
+  for (const set of sets) {
+    const rel = lines(api, model, W.IFCRELDEFINESBYPROPERTIES).find(r => r.RelatingPropertyDefinition.value === set.expressID)
+    assert.equal(api.GetLine(model, rel.RelatedObjects[0].value).TaskId.value, 'b')
+    const props = set.HasProperties.map(p => api.GetLine(model, p.value))
+    const assignment = JSON.parse(props.find(p => p.Name.value === 'assignment').NominalValue.value)
+    assert.deepEqual(assignment, input.assignments.find(a => a.id === assignment.id))
+  }
+  assert.ok(result.warnings.some(w => w.includes('not editable')))
+  await assert.rejects(exportIntegratedIfc(api, [source('modern.ifc', wallA)], input), /requires IFC2X3/)
+  input.assignments[0].resource_id = 'missing'
+  await assert.rejects(exportIntegratedIfc(api, [source('legacy.ifc', wallA, { schema: 'IFC2X3' })], input), /cannot be resolved/)
+}))
+
 for (const schema of ['IFC2X3', 'IFC4']) test(`${schema}: separate solid and axis contexts without changing geometry`, async () => withApi(async api => {
   const input = source('axis-and-body.ifc', wallA, { schema })
   input.bytes = new TextEncoder().encode(new TextDecoder().decode(input.bytes)

@@ -170,3 +170,23 @@ Synchro lexical errors. Synchro still rejects the separate native construction
 resource occurrence at Excavation Crew; full Synchro planning interoperability
 is not yet verified. Do not interpret the syntax correction as resolving that
 resource compatibility issue.
+
+### Synchro compatibility (2026-10-14)
+
+Select **Synchro compatibility (IFC2X3)** in the export dialog and rebuild the
+file. This option requires IFC2X3 source models and keeps native geometry,
+tasks, dates, dependencies and cost entities. It writes each Prosota resource
+assignment into a uniquely named task property set, retaining the complete
+resource and assignment payload, instead of creating the non-geometric native
+construction resources that stop Synchro at Excavation Crew. The resource
+catalogue is also retained. These properties are not editable Synchro human or
+equipment allocations. Standard export continues to emit native resources.
+
+Validated in the installed Synchro 4D Pro: both an isolation file and the actual
+exporter output completed import, creating 75 tasks, 80 links and 3,849 model
+resources. All 102 assignment payloads in the rebuilt clinic export matched
+the input exactly. The second import appended to the test project and reported
+duplicate task-code warnings from the first import; original Revit user-field
+name warnings also remain. This verifies the reported import blocker, not full
+calendar, cost or 4D playback fidelity in Synchro. All 15 IFC integration tests
+(including both local clinic fixtures) and the production build passed.

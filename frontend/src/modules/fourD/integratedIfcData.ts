@@ -3,6 +3,7 @@ import type { CostElement } from '../costs/types'
 import type { ModelElementLink } from './modelElementLinks'
 
 export interface IntegratedIfcData {
+  compatibility?: 'synchro'
   project: { id: string; name: string }
   schedulePeriodId: string
   costPeriodId: string
@@ -208,6 +209,12 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   for (const a of data.assignments) {
     const task = tasks.get(a.activity_id), r = resourceDefs.get(a.resource_id)
     if (!task || !r) throw new Error('A resource assignment cannot be resolved. Refresh and retry.')
+    // Synchro rejects non-geometric construction resources during IFC import.
+    // Keep every assignment on its task, without pretending it is a 3D resource.
+    if (data.compatibility === 'synchro') {
+      properties(task, `Prosota_ResourceAssignment_${a.id}`, { ...r, assignment: a })
+      continue
+    }
     const usage = a.utilisation_pct == null ? '$' : real(Number(a.utilisation_pct) / 100)
     const time = legacy ? '$' : add('IFCRESOURCETIME', '$', '.USERDEFINED.', stepText('Prosota'), '$', usage, '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$', '$')
     const cost = costValue('BUDGET', a.budget)
@@ -221,6 +228,7 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     add('IFCRELASSIGNSTOPROCESS', ...root('Prosota resource assignment'), list([resource]), '$', task, '$')
   }
   declare(resourceRoots)
+  if (data.compatibility === 'synchro') warnings.push('Synchro compatibility: resource assignments are retained as task properties, not editable labour/equipment resource allocations. Geometry resources, tasks and dependencies remain native IFC.')
   properties(schedule, 'Prosota_ResourceCatalogue', { resources: data.resources })
   const costSchedule = legacy ? add('IFCCOSTSCHEDULE', ...root(`${data.project.name} — Prosota cost plan`), '$', '$', '$', '$', '$', '$', stamp(data.exportedAt), stepText(data.costPeriodId), '.COSTPLAN.')
     : add('IFCCOSTSCHEDULE', ...root(`${data.project.name} — Prosota cost plan`), '$', stepText(data.costPeriodId), '.NOTDEFINED.', '$', '$', dateTime(data.exportedAt))

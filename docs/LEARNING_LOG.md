@@ -6952,6 +6952,10 @@ Milestone labels stacked upward from a vertically centred axis, but container he
 
 The coordinate parser accepted plain decimals and full DMS but rejected decimal degrees with a degree symbol and hemisphere, such as 53.2907° N. The panel then silently restored the previous value (blank for a new anchor). Accept decimal-degree hemisphere notation and mixed labelled pairs, retain DMS support, validate axis/ranges/minutes/seconds, and preserve invalid drafts with a visible correction message. Regression tests cover the reported paste, south/west signs, DMS pairs, and invalid input.
 
+## 2026-10-14 — Synchro construction-resource import blocker
+
+STEP syntax correction alone did not resolve Synchro's rejection of Excavation Crew. Isolating the non-geometric construction resources allowed the same clinic geometry and schedule to import successfully. Added an explicit IFC2X3 Synchro compatibility option that retains all assignment payloads on their tasks as properties; standard exports retain native resources. The dialog explains that these are not editable Synchro labour/equipment allocations. Actual exporter output imported successfully in Synchro (75 tasks, 80 links, 3,849 model resources), all 102 assignment payloads matched exactly, 15 IFC tests passed, and the production build passed. Do not equate successful import with full downstream planning fidelity.
+
 ## 2026-10-13 — Browser IFC export and long decimal measures
 
 Reproduced the clinic IFC4 export error on IfcCartesianPoint #317674 in the browser worker using the converted architecture and structure sources. Node exports passed, but browser WASM rejected long decimal REAL literals retained as strings in NumberHandle.internalValue, surfacing an unhelpful undefined name error in the binding. Normalize copied REAL measures through their value setter to finite numeric values while preserving generated measure prototypes and reference remapping. Browser export now completes (33,523,904 bytes); 11 integration tests pass, including combined clinic geometry counts and a regression enforcing the browser numeric contract. Original source files are unchanged.

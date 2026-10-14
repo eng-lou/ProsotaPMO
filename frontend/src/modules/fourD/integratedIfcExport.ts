@@ -56,6 +56,7 @@ export async function exportIntegratedIfc(api: IfcAPI, sources: IfcExportSource[
       const model = api.OpenModel(source.bytes)
       try {
         const sourceSchema = api.GetModelSchema(model).toUpperCase()
+        if (data.compatibility === 'synchro' && sourceSchema !== 'IFC2X3') throw new Error('Synchro compatibility requires IFC2X3 source models. Use the standard export for IFC4 sources.')
         if (!['IFC4', 'IFC2X3'].includes(sourceSchema)) throw new Error(`"${source.name}" uses ${sourceSchema}. Integrated export supports IFC2X3 and IFC4.`)
         if (index && sourceSchema !== schema) throw new Error('The source models mix IFC2X3 and IFC4. Combining different schemas requires conversion; use source models with the same schema.')
         schema = sourceSchema

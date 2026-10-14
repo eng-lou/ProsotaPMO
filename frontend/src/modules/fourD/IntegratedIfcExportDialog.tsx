@@ -11,6 +11,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   const [files, setFiles] = useState<Model3DFile[] | null>(null)
   const [currency, setCurrency] = useState('GBP')
   const [targetSchema, setTargetSchema] = useState<'source' | 'IFC4'>('source')
+  const [synchro, setSynchro] = useState(false)
   const [counts, setCounts] = useState<string>('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
@@ -82,7 +83,8 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       }
       if (!alive.current) return
       const data: IntegratedIfcData = { project, schedulePeriodId, costPeriodId, currency, exportedAt: new Date().toISOString(),
-        activities, relationships, resources, assignments, calendars, breaks, exceptions, costs, links }
+        activities, relationships, resources, assignments, calendars, breaks, exceptions, costs, links,
+        compatibility: synchro ? 'synchro' : undefined }
       const w = new Worker(new URL('./integratedIfc.worker.ts', import.meta.url), { type: 'module' })
       worker.current = w
       const fail = (message: string) => { setError(message); setBusy(false); setStatus(''); w.terminate(); worker.current = null }
@@ -122,11 +124,13 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       <p className="mt-2 text-xs text-gray-500">Uses original geometry, placements and materials, including hidden/unloaded elements. Viewport transforms, material overrides, split geometry and animation are not baked. Mesh and point-cloud files are excluded. Keep-source exports require matching schemas. The IFC4 option converts IFC2X3 sources. Combined sources must have matching units.</p>
       <ul className="my-3 text-xs list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
       <label className="block my-3">Output format
-        <select value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC4')} className="ml-3 border rounded px-2 py-1 bg-transparent">
+        <select value={targetSchema} disabled={busy || !!result || synchro} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC4')} className="ml-3 border rounded px-2 py-1 bg-transparent">
           <option value="source">Keep source schema</option>
           <option value="IFC4">IFC4 (convert IFC2X3 sources)</option>
         </select>
       </label>
+      <label className="block my-3"><input type="checkbox" checked={synchro} disabled={busy || !!result} onChange={e => { setSynchro(e.target.checked); if (e.target.checked) setTargetSchema('source') }} /> Synchro compatibility (IFC2X3)</label>
+      {synchro && <p className="text-xs text-gray-500">Requires IFC2X3 sources. Exports model geometry, tasks and dependencies. Crew, labour and equipment assignments are saved as task properties instead of native resource allocations, which Synchro rejects.</p>}
       {targetSchema === 'IFC4' && <p className="text-xs text-gray-500">Converts saved IFC2X3 sources before adding native IFC4 planning data. Conversion can take several minutes. Original models are preserved.</p>}
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
       <label className="block my-3">Currency of the Prosota costs
