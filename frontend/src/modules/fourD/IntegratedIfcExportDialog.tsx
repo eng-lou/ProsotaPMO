@@ -37,7 +37,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
     try {
       const get = async <T,>(path: string, params: object) => (await api.get<T>(`/api/v1/${path}/`, { params })).data
       const p = { project_id: project.id }, s = { schedule_period_id: schedulePeriodId }
-      const [activities, relationships, resources, assignments, calendars, costs, links] = await Promise.all([
+      const [activities, relationships, resources, assignments, calendars, costs, links, animationProfiles] = await Promise.all([
         get<IntegratedIfcData['activities']>('activities', { ...p, ...s }),
         get<IntegratedIfcData['relationships']>('activity-relationships', s),
         get<IntegratedIfcData['resources']>('resources', p),
@@ -45,6 +45,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         get<IntegratedIfcData['calendars']>('calendars', p),
         get<IntegratedIfcData['costs']>('cost-elements', { ...p, period_id: costPeriodId }),
         get<IntegratedIfcData['links']>('model-element-links', p),
+        get<IntegratedIfcData['animationProfiles']>('animation-profiles', p),
       ])
       const breaks: IntegratedIfcData['breaks'] = [], exceptions: IntegratedIfcData['exceptions'] = []
       setCounts(`${activities.length} activities · ${relationships.length} dependencies · ${resources.length} resources · ${assignments.length} resource assignments · ${costs.length} cost items`)
@@ -83,7 +84,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       }
       if (!alive.current) return
       const data: IntegratedIfcData = { project, schedulePeriodId, costPeriodId, currency, exportedAt: new Date().toISOString(),
-        activities, relationships, resources, assignments, calendars, breaks, exceptions, costs, links,
+        activities, relationships, resources, assignments, calendars, breaks, exceptions, costs, links, animationProfiles,
         compatibility: synchro ? 'synchro' : undefined }
       const w = new Worker(new URL('./integratedIfc.worker.ts', import.meta.url), { type: 'module' })
       worker.current = w
@@ -137,6 +138,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         <input aria-label="Export currency" value={currency} disabled={busy || !!result} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} className="ml-3 border rounded px-2 py-1 w-20 bg-transparent" />
       </label>
       <p className="text-xs text-gray-500">No currency conversion is performed. Native IFC data is supplemented by Prosota properties for custom fields. Other applications may display only the IFC features they support.</p>
+      <p className="mt-2 text-xs text-gray-500">IFC4 animation types: green profile start colours export as Construction, red as Demolition. Uncoloured defaults remain Not defined. Bonsai uses its own colour scheme for these types; exact colours and motion settings are retained as properties. IFC2X3 has no task predefined-type field.</p>
       {status && <p role="status" className="mt-3">{status}</p>}
       {counts && <p className="mt-2 text-xs">{counts}</p>}
       {error && <p role="alert" className="mt-3 text-red-600">{error}</p>}

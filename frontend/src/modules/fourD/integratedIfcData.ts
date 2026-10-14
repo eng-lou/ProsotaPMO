@@ -1,6 +1,7 @@
 import type { Activity, ActivityRelationship, Calendar, CalendarBreak, CalendarException, Resource, ResourceAssignment } from '../scheduling/types'
 import type { CostElement } from '../costs/types'
 import type { ModelElementLink } from './modelElementLinks'
+import type { AnimationProfile } from './animationProfiles'
 
 export interface IntegratedIfcData {
   compatibility?: 'synchro'
@@ -18,6 +19,23 @@ export interface IntegratedIfcData {
   exceptions: CalendarException[]
   costs: CostElement[]
   links: ModelElementLink[]
+  animationProfiles?: AnimationProfile[]
+}
+
+// Translate explicit animation colours, never the original model materials.
+// Neutral/default profiles keep their existing NOTDEFINED behaviour.
+function animationTaskType(profile?: AnimationProfile): string {
+  let color = profile?.config.color_from?.trim()
+  if (!color) return 'NOTDEFINED'
+  if (/^#[0-9a-f]{3}$/i.test(color)) color = '#' + [...color.slice(1)].map(c => c + c).join('')
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return 'NOTDEFINED'
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(color!.slice(i, i + 2), 16) / 255)
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min
+  if (delta < 0.15 || max < 0.2) return 'NOTDEFINED'
+  const hue = ((max === r ? (g - b) / delta : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60 + 360) % 360
+  if (hue >= 75 && hue <= 165) return 'CONSTRUCTION'
+  if (hue <= 20 || hue >= 345) return 'DEMOLITION'
+  return 'NOTDEFINED'
 }
 
 // STEP strings are ASCII with UTF-16 escape sequences. Never interpolate user
@@ -137,16 +155,26 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   declare([...calendars.values()])
   const tasks = new Map<string, string>()
   const calendarTasks = new Map<string, string[]>()
+  const profiles = new Map((data.animationProfiles ?? []).map(p => [p.id, p]))
   for (const a of data.activities) {
+    const modelLinks = data.links.filter(l => l.activity_id === a.id && l.source_kind === 'ifc' && elements.has(l.element_ref))
+    const profileIds = modelLinks.length ? modelLinks.map(l => l.animation_profile_id ?? a.animation_profile_id) : [a.animation_profile_id]
+    const types = new Set(profileIds.map(id => animationTaskType(id ? profiles.get(id) : undefined)))
+    const predefinedType = types.size === 1 ? [...types][0] : 'NOTDEFINED'
+    if (types.size > 1) warnings.push(`${a.code}: mixed element animation types cannot share one IFC task predefined type; retained NOTDEFINED.`)
     const completion = a.pct_complete == null ? '$' : real(Number(a.pct_complete) / 100)
     const time = legacy ? add('IFCSCHEDULETIMECONTROL', ...root(a.task_name), '$', stamp(a.actual_start), '$', '$', stamp(a.start), stamp(a.actual_finish), '$', '$', stamp(a.finish), measure(a.duration_hours), '$', measure(a.remaining_duration_hours), measure(a.free_float_hours), measure(a.total_float_hours), bool(a.is_critical), '$', '$', '$', completion)
       : add('IFCTASKTIME', '$', '.USERDEFINED.', stepText('Prosota'), '.WORKTIME.', duration(a.duration_hours), dateTime(a.start), dateTime(a.finish),
       '$', '$', '$', '$', duration(a.free_float_hours), duration(a.total_float_hours), bool(a.is_critical), '$', '$', dateTime(a.actual_start), dateTime(a.actual_finish), duration(a.remaining_duration_hours), completion)
     const task = legacy ? add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$')
-      : add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), '$', stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$', time, '.NOTDEFINED.')
+      : add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), '$', stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$', time, `.${predefinedType}.`)
     if (legacy) add('IFCRELASSIGNSTASKS', ...root(null), list([task]), '$', schedule, time)
     tasks.set(a.id, task)
     properties(task, 'Prosota_Activity', a)
+    if (profileIds.some(Boolean)) properties(task, 'Prosota_Animation', {
+      predefined_type: predefinedType,
+      profiles: [...new Set(profileIds)].filter((id): id is string => !!id).map(id => profiles.get(id) ?? { id }),
+    })
     const calendar = calendars.get(a.calendar_id ?? data.calendars.find(c => c.is_project_default)?.id ?? '')
     if (calendar) {
       if (legacy) calendarTasks.set(calendar, [...(calendarTasks.get(calendar) ?? []), task])

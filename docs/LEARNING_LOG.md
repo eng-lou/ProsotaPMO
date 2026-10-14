@@ -1,5 +1,9 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-14 — Export animation colours as IFC4 task types
+
+The integrated exporter hardcoded every task to NOTDEFINED and did not fetch saved animation profiles. It now maps explicit green start colours to CONSTRUCTION and red to DEMOLITION, leaving uncoloured defaults unchanged as requested. Element overrides win over activity profiles; conflicting types within one task produce a warning instead of an arbitrary classification. Full profile settings are also retained as properties. IFC2X3 cannot carry a native task predefined type. All 16 export tests passed with both clinic fixtures, and the frontend production build passed. This does not resolve native Synchro labour allocations or custom Synchro appearance profiles.
+
 The story of what happened, session by session — decisions made, why, and
 what was learned along the way. Written for learning purposes, so the
 reasoning behind the code is still readable long after the code itself has

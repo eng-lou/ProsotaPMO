@@ -209,3 +209,18 @@ output semantics. All 15 tests passed with both local clinic fixtures enabled.
 Nonvisual labour/equipment allocations still remain task properties in Synchro
 mode, and custom appearance profiles are not yet transferred as native Synchro
 profiles. This correction does not claim to resolve those separate limitations.
+
+### IFC4 animation predefined types (2026-10-14)
+
+Export now fetches saved animation profiles. Explicit green color_from hues
+(75–165 degrees) map to CONSTRUCTION; red hues (345–360 or 0–20) map to
+DEMOLITION. Neutral, other-colour and uncoloured/default profiles remain
+NOTDEFINED. This is a colour convention, not task-name inference. Bonsai uses
+its own animation colour scheme for these native types; exact Prosota settings
+are retained in Prosota_Animation properties rather than baked into geometry.
+Element overrides take priority over activity profiles. Conflicting mapped
+types on one task retain NOTDEFINED with an export warning. IFC2X3 has no
+IfcTask.PredefinedType; the mapping is retained as metadata only in that schema.
+Model assignment direction and geometry handling are unchanged. All 16 export
+tests pass, including the real architecture/structure fixtures, default/type
+mapping, element overrides, mixed profiles and Synchro model links.

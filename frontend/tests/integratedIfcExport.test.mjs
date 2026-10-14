@@ -62,6 +62,36 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
 
+test('IFC4 animation types follow explicit colours and element overrides, leaving defaults undefined', async () => withApi(async api => {
+  for (const [color, expected] of [[null, 'NOTDEFINED'], ['#00ff00', 'CONSTRUCTION'], ['#22c55e', 'CONSTRUCTION'], ['#0f0', 'CONSTRUCTION'], ['#ef4444', 'DEMOLITION'], ['#999999', 'NOTDEFINED']]) {
+    const input = data()
+    input.animationProfiles = [{ id: 'profile', config: { color_from: color } }]
+    input.activities[1].animation_profile_id = 'profile'
+    const result = await exportIntegratedIfc(api, [source('wall.ifc', wallA)], input)
+    const model = api.OpenModel(result.bytes)
+    const tasks = lines(api, model, W.IFCTASK)
+    assert.equal(tasks.find(t => t.Identification.value === 'b').PredefinedType.value, expected)
+    assert.equal(tasks.find(t => t.Identification.value === 'a').PredefinedType.value, 'NOTDEFINED')
+    assert.equal(lines(api, model, W.IFCRELASSIGNSTOPRODUCT).length, 1)
+    assert.equal(api.LoadAllGeometry(model).size(), 1)
+    api.CloseModel(model)
+  }
+  const input = data()
+  input.animationProfiles = [{ id: 'green', config: { color_from: '#00ff00' } }, { id: 'red', config: { color_from: '#ff0000' } }]
+  input.activities[1].animation_profile_id = 'red'
+  input.links[0].animation_profile_id = 'green'
+  let result = await exportIntegratedIfc(api, [source('wall.ifc', wallA)], input)
+  let model = api.OpenModel(result.bytes)
+  assert.equal(lines(api, model, W.IFCTASK).find(t => t.Identification.value === 'b').PredefinedType.value, 'CONSTRUCTION')
+  api.CloseModel(model)
+  input.links.push({ activity_id: 'b', source_kind: 'ifc', element_ref: wallB })
+  result = await exportIntegratedIfc(api, [source('wall.ifc', wallA), source('other.ifc', wallB)], input)
+  model = api.OpenModel(result.bytes)
+  assert.equal(lines(api, model, W.IFCTASK).find(t => t.Identification.value === 'b').PredefinedType.value, 'NOTDEFINED')
+  assert.ok(result.warnings.some(w => w.includes('mixed element animation types')))
+  api.CloseModel(model)
+}))
+
 test('Synchro restores original model-to-task links and preserves nonvisual resource data', async () => withApi(async api => {
   const input = { ...data(), compatibility: 'synchro' }
   input.links = [input.links[0], input.links[0], { ...input.links[0], activity_id: 'a' }]
