@@ -92,6 +92,32 @@ test('IFC4 animation types follow explicit colours and element overrides, leavin
   api.CloseModel(model)
 }))
 
+test('Synchro exports typed InPro appearance properties without changing standard IFC', async () => withApi(async api => {
+  for (const [color, expected, rgb] of [['#22c55e', 'CONSTRUCT', [34, 197, 94]], ['#f00', 'DEMOLISH', [255, 0, 0]], [null, null], ['#999999', null]]) {
+    const input = { ...data(), compatibility: 'synchro', animationProfiles: [{ id: 'p', config: { color_from: color } }] }
+    input.activities[1].animation_profile_id = 'p'
+    const result = await exportIntegratedIfc(api, [source('legacy.ifc', wallA, { schema: 'IFC2X3' })], input)
+    const model = api.OpenModel(result.bytes)
+    const sets = lines(api, model, W.IFCPROPERTYSET).filter(p => p.Name.value === '4DVisualizationParameter')
+    assert.equal(sets.length, expected ? 1 : 0)
+    if (expected) {
+      const props = Object.fromEntries(sets[0].HasProperties.map(p => { const v = api.GetLine(model, p.value); return [v.Name.value, v] }))
+      assert.equal(props.ConstructionType.EnumerationValues[0].value, expected)
+      assert.deepEqual(['Red', 'Green', 'Blue'].map(c => props[`RGBElementColour_${c}`].NominalValue.value), rgb)
+      assert.equal(props.RGBElementColour_Transparency.NominalValue.value, 0)
+      const rel = lines(api, model, W.IFCRELDEFINESBYPROPERTIES).find(r => r.RelatingPropertyDefinition.value === sets[0].expressID)
+      assert.equal(api.GetLine(model, rel.RelatedObjects[0].value).TaskId.value, 'b')
+    }
+    api.CloseModel(model)
+    delete input.compatibility
+    const standard = await exportIntegratedIfc(api, [source('standard.ifc', wallA)], input)
+    const standardModel = api.OpenModel(standard.bytes)
+    assert.equal(lines(api, standardModel, W.IFCPROPERTYSET).filter(p => p.Name.value === '4DVisualizationParameter').length, 0)
+    assert.equal(lines(api, standardModel, W.IFCRELASSIGNSTOPRODUCT).length, 1)
+    api.CloseModel(standardModel)
+  }
+}))
+
 test('Synchro restores original model-to-task links and preserves nonvisual resource data', async () => withApi(async api => {
   const input = { ...data(), compatibility: 'synchro' }
   input.links = [input.links[0], input.links[0], { ...input.links[0], activity_id: 'a' }]

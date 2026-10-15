@@ -156,6 +156,24 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   const tasks = new Map<string, string>()
   const calendarTasks = new Map<string, string[]>()
   const profiles = new Map((data.animationProfiles ?? []).map(p => [p.id, p]))
+  // Synchro's InPro reader consumes typed 4D properties, not Prosota JSON or
+  // IFC4 task enums. Keep these properties confined to the Synchro export.
+  const synchroAppearance = (task: string, profile: AnimationProfile) => {
+    const type = animationTaskType(profile)
+    if (type === 'NOTDEFINED') return
+    let color = profile.config.color_from!.trim()
+    if (color.length === 4) color = '#' + [...color.slice(1)].map(c => c + c).join('')
+    const props = [add('IFCPROPERTYSINGLEVALUE', stepText('Visualization'), '$', 'IFCBOOLEAN(.T.)', '$')]
+    for (const [i, channel] of ['Red', 'Green', 'Blue'].entries()) {
+      props.push(add('IFCPROPERTYSINGLEVALUE', stepText(`RGBElementColour_${channel}`), '$', `IFCINTEGER(${parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)})`, '$'))
+    }
+    // InPro represents the active colour, not Prosota's animated fade curve.
+    props.push(add('IFCPROPERTYSINGLEVALUE', stepText('RGBElementColour_Transparency'), '$', 'IFCINTEGER(0)', '$'))
+    const enumeration = add('IFCPROPERTYENUMERATION', stepText('ConstructionTypeEnumeration'), list(['CONSTRUCT', 'TEMPORARY', 'DEMOLISH', 'MAINTAIN', 'START_PERIOD', 'MIDDLE_PERIOD', 'END_PERIOD'].map(v => `IFCLABEL(${stepText(v)})`)), '$')
+    props.push(add('IFCPROPERTYENUMERATEDVALUE', stepText('ConstructionType'), '$', list([`IFCLABEL(${stepText(type === 'DEMOLITION' ? 'DEMOLISH' : 'CONSTRUCT')})`]), enumeration))
+    const pset = add('IFCPROPERTYSET', ...root('4DVisualizationParameter'), list(props))
+    add('IFCRELDEFINESBYPROPERTIES', ...root(null), list([task]), pset)
+  }
   for (const a of data.activities) {
     const modelLinks = data.links.filter(l => l.activity_id === a.id && l.source_kind === 'ifc' && elements.has(l.element_ref))
     const profileIds = modelLinks.length ? modelLinks.map(l => l.animation_profile_id ?? a.animation_profile_id) : [a.animation_profile_id]
@@ -170,6 +188,11 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
       : add('IFCTASK', ...root(a.task_name, a.commentary), '$', stepText(a.code), '$', stepText(a.status), '$', bool(a.activity_type.endsWith('milestone')), '$', time, `.${predefinedType}.`)
     if (legacy) add('IFCRELASSIGNSTASKS', ...root(null), list([task]), '$', schedule, time)
     tasks.set(a.id, task)
+    if (data.compatibility === 'synchro') {
+      const effective = [...new Set(profileIds)].map(id => id ? profiles.get(id) : undefined)
+      if (effective.length === 1 && effective[0]) synchroAppearance(task, effective[0])
+      else if (effective.length > 1) warnings.push(`${a.code}: mixed element appearance profiles are retained in Prosota properties; Synchro's task-level InPro profile cannot represent them individually.`)
+    }
     properties(task, 'Prosota_Activity', a)
     if (profileIds.some(Boolean)) properties(task, 'Prosota_Animation', {
       predefined_type: predefinedType,

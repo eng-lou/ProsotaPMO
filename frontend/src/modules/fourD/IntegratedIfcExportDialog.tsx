@@ -131,7 +131,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         </select>
       </label>
       <label className="block my-3"><input type="checkbox" checked={synchro} disabled={busy || !!result} onChange={e => { setSynchro(e.target.checked); if (e.target.checked) setTargetSchema('source') }} /> Synchro compatibility (IFC2X3)</label>
-      {synchro && <p className="text-xs text-gray-500">Requires IFC2X3 sources. Exports model geometry, tasks and dependencies. Crew, labour and equipment assignments are saved as task properties instead of native resource allocations, which Synchro rejects.</p>}
+      {synchro && <p className="text-xs text-gray-500">Requires IFC2X3 sources. Exports model geometry, task assignments and dependencies. For green construction/red demolition appearance profiles, enable “Use InPro profile for IFC integration” in Synchro Options → Synchronization → IFC before importing. Crew, labour and equipment assignments remain task properties, not native resource allocations.</p>}
       {targetSchema === 'IFC4' && <p className="text-xs text-gray-500">Converts saved IFC2X3 sources before adding native IFC4 planning data. Conversion can take several minutes. Original models are preserved.</p>}
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
       <label className="block my-3">Currency of the Prosota costs

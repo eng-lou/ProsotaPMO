@@ -224,3 +224,33 @@ IfcTask.PredefinedType; the mapping is retained as metadata only in that schema.
 Model assignment direction and geometry handling are unchanged. All 16 export
 tests pass, including the real architecture/structure fixtures, default/type
 mapping, element overrides, mixed profiles and Synchro model links.
+
+### Synchro native appearance profiles (2026-10-15)
+
+Synchro mode now emits the typed `4DVisualizationParameter` properties read by
+Synchro's InPro integration: `RGBElementColour_Red/Green/Blue`, transparency,
+Visualization and enumerated ConstructionType (`CONSTRUCT` or `DEMOLISH`).
+Enable **File → Options → Synchronization → IFC → Use InPro profile for IFC
+integration** before import. This setting was enabled in the isolated local
+test instance; without it the same file falls back to Install.
+
+Verified using the production exporter in installed Synchro 6.5.6.30: two new
+tasks imported with model assignments and two native appearance profiles.
+The profile editor showed Install with colour `22C55E` and Remove with colour
+`EF4444`. The source reference task also imported, giving three tasks and three
+assignments in the import log. The duplicate reference-task code warning was
+from appending this test to the existing diagnostic project.
+
+This transfers the explicit green/red active colour and action, not Prosota's
+fade curves, movement, staggering or colour interpolation. Default/neutral
+profiles remain unchanged. A task with different element profiles warns and
+retains the source profiles as metadata instead of choosing one arbitrarily.
+Standard IFC/Bonsai predefined types, product-output links and geometry are
+unchanged. All 17 IFC tests passed with both clinic fixtures; build passed.
+
+Native labour/equipment allocations remain unresolved. A minimal IFC containing
+one labour resource and one equipment resource reproduces the resource-creation
+failure with InPro both off and on. It is not caused by the clinic geometry or
+appearance-property encoding. Synchro mode therefore still retains these
+assignments as task properties; it must not be described as a full resource
+allocation round trip. No companion package has been introduced.

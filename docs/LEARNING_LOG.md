@@ -1,5 +1,9 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-15 — Verify Synchro appearance import in the receiving application
+
+Synchro ignores its typed IFC appearance properties unless “Use InPro profile for IFC integration” is enabled. With that preference enabled in the isolated test instance, production-exporter output created native Install/Remove profiles with the exact green/red active colours and retained the model assignments. Added those typed properties only to Synchro mode and documented the required setting in the export dialog. Standard Bonsai output is unchanged; all 17 IFC tests (including both clinic fixtures) and the frontend build passed. Fade curves, movement and mixed per-element profiles are not claimed as supported by this task-level mapping. Native human/equipment allocation remains unresolved: even the minimal two-resource IFC fails at resource creation with InPro enabled. Do not confuse imported model resources or retained resource properties with native labour/equipment allocations.
+
 ## 2026-10-14 — Export animation colours as IFC4 task types
 
 The integrated exporter hardcoded every task to NOTDEFINED and did not fetch saved animation profiles. It now maps explicit green start colours to CONSTRUCTION and red to DEMOLITION, leaving uncoloured defaults unchanged as requested. Element overrides win over activity profiles; conflicting types within one task produce a warning instead of an arbitrary classification. Full profile settings are also retained as properties. IFC2X3 cannot carry a native task predefined type. All 16 export tests passed with both clinic fixtures, and the frontend production build passed. This does not resolve native Synchro labour allocations or custom Synchro appearance profiles.
