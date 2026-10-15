@@ -254,3 +254,29 @@ failure with InPro both off and on. It is not caused by the clinic geometry or
 appearance-property encoding. Synchro mode therefore still retains these
 assignments as task properties; it must not be described as a full resource
 allocation round trip. No companion package has been introduced.
+
+### Resource/cost loading investigation (2026-10-15)
+
+Native resource/cost loading is **not fixed**. In the installed Synchro
+6.5.6.30 importer, the minimal labour/equipment probe fails independently of
+the clinic model and with InPro enabled or disabled. A native reference export
+with all export options enabled did not emit its assigned human resource;
+that reference therefore cannot establish a working IFC allocation contract.
+
+Read-only inspection suggests that the importer conditionally creates human
+and equipment resource roots but subsequently attempts to import construction
+resources even when those roots were not created. This is a hypothesis from
+static inspection, not a confirmed runtime diagnosis or a vendor statement.
+The inspected IFC options do not expose a corresponding human/equipment switch.
+
+Native cost entities in an IFC, or cost values retained as task properties,
+are not evidence of editable Synchro cost loading. No verified native cost
+mapping was established in this investigation. Do not re-enable the failing
+resource entities, attach labour costs to model elements, or claim a successful
+allocation import based on the 3D-resource counts. A working native import
+fixture or supported importer mapping is still needed before changing this path.
+
+No production exporter change was made. All 17 IFC integration tests passed
+again with both local clinic fixtures, including geometry preservation,
+standard product-output links, Synchro process links, native standard-export
+resources/cost associations and appearance properties.
