@@ -1,5 +1,9 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-16 — IFC dialog dark-mode contrast
+
+The IFC dialogs referenced a nonexistent `prosota-text` colour token, leaving dark text on the dark panel. Switched to the existing `prosota-paper` foreground, added muted copy and readable warning/error colours, and gave export inputs/selects explicit dark surfaces and text. Export behaviour is unchanged.
+
 ## 2026-10-16 — Keep Scheduling's Gantt visible after resizing
 
 A saved activity-table width was capped against the browser window only at mount. The actual schedule panel can be narrower because of the sidebar, embedding or later resizing, reducing the Gantt to zero width. Reproduced that state in a browser fixture. The split now observes its own container and reserves timeline space, including the divider; grouped and ungrouped layouts use the same rule. Invalid saved widths recover to the default. User width preferences are retained when the panel temporarily shrinks.

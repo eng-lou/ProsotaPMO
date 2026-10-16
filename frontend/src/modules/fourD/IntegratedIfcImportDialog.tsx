@@ -33,13 +33,13 @@ export function IntegratedIfcImportDialog({fileId, filename, schedulePeriodId, c
     } finally { setBusy(false) }
   }
   return <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Import IFC planning">
-    <div className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-text rounded-lg p-5 w-full max-w-xl text-sm">
+    <div className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-paper rounded-lg p-5 w-full max-w-xl text-sm">
       <h2 className="font-semibold text-base">Planning data detected</h2>
       <p className="my-3">The model “{filename}” has been imported. Include its embedded schedule, resources and cost data too?</p>
       <p className="my-3">Requires an empty schedule variant and cost period. Existing planning data is never replaced. Saved dates are retained without rescheduling.</p>
-      {preview && <div className="my-3"><ul>{Object.entries(preview.counts).map(([key, count]) => <li key={key}>{count} {key}</li>)}</ul><ul className="mt-2 text-xs text-amber-700">{preview.warnings.map(w => <li key={w}>{w}</li>)}</ul></div>}
+      {preview && <div className="my-3"><ul>{Object.entries(preview.counts).map(([key, count]) => <li key={key}>{count} {key}</li>)}</ul><ul className="mt-2 text-xs text-amber-700 dark:text-amber-300">{preview.warnings.map(w => <li key={w}>{w}</li>)}</ul></div>}
       {done && <p role="status" className="my-3">Planning data imported.</p>}
-      {error && <p role="alert" className="my-3 text-red-600">{error}</p>}
+      {error && <p role="alert" className="my-3 text-red-600 dark:text-red-400">{error}</p>}
       <div className="mt-4 flex justify-end gap-3">
         <button disabled={busy} onClick={onClose}>{done ? 'Done' : 'Keep model only'}</button>
         {!done && <button disabled={busy} onClick={() => run(!!preview)} className="rounded bg-indigo-600 text-white px-3 py-2 disabled:opacity-50">{busy ? 'Reading / importing…' : preview ? 'Include planning data' : 'Retry reading data'}</button>}
