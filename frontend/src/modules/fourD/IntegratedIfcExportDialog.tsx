@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
+import { useTheme } from '@/lib/ThemeContext'
 import { api, downloadLargeBlob } from '@/lib/api'
 import { decompressIfGzip } from '@/lib/fileCache'
 import type { IntegratedIfcData } from './integratedIfcData'
@@ -8,6 +9,11 @@ import { downloadModel3DFile, listModel3DFiles, type Model3DFile } from './model
 export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPeriodId, onClose }: {
   project: { id: string; name: string }; schedulePeriodId: string; costPeriodId: string; onClose: () => void
 }) {
+  const { theme } = useTheme()
+  const dark = theme === 'dark'
+  const foreground = dark ? '#E6EDF7' : '#1F2937'
+  const muted = dark ? '#AABBD0' : '#6B7280'
+  const fieldStyle = { color: foreground, backgroundColor: dark ? '#101F36' : '#FFFFFF', borderColor: dark ? '#496078' : '#D1D5DB', colorScheme: theme }
   const [files, setFiles] = useState<Model3DFile[] | null>(null)
   const [currency, setCurrency] = useState('GBP')
   const [targetSchema, setTargetSchema] = useState<'source' | 'IFC2X3' | 'IFC4'>('source')
@@ -119,11 +125,11 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   }
   const filename = `${project.name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')}-integrated.ifc`
   return <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="integrated-ifc-title">
-    <div className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-paper rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
-      <h2 id="integrated-ifc-title" className="font-semibold text-base mb-3">Export integrated IFC</h2>
-      <p className="text-gray-500 dark:text-prosota-muted">Export your saved models with schedule and cost data.</p>
-      <label className="block my-3">Output format
-        <select value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC2X3' | 'IFC4')} className="mt-2 block w-full border rounded px-3 py-2 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line">
+    <div style={{ color: foreground, backgroundColor: dark ? '#0C1A2E' : '#FFFFFF' }} className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-paper rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
+      <h2 style={{ color: foreground }} id="integrated-ifc-title" className="font-semibold text-base mb-3">Export integrated IFC</h2>
+      <p style={{ color: muted }} className="text-gray-500 dark:text-prosota-muted">Export your saved models with schedule and cost data.</p>
+      <label style={{ color: foreground }} className="block my-3">Output format
+        <select style={fieldStyle} value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC2X3' | 'IFC4')} className="mt-2 block w-full border rounded px-3 py-2 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line">
           <option value="source">Keep source</option>
           <option value="IFC2X3">IFC 2x3 (compatible)</option>
           <option value="IFC4">IFC 4</option>
@@ -131,10 +137,10 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       </label>
       {synchro && <p className="text-xs text-gray-500 dark:text-prosota-muted">Requires IFC 2x3 source models.</p>}
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
-      <label className="block my-3">Currency
-        <input aria-label="Export currency" value={currency} disabled={busy || !!result} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} className="ml-3 border rounded px-2 py-1 w-20 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line" />
+      <label style={{ color: foreground }} className="block my-3">Currency
+        <input style={fieldStyle} aria-label="Export currency" value={currency} disabled={busy || !!result} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} className="ml-3 border rounded px-2 py-1 w-20 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line" />
       </label>
-      <details className="mt-3 text-xs text-gray-500 dark:text-prosota-muted">
+      <details style={{ color: muted }} className="mt-3 text-xs text-gray-500 dark:text-prosota-muted">
         <summary className="cursor-pointer">Export details</summary>
         <ul className="my-2 list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
         <p>Uses saved geometry and materials, including hidden elements. Viewport edits and animation are not baked. Mesh and point-cloud files are excluded. Sources must have matching units; Keep source also requires matching schemas.</p>
@@ -144,11 +150,11 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         <p className="mt-2">IFC 4 maps green/red profile start colours to Construction/Demolition. The default is green Construction. Bonsai uses its own colour scheme; exact profile settings are retained as properties.</p>
         {counts && <p className="mt-2">{counts}</p>}
       </details>
-      {status && <p role="status" className="mt-3">{status}</p>}
+      {status && <p style={{ color: foreground }} role="status" className="mt-3">{status}</p>}
       {error && <p role="alert" className="mt-3 text-red-600 dark:text-red-400">{error}</p>}
       {!!result?.warnings.length && <details className="mt-3 text-xs text-amber-700 dark:text-amber-300"><summary className="cursor-pointer">Export notes ({result.warnings.length})</summary><ul className="mt-2 list-disc pl-5">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
       <div className="flex justify-end gap-3 mt-4">
-        <button onClick={onClose} className="border dark:border-prosota-line rounded px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2">{busy ? 'Cancel export' : 'Close'}</button>
+        <button style={{ color: foreground, borderColor: fieldStyle.borderColor }} onClick={onClose} className="border dark:border-prosota-line rounded px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2">{busy ? 'Cancel export' : 'Close'}</button>
         {result ? <a download={filename} href={result.url} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download IFC</a>
           : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : 'Build IFC'}</button>}
       </div>

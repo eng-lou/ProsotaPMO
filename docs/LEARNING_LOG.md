@@ -1,5 +1,10 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-16 — Explicit IFC export dialog theme colours
+
+The earlier dark-mode utility classes were confirmed in the public deployed bundle, but the user still saw dark foregrounds. The export dialog now reads the selected app theme and sets explicit foreground, muted text, field surfaces and native control colour scheme. Rendered the actual component with production CSS in Edge: headings, labels, input, select and Close resolve to #E6EDF7 in dark mode and #1F2937 in light mode. Visually checked both themes; frontend production build passed. Export behaviour is unchanged.
+
+
 ## 2026-10-16 — Power BI dashboard readability and time-based plans
 
 Replaced clipped schedule names with wrapped labels, searchable activities, timeline zoom, expanded viewing and milestone markers. Added editable playback date and speed. Resource and cost panels now use monthly/weekly budget charts with selection filtering and collapsible detail tables. Budget phasing is explicitly estimated over elapsed activity time; exported PV/EV/AC remain snapshots rather than invented historical series. Fixed explicit resource-hours reading (planned_hours) and excluded material quantities from hours. No production export semantics changed.
