@@ -1,0 +1,26 @@
+{
+  "visual": {
+    "name": "prosotaPowerBI",
+    "displayName": "Prosota BIM & 4D",
+    "guid": "prosotaPowerBI06AB2DAB71384B63AC389556E181B50B",
+    "visualClassName": "Visual",
+    "version": "1.0.0.0",
+    "description": "Integrated IFC model, sequence and project controls with baseline comparison.",
+    "supportUrl": "https://www.prosota.com",
+    "gitHubUrl": "https://github.com/eng-lou/ProsotaPMO"
+  },
+  "apiVersion": "5.11.1",
+  "author": {
+    "name": "Prosota",
+    "email": "sotalouisx@gmail.com"
+  },
+  "assets": {
+    "icon": "assets/icon.png"
+  },
+  "externalJS": null,
+  "style": "style/visual.less",
+  "capabilities": "capabilities.json",
+  "dependencies": null,
+  "stringResources": [],
+  "version": "1.0.0.0"
+}

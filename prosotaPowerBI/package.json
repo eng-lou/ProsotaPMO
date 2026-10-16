@@ -1,0 +1,40 @@
+{
+  "name": "prosota-powerbi",
+  "description": "Prosota integrated IFC and 4D project controls visual",
+  "version": "1.0.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eng-lou/ProsotaPMO.git"
+  },
+  "license": "UNLICENSED",
+  "scripts": {
+    "pbiviz": "pbiviz",
+    "start": "pbiviz start",
+    "package": "npm run prepare:assets && pbiviz package",
+    "lint": "npx eslint .",
+    "prepare:assets": "node scripts/prepare.mjs",
+    "check": "npm run prepare:assets && tsc --noEmit",
+    "test": "npm run prepare:assets && node --test tests/data.test.mjs",
+    "test:browser": "npm run prepare:assets && node scripts/smoke.mjs",
+    "preview": "npm run prepare:assets && node scripts/preview.mjs"
+  },
+  "dependencies": {
+    "@types/d3": "7.4.3",
+    "d3": "7.9.0",
+    "powerbi-visuals-api": "5.11.1",
+    "powerbi-visuals-utils-formattingmodel": "6.0.4",
+    "three": "^0.169.0",
+    "web-ifc": "^0.0.77"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/three": "^0.169.0",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "esbuild": "^0.25.12",
+    "eslint": "^9.11.1",
+    "eslint-plugin-powerbi-visuals": "^1.0.0",
+    "powerbi-visuals-tools": "^7.2.1",
+    "typescript": "5.5.4"
+  },
+  "private": true
+}

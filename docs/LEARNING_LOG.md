@@ -1,5 +1,11 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-16 — Power BI IFC/4D preview
+
+Added an independent `prosotaPowerBI` custom visual following the approved dashboard: IFC viewer, linked schedule and activity detail, financial KPIs, resource assignment budgets, and optional baseline snapshot comparison. It bundles the actual Prosota timeline engine. Moved its default recipe to the existing pure defaults module and re-exported it without changing the app's recipe. Power BI field binding deduplicates task totals, preserves matching imported recipes and rejects conflicting or truncated data. Baseline comparison evaluates separate snapshots at one date and matches tasks by ID/code.
+
+Full-model testing caught web-ifc truncating long JSON text properties: reading the complete STEP text restored all 3,664 clinic links. Verification includes 3,664 geometry elements, 69 non-summary activities, 102 resource assignments, generated baseline/animation fixtures, unit checks, a mock Power BI host and successful package/lint/type checks. The native Power BI Desktop/Service host remains unverified. Local IFC files are session-only; period utilisation/history and model persistence require further integration. The supplied README distinguishes these limits from implemented functionality; risk/ICD remain planned. No Synchro/Bonsai export semantics were changed.
+
 ## 2026-10-16 — IFC dialog dark-mode contrast
 
 The IFC dialogs referenced a nonexistent `prosota-text` colour token, leaving dark text on the dark panel. Switched to the existing `prosota-paper` foreground, added muted copy and readable warning/error colours, and gave export inputs/selects explicit dark surfaces and text. Export behaviour is unchanged.

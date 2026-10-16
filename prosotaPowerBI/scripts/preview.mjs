@@ -1,0 +1,11 @@
+import {build} from 'esbuild';
+import less from 'less';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {resolve} from 'node:path';
+await mkdir('preview',{recursive:true});
+await build({stdin:{contents:"import {Visual} from './src/visual';window.Visual=Visual;import {Dashboard} from './src/dashboard'; window.dashboard=new Dashboard(document.getElementById('app'));",resolveDir:process.cwd()},bundle:true,loader:{'.less':'empty'},format:'iife',outfile:'preview/app.js'});
+await writeFile('preview/app.css',(await less.render(await readFile('style/visual.less','utf8'))).css);
+await writeFile('preview/index.html','<!doctype html><html><head><link rel="stylesheet" href="/app.css"><style>html,body,#app{height:100%;margin:0}</style></head><body><div id="app"></div><script src="/app.js"></script></body></html>');
+export const server=createServer(async(req,res)=>{const name=req.url==='/'?'index.html':req.url.slice(1);if(!['index.html','app.js','app.css'].includes(name)){res.writeHead(404).end();return;}res.setHeader('Content-Type',name.endsWith('js')?'application/javascript':name.endsWith('css')?'text/css':'text/html');res.end(await readFile(resolve('preview',name)));});
+server.listen(Number(process.env.PORT??4180),'127.0.0.1',()=>console.log('Preview listening'));

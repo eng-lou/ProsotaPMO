@@ -1,0 +1,53 @@
+import {server} from './preview.mjs';
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+import {fixture} from '../tests/fixture.mjs';
+const current=await fixture(),baseline=await fixture(true);
+const browser=await chromium.launch({executablePath:process.env.EDGE_PATH??'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true,args:['--enable-unsafe-swiftshader']});
+try{
+ const page=await browser.newPage({viewport:{width:1600,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:4180');
+ await page.locator('input[type=file]').first().setInputFiles({name:'Current.ifc',mimeType:'application/octet-stream',buffer:Buffer.from(current)});
+ await page.waitForFunction(()=>window.dashboard.current.loaded);
+ let result=await page.evaluate(()=>{const s=window.dashboard.current.loaded.snapshot;return {tasks:s.tasks.length,budget:s.tasks[0].budget,links:s.links.length,elements:window.dashboard.current.loaded.elements.size,resource:s.resources[0].cost};});
+ assert.deepEqual(result,{tasks:1,budget:1000,links:1,elements:1,resource:800});
+ await page.getByRole('checkbox',{name:'Compare baseline'}).check();
+ await page.locator('input[type=file]').nth(1).setInputFiles({name:'Baseline.ifc',mimeType:'application/octet-stream',buffer:Buffer.from(baseline)});
+ await page.waitForFunction(()=>window.dashboard.baseline.loaded);
+ await page.getByRole('button',{name:'Construct wall',exact:true}).click();
+ await expect(page.locator('.baseline-bar')).toHaveCount(1);
+ result=await page.evaluate(()=>{const d=window.dashboard;d.now=Date.parse('2026-10-15T00:00:00Z');d.syncDate();return {current:d.current.loaded.group.children[0].children[0].material.opacity,baseline:d.baseline.loaded.group.children[0].children[0].material.opacity,origin:d.current.origin.equals(d.baseline.origin)};});
+ assert.equal(result.current,.5);assert.equal(result.baseline,1);assert.equal(result.origin,true);
+ await page.getByRole('button',{name:'Isolate',exact:true}).click();
+ assert.equal(await page.evaluate(()=>window.dashboard.baseline.loaded.group.children[0].visible),true);
+ await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).uncheck();assert.equal(await page.evaluate(()=>window.dashboard.current.loaded.group.children[0].children[0].material.opacity),1);
+ await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).check();
+ await page.setViewportSize({width:800,height:900});await expect(page.locator('.canvas canvas').first()).toBeVisible();
+ await page.setViewportSize({width:1600,height:1000});await page.screenshot({path:'preview/verified.png'});
+ assert.deepEqual(errors,[]);
+ if(process.env.IFC_PATH){
+  await page.locator('input[type=file]').first().setInputFiles(process.env.IFC_PATH);
+  await page.waitForFunction(()=>window.dashboard.current.loaded.snapshot.name!=='Current.ifc',null,{timeout:120000});
+  console.log('Full model',await page.evaluate(()=>{const d=window.dashboard,s=d.current.loaded.snapshot;return {elements:d.current.loaded.elements.size,tasks:s.tasks.length,links:s.links.length,resources:s.resources.length,warnings:s.warnings};}));
+  await page.getByRole('checkbox',{name:'Compare baseline'}).uncheck();
+  await page.getByRole('button',{name:'Clear selection'}).click();
+  await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).uncheck();
+  await page.evaluate(()=>{const d=window.dashboard;d.now=d.max;d.syncDate();d.current.frame();});
+  await page.screenshot({path:'preview/clinic.png'});
+ }
+ const hostResult=await page.evaluate(()=>{
+  window.dashboard.destroy();const container=document.getElementById('app');let selected=0,finished=0;
+  const host={hostCapabilities:{allowInteractions:true},createSelectionManager:()=>({select:()=>{selected++;return Promise.resolve([]);},clear:()=>Promise.resolve([])}),createSelectionIdBuilder:()=>({withTable(){return this;},createSelectionId:()=>({key:'task'})}),eventService:{renderingStarted(){},renderingFinished(){finished++;},renderingFailed(_o,error){throw new Error(error);}}};
+  const visual=new window.Visual({element:container,host});
+  const names=['taskId','start','finish','budget','elementGuid'];const columns=names.map(name=>({displayName:name,queryName:name,roles:{[name]:true},type:{text:true}}));
+  const table={columns,rows:[['task','2026-10-01','2026-10-11',100,'a'],['task','2026-10-01','2026-10-11',100,'b']]};
+  visual.update({dataViews:[{metadata:{columns},table}],viewport:{width:1600,height:1000},type:2});
+  const budget=container.querySelector('.kpi strong').textContent;container.querySelector('.gantt-row button').click();
+  const cards=visual.getFormattingModel().cards.length;
+  visual.update({dataViews:[{metadata:{columns,segment:{}},table}],viewport:{width:1600,height:1000},type:2});
+  const warning=container.querySelector('.notice').textContent;visual.destroy();return {budget,selected,finished,cards,warning};
+ });
+ assert.equal(hostResult.budget,'£100');assert.equal(hostResult.selected,1);assert.equal(hostResult.finished,2);assert.ok(hostResult.cards>0);assert.match(hostResult.warning,/part of this dataset/);
+ console.log('PASS Power BI adapter mock: field binding, selection, format pane and incomplete data rejection.');
+ console.log('PASS IFC geometry, schedule, resource budget, shared profile playback, baseline dates/IDs/origin, isolate and resize.');
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

@@ -1,7 +1,8 @@
 import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
-import { DEFAULT_ANIMATION_COLOR_FROM } from './animationDefaults'
+import { DEFAULT_ANIMATION_CONFIG } from './animationDefaults'
+export { DEFAULT_ANIMATION_CONFIG } from './animationDefaults'
 
 export type TransformKind = 'none' | 'translate' | 'scale' | 'rotate' | 'pop' | 'spiral' | 'fall' | 'grow'
 export type Axis = 'x' | 'y' | 'z'
@@ -41,24 +42,6 @@ export interface AnimationProfileConfig {
   stagger_reverse?: boolean
 }
 
-export const DEFAULT_ANIMATION_CONFIG: AnimationProfileConfig = {
-  trigger: 'over_duration',
-  transform_kind: 'none',
-  axis: 'z',
-  direction: 1,
-  distance: 1,
-  bounce: false,
-  twist: false,
-  opacity_from: 0,
-  opacity_to: 1,
-  color_from: DEFAULT_ANIMATION_COLOR_FROM,
-  color_to: null,
-  interpolation: 'linear',
-  duration_frames: null,
-  stagger: 0,
-  stagger_order: 'along_x',
-  stagger_reverse: false,
-}
 
 export interface AnimationProfile {
   id: string

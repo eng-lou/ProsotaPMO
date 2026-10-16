@@ -1,0 +1,166 @@
+{
+  "privileges": [],
+  "dataRoles": [
+    {
+      "name": "elementGuid",
+      "displayName": "IFC GlobalId",
+      "kind": "Grouping"
+    },
+    {
+      "name": "taskId",
+      "displayName": "Activity ID",
+      "kind": "Grouping"
+    },
+    {
+      "name": "taskName",
+      "displayName": "Activity name",
+      "kind": "Grouping"
+    },
+    {
+      "name": "start",
+      "displayName": "Start",
+      "kind": "Grouping"
+    },
+    {
+      "name": "finish",
+      "displayName": "Finish",
+      "kind": "Grouping"
+    },
+    {
+      "name": "budget",
+      "displayName": "Budget",
+      "kind": "Measure"
+    },
+    {
+      "name": "actual",
+      "displayName": "Actual cost",
+      "kind": "Measure"
+    },
+    {
+      "name": "earned",
+      "displayName": "Earned value",
+      "kind": "Measure"
+    },
+    {
+      "name": "progress",
+      "displayName": "Progress %",
+      "kind": "Measure"
+    },
+    {
+      "name": "level",
+      "displayName": "Level",
+      "kind": "Grouping"
+    },
+    {
+      "name": "discipline",
+      "displayName": "Discipline",
+      "kind": "Grouping"
+    },
+    {
+      "name": "profile",
+      "displayName": "Prosota profile JSON",
+      "kind": "Grouping"
+    },
+    {
+      "name": "planned",
+      "displayName": "Planned value",
+      "kind": "Measure"
+    }
+  ],
+  "dataViewMappings": [
+    {
+      "table": {
+        "rows": {
+          "select": [
+            {
+              "for": {
+                "in": "elementGuid"
+              }
+            },
+            {
+              "for": {
+                "in": "taskId"
+              }
+            },
+            {
+              "for": {
+                "in": "taskName"
+              }
+            },
+            {
+              "for": {
+                "in": "start"
+              }
+            },
+            {
+              "for": {
+                "in": "finish"
+              }
+            },
+            {
+              "for": {
+                "in": "budget"
+              }
+            },
+            {
+              "for": {
+                "in": "actual"
+              }
+            },
+            {
+              "for": {
+                "in": "earned"
+              }
+            },
+            {
+              "for": {
+                "in": "progress"
+              }
+            },
+            {
+              "for": {
+                "in": "level"
+              }
+            },
+            {
+              "for": {
+                "in": "discipline"
+              }
+            },
+            {
+              "for": {
+                "in": "profile"
+              }
+            },
+            {
+              "for": {
+                "in": "planned"
+              }
+            }
+          ],
+          "dataReductionAlgorithm": {
+            "window": {
+              "count": 30000
+            }
+          }
+        }
+      }
+    }
+  ],
+  "supportsLandingPage": true,
+  "supportsEmptyDataView": true,
+  "supportsKeyboardFocus": true,
+  "objects": {
+    "display": {
+      "displayName": "Display",
+      "properties": {
+        "fontSize": {
+          "displayName": "Text size",
+          "type": {
+            "numeric": true
+          }
+        }
+      }
+    }
+  }
+}

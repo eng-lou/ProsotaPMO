@@ -1,0 +1,6 @@
+.tmp/
+src/generated/
+preview/
+node_modules/
+dist/
+webpack.statistics.*.html
