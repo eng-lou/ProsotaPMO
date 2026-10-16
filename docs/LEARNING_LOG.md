@@ -1,5 +1,11 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-16 — Keep Scheduling's Gantt visible after resizing
+
+A saved activity-table width was capped against the browser window only at mount. The actual schedule panel can be narrower because of the sidebar, embedding or later resizing, reducing the Gantt to zero width. Reproduced that state in a browser fixture. The split now observes its own container and reserves timeline space, including the divider; grouped and ungrouped layouts use the same rule. Invalid saved widths recover to the default. User width preferences are retained when the panel temporarily shrinks.
+
+Validation: three width regression tests, frontend production build, and a browser check reproducing the old zero-width pane then verifying the corrected pane, container resize, grouped remount and deep scrolling without browser errors. Fixture: `frontend/tests/gantt-pane-smoke.html` (add `?old` to reproduce the prior behaviour). Power BI implementation remains paused and is not part of this change.
+
 ## 2026-10-15 — Verify Synchro appearance import in the receiving application
 
 Synchro ignores its typed IFC appearance properties unless “Use InPro profile for IFC integration” is enabled. With that preference enabled in the isolated test instance, production-exporter output created native Install/Remove profiles with the exact green/red active colours and retained the model assignments. Added those typed properties only to Synchro mode and documented the required setting in the export dialog. Standard Bonsai output is unchanged; all 17 IFC tests (including both clinic fixtures) and the frontend build passed. Fade curves, movement and mixed per-element profiles are not claimed as supported by this task-level mapping. Native human/equipment allocation remains unresolved: even the minimal two-resource IFC fails at resource creation with InPro enabled. Do not confuse imported model resources or retained resource properties with native labour/equipment allocations.

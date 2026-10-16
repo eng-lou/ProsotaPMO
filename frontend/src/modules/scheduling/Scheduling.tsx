@@ -34,6 +34,7 @@ import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay } from './durationDisplay'
 import { downloadActivitiesCsv } from './exportActivities'
 import { downloadP6Xml } from './exportP6'
+import { clampScheduleTableWidth, DEFAULT_SCHEDULE_TABLE_WIDTH, useSchedulePaneWidth } from './schedulePaneWidth'
 import { GanttChart, GANTT_ROW_HEIGHT, HEADER_HEIGHT, type GanttChartHandle } from './GanttChart'
 import { loadGanttZoom, saveGanttZoom, ZOOM_OPTIONS, type GanttZoom } from './ganttZoom'
 import { PasteFieldsWidget } from './PasteFieldsWidget'
@@ -1642,45 +1643,16 @@ export function Scheduling() {
     )
   }
 
-  // The Gantt pane beside this one is flex-1 with no minimum of its own, so
-  // an unbounded leftPaneWidth can squeeze it down to ~0px — invisible, and
-  // with its own resize divider pushed off past the right edge along with
-  // it, unreachable to drag back (2026-07-12 fix, per Maro: "what did you
-  // do to my gantt chart" — the chart wasn't touched, this divider had
-  // silently grown wide enough to hide it, with no way to recover short of
-  // clearing localStorage by hand). MIN_GANTT_PANE_WIDTH below is enforced
-  // both when *loading* a previously-saved width (so a value already stuck
-  // in someone's browser self-corrects on the next visit, not just future
-  // drags) and while dragging.
-  //
-  // The *real* trigger turned out to be a second, related bug (2026-07-12,
-  // same report — "you enabled all my columns so it pushed the gantt to
-  // the right"): whenever leftPaneWidth had never been manually dragged
-  // (null), the pane's style fell through to `width: undefined` — no
-  // explicit width at all — so with this pane's own flex-shrink:0, it
-  // sized itself to its *content's* natural width (every enabled column
-  // added together) instead of ever being capped, and being flex-shrink:0
-  // meant its flex-1 Gantt sibling was the only one left to absorb the
-  // compression, all the way down to nothing. DEFAULT_LEFT_PANE_WIDTH
-  // below closes that: the pane always gets a real, capped pixel width,
-  // dragged or not — and overflow-x is now `auto`, not `hidden` (was
-  // silently clipping instead of scrolling), so extra columns beyond that
-  // width are reachable by scrolling the activity table itself, per
-  // Maro's own explicit ask: "the activity can be scrollable if there are
-  // excess columns."
-  const MIN_GANTT_PANE_WIDTH = 240
-  const DEFAULT_LEFT_PANE_WIDTH = 700
-  const clampLeftPaneWidth = (width: number) => Math.max(320, Math.min(width, window.innerWidth - MIN_GANTT_PANE_WIDTH))
-  const [leftPaneWidth, setLeftPaneWidth] = useState<number>(() => {
-    const saved = localStorage.getItem('prosota_scheduling_left_pane_width')
-    return clampLeftPaneWidth(saved ? Number(saved) : DEFAULT_LEFT_PANE_WIDTH)
+  const [preferredLeftPaneWidth, setLeftPaneWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('prosota_scheduling_left_pane_width'))
+    return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_SCHEDULE_TABLE_WIDTH
   })
+  const { splitPaneRef, tableWidth: leftPaneWidth } = useSchedulePaneWidth(preferredLeftPaneWidth)
   const startPaneResize = (e: React.MouseEvent) => {
-    const startWidth = leftPaneRef.current?.getBoundingClientRect().width ?? 700
-    const containerWidth = leftPaneRef.current?.parentElement?.getBoundingClientRect().width ?? window.innerWidth
-    const maxWidth = Math.max(320, containerWidth - MIN_GANTT_PANE_WIDTH)
+    const container = e.currentTarget.parentElement
+    const startWidth = leftPaneWidth
     beginDrag(
-      deltaX => setLeftPaneWidth(Math.min(maxWidth, Math.max(320, startWidth + deltaX))),
+      deltaX => setLeftPaneWidth(clampScheduleTableWidth(startWidth + deltaX, container?.clientWidth ?? 0)),
       () => setLeftPaneWidth(w => {
         localStorage.setItem('prosota_scheduling_left_pane_width', String(w))
         return w
@@ -3751,7 +3723,7 @@ export function Scheduling() {
       )}
 
       {groupBy === 'none' && (
-      <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
+      <div ref={splitPaneRef} className="min-w-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
         <div
           ref={leftPaneRef}
           onScroll={e => handleGridScroll(e.currentTarget.scrollTop)}
@@ -4330,7 +4302,7 @@ export function Scheduling() {
           // this pane just clips to the same fixed height and lets
           // GanttChart's internal transform reveal the right slice of rows.
           // Horizontal scroll (panning the wide timeline) stays independent.
-          className="flex-1 overflow-x-auto overflow-y-hidden no-print"
+          className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden no-print"
           style={{ height: topPaneHeight }}
         >
           <GanttChart
@@ -4354,7 +4326,7 @@ export function Scheduling() {
           see groupGanttActivities' own header for how row alignment works
           without GanttChart needing to know grouping exists. */}
       {groupBy !== 'none' && (
-        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
+        <div ref={splitPaneRef} className="min-w-0 bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden flex">
           <div
             ref={groupScrollRef}
             onScroll={e => handleGroupScroll(e.currentTarget.scrollTop)}
@@ -4440,7 +4412,7 @@ export function Scheduling() {
             title="Drag to resize"
             className="w-1.5 shrink-0 cursor-col-resize bg-gray-100 dark:bg-prosota-panel2 hover:bg-blue-300 dark:hover:bg-prosota-azure/40 active:bg-blue-400 dark:active:bg-prosota-azure/60 no-print"
           />
-          <div className="flex-1 overflow-x-auto overflow-y-hidden no-print" style={{ height: topPaneHeight }}>
+          <div className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden no-print" style={{ height: topPaneHeight }}>
             <GanttChart
               ref={ganttRef}
               activities={groupGanttActivities} relationships={relationships} resourceAssignments={resourceAssignments} style={ganttStyle}
