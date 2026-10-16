@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     "twist": False,
     "opacity_from": 0.0,
     "opacity_to": 1.0,
-    "color_from": None,
+    "color_from": "#22c55e",
     "color_to": None,
     "interpolation": "linear",
     "duration_frames": None,

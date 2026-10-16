@@ -1,4 +1,4 @@
-import { OverallocationControl, resourcePeriodWidth, ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
+import { hasResourceFigures, OverallocationControl, resourcePeriodWidth, ResourceFigures, ResourceSeriesControls, type ResourceSeries } from './resourceSeries'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { useTheme } from '@/lib/ThemeContext'
@@ -730,12 +730,13 @@ function ResourceTrackingWidgetImpl({
                         {visibleBucketIndices.map(i => {
                           const demand = resourceBuckets?.demand[i] ?? 0
                           const capacity = resourceBuckets?.capacity[i] ?? 0
+                          const empty = !hasResourceFigures(series, demand * usageUnitFactor(resource, unit), resourceFigures.get(resource.id)?.actual[i] ?? null, resourceFigures.get(resource.id)?.earned[i] ?? null)
                           const overallocated = showOverallocation && series.includes('budget') && demand > capacity && capacity > 0
                           return (
                             <td
                               key={i}
                               style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
-                              className="px-2 py-1.5 text-right"
+                              className={`px-2 py-1.5 text-right ${empty ? 'bg-gray-100 dark:bg-prosota-panel2' : ''}`}
                             >
                               <ResourceFigures overallocated={overallocated} selected={series} budget={demand * usageUnitFactor(resource, unit)} actual={resourceFigures.get(resource.id)?.actual[i] ?? null} earned={resourceFigures.get(resource.id)?.earned[i] ?? null} unit={unit} />
                             </td>
@@ -763,10 +764,8 @@ function ResourceTrackingWidgetImpl({
                       {visibleBucketIndices.map(i => {
                         const bucket = buckets[i]
                         const active = bucketOverlapsSpan(bucket, row.activity)
-                        if (!active && !series.some(s => s !== 'budget')) {
-                          return <td key={i} className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2" style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }} />
-                        }
                         const hours = bucketData.hoursByAssignment.get(row.assignment.id)?.[i] ?? 0
+                        const empty = !hasResourceFigures(series, hours * usageUnitFactor(resource, unit), figures.actualByAssignment.get(row.assignment.id)?.[i] ?? null, figures.evByAssignment.get(row.assignment.id)?.[i] ?? null)
                         const isEditing = series.includes('budget') && editing?.assignmentId === row.assignment.id && editing.bucketIndex === i
                         if (isEditing) {
                           return (
@@ -789,9 +788,9 @@ function ResourceTrackingWidgetImpl({
                         return (
                           <td
                             key={i}
-                            onDoubleClick={() => { if (series.length === 1 && series[0] === 'budget') startEdit(row.assignment, i, hours) }}
+                            onDoubleClick={() => { if (active && series.length === 1 && series[0] === 'budget') startEdit(row.assignment, i, hours) }}
                             title={series.length === 1 && series[0] === 'budget' ? "Double-click to edit — manual resource leveling" : "Select Budgeted alone to edit its values. Actuals and Earned Value are read-only."}
-                            className="px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted cursor-pointer hover:bg-blue-50"
+                            className={`px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted ${empty ? 'bg-gray-100 dark:bg-prosota-panel2' : ''} ${active ? 'cursor-pointer hover:bg-blue-50' : ''}`}
                             style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}
                           >
                             <ResourceFigures selected={series} budget={hours * usageUnitFactor(resource, unit)} actual={figures.actualByAssignment.get(row.assignment.id)?.[i] ?? null} earned={figures.evByAssignment.get(row.assignment.id)?.[i] ?? null} unit={unit} />

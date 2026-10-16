@@ -44,7 +44,7 @@ class AnimationProfileConfig(BaseModel):
     # colour both ends, just held for the duration).
     opacity_from: float = Field(default=0.0, ge=0, le=1)
     opacity_to: float = Field(default=1.0, ge=0, le=1)
-    color_from: str | None = None
+    color_from: str | None = "#22c55e"
     color_to: str | None = None
 
     interpolation: Literal["linear", "ease_in", "ease_out", "ease_in_out", "bounce"] = "linear"

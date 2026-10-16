@@ -1,6 +1,7 @@
 import { useUndoRefresh } from '@/lib/useUndoRefresh'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { DEFAULT_ANIMATION_COLOR_FROM } from './animationDefaults'
 
 export type TransformKind = 'none' | 'translate' | 'scale' | 'rotate' | 'pop' | 'spiral' | 'fall' | 'grow'
 export type Axis = 'x' | 'y' | 'z'
@@ -50,7 +51,7 @@ export const DEFAULT_ANIMATION_CONFIG: AnimationProfileConfig = {
   twist: false,
   opacity_from: 0,
   opacity_to: 1,
-  color_from: null,
+  color_from: DEFAULT_ANIMATION_COLOR_FROM,
   color_to: null,
   interpolation: 'linear',
   duration_frames: null,

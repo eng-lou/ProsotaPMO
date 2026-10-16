@@ -6980,3 +6980,16 @@ STEP syntax correction alone did not resolve Synchro's rejection of Excavation C
 ## 2026-10-13 — Browser IFC export and long decimal measures
 
 Reproduced the clinic IFC4 export error on IfcCartesianPoint #317674 in the browser worker using the converted architecture and structure sources. Node exports passed, but browser WASM rejected long decimal REAL literals retained as strings in NumberHandle.internalValue, surfacing an unhelpful undefined name error in the binding. Normalize copied REAL measures through their value setter to finite numeric values while preserving generated measure prototypes and reference remapping. Browser export now completes (33,523,904 bytes); 11 integration tests pass, including combined clinic geometry counts and a regression enforcing the browser numeric contract. Original source files are unchanged.
+## 2026-10-16 — Green animation default and quiet resource tracking
+
+The built-in animation default now starts at green #22c55e in the viewport,
+API defaults and IFC appearance mapping. Existing saved custom profiles retain
+their colours, including explicit null. IFC4 defaults map to Construction;
+Synchro defaults use the existing typed green CONSTRUCT appearance path.
+
+Resource tracking shades periods with no displayed figures grey and omits
+empty B/A/EV labels, on screen and in print. Explicit zero actual/earned values
+remain visible; actuals outside the planned activity span are not hidden.
+Budget editing remains available within the activity span, including empty
+periods. All 17 IFC regression tests passed with both clinic fixtures; render
+checks covered empty figures, actual-only values, explicit zero and labels.

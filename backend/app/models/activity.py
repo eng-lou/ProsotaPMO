@@ -191,7 +191,7 @@ class Activity(Base, TimestampMixin):
     # 4D animation profile for this activity (2026-07-22, per Maro: "allow me
     # set animation profile per activity not just per element, this will
     # allow for bulk profile setting"). Null = every element linked to this
-    # activity animates with the default opacity-only profile, same as
+    # activity animates with the default green fade-in profile, same as
     # ModelElementLink.animation_profile_id's own null case — Viewport3D.tsx's
     # own resolve() reads this as the fallback whenever a specific link has
     # no override of its own, so setting this once here is what "influences

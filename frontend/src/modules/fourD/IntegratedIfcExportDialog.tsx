@@ -141,7 +141,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         {synchro && <p className="mt-2">For appearance profiles in Synchro, enable “Use InPro profile for IFC integration” under Options → Synchronization → IFC. Labour and equipment assignments are retained as task properties, not native allocations.</p>}
         {targetSchema === 'IFC4' && <p className="mt-2">IFC 2x3 sources are converted to IFC 4. Conversion can take several minutes. Original models are preserved.</p>}
         <p className="mt-2">No currency conversion. Receiving applications may not support every exported feature.</p>
-        <p className="mt-2">IFC 4 maps green/red profile start colours to Construction/Demolition. Defaults remain Not defined. Bonsai uses its own colour scheme; exact profile settings are retained as properties.</p>
+        <p className="mt-2">IFC 4 maps green/red profile start colours to Construction/Demolition. The default is green Construction. Bonsai uses its own colour scheme; exact profile settings are retained as properties.</p>
         {counts && <p className="mt-2">{counts}</p>}
       </details>
       {status && <p role="status" className="mt-3">{status}</p>}

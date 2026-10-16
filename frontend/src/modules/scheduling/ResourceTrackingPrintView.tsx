@@ -1,4 +1,4 @@
-import { resourcePeriodWidth, ResourceFigures, SERIES, type ResourceSeries } from './resourceSeries'
+import { hasResourceFigures, resourcePeriodWidth, ResourceFigures, SERIES, type ResourceSeries } from './resourceSeries'
 import { Fragment } from 'react'
 import { PRINT_LEFT_PANE_WIDTH, RESOURCE_CHART_Y_AXIS_WIDTH } from './resourcesLayout'
 
@@ -62,7 +62,7 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series, 
               <tr style={{ height: rowHeight, breakInside: 'avoid' }} className="border-b border-gray-300 font-bold bg-gray-100">
                 <td className="py-1 pr-2 truncate" colSpan={4}>{group.resourceName}</td>
                 <td />
-                {group.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures overallocated={showOverallocation && (group.capacity?.[i] ?? 0) > 0 && h > group.capacity![i]} selected={series} budget={h} actual={group.actual?.[i] ?? null} earned={group.earned?.[i] ?? null} unit={unit} /></td>)}
+                {group.bucketHours.map((h, i) => <td key={i} style={{ printColorAdjust: 'exact' }} className={`py-1 pr-2 text-right ${!hasResourceFigures(series, h, group.actual?.[i] ?? null, group.earned?.[i] ?? null) ? 'bg-gray-100' : ''}`}><ResourceFigures overallocated={showOverallocation && (group.capacity?.[i] ?? 0) > 0 && h > group.capacity![i]} selected={series} budget={h} actual={group.actual?.[i] ?? null} earned={group.earned?.[i] ?? null} unit={unit} /></td>)}
               </tr>
               {group.rows.map(row => (
                 <tr key={`${group.resourceName}-${row.code}`} style={{ height: rowHeight, breakInside: 'avoid' }} className="border-b border-gray-200">
@@ -71,7 +71,7 @@ export function ResourceTrackingPrintView({ groups, bucketLabels, unit, series, 
                   <td className="py-1 pr-2 truncate">{row.start ?? '—'}</td>
                   <td className="py-1 pr-2 truncate">{row.finish ?? '—'}</td>
                   <td />
-                  {row.bucketHours.map((h, i) => <td key={i} className="py-1 pr-2 text-right"><ResourceFigures selected={series} budget={h} actual={row.actual?.[i] ?? null} earned={row.earned?.[i] ?? null} unit={unit} /></td>)}
+                  {row.bucketHours.map((h, i) => <td key={i} style={{ printColorAdjust: 'exact' }} className={`py-1 pr-2 text-right ${!hasResourceFigures(series, h, row.actual?.[i] ?? null, row.earned?.[i] ?? null) ? 'bg-gray-100' : ''}`}><ResourceFigures selected={series} budget={h} actual={row.actual?.[i] ?? null} earned={row.earned?.[i] ?? null} unit={unit} /></td>)}
                 </tr>
               ))}
             </Fragment>

@@ -2,6 +2,7 @@ import type { Activity, ActivityRelationship, Calendar, CalendarBreak, CalendarE
 import type { CostElement } from '../costs/types'
 import type { ModelElementLink } from './modelElementLinks'
 import type { AnimationProfile } from './animationProfiles'
+import { DEFAULT_ANIMATION_COLOR_FROM } from './animationDefaults'
 
 export interface IntegratedIfcData {
   compatibility?: 'synchro'
@@ -23,8 +24,10 @@ export interface IntegratedIfcData {
 }
 
 // Translate explicit animation colours, never the original model materials.
-// Neutral/default profiles keep their existing NOTDEFINED behaviour.
-function animationTaskType(profile?: AnimationProfile): string {
+// Explicitly uncoloured/neutral custom profiles remain NOTDEFINED.
+type AppearanceProfile = { config: { color_from: string | null } }
+const defaultAppearance: AppearanceProfile = { config: { color_from: DEFAULT_ANIMATION_COLOR_FROM } }
+function animationTaskType(profile?: AppearanceProfile): string {
   let color = profile?.config.color_from?.trim()
   if (!color) return 'NOTDEFINED'
   if (/^#[0-9a-f]{3}$/i.test(color)) color = '#' + [...color.slice(1)].map(c => c + c).join('')
@@ -158,7 +161,7 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   const profiles = new Map((data.animationProfiles ?? []).map(p => [p.id, p]))
   // Synchro's InPro reader consumes typed 4D properties, not Prosota JSON or
   // IFC4 task enums. Keep these properties confined to the Synchro export.
-  const synchroAppearance = (task: string, profile: AnimationProfile) => {
+  const synchroAppearance = (task: string, profile: AppearanceProfile) => {
     const type = animationTaskType(profile)
     if (type === 'NOTDEFINED') return
     let color = profile.config.color_from!.trim()
@@ -177,7 +180,7 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
   for (const a of data.activities) {
     const modelLinks = data.links.filter(l => l.activity_id === a.id && l.source_kind === 'ifc' && elements.has(l.element_ref))
     const profileIds = modelLinks.length ? modelLinks.map(l => l.animation_profile_id ?? a.animation_profile_id) : [a.animation_profile_id]
-    const types = new Set(profileIds.map(id => animationTaskType(id ? profiles.get(id) : undefined)))
+    const types = new Set(profileIds.map(id => animationTaskType(id ? profiles.get(id) : defaultAppearance)))
     const predefinedType = types.size === 1 ? [...types][0] : 'NOTDEFINED'
     if (types.size > 1) warnings.push(`${a.code}: mixed element animation types cannot share one IFC task predefined type; retained NOTDEFINED.`)
     const completion = a.pct_complete == null ? '$' : real(Number(a.pct_complete) / 100)
@@ -189,7 +192,7 @@ export function buildPlanningStep(data: IntegratedIfcData, projectId: number, fi
     if (legacy) add('IFCRELASSIGNSTASKS', ...root(null), list([task]), '$', schedule, time)
     tasks.set(a.id, task)
     if (data.compatibility === 'synchro') {
-      const effective = [...new Set(profileIds)].map(id => id ? profiles.get(id) : undefined)
+      const effective = [...new Set(profileIds)].map(id => id ? profiles.get(id) : defaultAppearance)
       if (effective.length === 1 && effective[0]) synchroAppearance(task, effective[0])
       else if (effective.length > 1) warnings.push(`${a.code}: mixed element appearance profiles are retained in Prosota properties; Synchro's task-level InPro profile cannot represent them individually.`)
     }

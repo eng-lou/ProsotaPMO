@@ -1,5 +1,10 @@
 # Integrated IFC export
 
+As of 2026-10-16, the built-in animation default starts green (`#22c55e`).
+Activities without a saved profile therefore export as Construction in IFC4
+and green CONSTRUCT appearances in Synchro mode. Explicitly uncoloured custom
+profiles remain NOTDEFINED; saved profile colours are not rewritten.
+
 The export dialog uses one format selector: **Keep source**, **IFC 2x3
 (compatible)**, and **IFC 4**. IFC 2x3 (compatible) selects the existing Synchro
 compatibility path and still requires IFC2X3 sources; it does not down-convert

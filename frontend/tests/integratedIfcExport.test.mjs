@@ -62,7 +62,7 @@ const data = () => ({ project: { id: 'p', name: 'Test project' }, schedulePeriod
 async function withApi(fn) { const api = new W.IfcAPI(); await api.Init(); try { await fn(api) } finally { api.Dispose() } }
 function lines(api, model, type) { const v = api.GetLineIDsWithType(model, type); return Array.from({ length: v.size() }, (_, i) => api.GetLine(model, v.get(i))) }
 
-test('IFC4 animation types follow explicit colours and element overrides, leaving defaults undefined', async () => withApi(async api => {
+test('IFC4 defaults to green construction while respecting explicit colours and element overrides', async () => withApi(async api => {
   for (const [color, expected] of [[null, 'NOTDEFINED'], ['#00ff00', 'CONSTRUCTION'], ['#22c55e', 'CONSTRUCTION'], ['#0f0', 'CONSTRUCTION'], ['#ef4444', 'DEMOLITION'], ['#999999', 'NOTDEFINED']]) {
     const input = data()
     input.animationProfiles = [{ id: 'profile', config: { color_from: color } }]
@@ -71,7 +71,7 @@ test('IFC4 animation types follow explicit colours and element overrides, leavin
     const model = api.OpenModel(result.bytes)
     const tasks = lines(api, model, W.IFCTASK)
     assert.equal(tasks.find(t => t.Identification.value === 'b').PredefinedType.value, expected)
-    assert.equal(tasks.find(t => t.Identification.value === 'a').PredefinedType.value, 'NOTDEFINED')
+    assert.equal(tasks.find(t => t.Identification.value === 'a').PredefinedType.value, 'CONSTRUCTION')
     assert.equal(lines(api, model, W.IFCRELASSIGNSTOPRODUCT).length, 1)
     assert.equal(api.LoadAllGeometry(model).size(), 1)
     api.CloseModel(model)
@@ -98,7 +98,17 @@ test('Synchro exports typed InPro appearance properties without changing standar
     input.activities[1].animation_profile_id = 'p'
     const result = await exportIntegratedIfc(api, [source('legacy.ifc', wallA, { schema: 'IFC2X3' })], input)
     const model = api.OpenModel(result.bytes)
-    const sets = lines(api, model, W.IFCPROPERTYSET).filter(p => p.Name.value === '4DVisualizationParameter')
+    const allSets = lines(api, model, W.IFCPROPERTYSET).filter(p => p.Name.value === '4DVisualizationParameter')
+    const taskCode = set => {
+      const rel = lines(api, model, W.IFCRELDEFINESBYPROPERTIES).find(r => r.RelatingPropertyDefinition.value === set.expressID)
+      return api.GetLine(model, rel.RelatedObjects[0].value).TaskId.value
+    }
+    const defaultSet = allSets.find(set => taskCode(set) === 'a')
+    assert.ok(defaultSet, 'unassigned default exports a native green appearance')
+    const defaultProps = Object.fromEntries(defaultSet.HasProperties.map(p => { const v = api.GetLine(model, p.value); return [v.Name.value, v] }))
+    assert.equal(defaultProps.ConstructionType.EnumerationValues[0].value, 'CONSTRUCT')
+    assert.deepEqual(['Red', 'Green', 'Blue'].map(c => defaultProps[`RGBElementColour_${c}`].NominalValue.value), [34, 197, 94])
+    const sets = allSets.filter(set => taskCode(set) === 'b')
     assert.equal(sets.length, expected ? 1 : 0)
     if (expected) {
       const props = Object.fromEntries(sets[0].HasProperties.map(p => { const v = api.GetLine(model, p.value); return [v.Name.value, v] }))

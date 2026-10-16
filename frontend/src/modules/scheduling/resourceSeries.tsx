@@ -59,6 +59,11 @@ export function formatResourceFigure(value: number | null, unit: 'hours' | 'days
   return unit === 'cost' ? `£${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : value.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }
 
+export function hasResourceFigures(selected: ResourceSeries[], budget: number, actual: number | null, earned: number | null) {
+  const values = { budget, actual, earned }
+  return selected.some(key => key === 'budget' ? values[key] !== 0 : values[key] !== null)
+}
+
 export function ResourceFigures({ selected, budget, actual, earned, unit, overallocated = false }: {
   overallocated?: boolean
   selected: ResourceSeries[]; budget: number; actual: number | null; earned: number | null; unit: 'hours' | 'days' | 'cost'
@@ -66,7 +71,7 @@ export function ResourceFigures({ selected, budget, actual, earned, unit, overal
   const values = { budget, actual, earned }
   return <div className="flex items-center justify-end gap-2 whitespace-nowrap">
     {selected.map(key => <span key={key} className={`flex-1 text-right ${key === 'budget' && overallocated ? 'text-red-600 dark:text-red-300 font-bold' : ''}`} title={SERIES.find(s => s.key === key)!.label}>
-      {selected.length > 1 && <span className="opacity-70 mr-1">{SERIES.find(s => s.key === key)!.short}</span>}
+      {selected.length > 1 && (key === 'budget' ? values[key] !== 0 : values[key] !== null) && <span className="opacity-70 mr-1">{SERIES.find(s => s.key === key)!.short}</span>}
       {key === 'budget' && values[key] === 0 ? '' : formatResourceFigure(values[key], unit)}
     </span>)}
   </div>
