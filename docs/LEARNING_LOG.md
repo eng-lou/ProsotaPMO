@@ -1,5 +1,12 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-16 — Power BI dashboard readability and time-based plans
+
+Replaced clipped schedule names with wrapped labels, searchable activities, timeline zoom, expanded viewing and milestone markers. Added editable playback date and speed. Resource and cost panels now use monthly/weekly budget charts with selection filtering and collapsible detail tables. Budget phasing is explicitly estimated over elapsed activity time; exported PV/EV/AC remain snapshots rather than invented historical series. Fixed explicit resource-hours reading (planned_hours) and excluded material quantities from hours. No production export semantics changed.
+
+Verified seven unit tests including conservation of phased totals, milestone boundaries, missing values and long schedules; Edge checks cover long names, search, expand, zoom, charts, hours, baseline/profile playback and host bindings. The full clinic still loads 3,664 elements/links, 69 activities and 102 assignments without warnings.
+
+
 ## 2026-10-16 — Power BI IFC/4D preview
 
 Added an independent `prosotaPowerBI` custom visual following the approved dashboard: IFC viewer, linked schedule and activity detail, financial KPIs, resource assignment budgets, and optional baseline snapshot comparison. It bundles the actual Prosota timeline engine. Moved its default recipe to the existing pure defaults module and re-exported it without changing the app's recipe. Power BI field binding deduplicates task totals, preserves matching imported recipes and rejects conflicting or truncated data. Baseline comparison evaluates separate snapshots at one date and matches tasks by ID/code.

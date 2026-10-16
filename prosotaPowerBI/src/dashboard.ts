@@ -2,6 +2,7 @@ import { pickActiveLink } from './generated/animation';
 import { Viewer } from './viewer';
 import { loadIfc } from './ifc';
 import { Snapshot, Task, total } from './types';
+import { chart, periods, phase } from './charts';
 const dateLabel = (v: number) => new Date(v).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') { const n = document.createElement(tag); n.textContent = text; n.className = cls; return n; }
 export class Dashboard {
@@ -11,6 +12,8 @@ export class Dashboard {
     private note: HTMLElement;
     private range: HTMLInputElement;
     private date: HTMLElement;
+    private dateInput: HTMLInputElement;
+    private speed = 1;
     private kpis: HTMLElement;
     private schedule: HTMLElement;
     private details: HTMLElement;
@@ -20,6 +23,10 @@ export class Dashboard {
     private baselinePane: HTMLElement;
     private level: HTMLSelectElement;
     private discipline: HTMLSelectElement;
+    private search = '';
+    private scheduleZoom = 'fit';
+    private chartPeriod: 'weeks' | 'months' = 'months';
+    private resourceMetric = 'cost';
     private selected: string | null = null;
     private now = Date.now();
     private min = this.now;
@@ -98,7 +105,7 @@ export class Dashboard {
             this.stop(play);
             return;
         } if (this.now >= this.max)
-            this.now = this.min; play.textContent = 'Pause'; this.timer = setInterval(() => { this.now = Math.min(this.max, this.now + (this.max - this.min) / 240); this.syncDate(); if (this.now >= this.max)
+            this.now = this.min; play.textContent = 'Pause'; this.timer = setInterval(() => { this.now = Math.min(this.max, this.now + (this.max - this.min) / 240 * this.speed); this.syncDate(); if (this.now >= this.max)
             this.stop(play); }, 100); });
         this.range = node('input');
         this.range.type = 'range';
@@ -107,18 +114,33 @@ export class Dashboard {
         this.range.setAttribute('aria-label', 'Sequence date');
         this.range.oninput = () => { this.now = this.min + (this.max - this.min) * Number(this.range.value) / 1000; this.syncDate(); };
         this.date = node('span');
-        playback.append(this.range, this.date);
+        this.dateInput=node('input');this.dateInput.type='date';this.dateInput.setAttribute('aria-label','Playback date');this.dateInput.onchange=()=>{const value=Date.parse(this.dateInput.value+'T12:00:00');if(Number.isFinite(value)){this.now=Math.max(this.min,Math.min(this.max,value));this.syncDate();}};
+        const speed=node('select');speed.setAttribute('aria-label','Playback speed');for(const value of [.5,1,2,4])speed.add(new Option(`${value}x`,String(value)));speed.value='1';speed.onchange=()=>{this.speed=Number(speed.value);};
+        playback.append(this.range, this.dateInput,speed);
         this.toggle(playback, 'Respect Prosota profiles', true, v => { this.useProfiles = v; this.apply(); });
         model.append(playback);
         const side = node('div', '', 'side');
         this.schedule = this.panel(side, 'Schedule');
+        const schedulePanel = this.schedule.parentElement!;
+        schedulePanel.classList.add('schedule-panel');
+        const scheduleControls=node('div','','schedule-controls');
+        const search=node('input');search.type='search';search.placeholder='Search activities';search.setAttribute('aria-label','Search activities');search.oninput=()=>{this.search=search.value;this.renderData();};
+        const zoom=node('select');zoom.setAttribute('aria-label','Schedule zoom');for(const [value,label] of [['fit','Fit timeline'],['months','Months'],['weeks','Weeks']])zoom.add(new Option(label,value));zoom.onchange=()=>{this.scheduleZoom=zoom.value;this.renderData();};
+        scheduleControls.append(search,zoom);
+        const expand=this.button(scheduleControls,'Expand',()=>{const expanded=schedulePanel.classList.toggle('expanded-schedule');expand.textContent=expanded?'Close expanded schedule':'Expand';expand.setAttribute('aria-pressed',String(expanded));if(expanded){this.root.scrollTop=0;schedulePanel.style.height=`${this.root.clientHeight-24}px`;}else schedulePanel.style.height='';});
+        schedulePanel.insertBefore(scheduleControls,this.schedule);
+        this.schedule.classList.add('schedule-scroll');
         this.details = this.panel(side, 'Selected activity');
         main.append(model, side);
         this.root.append(main);
         const lower = node('div', '', 'lower-grid');
-        this.resources = this.panel(lower, 'Resource assignments');
+        this.resources = this.panel(lower, 'Resource plan');
         this.costs = this.panel(lower, 'Cost performance');
         this.root.append(lower);
+        const chartControls=node('div','','chart-controls');
+        const period=node('select');period.setAttribute('aria-label','Chart periods');period.add(new Option('Monthly','months'));period.add(new Option('Weekly','weeks'));period.onchange=()=>{this.chartPeriod=period.value as 'weeks'|'months';this.renderData();};
+        const metric=node('select');metric.setAttribute('aria-label','Resource measure');metric.add(new Option('Budget cost','cost'));metric.add(new Option('Budget hours','hours'));metric.onchange=()=>{this.resourceMetric=metric.value;this.renderData();};
+        chartControls.append(node('span','Time-based plan'),period,metric);this.root.insertBefore(chartControls,lower);
         const footer = node('footer');
         footer.append(node('span', 'Overview'), node('span', 'Risk · Planned'), node('span', 'ICD · Planned'));
         this.note = node('div', '', 'notice');
@@ -185,8 +207,9 @@ export class Dashboard {
         this.max = Math.max(this.min + 86400000, ...tasks.map(t => t.finish));
         this.now = Math.max(this.min, Math.min(this.now, this.max));
     } this.syncDate(); }
-    private syncDate() { this.range.value = String((this.now - this.min) / (this.max - this.min) * 1000); this.date.textContent = dateLabel(this.now); for (const line of this.schedule?.querySelectorAll<HTMLElement>('.date-line') ?? [])
-        line.style.left = `${(this.now - this.min) / (this.max - this.min) * 100}%`; this.apply(); }
+    private syncDate() { this.range.value = String((this.now - this.min) / (this.max - this.min) * 1000); this.date.textContent = dateLabel(this.now);const localDate=new Date(this.now);this.dateInput.value=`${localDate.getFullYear()}-${String(localDate.getMonth()+1).padStart(2,'0')}-${String(localDate.getDate()).padStart(2,'0')}`; for (const line of this.schedule?.querySelectorAll<HTMLElement>('.date-line') ?? [])
+        line.style.left = `${(this.now - this.min) / (this.max - this.min) * 100}%`;
+        for(const line of this.root.querySelectorAll<SVGElement>('.chart-playhead')){const start=Number(line.dataset.start),end=Number(line.dataset.end),x=Number(line.dataset.left)+(this.now-start)/(end-start)*Number(line.dataset.width);line.setAttribute('x1',String(x));line.setAttribute('x2',String(x));line.setAttribute('visibility',this.now<start||this.now>end?'hidden':'visible');} this.apply(); }
     private stop(button: HTMLButtonElement) { clearInterval(this.timer); this.timer = undefined; button.textContent = 'Play'; }
     private select(id: string) { this.selected = id; const task = this.snapshot?.tasks.find(t => t.id === id); if (task)
         this.onSelect?.(task); this.renderData(); this.apply(); }
@@ -210,19 +233,31 @@ export class Dashboard {
         const spi = node('div', '', 'kpi');
         spi.append(node('span', 'Schedule SPI'), node('strong', pv !== null && pv > 0 && ev !== null ? (ev / pv).toFixed(2) : '—'));
         this.kpis.append(spi);
+        const scrollTop=this.schedule.scrollTop,scrollLeft=this.schedule.scrollLeft;
         this.schedule.replaceChildren();
         if (!tasks.length)
             this.schedule.append(node('p', 'Open a Prosota integrated IFC or bind schedule fields.', 'muted'));
         const tick = node('div', `${dateLabel(this.min)} — ${dateLabel(this.max)}`, 'muted');
-        this.schedule.append(tick);
-        for (const task of tasks) {
+        const grid=node('div','','schedule-grid');
+        const durationDays=(this.max-this.min)/86400000;
+        if(this.scheduleZoom!=='fit')grid.style.minWidth=`${300+Math.min(18000,durationDays*(this.scheduleZoom==='weeks'?6:1.5))}px`;
+        this.schedule.append(tick,grid);
+        const axis=node('div','','gantt-row gantt-axis');axis.append(node('strong','Activity'));const axisLane=node('div','','lane');
+        const tickCount=this.scheduleZoom==='fit'?2:4;for(let i=0;i<=tickCount;i++){const label=node('span',new Date(this.min+(this.max-this.min)*i/tickCount).toLocaleDateString('en-GB',{day:durationDays<90?'numeric':undefined,month:'short',year:durationDays>=90?'2-digit':undefined}),'axis-label');label.style.left=`${i/tickCount*100}%`;axisLane.append(label);}axis.append(axisLane);grid.append(axis);
+        const visibleTasks=tasks.filter(t=>`${t.code} ${t.name}`.toLowerCase().includes(this.search.toLowerCase()));
+        if(tasks.length&&!visibleTasks.length)grid.append(node('p','No matching activities.','muted'));
+        for (const task of visibleTasks) {
             const row = node('div', '', 'gantt-row');
             const b = this.button(row, task.name, () => this.select(task.id));
-            b.title = task.code;
+            b.title = `${task.code} · ${task.name}\n${dateLabel(task.start)} — ${dateLabel(task.finish)}`;
+            b.setAttribute('aria-pressed',String(task.id===this.selected));
+            row.classList.toggle('selected',task.id===this.selected);
             const lane = node('div', '', 'lane');
             const mark = node('span', '', 'current-bar');
             mark.style.left = `${(task.start - this.min) / (this.max - this.min) * 100}%`;
             mark.style.width = `${Math.max(.5, (task.finish - task.start) / (this.max - this.min) * 100)}%`;
+            mark.title=`${dateLabel(task.start)} — ${dateLabel(task.finish)}`;
+            if(task.start===task.finish)mark.classList.add('milestone');
             lane.append(mark);
             const baseline = this.baseline.loaded?.snapshot.tasks.find(t => t.id === task.id || t.code === task.code);
             if (this.compare && baseline) {
@@ -235,8 +270,9 @@ export class Dashboard {
             const line = node('i', '', 'date-line');
             line.style.left = `${(this.now - this.min) / (this.max - this.min) * 100}%`;
             lane.append(line);
-            this.schedule.append(row);
+            grid.append(row);
         }
+        this.schedule.scrollTop=scrollTop;this.schedule.scrollLeft=scrollLeft;
         this.details.replaceChildren();
         const task = tasks.find(t => t.id === this.selected);
         if (task) {
@@ -251,37 +287,28 @@ export class Dashboard {
         const rows = (snapshot?.resources ?? []).filter(r => scope.has(r.taskId));
         const byResource = new Map<string, number | null>();
         for (const r of rows) {
-            const old = byResource.get(r.name);
-            byResource.set(r.name, r.cost === null || old === null ? null : (old ?? 0) + r.cost);
+            const old = byResource.get(r.name), value=this.resourceMetric==='hours'?r.hours:r.cost;
+            byResource.set(r.name, value === null || old === null ? null : (old ?? 0) + value);
         }
-        this.bars(this.resources, [...byResource].map(([label, value]) => ({ label, value, color: '#3984fc' })));
-        this.table(this.resources, ['Resource', 'Budget'], [...byResource].map(([name, cost]) => [name, this.money(cost)]));
-        if (!rows.length)
-            this.resources.append(node('p', 'No resource assignments in this selection.', 'muted'));
-        this.costs.replaceChildren();
         const costTasks = tasks.filter(t => scope.has(t.id));
-        this.bars(this.costs, ([['Budget','budget','#3984fc'],['Planned value','planned','#6574d7'],['Earned value','earned','#0bb2b7'],['Actual cost','actual','#efa900']] as const).map(([label,key,color])=>({label:costTasks.some(t=>t[key]===null)?`${label} (known)`:label,value:total(costTasks.filter(t=>t[key]!==null),key),color})));
-        this.table(this.costs, ['Activity', 'Budget', 'Earned', 'Actual'], tasks.filter(t => scope.has(t.id)).map(t => [t.name, this.money(t.budget), this.money(t.earned), this.money(t.actual)]));
-        this.costs.append(node('p', 'Snapshot totals. Missing values are shown as —; known KPI totals exclude them.', 'muted'));
-    }
-    private bars(parent: HTMLElement, values: {
-        label: string;
-        value: number | null;
-        color: string;
-    }[]) {
-        const chart = node('div', '', 'bar-chart');
-        const max = Math.max(1, ...values.map(v => Math.abs(v.value ?? 0)));
-        for (const v of values) {
-            const row = node('div', '', 'metric-row');
-            row.append(node('span', v.label));
-            const track = node('div', '', 'metric-track'), bar = node('div', '', 'metric-bar');
-            bar.style.width = `${Math.abs(v.value ?? 0) / max * 100}%`;
-            bar.style.background = v.color;
-            track.append(bar);
-            row.append(track, node('strong', this.money(v.value)));
-            chart.append(row);
-        }
-        parent.append(chart);
+        const bins=periods(this.min,this.max,this.chartPeriod);
+        const formatResource=(v:number)=>this.resourceMetric==='hours'?`${Math.round(v).toLocaleString()} h`:this.money(v);
+        const resourceAmounts=rows.flatMap(r=>{const task=tasks.find(t=>t.id===r.taskId);return task?[{start:task.start,finish:task.finish,value:this.resourceMetric==='hours'?r.hours:r.cost}]:[];});
+        this.resources.append(node('p',`${task ? task.code : 'Filtered schedule'} · Budgeted ${this.resourceMetric==='hours'?'hours':'cost'}`,'chart-caption'));
+        this.resources.append(chart(bins,phase(resourceAmounts,bins),false,formatResource,this.now,'Resource budget by period'));
+        this.resources.append(node('p','Estimated evenly across activity dates. Actual use and capacity are not supplied.','muted chart-note'));
+        if(resourceAmounts.some(a=>a.value===null))this.resources.append(node('p','Some assignments have no value for this measure; only known amounts are plotted.','muted'));
+        const resourceDetails=node('details');resourceDetails.append(node('summary',`Assignments (${rows.length})`));
+        this.table(resourceDetails, ['Resource',this.resourceMetric==='hours'?'Budget hours':'Budget'], [...byResource].map(([name,value]) => [name,value===null?'—':formatResource(value)]));this.resources.append(resourceDetails);
+        this.costs.replaceChildren();
+        this.costs.append(node('p',`${task ? task.code : 'Filtered schedule'} · Cumulative planned budget`,'chart-caption'));
+        this.costs.append(chart(bins,phase(costTasks.map(t=>({start:t.start,finish:t.finish,value:t.budget})),bins,true),true,v=>this.money(v),this.now,'Cumulative planned budget, estimated'));
+        const metrics=node('div','','snapshot-metrics');
+        for(const [label,key] of [['PV','planned'],['EV','earned'],['AC','actual']] as const){const card=node('div');card.append(node('span',`${label} snapshot${costTasks.some(t=>t[key]===null)?' (known)':''}`),node('strong',this.money(total(costTasks.filter(t=>t[key]!==null),key))));metrics.append(card);}this.costs.append(metrics);
+        if(costTasks.some(t=>t.budget===null))this.costs.append(node('p','Incomplete budget: curve includes known activity budgets only.','muted'));
+        this.costs.append(node('p','Budget curve uses elapsed-time estimates, not calendar-based PV. EV/AC are snapshot totals; history is not supplied. Dashed line: playback date.','muted chart-note'));
+        const costDetails=node('details');costDetails.append(node('summary',`Activity costs (${costTasks.length})`));
+        this.table(costDetails, ['Activity', 'Budget', 'Earned', 'Actual'], costTasks.map(t => [t.name, this.money(t.budget), this.money(t.earned), this.money(t.actual)]));this.costs.append(costDetails);
     }
     private table(parent: HTMLElement, headers: string[], rows: string[][]) { const table = node('table'), head = node('thead'), tr = node('tr'); headers.forEach(h => tr.append(node('th', h))); head.append(tr); table.append(head); const body = node('tbody'); for (const row of rows) {
         const tr = node('tr');

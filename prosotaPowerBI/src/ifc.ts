@@ -87,7 +87,7 @@ export async function loadIfc(bytes: Uint8Array, name: string, progress: (messag
             if (!a || seen.has(a.id))
                 continue;
             seen.add(a.id);
-            snapshot.resources.push({ id: a.id, taskId: a.activity_id, name: r.name ?? a.resource_name ?? 'Resource', hours: numberOrNull(a.budgeted_units ?? a.planned_units ?? a.budgeted_hours), cost: numberOrNull(a.budget) });
+            snapshot.resources.push({ id: a.id, taskId: a.activity_id, name: r.name ?? a.resource_name ?? 'Resource', hours: (['labour','equipment','crew'].includes(r.resource_type ?? a.resource_type) ? numberOrNull(a.planned_hours ?? a.budgeted_hours ?? a.budgeted_units ?? a.planned_units) : null), cost: numberOrNull(a.budget) });
         }
         progress('Reading IFC geometry…');
         let count = 0;

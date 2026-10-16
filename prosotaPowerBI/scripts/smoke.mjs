@@ -23,7 +23,22 @@ try{
  await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).uncheck();assert.equal(await page.evaluate(()=>window.dashboard.current.loaded.group.children[0].children[0].material.opacity),1);
  await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).check();
  await page.setViewportSize({width:800,height:900});await expect(page.locator('.canvas canvas').first()).toBeVisible();
- await page.setViewportSize({width:1600,height:1000});await page.screenshot({path:'preview/verified.png'});
+ await page.setViewportSize({width:1600,height:1000});
+ await expect(page.getByRole('img',{name:'Resource budget by period',exact:true})).toBeVisible();
+ await expect(page.getByRole('img',{name:'Cumulative planned budget, estimated',exact:true})).toBeVisible();
+ await page.getByRole('searchbox',{name:'Search activities'}).fill('does not exist');await expect(page.locator('.gantt-row button')).toHaveCount(0);
+ await page.getByRole('searchbox',{name:'Search activities'}).fill('Construct');await expect(page.locator('.gantt-row button')).toHaveCount(1);
+ await page.getByRole('searchbox',{name:'Search activities'}).fill('');
+ await page.getByLabel('Schedule zoom').selectOption('weeks');
+ await page.getByRole('button',{name:'Expand',exact:true}).click();await expect(page.locator('.expanded-schedule')).toBeVisible();
+ await page.getByRole('button',{name:'Close expanded schedule'}).click();
+ await page.getByLabel('Chart periods').selectOption('weeks');
+ await page.getByLabel('Resource measure').selectOption('hours');await expect(page.getByRole('img',{name:'Resource budget by period',exact:true})).toBeVisible();assert.equal(await page.evaluate(()=>window.dashboard.current.loaded.snapshot.resources[0].hours),64);
+ await page.getByLabel('Resource measure').selectOption('cost');await page.getByLabel('Chart periods').selectOption('months');
+ await page.evaluate(()=>{const d=window.dashboard;d.current.loaded.snapshot.tasks[0].name='Level 7A TOS - Non-Structural Walls - Install Non-Structural Walls and Associated Finishes';d.renderData();});
+ const nameLayout=await page.locator('.gantt-row button').evaluate(el=>({whiteSpace:getComputedStyle(el).whiteSpace,scroll:el.scrollHeight,height:el.clientHeight}));assert.equal(nameLayout.whiteSpace,'normal');assert.ok(nameLayout.scroll<=nameLayout.height+1);
+ await page.getByLabel('Playback date',{exact:true}).fill('2026-10-16');await page.getByLabel('Playback speed').selectOption('2');
+ await page.screenshot({path:'preview/verified.png'});
  assert.deepEqual(errors,[]);
  if(process.env.IFC_PATH){
   await page.locator('input[type=file]').first().setInputFiles(process.env.IFC_PATH);
@@ -33,7 +48,7 @@ try{
   await page.getByRole('button',{name:'Clear selection'}).click();
   await page.getByRole('checkbox',{name:'Respect Prosota profiles'}).uncheck();
   await page.evaluate(()=>{const d=window.dashboard;d.now=d.max;d.syncDate();d.current.frame();});
-  await page.screenshot({path:'preview/clinic.png'});
+  await page.getByLabel('Schedule zoom').selectOption('fit');await page.setViewportSize({width:1600,height:1350});assert.ok(await page.locator('.side').evaluate(el=>el.getBoundingClientRect().height<=600));assert.ok(await page.locator('.lower-grid').evaluate(el=>el.getBoundingClientRect().top<1000));await page.screenshot({path:'preview/clinic.png'});
  }
  const hostResult=await page.evaluate(()=>{
   window.dashboard.destroy();const container=document.getElementById('app');let selected=0,finished=0;
