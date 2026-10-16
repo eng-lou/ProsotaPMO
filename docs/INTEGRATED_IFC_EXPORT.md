@@ -1,5 +1,13 @@
 # Integrated IFC export
 
+The export dialog uses one format selector: **Keep source**, **IFC 2x3
+(compatible)**, and **IFC 4**. IFC 2x3 (compatible) selects the existing Synchro
+compatibility path and still requires IFC2X3 sources; it does not down-convert
+IFC4 models. Model lists, record counts and implementation notes are available
+under collapsed **Export details**. Completed-export warnings remain available
+under **Export notes**, while errors remain visible. This presentation change
+does not alter geometry, planning data or compatibility mappings.
+
 The 4D toolbar's **Export IFC** action creates one combined IFC file from all
 saved IFC sources in the selected project. It reads the active schedule period
 and the active cost period afresh at export time. It does not change source

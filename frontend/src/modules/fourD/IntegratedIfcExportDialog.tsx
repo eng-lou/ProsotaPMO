@@ -10,8 +10,8 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
 }) {
   const [files, setFiles] = useState<Model3DFile[] | null>(null)
   const [currency, setCurrency] = useState('GBP')
-  const [targetSchema, setTargetSchema] = useState<'source' | 'IFC4'>('source')
-  const [synchro, setSynchro] = useState(false)
+  const [targetSchema, setTargetSchema] = useState<'source' | 'IFC2X3' | 'IFC4'>('source')
+  const synchro = targetSchema === 'IFC2X3'
   const [counts, setCounts] = useState<string>('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
@@ -121,32 +121,36 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   return <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="integrated-ifc-title">
     <div className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-text rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
       <h2 id="integrated-ifc-title" className="font-semibold text-base mb-3">Export integrated IFC</h2>
-      <p>Combine all saved IFC models with the active schedule, dependencies, resource assignments and current cost plan.</p>
-      <p className="mt-2 text-xs text-gray-500">Uses original geometry, placements and materials, including hidden/unloaded elements. Viewport transforms, material overrides, split geometry and animation are not baked. Mesh and point-cloud files are excluded. Keep-source exports require matching schemas. The IFC4 option converts IFC2X3 sources. Combined sources must have matching units.</p>
-      <ul className="my-3 text-xs list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
+      <p className="text-gray-500">Export your saved models with schedule and cost data.</p>
       <label className="block my-3">Output format
-        <select value={targetSchema} disabled={busy || !!result || synchro} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC4')} className="ml-3 border rounded px-2 py-1 bg-transparent">
-          <option value="source">Keep source schema</option>
-          <option value="IFC4">IFC4 (convert IFC2X3 sources)</option>
+        <select value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC2X3' | 'IFC4')} className="mt-2 block w-full border rounded px-3 py-2 bg-transparent">
+          <option value="source">Keep source</option>
+          <option value="IFC2X3">IFC 2x3 (compatible)</option>
+          <option value="IFC4">IFC 4</option>
         </select>
       </label>
-      <label className="block my-3"><input type="checkbox" checked={synchro} disabled={busy || !!result} onChange={e => { setSynchro(e.target.checked); if (e.target.checked) setTargetSchema('source') }} /> Synchro compatibility (IFC2X3)</label>
-      {synchro && <p className="text-xs text-gray-500">Requires IFC2X3 sources. Exports model geometry, task assignments and dependencies. For green construction/red demolition appearance profiles, enable “Use InPro profile for IFC integration” in Synchro Options → Synchronization → IFC before importing. Crew, labour and equipment assignments remain task properties, not native resource allocations.</p>}
-      {targetSchema === 'IFC4' && <p className="text-xs text-gray-500">Converts saved IFC2X3 sources before adding native IFC4 planning data. Conversion can take several minutes. Original models are preserved.</p>}
+      {synchro && <p className="text-xs text-gray-500">Requires IFC 2x3 source models.</p>}
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
-      <label className="block my-3">Currency of the Prosota costs
+      <label className="block my-3">Currency
         <input aria-label="Export currency" value={currency} disabled={busy || !!result} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} className="ml-3 border rounded px-2 py-1 w-20 bg-transparent" />
       </label>
-      <p className="text-xs text-gray-500">No currency conversion is performed. Native IFC data is supplemented by Prosota properties for custom fields. Other applications may display only the IFC features they support.</p>
-      <p className="mt-2 text-xs text-gray-500">IFC4 animation types: green profile start colours export as Construction, red as Demolition. Uncoloured defaults remain Not defined. Bonsai uses its own colour scheme for these types; exact colours and motion settings are retained as properties. IFC2X3 has no task predefined-type field.</p>
+      <details className="mt-3 text-xs text-gray-500">
+        <summary className="cursor-pointer">Export details</summary>
+        <ul className="my-2 list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
+        <p>Uses saved geometry and materials, including hidden elements. Viewport edits and animation are not baked. Mesh and point-cloud files are excluded. Sources must have matching units; Keep source also requires matching schemas.</p>
+        {synchro && <p className="mt-2">For appearance profiles in Synchro, enable “Use InPro profile for IFC integration” under Options → Synchronization → IFC. Labour and equipment assignments are retained as task properties, not native allocations.</p>}
+        {targetSchema === 'IFC4' && <p className="mt-2">IFC 2x3 sources are converted to IFC 4. Conversion can take several minutes. Original models are preserved.</p>}
+        <p className="mt-2">No currency conversion. Receiving applications may not support every exported feature.</p>
+        <p className="mt-2">IFC 4 maps green/red profile start colours to Construction/Demolition. Defaults remain Not defined. Bonsai uses its own colour scheme; exact profile settings are retained as properties.</p>
+        {counts && <p className="mt-2">{counts}</p>}
+      </details>
       {status && <p role="status" className="mt-3">{status}</p>}
-      {counts && <p className="mt-2 text-xs">{counts}</p>}
       {error && <p role="alert" className="mt-3 text-red-600">{error}</p>}
-      {!!result?.warnings.length && <div className="mt-3 text-amber-700"><p>Review before sharing:</p><ul className="list-disc pl-5 text-xs">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>}
+      {!!result?.warnings.length && <details className="mt-3 text-xs text-amber-700"><summary className="cursor-pointer">Export notes ({result.warnings.length})</summary><ul className="mt-2 list-disc pl-5">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
       <div className="flex justify-end gap-3 mt-4">
         <button onClick={onClose} className="border rounded px-3 py-1.5">{busy ? 'Cancel export' : 'Close'}</button>
         {result ? <a download={filename} href={result.url} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download IFC</a>
-          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">Build integrated IFC</button>}
+          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : 'Build IFC'}</button>}
       </div>
     </div>
   </div>
