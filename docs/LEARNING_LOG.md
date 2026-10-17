@@ -7021,3 +7021,7 @@ remain visible; actuals outside the planned activity span are not hidden.
 Budget editing remains available within the activity span, including empty
 periods. All 17 IFC regression tests passed with both clinic fixtures; render
 checks covered empty figures, actual-only values, explicit zero and labels.
+
+## 2026-10-17 — Construction and Maritime separation
+
+Added distinct public Construction and Maritime entries and a synthetic Maritime workspace with tab-scoped scenario state. Keep private Construction projects behind their existing authentication and open cross-workspace links in a separate tab. Reuse the existing 4D profile engine for expansion previews; authoritative scheduling is backend/database based, so illustrative day stages must not be presented as rescheduled working-calendar results. The terminal outage model conserves cargo and integrates capacity only after arrival. Default outage adds three hours, not its full six-hour duration, because the other crane continues operating. Seven calculation/reference tests, the production build and built-app browser flows passed. See MARITIME_BUILD.md for scope and remaining integrations.

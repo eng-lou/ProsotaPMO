@@ -33,6 +33,8 @@ import { ProjectSelector } from './modules/projects/ProjectSelector'
 // main-thread work to every navigation click anywhere in the app once 4D
 // had been opened in the tab. FourD's only prop is `active`, so it now
 // re-renders only when that actually flips.
+const MaritimePage = lazy(() => import('./modules/maritime/MaritimePage').then(m => ({ default: m.MaritimePage })))
+const MaritimeWorkspace = lazy(() => import('./modules/maritime/MaritimeWorkspace').then(m => ({ default: m.MaritimeWorkspace })))
 const ClashReportPage = lazy(() => import('./modules/fourD/ClashReportPage').then(m => ({ default: m.ClashReportPage })))
 const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: memo(m.FourD) })))
 const Scheduling = lazy(() => import('./modules/scheduling/Scheduling').then(m => ({ default: m.Scheduling })))
@@ -49,10 +51,10 @@ const IcdTracker = lazy(() => import('./modules/icd/IcdTracker').then(m => ({ de
 // gate — see AccessGate below for what happens right after (pending
 // approval, or straight into the app).
 function LoginPage() {
-  const { loginWithRedirect } = useAuth0()
+  const { loginWithRedirect, isAuthenticated } = useAuth0()
   return (
     <HomePage
-      onSignIn={() => loginWithRedirect()}
+      onSignIn={() => isAuthenticated ? window.location.assign('/dashboard') : loginWithRedirect()}
       onRequestAccess={() => loginWithRedirect({ authorizationParams: { screen_hint: 'signup' } })}
     />
   )
@@ -243,7 +245,7 @@ function AuthGate() {
 export default function App() {
   return (
     <ThemeProvider>
-      {window.location.pathname === '/clash-report' ? <Suspense fallback={<p>Loading report…</p>}><ClashReportPage /></Suspense> : <AuthGate />}
+      {window.location.pathname.replace(/\/$/, '') === '/maritime/workspace' ? <Suspense fallback={<p className="p-8">Loading Maritime workspace…</p>}><MaritimeWorkspace /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/maritime' ? <Suspense fallback={<p className="p-8">Loading Maritime…</p>}><MaritimePage /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/construction' ? <LoginPage /> : window.location.pathname === '/clash-report' ? <Suspense fallback={<p>Loading report…</p>}><ClashReportPage /></Suspense> : <AuthGate />}
     </ThemeProvider>
   )
 }
