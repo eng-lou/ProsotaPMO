@@ -7729,6 +7729,26 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return { elements }
     }
 
+    // Maritime asset inspection reuses the same persisted element references
+    // and resolver as Collections; it never duplicates or reparents geometry.
+    aiFourDBridge.current.select_maritime_asset = async input => {
+      const refs = input.elements as {source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string}[]
+      const targets = await resolveElementRefsToTargets(refs ?? [], sceneObjects, ifcHandles)
+      if (!targets.objectIds.size) return {error:'Linked geometry is not loaded. Import or restore the asset model first.'}
+      setSelectedObjectIds(targets.objectIds)
+      setSelectedExpressIds(targets.expressIds)
+      setSelectedExpressId(targets.expressIds.size === 1 ? [...targets.expressIds][0] : null)
+      const ifcObjects = [...targets.objectIds].filter(id => id.startsWith('ifc-'))
+      setActiveIfcModelId(ifcObjects.length === 1 ? ifcObjects[0] : null)
+      setActiveObjectId(targets.objectIds.size === 1 ? [...targets.objectIds][0] : null)
+      if (input.isolate) {
+        setIsolatedObjectIds(targets.objectIds)
+        setIsolatedElementKeys(targets.expressKeys)
+        setIsolateMode(true)
+      }
+      return {selected:targets.expressKeys.size + [...targets.objectIds].filter(id => !id.startsWith('ifc-')).length}
+    }
+
     aiFourDBridge.current.run_clash_detection = async () => {
       if (clashTests.length === 0) {
         return { error: 'No clash test is configured yet — set up Selection A/B in the Clash Detective panel first.' }
@@ -7811,6 +7831,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       delete aiFourDBridge.current.color_by_criteria
       delete aiFourDBridge.current.run_clash_detection
       delete aiFourDBridge.current.get_selected_elements
+      delete aiFourDBridge.current.select_maritime_asset
       delete aiFourDBridge.current.execute_clash_test_proposal
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

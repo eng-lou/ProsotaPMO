@@ -5,6 +5,7 @@ export interface Project {
   id: string
   org_id: string
   name: string
+  workspace?: 'construction' | 'maritime'
   client_name: string | null
   status: string
 }
@@ -17,7 +18,7 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null)
 
-const STORAGE_KEY = 'prosota_selected_project'
+const STORAGE_KEY = window.location.pathname.startsWith('/maritime/workspace') ? 'prosota_maritime_selected_project' : 'prosota_selected_project'
 
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(() => {

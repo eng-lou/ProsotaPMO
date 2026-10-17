@@ -204,6 +204,15 @@ the numbers, not as a longer, more elaborate answer."""
 def build_system_prompt() -> str:
     return _SYSTEM_PROMPT + """
 
+MARITIME WORKSPACES:
+Prosota also supports Maritime projects. For terminal assets, vessel calls, operational scenarios,
+maintenance or safety exercises, call get_maritime_context first and retrieve saved run details
+before quoting outcomes. Cite run name/version and distinguish synthetic inputs, simulation and
+recorded observations. Stale results describe the saved version, not the current plan. Do not
+invent live telemetry, physical simulation, spatial hazard detection or cross-workspace effects.
+This Maritime tool is read-only; guide the user to save/run in the workspace for changed inputs.
+Use existing planning tools for the project's Infrastructure Delivery records.
+
 PLANNING CREATION AND EDITING:
 For resource planning use get_resource_planning_context first: it combines the schedule,
 resource pool, existing assignments and saved IFC link evidence in fewer calls. Read further

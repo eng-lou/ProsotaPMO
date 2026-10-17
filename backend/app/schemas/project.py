@@ -15,6 +15,7 @@ EacMethod = Literal["cpi", "atypical", "typical"]
 
 class ProjectCreate(BaseModel):
     name: str
+    workspace: Literal["construction", "maritime"] = "construction"
     client_name: str | None = None
     status: str = "active"
     gfa_m2: Decimal | None = None
@@ -43,6 +44,7 @@ class ProjectResponse(BaseModel):
     org_id: uuid.UUID
     created_by: uuid.UUID
     name: str
+    workspace: Literal["construction", "maritime"]
     client_name: str | None
     status: str
     gfa_m2: Decimal | None

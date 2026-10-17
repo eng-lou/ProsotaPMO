@@ -1,65 +1,63 @@
 # Prosota Maritime — implementation status
 
-17 October 2026. Based on the supplied Maritime Development Brief v1.0.
+17 October 2026. The governing product scope is [MARITIME_SCOPE.md](MARITIME_SCOPE.md).
 
-## Product separation
+## Current release: persistent project workspace
 
-- `/construction`: existing Construction public website and sign-in.
-- `/maritime`: Maritime public website.
-- `/maritime/workspace`: public, synthetic terminal prototype.
-- Construction retains its authenticated projects and existing routes. Its Maritime link opens a separate tab to preserve open editing sessions.
+`/maritime/workspace` now uses the existing approved-user authentication and project infrastructure. Construction and Maritime projects have separate selectors and tab storage. Existing projects default to Construction; the migration does not reclassify them. The earlier synthetic demonstration remains at `/maritime/demo` as a reference, not the editable project platform.
 
-The prototype does not query or modify Construction projects. Operations and delivery inputs use the tab-scoped `prosota_maritime_demo_v1` and `prosota_maritime_delivery_v1` session-storage keys. Delivery calculations run on the backend with isolated in-memory records. No database migration or live terminal feed is required. Poe uses the existing authenticated, approved-user AI allowance.
+### Implemented
 
-## Implemented
+- Editable, persisted Maritime working plans with asset registers, vessel calls, availability scenarios, maintenance work orders and guided exercise definitions.
+- Shared asset identifiers across records, with geometry links using the existing IFC GlobalId / mesh-name / split-element reference conventions. Import, restore, selection and isolation use the existing model viewer. Mesh links identify imported objects, not individual submeshes; existing rigging supports equipment parts.
+- Existing model import, rigging, paths, animation profiles, 4D sequencing, scheduling, calendars, resources, cost, risk, ICD and dashboards accessible within the Maritime navigation. Shared module links retain Maritime context.
+- Deterministic terminal flow calculations with exclusive berths/cranes, FIFO calls, truck capacity, finite pooled yard storage and outbound gate capacity. Outages and scheduled maintenance constrain availability. Incomplete horizons return no invented finish time.
+- Saved operation runs contain the complete plan/version, scenario and results. Reports expose the working-plan comparison, cargo flow, vessel completion, equipment utilisation and cost assumptions. JSON, CSV and print exports use the saved run.
+- Editable guided safety exercises, timestamped participant actions, ordered/timed criteria, saved debriefs and action-log replay. Attempts remain active across scene navigation, with the same controls in the model inspector.
+- Project-scoped Poe evidence tool reads saved plans and runs, reports staleness and calculation assumptions, and excludes large geometry arrays. Existing planning tools remain available for delivery records.
+- Existing ten-step undo/redo is retained for shared modules and integrated with local Maritime plan edits; undoing a plan edit marks it unsaved.
+- Optimistic version checks reject stale saves/runs, project ownership checks isolate Maritime data, and old run snapshots do not change when the plan changes. Project duplication remaps planning links; model links are cleared because the existing duplication service does not copy model files. Run history is not copied.
+- Optional terminal starter records use the same editors and validation as user-authored plans. They are clearly synthetic and require separately imported model geometry.
 
-- Selectable procedural 3D terminal, eight shared asset IDs, camera views and controllable playback.
-- Operate: vessel arrival, cargo handling, crane outage inputs, deterministic baseline comparison and downloadable JSON scenario report.
-- Train: identify a restricted lifting zone, choose a response, receive a first-decision score, restart the exercise.
-- Deliver: six activities (including parallel procurement and the readiness milestone), shared CPM working-calendar calculations, baseline/scenario criticality and float, resource assignments and forecast costs. Four visible expansion stages use the existing `computeAppliedAnimationStateAt` engine with the calculated dates. Playback progress is planned sequence progress, not actual progress.
-- Poe: explanations grounded in server-calculated operations/delivery results, plus a validated delivery-scenario tool and explicit Apply proposal action. Provider errors remain visible; no fabricated fallback reply.
-- Responsive product pages and workspace, accessible labelled inputs and explicit synthetic-data assumptions.
+### Operational calculation contract
 
-The default scenario handles 1,200 moves using two independent cranes at 30 moves/hour after arrival at hour 2. Baseline completion is hour 22. Losing one crane from hour 8 to 14 shifts completion to hour 25. Cargo conservation and outage boundary cases have automated tests. Vehicle animations are illustrative; tides, weather, queues and yard congestion are not modelled.
+The engine uses one-minute fluid steps, elapsed hours and cargo moves (not TEU). All configured cargo unloads to a pooled yard and exits through outbound gates. Crane productivity is moves per productive hour; truck rate includes travel. Equipment utilisation uses productive-equivalent hours divided by elapsed run hours. Berth hours measure occupancy.
 
-## Reuse assessment
+Costs charge productive crane/truck/gate hours, occupied berth hours, and scheduled maintenance once when it starts within the run. They do not imply idle, fuel, demurrage or labour costs. Operational costs are a separate calculation from the delivery cost plan; a resource association does not copy or double-count charges. An outage can therefore delay completion without changing the cost if no time-dependent occupancy/idle charge applies.
 
-The existing application provides React Three Fiber/Three.js rendering, animation profiles, authenticated project infrastructure, resources, costs, risks and Poe. Maritime reuses rendering dependencies, the animation engine, CPM forward/backward pass and resource-costing functions. Construction's full viewer and IFC export remain unchanged. The existing database scheduling wrapper now calls the extracted `calculate_schedule` function; its executable forward/backward-pass statements are identical to the previous implementation.
+The synthetic starter unloads 1,200 moves, arriving at hour 2, using two cranes at 30 moves/hour. Working-plan vessel finish is hour 22; one crane unavailable from hour 8 to 14 gives hour 25. A truck bottleneck of 20 moves/hour gives hour 62 in both cases: increasing crane capacity cannot bypass transport capacity. Terminal clearance may follow vessel completion because the yard still needs to drain.
 
-The actual Construction schedule UI uses a custom Gantt, not Syncfusion EJ2. Maritime presents a bounded scenario comparison table and timeline, using the same backend CPM pass, not a second client-side planning engine. `compute_assignment_budget_raw` calculates resource costs with full precision before totals are rounded.
+### Delivery integration
 
-## Connected delivery scenario
+Delivery uses real project schedules and model assignments through the existing modules. Asset records can explicitly reference a planning resource and delivery activity. These associations currently identify related records; operational outages do **not** automatically alter construction durations or reschedule the project. No new planning engine or guessed dependency impact has been introduced.
 
-Default start: 19 October 2026. Mon–Fri, 08:00–17:00 with a one-hour lunch, no holidays. Foundation 12 days → deck 12 → installation 8 → commissioning 4 → readiness. Procurement runs for 20 days in parallel and also precedes installation.
+### Remaining approved scope
 
-- Baseline readiness: 8 December 2026; forecast £441,000.
-- Foundation +15 working days: readiness 29 December, forecast £516,000, +240 crew/equipment assignment hours.
-- Procurement +4 days: absorbed by four days of float, no readiness or cost change.
-- Procurement +10 days: six working days of readiness delay and £6,000 additional site overhead; supply remains a lump sum.
+This release establishes the editable project foundation; it does not complete the full scope statement.
 
-Delay means **additional productive duration**, not idle suspension. Crews and plant stay fully utilised on the extended activity. Fixed material quantities and supply lump sums do not increase. Overhead is £1,000 per project working day by default. Rates, quantities and timing are synthetic, with material/supply costs recognised at task finish for the cost curve. Resource totals are assignment hours, not individual worker-hours; no resource levelling is performed.
+- Scene-driven operational playback tied to saved flow states, transport routes, operating calendars, arrival windows and priorities.
+- Spatial exercise authoring: exclusion zones, triggers, equipment interaction, system events and participant actions distinguished in the debrief. Current actions are participant-recorded controls, not automatic hazard detection or certified assessment.
+- Explicit cross-workspace impact calculation and review/adoption for linked delivery work, berth restrictions and shared-equipment conflicts.
+- Saved reference baselines and richer scenario parameter alternatives; current operation comparisons use the working plan captured in each run.
+- A representative imported terminal and berth-extension project exercising the complete three-workspace workflow, plus submission evidence.
+- Richer shared inspectors, saved spatial viewpoints/hotspots, report assembly and project access controls where the existing project model permits them.
 
-## API and Poe
+Live AIS/IoT, predictive maintenance, advanced physical simulation, VR integration and certified training remain future capabilities under the approved scope.
 
-- `POST /api/v1/maritime/delivery/calculate`: public bounded synthetic calculation; no project identifiers or writes. Validates start date, selected activity, integer delay 0–90 days and finite nonnegative overhead rate.
-- `POST /api/v1/maritime/poe`: approved sign-in and existing `require_ai_quota`; recalculates supplied inputs server-side. Uses the existing provider client. `evaluate_delivery_scenario` returns a calculated proposal, never an automatic mutation. Maximum four provider rounds and four tool calls per round.
-- Calculation failures clear stale results and offer retry. Signed-in users return to Maritime after authentication. Scenario inputs and reports stay separate from Construction data.
+## Deployment
 
-## Next implementation stages
+Alembic revision `f9017ab12c34` adds `projects.workspace`, `maritime_workspaces` and `maritime_runs`. Existing production deployment runs migrations before publishing. No production records were manually changed during implementation.
 
-1. Persistent Maritime project/asset/scenario records and import/create workflows using existing project infrastructure; current scenario records remain synthetic and session-scoped.
-2. Editable programme networks, calendars/holidays, resource quantities/rates and richer operational cost assumptions.
-3. Stored training decisions and reports; no certification claims.
-4. End-to-end demonstration recording and submission evidence.
+The new authenticated API lives at `/api/v1/maritime/projects/{project_id}`: workspace GET/PUT, run list/detail, operation execution and exercise-attempt submission. Definitions are bounded and validated, with a 2 MB persisted-plan limit. Runs retain immutable input/result snapshots; the UI lists the latest 100 runs.
 
-Model import, live AIS/IoT, operational physics and certified training are outside this first release.
+## Verification and reproducibility
 
-## Validation — 17 October 2026
+- 85 backend checks passed across the selected regression suites (including the migration test and a corrected fixture rerun). Coverage includes conservation, outage boundaries, transport and yard bottlenecks, shared capacity, maintenance, invalid inputs, authentication, ownership, conflicting saves, snapshots, project-copy remapping and Poe evidence isolation. Existing project, CPM and resource-cost tests run alongside these.
+- 33 frontend unit checks passed for undo, equipment rigging, animation profiles and the existing Maritime demo. Frontend build/type checks and an Edge browser workflow exercise the real local API, save/versioning, scenario results, asset edits, model import/mapping/reload, exercise navigation/debrief, dark mode, downloads and shared module navigation.
+- Browser fixture: run `backend/.venv/Scripts/python.exe backend/tests/browser_maritime_server.py` from the repository root, then `node tests/maritimeWorkspace.smoke.mjs` from `frontend`. It only permits a database ending in `_test`, binds to localhost and replaces external object storage with memory. Do not run pytest concurrently against that database. Restart the fixture to reset its named project before rerunning the browser test.
+- Existing migration/deployment infrastructure is retained. Construction geometry conversion and IFC export logic are not changed by this release.
+- Live generated Poe replies remain unverified locally: the provider account previously rejected requests for insufficient credit. Saved-evidence/tool behavior is tested separately; provider failure remains visible rather than producing a fabricated reply.
 
-- 53 backend tests: Maritime calculation/API/Poe tools and errors, existing CPM/whole-day/suspend-resume regressions, and resource-costing tests.
-- Seven frontend operations/scoring/shared-ID tests.
-- Production frontend build passed.
-- Built-app browser checks against the real local calculation API: critical and parallel delays, costs, resource hours, baseline sequence, calculated playback dates, report export, Poe sign-in, operations/safety and mobile overflow.
-- A real provider request was attempted. The locally configured Anthropic account rejected it for insufficient credit. The validated tool round-trip is tested with provider doubles, but live generated replies are **not verified**. Production uses its own configured provider/credentials and must have available quota/credit.
+## Previous prototype
 
-Construction saved-schedule tests passed after CPM extraction. This release does not claim live telemetry, actual cost/progress, persistent Maritime projects or certified training.
+The earlier `/maritime/demo` supports a procedural terminal, a multiple-choice safety example and a six-activity delivery example. Its delivery calculation reuses the existing CPM and resource-cost functions, and sequence playback uses the existing animation engine. Public prototype calculation endpoints remain bounded and separate from persisted projects. Its session-scoped inputs are not imported automatically into project workspaces.

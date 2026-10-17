@@ -28,6 +28,7 @@ class Project(Base, TimestampMixin):
     # a visibility one.
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    workspace: Mapped[str] = mapped_column(String(20), nullable=False, default="construction", server_default="construction")
     client_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     # Optional — not every project has a meaningful floor area (e.g. non-building projects).

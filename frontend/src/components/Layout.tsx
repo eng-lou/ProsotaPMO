@@ -5,6 +5,7 @@ import { clearPersistedConversation, getPersistedConversation } from '@/lib/aiAs
 import { AiFourDBridgeProvider } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { NAV, Sidebar } from './Sidebar'
+import { MaritimeChrome } from '@/modules/maritime/MaritimeChrome'
 
 // Lazy (2026-09-03 perf pass, per Maro: "switching between modules...
 // takes a longer time") — PoePanel pulls in aiAttachments.ts's own `xlsx`
@@ -26,8 +27,14 @@ function useDocumentTitle() {
   const location = useLocation()
   const { selectedProject } = useProject()
   useEffect(() => {
-    const page = NAV.find(({ to }) => location.pathname.startsWith(to))?.label
-    document.title = [page, selectedProject?.name, 'Prosota'].filter(Boolean).join(' — ')
+    const maritime = selectedProject?.workspace === 'maritime'
+    const section = location.pathname.split('/').pop() ?? ''
+    const page = maritime ? ({project:'Project',models:'Models & Assets',operations:'Port Operations',calls:'Vessel Calls',
+      berths:'Berths',equipment:'Equipment',yard:'Yard & Gates',scenarios:'Scenarios',results:'Run Results',reports:'Reports',
+      exercises:'Exercises',setup:'Exercise Setup',training:'Exercise',debrief:'Debrief',schedule:'Schedule',resources:'Resources',
+      costs:'Costs',risks:'Risks',issues:'Issues & Decisions',dashboard:'Reporting & Controls'} as Record<string,string>)[section]
+      : NAV.find(({ to }) => location.pathname.startsWith(to))?.label
+    document.title = [page, selectedProject?.name, maritime ? 'Prosota Maritime' : 'Prosota'].filter(Boolean).join(' — ')
   }, [location.pathname, selectedProject])
 }
 
@@ -84,13 +91,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
     // reads them) as siblings under the one shared provider instance.
     <AiFourDBridgeProvider>
       <div className="flex min-h-screen bg-gray-50 dark:bg-prosota-ink">
-        <Sidebar />
+        {selectedProject?.workspace !== 'maritime' && <Sidebar />}
         {/* Full page-content dark-mode pass (2026-08-03) — every routed page
             now carries its own dark: variants (see that session's plan), so
             this can finally follow the outer wrapper's own dark:bg-prosota-ink
             instead of the light-only bg-gray-50 the original shell-only pass
             (2026-07-25) deliberately pinned here to avoid dark-on-dark text. */}
-        <main className="flex-1 overflow-auto bg-gray-50 dark:bg-prosota-ink">{children}</main>
+        {selectedProject?.workspace === 'maritime' ? <MaritimeChrome onPoe={() => setPoeOpen(true)}>{children}</MaritimeChrome> : <main className="flex-1 overflow-auto bg-gray-50 dark:bg-prosota-ink">{children}</main>}
         {selectedProject && !poeOpen && (
           <button
             onClick={() => setPoeOpen(true)}

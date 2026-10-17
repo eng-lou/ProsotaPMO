@@ -940,3 +940,5 @@ PROPOSAL_TOOL_NAMES = PROPOSAL_TOOL_NAMES | {"propose_planning_changes"}
 
 from app.ai.resource_context import TOOL as RESOURCE_CONTEXT_TOOL
 TOOLS.append(RESOURCE_CONTEXT_TOOL)
+from app.ai.maritime_context import TOOL as MARITIME_CONTEXT_TOOL
+TOOLS.append(MARITIME_CONTEXT_TOOL)

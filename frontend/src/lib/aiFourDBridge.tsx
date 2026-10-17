@@ -44,7 +44,7 @@ export type AiFourDToolName = 'highlight_elements' | 'isolate_elements' | 'color
 // needs live loaded-model geometry (sceneClash.ts's own findClashes),
 // something only FourD.tsx's own client-side code can do, not a plain
 // REST call the way every other proposal's approval action already is.
-type AiFourDInternalName = 'execute_clash_test_proposal'
+type AiFourDInternalName = 'execute_clash_test_proposal' | 'select_maritime_asset'
 
 export type AiFourDHandlers = Partial<Record<AiFourDToolName | AiFourDInternalName, (input: Record<string, unknown>) => Promise<unknown> | unknown>>
 

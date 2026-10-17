@@ -11,6 +11,8 @@ import { CurrentUserProvider, useCurrentUser } from './lib/CurrentUserContext'
 import { ProjectProvider, useProject } from './lib/ProjectContext'
 import { ThemeProvider } from './lib/ThemeContext'
 import { ProjectSelector } from './modules/projects/ProjectSelector'
+import { MaritimeDataProvider } from './modules/maritime/workspaceData'
+import { MaritimeModelDock } from './modules/maritime/MaritimeModelDock'
 
 // Lazy (2026-07-20, FourD; extended 2026-07-21 to every other routed
 // module) — FourD pulls in Three.js, react-three-fiber/drei,
@@ -35,6 +37,7 @@ import { ProjectSelector } from './modules/projects/ProjectSelector'
 // re-renders only when that actually flips.
 const MaritimePage = lazy(() => import('./modules/maritime/MaritimePage').then(m => ({ default: m.MaritimePage })))
 const MaritimeWorkspace = lazy(() => import('./modules/maritime/MaritimeWorkspace').then(m => ({ default: m.MaritimeWorkspace })))
+const MaritimeProject = lazy(() => import('./modules/maritime/MaritimeProject').then(m => ({ default: m.MaritimeProject })))
 const ClashReportPage = lazy(() => import('./modules/fourD/ClashReportPage').then(m => ({ default: m.ClashReportPage })))
 const FourD = lazy(() => import('./modules/fourD/FourD').then(m => ({ default: memo(m.FourD) })))
 const Scheduling = lazy(() => import('./modules/scheduling/Scheduling').then(m => ({ default: m.Scheduling })))
@@ -73,7 +76,8 @@ function LoginPage() {
 // re-init, the moment you navigate back.
 function PersistentFourD() {
   const location = useLocation()
-  const active = location.pathname === '/4d'
+  const {selectedProject} = useProject()
+  const active = location.pathname === '/4d' || location.pathname === '/maritime/workspace/models'
   // hasEverBeenActive (2026-07-20) — the component (and its lazy chunk)
   // isn't even mounted until the very first visit to /4d, so a user who
   // never opens it never pays for FourD at all, not even the Suspense
@@ -90,15 +94,16 @@ function PersistentFourD() {
   return (
     <div className={active ? 'h-full' : 'hidden'}>
       <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading 4D…</div>}>
-        <FourD active={active} />
+        {selectedProject?.workspace === 'maritime' ? <MaritimeModelDock><FourD active={active} /></MaritimeModelDock> : <FourD active={active} />}
       </Suspense>
     </div>
   )
 }
 
-function AuthenticatedApp() {
+export function AuthenticatedApp() {
   const undoRevision = useUndoRefresh()
   const { selectedProject } = useProject()
+  const maritime = selectedProject?.workspace === 'maritime'
 
   // A SINGLE <BrowserRouter> for the whole app, not one recreated per branch
   // below — two separate router instances that get mounted/unmounted as
@@ -116,7 +121,7 @@ function AuthenticatedApp() {
           <Route path="*" element={<ProjectSelector />} />
         </Routes>
       ) : (
-        <Layout>
+        <ProjectWorkspace>
           <PersistentFourD />
           {/* One shared boundary, not one per lazy route (2026-07-21) —
               <Routes> only ever mounts one matched route at a time, so at
@@ -126,19 +131,36 @@ function AuthenticatedApp() {
               markup five times. */}
           <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>}>
             <Routes key={undoRevision}>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<Navigate to={maritime ? '/maritime/workspace/project' : '/dashboard'} replace />} />
               <Route path="/projects" element={<ProjectSelector />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/scheduling" element={<Scheduling />} />
-              <Route path="/risks" element={<RiskRegister />} />
-              <Route path="/costs" element={<CostPlan />} />
-              <Route path="/icd" element={<IcdTracker />} />
+              <Route path="/dashboard" element={maritime ? <Navigate to="/maritime/workspace/dashboard" replace /> : <Dashboard />} />
+              <Route path="/scheduling" element={maritime ? <Navigate to="/maritime/workspace/schedule" replace /> : <Scheduling />} />
+              <Route path="/risks" element={maritime ? <Navigate to="/maritime/workspace/risks" replace /> : <RiskRegister />} />
+              <Route path="/costs" element={maritime ? <Navigate to="/maritime/workspace/costs" replace /> : <CostPlan />} />
+              <Route path="/icd" element={maritime ? <Navigate to="/maritime/workspace/issues" replace /> : <IcdTracker />} />
+              <Route path="/4d" element={maritime ? <Navigate to="/maritime/workspace/models" replace /> : null} />
+              <Route path="/maritime/workspace" element={<Navigate to="/maritime/workspace/project" replace />} />
+              <Route path="/maritime/workspace/schedule" element={<Scheduling />} />
+              <Route path="/maritime/workspace/resources" element={<Scheduling initialTab="resources" />} />
+              <Route path="/maritime/workspace/costs" element={<CostPlan />} />
+              <Route path="/maritime/workspace/risks" element={<RiskRegister />} />
+              <Route path="/maritime/workspace/issues" element={<IcdTracker />} />
+              <Route path="/maritime/workspace/dashboard" element={<Dashboard />} />
+              <Route path="/maritime/workspace/models" element={null} />
+              <Route path="/maritime/workspace/*" element={<MaritimeProject />} />
             </Routes>
           </Suspense>
-        </Layout>
+        </ProjectWorkspace>
       )}
     </BrowserRouter>
   )
+}
+
+function ProjectWorkspace({children}: {children: React.ReactNode}) {
+  const {selectedProject} = useProject()
+  return selectedProject?.workspace === 'maritime'
+    ? <MaritimeDataProvider key={selectedProject.id}><Layout>{children}</Layout></MaritimeDataProvider>
+    : <Layout>{children}</Layout>
 }
 
 // Gates on the backend's own approval status, not just a valid Auth0 token
@@ -226,7 +248,7 @@ function AuthGate() {
     )
   }
 
-  if (!isAuthenticated) return <LoginPage />
+  if (!isAuthenticated) return window.location.pathname.startsWith('/maritime/workspace') ? <MaritimeSignIn /> : <LoginPage />
 
   return (
     <AuthTokenProvider>
@@ -237,6 +259,11 @@ function AuthGate() {
   )
 }
 
+function MaritimeSignIn() {
+  const {loginWithRedirect} = useAuth0()
+  return <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-gray-50 dark:bg-prosota-ink dark:text-prosota-paper"><h1 className="text-2xl font-bold">Prosota Maritime</h1><p>Sign in to open your projects, models and scenarios.</p><button className="bg-teal-700 text-white px-5 py-3 rounded" onClick={() => loginWithRedirect({appState:{returnTo:'/maritime/workspace'}})}>Sign in</button><a href="/maritime">Maritime home</a></div>
+}
+
 // ThemeProvider wraps everything, including the pre-auth screens
 // (2026-07-25, per Maro's own light/dark toggle) — the login screen and
 // auth-loading spinner are real, always-visible chrome too, same reasoning
@@ -245,7 +272,7 @@ function AuthGate() {
 export default function App() {
   return (
     <ThemeProvider>
-      {window.location.pathname.replace(/\/$/, '') === '/maritime/workspace' ? <Suspense fallback={<p className="p-8">Loading Maritime workspace…</p>}><MaritimeWorkspace /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/maritime' ? <Suspense fallback={<p className="p-8">Loading Maritime…</p>}><MaritimePage /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/construction' ? <LoginPage /> : window.location.pathname === '/clash-report' ? <Suspense fallback={<p>Loading report…</p>}><ClashReportPage /></Suspense> : <AuthGate />}
+      {window.location.pathname.replace(/\/$/, '') === '/maritime/demo' ? <Suspense fallback={<p className="p-8">Loading example…</p>}><MaritimeWorkspace /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/maritime' ? <Suspense fallback={<p className="p-8">Loading Maritime…</p>}><MaritimePage /></Suspense> : window.location.pathname.replace(/\/$/, '') === '/construction' ? <LoginPage /> : window.location.pathname === '/clash-report' ? <Suspense fallback={<p>Loading report…</p>}><ClashReportPage /></Suspense> : <AuthGate />}
     </ThemeProvider>
   )
 }

@@ -550,7 +550,7 @@ const PASTE_FIELD_OPTIONS: PasteFieldOption[] = [
   { key: 'calendar_id', label: 'Calendar', defaultChecked: true },
 ]
 
-export function Scheduling() {
+export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' | 'resources'} = {}) {
   const { selectedProject } = useProject()
   const { theme } = useTheme()
   const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
@@ -1188,7 +1188,8 @@ export function Scheduling() {
   // widget in there"). Assign-resources-to-an-activity stays in the bottom
   // detail panel (ResourceAssignments, below) — only the resource *pool*
   // definitions move.
-  const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>('schedule')
+  const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>(initialTab)
+  useEffect(() => setActiveTab(initialTab), [initialTab])
   // "Generate Resources" / "Auto Assign Resources" (2026-07-17, per Maro's
   // two-stage flow — schedule generation itself no longer creates any
   // Resource/ResourceAssignment rows, see buildStagedSchedule's own header
