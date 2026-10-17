@@ -2,6 +2,8 @@
 
 17 October 2026. The governing product scope is [MARITIME_SCOPE.md](MARITIME_SCOPE.md).
 
+For setup, workflows, worked examples and troubleshooting, see the [Maritime user guide](MARITIME_USER_GUIDE.md) or the [Word edition](guides/Prosota_Maritime_User_Guide.docx).
+
 ## Current release: persistent project workspace
 
 `/maritime/workspace` now uses the existing approved-user authentication and project infrastructure. Construction and Maritime projects have separate selectors and tab storage. Existing projects default to Construction; the migration does not reclassify them. The earlier synthetic demonstration remains at `/maritime/demo` as a reference, not the editable project platform.
