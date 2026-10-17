@@ -18,6 +18,12 @@ class ElementRef(StrictModel):
     element_label: str = Field(default='', max_length=500)
 
 
+class ScenePlacement(StrictModel):
+    x: float = Field(ge=-10000, le=10000)
+    z: float = Field(ge=-10000, le=10000)
+    heading: float = Field(default=0, ge=-360, le=360)
+
+
 class Asset(StrictModel):
     id: UUID
     name: Name
@@ -30,6 +36,7 @@ class Asset(StrictModel):
     resource_id: UUID | None = None
     activity_id: UUID | None = None
     notes: str = Field(default='', max_length=4000)
+    placement: ScenePlacement | None = None
 
     @model_validator(mode='after')
     def stock_limit(self):
@@ -78,6 +85,7 @@ class Exercise(StrictModel):
     hazard: str = Field(default='Lifting zone intrusion', min_length=1, max_length=500)
     required_actions: list[Name] = Field(default_factory=lambda: ['Identify hazard', 'Stop lift', 'Secure zone', 'Notify supervisor'], min_length=1, max_length=20)
     response_limit_seconds: int = Field(default=60, ge=1, le=3600)
+    scene_effects: dict[Name, Literal['identify', 'stop', 'secure', 'notify']] = Field(default_factory=dict, max_length=20)
 
 
 class WorkspaceDefinition(StrictModel):
@@ -121,6 +129,8 @@ class WorkspaceDefinition(StrictModel):
             require(exercise.asset_id)
             if len(set(exercise.required_actions)) != len(exercise.required_actions):
                 raise ValueError('Exercise actions must be unique')
+            if any(action not in exercise.required_actions for action in exercise.scene_effects):
+                raise ValueError('Scene effects must refer to a required exercise action')
         return self
 
 

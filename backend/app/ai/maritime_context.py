@@ -32,7 +32,7 @@ async def get_context(db, project_id, run_id=None):
                 {k:v for k,v in a.items() if k != 'elements'} | {'linked_elements':len(a.get('elements',[]))}
                 for a in inputs['plan'].get('assets',[])]}
         if run.kind == 'operations':
-            result = {**result, **{key:{k:v for k,v in result[key].items() if k != 'samples'} for key in ('baseline','scenario')}}
+            result = {**result, **{key:{k:v for k,v in result[key].items() if k not in ('samples', 'replay')} for key in ('baseline','scenario')}}
         return jsonable_encoder({'run_id':run.id,'kind':run.kind,'name':run.name,'version':run.version,
                                   'created_at':run.created_at,'stale':run.version != row.version,
                                   'inputs':inputs,'results':result})

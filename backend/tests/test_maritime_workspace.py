@@ -192,6 +192,7 @@ async def test_poe_reads_saved_evidence_without_cross_project_leak(client, db):
     assert evidence['results']['completion_delay_hours']==3
     assert evidence['results']['scenario']['assumptions']
     assert 'samples' not in evidence['results']['scenario']
+    assert 'replay' not in evidence['results']['scenario']
     assert evidence['stale'] is False
     await client.put(url+'/workspace',json={'version':1,'definition':data})
     assert (await get_context(db,project_id,result['id']))['stale'] is True

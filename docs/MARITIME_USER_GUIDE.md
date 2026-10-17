@@ -1,10 +1,12 @@
 # Prosota Maritime User Guide
 
-Version 1.0 | 17 October 2026 | Persistent workspace release
+Version 1.1 | 18 October 2026 | Interactive port environment
 
 Prosota Maritime brings port operations, safety exercises and infrastructure delivery into a shared project. This guide explains how to create useful project data, connect it to models, run the available calculations and interpret the results. It covers the implementation released in October 2026, with practical examples for someone learning the platform from the beginning.
 
-Start with sections 1 to 4. They explain the interface and take you through a complete operational comparison without requiring a model. Then import your geometry, build a guided exercise and use the existing Prosota planning tools for delivery. The later sections explain calculations, reporting, Poe and recovery from common problems.
+For the quickest visual introduction, open **Port Operations**, create the editable terminal if the project is empty, and choose **Follow the story**. This saves and runs the selected alternative, then takes you from vessel arrival to an outage and a comparison. **Assets** and **Details** toggle the side panels; **Focus view** expands the environment.
+
+The Word edition remains version 1.0; this page includes the new port environment. Start with sections 1 to 4. They explain the interface and take you through a complete operational comparison without requiring a model. Then import your geometry, build a guided exercise and use the existing Prosota planning tools for delivery. The later sections explain calculations, reporting, Poe and recovery from common problems.
 
 **Three things to understand before starting.** An imported model supplies geometry. An asset record supplies identity and operational settings. A delivery activity supplies schedule dates and assignments. Linking these records makes them easier to use together, but each link has a specific purpose; it does not automatically activate every calculation or animation.
 
@@ -16,13 +18,13 @@ Start with sections 1 to 4. They explain the interface and take you through a co
 
 Use this workspace to answer questions such as: Can the terminal handle the planned cargo? What happens if a crane stops for six hours? Will trucks or outbound gates become the bottleneck? What utilisation and operating costs result from those assumptions?
 
-You enter assets, vessel calls, handling rates, yard capacity and availability restrictions. The engine calculates cargo flow and saves a run containing both its inputs and outputs. Its replay controls show recorded quantities over time. They do not yet drive cranes and trucks around the imported scene.
+You enter assets, vessel calls, handling rates, yard capacity and availability restrictions. The engine calculates cargo flow and saves a run containing both its inputs and outputs. The port environment replays recorded quantities and equipment states. Crane cycles and representative truck movement follow calculated handling progress, freezing during outages. The layout is generated from your editable assets; imported geometry is available through Models & Assets. Travel paths are illustrative, and operational runs do not yet drive arbitrary imported rigged equipment.
 
 ### Safety and Training
 
 Use this workspace to author a guided exercise, inspect its linked asset in the model, record participant actions and review their timing and order. An example is identifying a lifting-zone intrusion, stopping the lift, securing the zone and notifying the supervisor.
 
-The current exercise records buttons pressed by the participant. Pressing **Stop lift** records that action; it does not physically stop an imported crane. Automatic zone detection, equipment interaction and system-generated hazard events remain future work. Use the exercise as a guided rehearsal and review tool.
+Configure a scene control for each action in **Setup**. Participants can identify the hazard, stop practice equipment, place barriers and acknowledge notification through scene markers. Stopping freezes the practice animation at that timestamp. Existing exercises without mappings remain record-only. These controls do not operate imported cranes or detect hazards automatically. Use the exercise as a guided rehearsal and review tool.
 
 ### Infrastructure Delivery
 
@@ -106,7 +108,7 @@ This exercise uses the editable terminal starter. Geometry is optional: complete
 5. Open **Port Operations → Equipment**. Find QC-01 and QC-02. Each has a handling rate of **30 moves/h** and operating rate of **120 GBP/h**.
 6. Check the truck fleet at **90 moves/h**, Yard A capacity at **1,500 moves**, and outbound gates at **90 moves/h**.
 7. Open **Vessel calls**. Horizon discharge should use MV Horizon, Berth 02, both cranes, arrival hour **2** and **1,200 cargo moves**.
-8. Open **Overview → Run working plan**. Read the result before changing any inputs. The two sides of this run are identical, so its completion and cost impacts are zero.
+8. Open **Overview**, select **Working plan**, then **Run simulation**. Use **Play**, scrub the timeline and open **Full results** before changing any inputs. The two sides of this run are identical, so its completion and cost impacts are zero.
 9. Open **Scenarios** and select **QC-02 outage**. Confirm QC-02, start hour **8**, duration **6 hours**.
 10. If you changed anything, save it. Click **Run comparison**. You will be taken to Results.
 11. Check **Working-plan vessel finish = 22.00 h**, **Scenario vessel finish = 25.00 h** and **Completion impact = 3.00 h**.
@@ -354,24 +356,24 @@ Create an exercise around a specific registered asset or location. Give the part
 4. In **Hazard / objective**, explain the situation and what the participant is expected to recognise.
 5. Set **Response limit from exercise start (seconds)**. This one limit applies to every required action; it is not a fresh timer for each step.
 6. Enter **Required actions in order**. The starter uses Identify hazard, Stop lift, Secure zone and Notify supervisor.
-7. Add or remove actions as needed. Names must be non-empty and unique. The current authoring list has no drag-to-reorder control; edit the action text in the required sequence.
+7. For scene interaction, choose a **Scene control** beside each action. These map to identification, stopping the practice animation, barriers or notification; **Record only** keeps the action in the log without a scene effect. Add or remove actions as needed. Names must be non-empty and unique. The current authoring list has no drag-to-reorder control; edit the action text in the required sequence.
 8. Save the plan, then open **Run exercise**.
 
 Use precise, distinct actions. For example, **Identify the person in the lifting zone** is easier to review than **Check safety**. Keep an exercise focused enough that its sequence and time limit are meaningful.
 
-**Inspect linked environment** opens the shared model area and selects the exercise's asset in the inspector. Use **Select in model**, **Isolate asset** or **Frame Selected** to inspect its geometry. If no geometry is linked, the exercise can still run as a guided action exercise, but it does not have a meaningful spatial reference yet.
+**Inspect linked environment** opens the shared model area and selects the exercise's asset in the inspector. Use **Select in model**, **Isolate asset** or **Frame Selected** to inspect its geometry. If no geometry is linked, the exercise still runs against the representative asset in the operational layout. Imported geometry and its existing inspector remain available separately.
 
-Saving an exercise does not create an exclusion-zone volume or trigger a hazard in the model. Hazard text and asset selection describe the exercise; automated spatial interaction is a later implementation stage. Do not treat an authored time limit as an externally validated safety standard.
+Scene mappings display practice markers and barriers around the selected asset. They do not create a collision-tested exclusion volume or trigger hazards from live model geometry. Do not treat an authored time limit as an externally validated safety standard.
 
 ## 13 Conduct an attempt and interpret the debrief
 
 ### Run the exercise
 
 1. In **Safety & Training → Run**, select the intended exercise. Confirm its hazard and linked asset.
-2. Click **Start attempt**. The timer begins and the exercise version is captured.
-3. Record each action when you perform or describe it. A recorded action receives a timestamp and cannot be recorded twice in the same attempt.
+2. Click **Start exercise**. The timer begins and the exercise version is captured.
+3. Use the scene markers or inspector action buttons. Configured effects update the practice scene. Every action receives a timestamp and cannot be recorded twice in the same attempt.
 4. Navigate to **Models & Assets** if you need to inspect the environment. The attempt remains active and the same action controls appear in the model inspector. Navigation time counts towards the response limit.
-5. Click **Finish & save attempt**. Wait for the saved debrief. Finishing is what persists the attempt.
+5. Click **Finish & review** in the port environment, or **Finish & save attempt** in the imported-model inspector. Wait for the saved debrief. Finishing is what persists the attempt.
 
 An active attempt survives navigation within the current project session. It is not resumable after a browser refresh or closed tab. The browser warns before leaving with an active attempt. Complete or discard it before switching projects. Plan save and reload controls are disabled while an attempt is active.
 

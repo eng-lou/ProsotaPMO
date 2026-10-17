@@ -5,8 +5,9 @@ capacity, finite yard buffer, outbound gate drain. No physical collision or
 stochastic arrival claims. Report incomplete runs explicitly.
 """
 from app.schemas.maritime_workspace import WorkspaceDefinition, Scenario
+from app.services.maritime_replay import ReplayRecorder
 
-ENGINE_VERSION = 'terminal-flow-1'
+ENGINE_VERSION = 'terminal-flow-2'
 
 
 def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
@@ -34,11 +35,17 @@ def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
     cleared = 0.0
     dt = 1 / 60
     unavailable = set()
+    replay = ReplayRecorder()
     def available(id, hour):
         return id not in unavailable
 
     for minute in range(plan.horizon_hours * 60):
         hour = minute / 60
+        end_hour = (minute + 1) / 60
+        before_moves = moves.copy()
+        stock_before, cleared_before = stock, cleared
+        handled_before = sum(c.cargo_moves - remaining[c.id] for c in calls)
+        equipment_calls = {}
         unavailable = {a for a, start, end in intervals if start <= hour < end}
         open_gates = [a for a in gates if available(a.id, hour)]
         gate_rate = sum(a.rate for a in open_gates)
@@ -56,10 +63,19 @@ def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
         occupied_berths, used_cranes, occupied_vessels = set(), set(), set()
         queue = 0
         for c in calls:
-            if remaining[c.id] <= 1e-7 or c.arrival_hour > hour + 1e-9:
+            handled_call = c.cargo_moves - remaining[c.id]
+            def record_call(state, reason='', rate=0):
+                replay.add(f'call:{c.id}', hour, end_hour, handled_call, rate, state, reason)
+            if remaining[c.id] <= 1e-7:
+                record_call('complete', 'Cargo unloaded')
+                continue
+            if c.arrival_hour > hour + 1e-9:
+                record_call('scheduled', 'Awaiting arrival')
                 continue
             if c.berth_id in occupied_berths or c.vessel_id in occupied_vessels or not available(c.berth_id, hour):
                 queue += 1
+                record_call('waiting', 'Berth unavailable' if not available(c.berth_id, hour) else
+                            'Berth occupied' if c.berth_id in occupied_berths else 'Vessel serving another call')
                 continue
             occupied_berths.add(c.berth_id)
             occupied_vessels.add(c.vessel_id)
@@ -68,6 +84,16 @@ def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
             used_cranes.update(a.id for a in cranes)
             crane_rate = sum(a.rate for a in cranes)
             amount = max(0, min(remaining[c.id], crane_rate * dt, transport_left, capacity - stock))
+            constraints = [(crane_rate * dt, 'Crane capacity'), (transport_left, 'Truck capacity'),
+                           (capacity - stock, 'Yard storage')]
+            limiting, reason = min(constraints, key=lambda pair: pair[0])
+            if not cranes:
+                reason = 'Assigned cranes unavailable or in use'
+            elif remaining[c.id] <= limiting:
+                reason = 'Finishing cargo'
+            record_call('handling' if amount > 1e-7 else 'blocked', reason, amount / dt)
+            equipment_calls[c.berth_id] = c.id
+            equipment_calls.update({a.id: c.id for a in cranes})
             remaining[c.id] -= amount
             stock += amount
             transport_left -= amount
@@ -87,6 +113,19 @@ def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
                 remaining[c.id] = 0
                 finished[c.id] = (minute + 1) / 60
         complete = all(v == 0 for v in remaining.values())
+        for a in plan.assets:
+            if a.kind not in ('crane', 'truck', 'gate', 'berth'):
+                continue
+            delta = moves[a.id] - before_moves[a.id]
+            state = 'unavailable' if a.id in unavailable else 'working' if delta > 1e-7 else 'idle'
+            if a.kind == 'berth' and a.id in occupied_berths:
+                state = 'occupied'
+            reason = 'Availability restriction' if state == 'unavailable' else ''
+            replay.add(f'asset:{a.id}', hour, end_hour, before_moves[a.id], delta / dt, state, reason, equipment_calls.get(a.id))
+        replay.add('flow:handled', hour, end_hour, handled_before,
+                   (sum(c.cargo_moves - remaining[c.id] for c in calls) - handled_before) / dt, 'flow')
+        replay.add('flow:yard', hour, end_hour, stock_before, (stock - stock_before) / dt, 'flow')
+        replay.add('flow:cleared', hour, end_hour, cleared_before, (cleared - cleared_before) / dt, 'flow')
         if minute % 15 == 0 or (complete and stock < 1e-7):
             samples.append({'hour': round((minute + 1) / 60, 4),
                             'handled': round(sum(c.cargo_moves - remaining[c.id] for c in calls), 3),
@@ -118,6 +157,7 @@ def simulate(plan: WorkspaceDefinition, scenario: Scenario | None = None):
                        'utilisation_elapsed_percent': round(100 * productive[a.id] / elapsed, 2)}
                       for a in plan.assets if a.kind in ('crane', 'truck', 'gate', 'berth')],
         'samples': samples,
+        'replay': replay.result(),
         'assumptions': [
             'One-minute fluid approximation; all cargo is unloaded to a pooled yard then leaves through outbound gates.',
             'Calls use FIFO arrival order; a berth serves one vessel and a crane serves one call at a time. A vessel cannot occupy two berths at once.',

@@ -6,15 +6,18 @@ import { useProject } from '@/lib/ProjectContext'
 
 export type AssetKind = 'berth' | 'crane' | 'truck' | 'yard' | 'gate' | 'vessel' | 'infrastructure'
 export interface ElementRef { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string; element_label: string }
-export interface Asset { id: string; name: string; kind: AssetKind; rate: number; capacity: number; initial_stock: number; hourly_cost: number; elements: ElementRef[]; resource_id: string | null; activity_id: string | null; notes: string }
+export interface Asset { id: string; name: string; kind: AssetKind; rate: number; capacity: number; initial_stock: number; hourly_cost: number; elements: ElementRef[]; resource_id: string | null; activity_id: string | null; notes: string; placement?: {x:number;z:number;heading:number} | null }
 export interface VesselCall { id: string; name: string; vessel_id: string; berth_id: string; crane_ids: string[]; arrival_hour: number; cargo_moves: number }
 export interface Scenario { id: string; name: string; downtime: {asset_id: string; start_hour: number; duration_hours: number}[] }
 export interface WorkOrder { id: string; name: string; asset_id: string; start_hour: number; duration_hours: number; cost: number; status: 'draft' | 'scheduled' | 'complete'; notes: string }
-export interface Exercise { id: string; name: string; asset_id: string; hazard: string; required_actions: string[]; response_limit_seconds: number }
+export type SceneEffect = 'identify' | 'stop' | 'secure' | 'notify'
+export interface Exercise { id: string; name: string; asset_id: string; hazard: string; required_actions: string[]; response_limit_seconds: number; scene_effects?: Record<string, SceneEffect> }
 export interface WorkspaceDefinition { currency: string; source: 'synthetic' | 'user_entered'; start_at: string; horizon_hours: number; assets: Asset[]; calls: VesselCall[]; scenarios: Scenario[]; work_orders: WorkOrder[]; exercises: Exercise[] }
 export interface RunSummary { id: string; version: number; kind: 'operations' | 'safety'; name: string; created_at: string }
 export interface Sample { hour: number; handled: number; yard_moves: number; gate_cleared: number; waiting_vessels: number; operating_cost: number }
-export interface FlowResult { status: string; vessel_completion_hour: number | null; terminal_completion_hour: number | null; cargo_moves: number; handled_moves: number; yard_moves: number; gate_cleared: number; total_cost: number; currency: string; elapsed_hours: number; assumptions: string[]; samples: Sample[]; calls: { id: string; name: string; arrival_hour: number; start_hour: number | null; finish_hour: number | null; remaining_moves: number }[]; equipment: {id: string; name: string; kind: string; productive_hours: number; moves: number; utilisation_elapsed_percent: number}[] }
+export interface ReplaySegment {start:number;end:number;value:number;rate:number;state:string;reason:string;call_id:string|null}
+export interface FlowReplay {version:number;available:boolean;tracks:Record<string,ReplaySegment[]>;note:string}
+export interface FlowResult { replay?: FlowReplay; status: string; vessel_completion_hour: number | null; terminal_completion_hour: number | null; cargo_moves: number; handled_moves: number; yard_moves: number; gate_cleared: number; total_cost: number; currency: string; elapsed_hours: number; assumptions: string[]; samples: Sample[]; calls: { id: string; name: string; arrival_hour: number; start_hour: number | null; finish_hour: number | null; remaining_moves: number }[]; equipment: {id: string; name: string; kind: string; productive_hours: number; moves: number; utilisation_elapsed_percent: number}[] }
 export interface OperationRun extends RunSummary { kind: 'operations'; inputs: { plan: WorkspaceDefinition; scenario_id: string | null }; results: { baseline: FlowResult; scenario: FlowResult; completion_delay_hours: number | null; cost_change: number } }
 export interface SafetyRun extends RunSummary { kind: 'safety'; inputs: { exercise: Exercise; asset: Asset }; results: { criteria: {action: string; completed: boolean; seconds: number | null; within_limit: boolean}[]; actions: {action: string; seconds: number}[]; required: number; completed: number; missed: string[]; in_order: boolean; first_response_seconds: number | null; timing_basis: string } }
 export type SavedRun = OperationRun | SafetyRun
@@ -31,7 +34,7 @@ export function starterPlan(): WorkspaceDefinition {
     assets: [berth, vessel, a, b, truck, yard, gate],
     calls: [{id: crypto.randomUUID(), name: 'Horizon discharge', vessel_id: vessel.id, berth_id: berth.id, crane_ids: [a.id,b.id], arrival_hour: 2, cargo_moves: 1200}],
     scenarios: [{id: crypto.randomUUID(), name: 'QC-02 outage', downtime: [{asset_id: b.id, start_hour: 8, duration_hours: 6}]}], work_orders: [],
-    exercises: [{id: crypto.randomUUID(), name: 'Quayside lifting exercise', asset_id: b.id, hazard: 'Person enters lifting exclusion zone', required_actions: ['Identify hazard','Stop lift','Secure zone','Notify supervisor'], response_limit_seconds: 60}]}
+    exercises: [{id: crypto.randomUUID(), name: 'Quayside lifting exercise', asset_id: b.id, hazard: 'Person enters lifting exclusion zone', required_actions: ['Identify hazard','Stop lift','Secure zone','Notify supervisor'], response_limit_seconds: 60, scene_effects: {'Identify hazard':'identify','Stop lift':'stop','Secure zone':'secure','Notify supervisor':'notify'}}]}
 }
 export function errorMessage(error: unknown) {
   if (axios.isAxiosError(error)) {
@@ -46,11 +49,13 @@ interface Context {
   plan: WorkspaceDefinition | null; version: number; dirty: boolean; busy: boolean; error: string | null
   setError: (message: string | null) => void; edit: (fn: (plan: WorkspaceDefinition) => WorkspaceDefinition) => void
   save: () => Promise<void>; reload: () => Promise<void>; runs: RunSummary[]; refreshRuns: () => Promise<void>
-  run: (scenarioId?: string) => Promise<SavedRun | null>; endpoint: string
+  run: (scenarioId?: string, saveFirst?:boolean) => Promise<SavedRun | null>; endpoint: string
   attempt: ActiveAttempt | null; attemptSaving: boolean
   startAttempt: (exercise: Exercise) => void; recordAction: (action: string) => void
   restartAttempt: () => void; discardAttempt: () => void; finishAttempt: () => Promise<SavedRun | null>
   selectedAssetId: string; selectAsset: (id: string) => void
+  portRun: OperationRun | null; setPortRun: (run:OperationRun|null)=>void
+  portHour: number; setPortHour: (hour:number)=>void
 }
 const WorkspaceContext = createContext<Context | null>(null)
 export function MaritimeDataProvider({children}: {children: ReactNode}) {
@@ -63,6 +68,7 @@ export function MaritimeDataProvider({children}: {children: ReactNode}) {
   const [runs,setRuns] = useState<RunSummary[]>([])
   const [attempt,setAttempt] = useState<ActiveAttempt | null>(null), [attemptSaving,setAttemptSaving] = useState(false)
   const [selectedAssetId,selectAsset] = useState('')
+  const [portRun,setPortRun] = useState<OperationRun|null>(null), [portHour,setPortHour] = useState(0)
   const interactionState = useRef({busy,attempt})
   interactionState.current={busy,attempt}
   useEffect(()=>()=>undoHistory.remove(undoOwner.current),[])
@@ -77,6 +83,7 @@ export function MaritimeDataProvider({children}: {children: ReactNode}) {
   const edit: Context['edit'] = fn => {
     const before = planRef.current
     if (!before || busy) return
+    if (attempt) {setError('Finish or discard the active exercise before editing its working plan.');return}
     const after = fn(before)
     const restore = (value: WorkspaceDefinition) => {
       if (interactionState.current.busy || interactionState.current.attempt) throw new Error('Finish the current operation or exercise before undoing plan edits.')
@@ -96,11 +103,19 @@ export function MaritimeDataProvider({children}: {children: ReactNode}) {
     try {const r = await api.put<{version: number; definition: WorkspaceDefinition}>(`${endpoint}/workspace`,{version,definition: plan}); replacePlan(r.data.definition); setVersion(r.data.version); setDirty(false)}
     catch(e){setError(errorMessage(e))} finally {setBusy(false)}
   }
-  const run = async (scenarioId?: string) => {
+  const run = async (scenarioId?: string, saveFirst=false) => {
     if(busy) return null
-    if(dirty || !version){setError('Save your changes before running a scenario.'); return null}
+    if((dirty || !version)&&!saveFirst){setError('Save your changes before running a scenario.'); return null}
+    if(saveFirst&&attempt){setError('Finish or discard the exercise before saving a scenario.');return null}
     setBusy(true); setError(null)
-    try {const r = await api.post<SavedRun>(`${endpoint}/runs`,{version,scenario_id:scenarioId ?? null}); setRuns(rows=>[r.data,...rows].slice(0,100)); return r.data}
+    try {
+      let inputVersion=version
+      if(saveFirst&&(dirty||!version)){
+        const saved=await api.put<{version:number;definition:WorkspaceDefinition}>(`${endpoint}/workspace`,{version,definition:planRef.current})
+        replacePlan(saved.data.definition);setVersion(saved.data.version);setDirty(false);inputVersion=saved.data.version
+      }
+      const r = await api.post<SavedRun>(`${endpoint}/runs`,{version:inputVersion,scenario_id:scenarioId ?? null}); setRuns(rows=>[r.data,...rows].slice(0,100)); return r.data
+    }
     catch(e){setError(errorMessage(e)); return null} finally {setBusy(false)}
   }
   const startAttempt = (exercise: Exercise) => {
@@ -127,6 +142,6 @@ export function MaritimeDataProvider({children}: {children: ReactNode}) {
       return r.data
     } catch(e) {setError(errorMessage(e)); return null} finally {setAttemptSaving(false)}
   }
-  return <WorkspaceContext.Provider value={{plan,version,dirty,busy,error,setError,edit,save,reload,runs,refreshRuns,run,endpoint,attempt,attemptSaving,startAttempt,recordAction,restartAttempt,discardAttempt,finishAttempt,selectedAssetId,selectAsset}}>{children}</WorkspaceContext.Provider>
+  return <WorkspaceContext.Provider value={{plan,version,dirty,busy,error,setError,edit,save,reload,runs,refreshRuns,run,endpoint,attempt,attemptSaving,startAttempt,recordAction,restartAttempt,discardAttempt,finishAttempt,selectedAssetId,selectAsset,portRun,setPortRun,portHour,setPortHour}}>{children}</WorkspaceContext.Provider>
 }
 export function useMaritime(){const c=useContext(WorkspaceContext); if(!c) throw new Error('Maritime provider missing'); return c}

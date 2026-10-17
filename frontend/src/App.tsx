@@ -131,7 +131,7 @@ export function AuthenticatedApp() {
               markup five times. */}
           <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>}>
             <Routes key={undoRevision}>
-              <Route path="/" element={<Navigate to={maritime ? '/maritime/workspace/project' : '/dashboard'} replace />} />
+              <Route path="/" element={<Navigate to={maritime ? '/maritime/workspace/operations' : '/dashboard'} replace />} />
               <Route path="/projects" element={<ProjectSelector />} />
               <Route path="/dashboard" element={maritime ? <Navigate to="/maritime/workspace/dashboard" replace /> : <Dashboard />} />
               <Route path="/scheduling" element={maritime ? <Navigate to="/maritime/workspace/schedule" replace /> : <Scheduling />} />
@@ -139,7 +139,7 @@ export function AuthenticatedApp() {
               <Route path="/costs" element={maritime ? <Navigate to="/maritime/workspace/costs" replace /> : <CostPlan />} />
               <Route path="/icd" element={maritime ? <Navigate to="/maritime/workspace/issues" replace /> : <IcdTracker />} />
               <Route path="/4d" element={maritime ? <Navigate to="/maritime/workspace/models" replace /> : null} />
-              <Route path="/maritime/workspace" element={<Navigate to="/maritime/workspace/project" replace />} />
+              <Route path="/maritime/workspace" element={<Navigate to="/maritime/workspace/operations" replace />} />
               <Route path="/maritime/workspace/schedule" element={<Scheduling />} />
               <Route path="/maritime/workspace/resources" element={<Scheduling initialTab="resources" />} />
               <Route path="/maritime/workspace/costs" element={<CostPlan />} />

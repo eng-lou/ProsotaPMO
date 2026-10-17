@@ -1,15 +1,19 @@
 # Prosota Maritime — implementation status
 
-17 October 2026. The governing product scope is [MARITIME_SCOPE.md](MARITIME_SCOPE.md).
+18 October 2026. The governing product scope is [MARITIME_SCOPE.md](MARITIME_SCOPE.md).
 
 For setup, workflows, worked examples and troubleshooting, see the [Maritime user guide](MARITIME_USER_GUIDE.md) or the [Word edition](guides/Prosota_Maritime_User_Guide.docx).
 
-## Current release: persistent project workspace
+## Current release: interactive port environment
 
 `/maritime/workspace` now uses the existing approved-user authentication and project infrastructure. Construction and Maritime projects have separate selectors and tab storage. Existing projects default to Construction; the migration does not reclassify them. The earlier synthetic demonstration remains at `/maritime/demo` as a reference, not the editable project platform.
 
 ### Implemented
 
+- Port Operations opens a project-driven 3D layout with searchable assets, type filters, orbit, quayside, yard, follow and keyboard walk views. Focus view expands the scene. Asset placement and heading are editable and persist with the working plan; imported geometry continues to use Models & Assets and its existing shared identifiers.
+- Save & simulate generates compact per-asset and per-call replay tracks from the calculation itself. Scrubbing freezes equipment progress during outages and resumes at the calculated boundary. Cargo quantities, pooled yard inventory and gate throughput use the same recorded states. Camera presets and a shared clock support side-by-side working-plan comparison; a three-step walkthrough follows arrival, disruption and consequences.
+- The environment is a representative layout generated from the project's asset register. Crane cycles and representative truck motion illustrate calculated progress; routes, vessel approach and departure paths are illustrative. It does not animate arbitrary imported rigged equipment from operational runs or provide a physical logistics solver.
+- Exercise actions can explicitly select scene effects: hazard identification, stop practice animation, place barriers and acknowledge notification. Practice crane/truck motion freezes at the stop action's timestamp. Existing exercises without scene-control mappings remain record-only until configured in Setup. Saved action order and timing continue to drive debriefs.
 - Editable, persisted Maritime working plans with asset registers, vessel calls, availability scenarios, maintenance work orders and guided exercise definitions.
 - Shared asset identifiers across records, with geometry links using the existing IFC GlobalId / mesh-name / split-element reference conventions. Import, restore, selection and isolation use the existing model viewer. Mesh links identify imported objects, not individual submeshes; existing rigging supports equipment parts.
 - Existing model import, rigging, paths, animation profiles, 4D sequencing, scheduling, calendars, resources, cost, risk, ICD and dashboards accessible within the Maritime navigation. Shared module links retain Maritime context.
@@ -37,8 +41,8 @@ Delivery uses real project schedules and model assignments through the existing 
 
 This release establishes the editable project foundation; it does not complete the full scope statement.
 
-- Scene-driven operational playback tied to saved flow states, transport routes, operating calendars, arrival windows and priorities.
-- Spatial exercise authoring: exclusion zones, triggers, equipment interaction, system events and participant actions distinguished in the debrief. Current actions are participant-recorded controls, not automatic hazard detection or certified assessment.
+- Operational replay on imported rigged equipment, physical transport routes, operating calendars, arrival windows and priorities.
+- Arbitrary spatial exercise authoring: exclusion volumes, automatic triggers, system events distinguished from participant actions, and imported-equipment controls. Current scene interactions remain participant actions, not automatic hazard detection or certified assessment.
 - Explicit cross-workspace impact calculation and review/adoption for linked delivery work, berth restrictions and shared-equipment conflicts.
 - Saved reference baselines and richer scenario parameter alternatives; current operation comparisons use the working plan captured in each run.
 - A representative imported terminal and berth-extension project exercising the complete three-workspace workflow, plus submission evidence.
@@ -52,8 +56,12 @@ Alembic revision `f9017ab12c34` adds `projects.workspace`, `maritime_workspaces`
 
 The new authenticated API lives at `/api/v1/maritime/projects/{project_id}`: workspace GET/PUT, run list/detail, operation execution and exercise-attempt submission. Definitions are bounded and validated, with a 2 MB persisted-plan limit. Runs retain immutable input/result snapshots; the UI lists the latest 100 runs.
 
+The port environment adds optional placement and exercise-control fields to the existing JSON definition; no new migration is required. `terminal-flow-2` preserves the numerical flow algorithm and adds compact replay segments, bounded at 50,000 per result. Exceeding the limit omits all replay detail while preserving aggregates. Older runs retain aggregate playback and prompt users to rerun for equipment detail. Poe excludes replay arrays and continues to receive the saved calculation summary.
+
 ## Verification and reproducibility
 
+- Port environment: 38 backend checks and 11 frontend replay/demo checks passed; the Poe context check also passed after excluding replay arrays. The production frontend build passed. New Edge browser coverage exercises save-and-run, exact outage boundaries, comparison, search, persisted layout heading, scene-created outages, walkthrough, scene exercise actions and saved debrief. The existing import/mapping/reload, undo, version-conflict, reports and shared-module browser regression also passed.
+- With the local browser fixture running, execute `node tests/maritimePort.smoke.mjs` from `frontend`. Restart the fixture between that test and `maritimeWorkspace.smoke.mjs`, since each expects the named test project to be empty.
 - 85 backend checks passed across the selected regression suites (including the migration test and a corrected fixture rerun). Coverage includes conservation, outage boundaries, transport and yard bottlenecks, shared capacity, maintenance, invalid inputs, authentication, ownership, conflicting saves, snapshots, project-copy remapping and Poe evidence isolation. Existing project, CPM and resource-cost tests run alongside these.
 - 33 frontend unit checks passed for undo, equipment rigging, animation profiles and the existing Maritime demo. Frontend build/type checks and an Edge browser workflow exercise the real local API, save/versioning, scenario results, asset edits, model import/mapping/reload, exercise navigation/debrief, dark mode, downloads and shared module navigation.
 - Browser fixture: run `backend/.venv/Scripts/python.exe backend/tests/browser_maritime_server.py` from the repository root, then `node tests/maritimeWorkspace.smoke.mjs` from `frontend`. It only permits a database ending in `_test`, binds to localhost and replaces external object storage with memory. Do not run pytest concurrently against that database. Restart the fixture to reset its named project before rerunning the browser test.
