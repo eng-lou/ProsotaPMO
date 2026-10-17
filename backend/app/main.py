@@ -45,6 +45,7 @@ from app.api.fourd_videos import router as fourd_videos_router
 from app.api.gantt_layouts import router as gantt_layouts_router
 from app.api.environment_maps import router as environment_maps_router
 from app.api.material_presets import router as material_presets_router
+from app.api.maritime import router as maritime_router
 from app.api.measurements import router as measurements_router
 from app.api.model3d_files import router as model3d_files_router
 from app.api.model_element_links import router as model_element_links_router
@@ -97,6 +98,7 @@ _auth = [Depends(get_current_user)]
 _auth_approved = [Depends(get_approved_user)]
 
 app = FastAPI(title="Prosota API", version="0.1.0")
+app.include_router(maritime_router, prefix="/api/v1")
 
 app.add_middleware(
     CORSMiddleware,

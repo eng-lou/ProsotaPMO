@@ -955,86 +955,18 @@ async def _recompute_subproject_floats(
     return touched
 
 
-async def recompute_schedule(
-    db: AsyncSession, schedule_period_id: uuid.UUID, *, force_all_subprojects: bool = False,
+def calculate_schedule(
+    participants: list[Activity], relationships: list[ActivityRelationship],
+    lookup: _CalendarLookup, period: SchedulePeriod, *,
     pinned_start_by_id: dict[uuid.UUID, datetime] | None = None,
     pinned_finish_by_id: dict[uuid.UUID, datetime] | None = None,
-) -> None:
-    """Forward/backward pass (PMBOK7/Rita Mulcahy Ch.8) over a period's activities.
+) -> datetime:
+    """Shared in-memory CPM pass. Mutates supplied activities, never accesses storage.
 
-    Writes back start/finish/duration_days/total_float_hours/free_float_hours/
-    is_critical — these become genuinely computed from duration+logic+calendar+
-    constraints from here on, never accepted as API input
-    (docs/SCHEDULING_MODULE_PLAN.md Phase 5, retrofitted to hour precision in Phase
-    10). Runs on-demand after any activity/relationship mutation rather than on
-    every read.
-
-    force_all_subprojects: set by app/services/schedule_subproject.py after
-    tagging/retagging a branch — that action alone doesn't dirty any Activity
-    or ActivityRelationship row, so the normal touched-set skip in
-    _recompute_subproject_floats (§D.2) would otherwise wrongly skip the very
-    branch that just needs its first-ever (or nesting-changed) scoped pass.
-
-    pinned_start_by_id/pinned_finish_by_id: p6_import.py's own escape hatch for
-    the small set of activities CPM genuinely cannot derive correctly on its
-    own (2026-09-05, per Maro, tracing a real P6-vs-Prosota mismatch down to
-    its actual root cause) — a real *In Progress* activity ("Third Floor
-    Masonry Structure"): PhysicalPercentComplete 90% but DurationPercentComplete
-    77.78%, meaning P6 has already re-projected its at-completion duration
-    longer than the original PlannedDuration once real progress showed it
-    running behind pace. Prosota's own finish_from_start has no way to
-    reproduce that re-projection — it only knows the original planned
-    duration — so it lands 2 real working days early. The file's own
-    FinishDate is the one number that reflects P6's re-projection, so it's
-    pinned directly into `ef` here, INSIDE this same forward pass, so a
-    successor computed later in the same topological order
-    ("Fourth Floor Slab") sees the corrected value and starts on or after it
-    — earlier code applied this kind of correction in a separate pass *after*
-    this whole function returned, which fixed the pinned activity's own
-    display but never propagated to anything downstream of it (found via
-    exactly that successor starting 2 real days before its own predecessor's
-    corrected finish on a plain FS+0 link). Deliberately NOT extended to
-    every activity: a follow-up real comparison ("Pergola and Amenities", 0%
-    complete, no progress at all) found Prosota's own calendar math already
-    landing bit-for-bit on P6's actual value (both correctly accounting for
-    the calendar's own lunch break) while the file's own snapshot was stale
-    by an hour — for genuinely not-yet-started, unconstrained work, trusting
-    a frozen file value over a fresh, correct calendar+logic computation is
-    the wrong default, not a safe one."""
-    period = await db.get(SchedulePeriod, schedule_period_id)
-    if period is None:
-        return
-    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
-    project_id = variant.project_id
-
-    activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
-    all_activities = list(activities_result.scalars().all())
-    participants = _cpm_participants(all_activities)
+    Callers supply non-empty CPM participants and relationships within that set.
+    Saved schedules and isolated Maritime scenarios use exactly the same pass.
+    """
     participant_ids = {a.id for a in participants}
-
-    for a in all_activities:
-        if a.activity_type == "wbs_summary" or a.is_archived:
-            a.total_float_hours = None
-            a.free_float_hours = None
-            a.is_critical = None
-            a.sub_total_float_hours = None
-            a.sub_is_critical = None
-
-    if not participants:
-        await db.commit()
-        return
-
-    lookup = await _build_calendar_lookup(db, project_id)
-
-    rel_result = await db.execute(
-        select(ActivityRelationship)
-        .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
-        .where(Activity.schedule_period_id == schedule_period_id)
-    )
-    relationships = [
-        r for r in rel_result.scalars().all()
-        if r.predecessor_id in participant_ids and r.successor_id in participant_ids
-    ]
     edges = [(r.predecessor_id, r.successor_id) for r in relationships]
 
     if _find_cycle(edges, participant_ids):
@@ -1247,6 +1179,94 @@ async def recompute_schedule(
         # Same formula as app/services/activity.py:_apply_computed_fields — re-derived
         # here too since CPM is what just set (possibly changed) this activity's finish.
         a.variance_days = (a.finish - a.bl_finish).days if a.bl_finish is not None else None
+
+    return anchor
+
+
+async def recompute_schedule(
+    db: AsyncSession, schedule_period_id: uuid.UUID, *, force_all_subprojects: bool = False,
+    pinned_start_by_id: dict[uuid.UUID, datetime] | None = None,
+    pinned_finish_by_id: dict[uuid.UUID, datetime] | None = None,
+) -> None:
+    """Forward/backward pass (PMBOK7/Rita Mulcahy Ch.8) over a period's activities.
+
+    Writes back start/finish/duration_days/total_float_hours/free_float_hours/
+    is_critical — these become genuinely computed from duration+logic+calendar+
+    constraints from here on, never accepted as API input
+    (docs/SCHEDULING_MODULE_PLAN.md Phase 5, retrofitted to hour precision in Phase
+    10). Runs on-demand after any activity/relationship mutation rather than on
+    every read.
+
+    force_all_subprojects: set by app/services/schedule_subproject.py after
+    tagging/retagging a branch — that action alone doesn't dirty any Activity
+    or ActivityRelationship row, so the normal touched-set skip in
+    _recompute_subproject_floats (§D.2) would otherwise wrongly skip the very
+    branch that just needs its first-ever (or nesting-changed) scoped pass.
+
+    pinned_start_by_id/pinned_finish_by_id: p6_import.py's own escape hatch for
+    the small set of activities CPM genuinely cannot derive correctly on its
+    own (2026-09-05, per Maro, tracing a real P6-vs-Prosota mismatch down to
+    its actual root cause) — a real *In Progress* activity ("Third Floor
+    Masonry Structure"): PhysicalPercentComplete 90% but DurationPercentComplete
+    77.78%, meaning P6 has already re-projected its at-completion duration
+    longer than the original PlannedDuration once real progress showed it
+    running behind pace. Prosota's own finish_from_start has no way to
+    reproduce that re-projection — it only knows the original planned
+    duration — so it lands 2 real working days early. The file's own
+    FinishDate is the one number that reflects P6's re-projection, so it's
+    pinned directly into `ef` here, INSIDE this same forward pass, so a
+    successor computed later in the same topological order
+    ("Fourth Floor Slab") sees the corrected value and starts on or after it
+    — earlier code applied this kind of correction in a separate pass *after*
+    this whole function returned, which fixed the pinned activity's own
+    display but never propagated to anything downstream of it (found via
+    exactly that successor starting 2 real days before its own predecessor's
+    corrected finish on a plain FS+0 link). Deliberately NOT extended to
+    every activity: a follow-up real comparison ("Pergola and Amenities", 0%
+    complete, no progress at all) found Prosota's own calendar math already
+    landing bit-for-bit on P6's actual value (both correctly accounting for
+    the calendar's own lunch break) while the file's own snapshot was stale
+    by an hour — for genuinely not-yet-started, unconstrained work, trusting
+    a frozen file value over a fresh, correct calendar+logic computation is
+    the wrong default, not a safe one."""
+    period = await db.get(SchedulePeriod, schedule_period_id)
+    if period is None:
+        return
+    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
+    project_id = variant.project_id
+
+    activities_result = await db.execute(select(Activity).where(Activity.schedule_period_id == schedule_period_id))
+    all_activities = list(activities_result.scalars().all())
+    participants = _cpm_participants(all_activities)
+    participant_ids = {a.id for a in participants}
+
+    for a in all_activities:
+        if a.activity_type == "wbs_summary" or a.is_archived:
+            a.total_float_hours = None
+            a.free_float_hours = None
+            a.is_critical = None
+            a.sub_total_float_hours = None
+            a.sub_is_critical = None
+
+    if not participants:
+        await db.commit()
+        return
+
+    lookup = await _build_calendar_lookup(db, project_id)
+
+    rel_result = await db.execute(
+        select(ActivityRelationship)
+        .join(Activity, Activity.id == ActivityRelationship.predecessor_id)
+        .where(Activity.schedule_period_id == schedule_period_id)
+    )
+    relationships = [
+        r for r in rel_result.scalars().all()
+        if r.predecessor_id in participant_ids and r.successor_id in participant_ids
+    ]
+    anchor = calculate_schedule(
+        participants, relationships, lookup, period,
+        pinned_start_by_id=pinned_start_by_id, pinned_finish_by_id=pinned_finish_by_id,
+    )
 
     # Master pass's own dirty set, captured *before* the sub-project passes
     # below add their own writes — used only to decide which sub-project
