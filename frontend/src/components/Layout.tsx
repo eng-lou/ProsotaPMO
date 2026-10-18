@@ -6,6 +6,7 @@ import { AiFourDBridgeProvider } from '@/lib/aiFourDBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { NAV, Sidebar } from './Sidebar'
 import { MaritimeChrome } from '@/modules/maritime/MaritimeChrome'
+import { ModelSceneProvider } from '@/modules/fourD/modelSceneBridge'
 
 // Lazy (2026-09-03 perf pass, per Maro: "switching between modules...
 // takes a longer time") — PoePanel pulls in aiAttachments.ts's own `xlsx`
@@ -89,7 +90,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     // own tool handlers when mounted, see aiFourDBridge.tsx's own header on
     // why this can't be a normal top-down Context) and PoePanel (which
     // reads them) as siblings under the one shared provider instance.
-    <AiFourDBridgeProvider>
+    <AiFourDBridgeProvider><ModelSceneProvider>
       <div className="flex min-h-screen bg-gray-50 dark:bg-prosota-ink">
         {selectedProject?.workspace !== 'maritime' && <Sidebar />}
         {/* Full page-content dark-mode pass (2026-08-03) — every routed page
@@ -121,6 +122,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </Suspense>
         )}
       </div>
-    </AiFourDBridgeProvider>
+    </ModelSceneProvider></AiFourDBridgeProvider>
   )
 }

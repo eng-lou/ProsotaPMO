@@ -5,10 +5,14 @@ import { Color, DoubleSide, InstancedMesh, Matrix4, Quaternion, Shape, Vector3, 
 import type { OrbitControls as Controls } from 'three-stdlib'
 import type { Exercise, FlowResult, SceneEffect, WorkspaceDefinition } from './workspaceData'
 import { assetTrack, flowAt, portLayout, statusLabel, vesselPosition, type Position } from './portPlayback'
+import { buildPortGeometry } from './importedPortGeometry'
+import type { ModelSceneSnapshot } from '../fourD/modelSceneBridge'
+import type { ResolvedIsolationTarget } from '../fourD/linkedElements'
 
 export type CameraView = 'overview'|'quay'|'yard'|'follow'|'walk'
 export interface SceneExercise {exercise:Exercise;actions:{action:string;seconds:number}[];seconds:number;record:(action:string)=>void;disabled:boolean}
-interface Props {plan:WorkspaceDefinition;result:FlowResult|null;hour:number;selected:string;select:(id:string)=>void;camera:CameraView;focus:number;labels:boolean;arrange?:boolean;place?:(x:number,z:number)=>void;exercise?:SceneExercise;onReady?:()=>void;hiddenKinds?:string[]}
+export interface ModelAssetInfo {origin:Position;elements:number}
+interface Props {plan:WorkspaceDefinition;result:FlowResult|null;hour:number;selected:string;select:(id:string)=>void;camera:CameraView;focus:number;labels:boolean;arrange?:boolean;place?:(x:number,z:number)=>void;exercise?:SceneExercise;onReady?:()=>void;hiddenKinds?:string[];models?:ModelSceneSnapshot|null;modelTargets?:Map<string,ResolvedIsolationTarget>|null;onModelAssets?:(assets:Record<string,ModelAssetInfo>)=>void}
 const colours=['#c66a45','#2c6e7f','#d9aa50','#3d7882','#c7c7ab','#416386']
 function Box({p,s,c,opacity=1}:{p:Position;s:Position;c:string;opacity?:number}){return <mesh position={p} castShadow receiveShadow><boxGeometry args={s}/><meshStandardMaterial color={c} roughness={.65} metalness={.12} transparent={opacity<1} opacity={opacity}/></mesh>}
 function Beam({a,b,r=.22,c='#c5cfd2'}:{a:Position;b:Position;r?:number;c?:string}){
@@ -58,21 +62,23 @@ function Crane({progress,stopped}:{progress:number;stopped:boolean}){
 }
 function Truck(){return <><Box p={[0,1,0]} s={[11,.65,3]} c="#2c3f49"/><Box p={[5,2.2,0]} s={[3.2,3.3,3]} c="#eff0dd"/><Box p={[6.65,2.8,0]} s={[.1,1.1,2.5]} c="#25546a"/><Box p={[-1,2.6,0]} s={[8,2.7,2.8]} c="#348383"/>{[-4,-2,4].flatMap(x=>[-1.6,1.6].map(z=><mesh key={`${x}:${z}`} position={[x,.7,z]} rotation={[Math.PI/2,0,0]}><cylinderGeometry args={[.75,.75,.5,12]}/><meshStandardMaterial color="#202831"/></mesh>))}</>}
 
-function CameraRig({view,selected,focus,target,extent}:{view:CameraView;selected:string;focus:number;target:Position;extent:number}){
+function CameraRig({view,selected,focus,target,extent,center=[0,0,20],selectionSize=45,quayTarget,yardTarget}:{view:CameraView;selected:string;focus:number;target:Position;extent:number;center?:Position;selectionSize?:number;quayTarget?:Position;yardTarget?:Position}){
   const {camera,gl,size}=useThree(),controls=useRef<Controls>(null),keys=useRef(new Set<string>()),previous=useRef(new Vector3())
   const fit=Math.max(1,1.45/(size.width/size.height))
   const followSelection=view==='follow'?selected:''
   useEffect(()=>{
     const t=new Vector3(...target)
-    if(view==='overview'){camera.position.set(extent*.62*fit,extent*.58*fit,extent*.75*fit);controls.current?.target.set(0,0,20)}
+    if(view==='overview'){camera.position.set(center[0]+extent*.62*fit,center[1]+extent*.58*fit,center[2]+extent*.75*fit);controls.current?.target.set(...center)}
+    else if(view==='quay'&&quayTarget){const q=new Vector3(...quayTarget);camera.position.copy(q).add(new Vector3(extent*.35,extent*.15,-extent*.4).multiplyScalar(fit));controls.current?.target.copy(q)}
+    else if(view==='yard'&&yardTarget){const q=new Vector3(...yardTarget);camera.position.copy(q).add(new Vector3(extent*.3,extent*.4,extent*.4).multiplyScalar(fit));controls.current?.target.copy(q)}
     else if(view==='quay'){camera.position.set(65,18,-72);controls.current?.target.set(0,14,-7)}
     else if(view==='yard'){camera.position.set(55,36,110);controls.current?.target.set(0,0,50)}
     else if(view==='walk'){camera.position.copy(t).add(new Vector3(18,2.3,20));controls.current?.target.copy(t).add(new Vector3(0,2.3,0))}
-    else {camera.position.copy(t).add(new Vector3(42*fit,45*fit,60*fit));controls.current?.target.copy(t).add(new Vector3(0,15,0))}
+    else {camera.position.copy(t).add(new Vector3(selectionSize*.94*fit,selectionSize*fit,selectionSize*1.34*fit));controls.current?.target.copy(t).add(new Vector3(0,selectionSize/3,0))}
     previous.current.copy(t)
     if(view==='walk'&&controls.current)camera.lookAt(controls.current.target)
     else controls.current?.update()
-  },[view,followSelection,focus,camera,extent,fit])
+  },[view,followSelection,focus,camera,extent,fit,...center,selectionSize,quayTarget?.join(','),yardTarget?.join(',')])
   useEffect(()=>{
     const canvas=gl.domElement;canvas.tabIndex=0
     let drag:{x:number;y:number}|null=null
@@ -101,10 +107,18 @@ function CameraRig({view,selected,focus,target,extent}:{view:CameraView;selected
 }
 
 function Port(props:Props){
-  const {plan,result,hour,selected,select,exercise}=props,layout=useMemo(()=>portLayout(plan),[plan]),flow=flowAt(result,plan,hour)
-  const extent=Math.max(160,...Object.values(layout).map(p=>Math.max(Math.abs(p.x)+70,p.z+40)))
+  const {plan,result,hour,selected,select,exercise}=props
+  const imported=useMemo(()=>buildPortGeometry(props.models?.models??[],props.modelTargets??new Map()),[props.models,props.modelTargets])
+  useEffect(()=>()=>imported.dispose(),[imported])
+  const origins=useMemo(()=>Object.fromEntries([...imported.assets].map(([id,a])=>[id,a.origin])),[imported])
+  useEffect(()=>{props.onModelAssets?.(Object.fromEntries([...imported.assets].map(([id,a])=>[id,{origin:a.origin,elements:a.elements}])))},[imported,props.onModelAssets])
+  const layout=useMemo(()=>portLayout(plan,origins),[plan,origins]),flow=flowAt(result,plan,hour)
+  const hasModels=!!props.models?.models.length
+  const center:Position=hasModels&&!imported.bounds.isEmpty()?imported.bounds.getCenter(new Vector3()).toArray() as Position:[0,0,20]
+  const extent=hasModels&&!imported.bounds.isEmpty()?Math.max(15,imported.bounds.getSize(new Vector3()).length()):Math.max(160,...Object.values(layout).map(p=>Math.max(Math.abs(p.x)+70,p.z+40)))
   const picked=plan.assets.find(a=>a.id===selected),p=picked?layout[picked.id]:{x:0,z:0,heading:0}
-  const target:Position=picked?.kind==='vessel'?vesselPosition(picked,plan,result,hour,layout):[p.x,0,p.z]
+  const target:Position=origins[selected]?[p.x,origins[selected][1],p.z]:hasModels?center:picked?.kind==='vessel'?vesselPosition(picked,plan,result,hour,layout):[p.x,0,p.z]
+  const zoneTarget=(kind:string):Position|undefined=>{if(!hasModels)return;const a=plan.assets.find(a=>a.kind===kind&&origins[a.id]);return a?[layout[a.id].x,origins[a.id][1],layout[a.id].z]:center}
   const effects=new Set(exercise?.actions.map(a=>exercise.exercise.scene_effects?.[a.action]))
   useEffect(()=>{props.onReady?.()},[])
   const click=(id:string)=>(e:ThreeEvent<MouseEvent>)=>{e.stopPropagation();if(e.delta<=5)select(id)}
@@ -112,7 +126,11 @@ function Port(props:Props){
   const positions=Object.values(layout),minX=Math.min(-85,...positions.map(p=>p.x-60)),maxX=Math.max(100,...positions.map(p=>p.x+60)),depth=Math.max(145,...positions.map(p=>p.z+35))
   return <><color attach="background" args={['#c3d5e2']}/><fog attach="fog" args={['#c3d5e2',extent*2,extent*6]}/><Sky sunPosition={[100,50,40]} turbidity={5} rayleigh={.5}/>
     <hemisphereLight args={['#d4e9ff','#666754',1.6]}/><directionalLight position={[80,140,50]} intensity={2.8} castShadow shadow-mapSize={[2048,2048]} shadow-camera-left={-extent} shadow-camera-right={extent} shadow-camera-top={extent} shadow-camera-bottom={-extent} shadow-camera-far={600} shadow-normalBias={.15}/>
-    <CameraRig view={props.camera} selected={selected} focus={props.focus} target={target} extent={extent}/><Water/>
+    <CameraRig view={props.camera} selected={selected} focus={props.focus} target={target} extent={extent} center={center} quayTarget={zoneTarget('berth')} yardTarget={zoneTarget('yard')} selectionSize={imported.assets.has(selected)?Math.max(5,...imported.assets.get(selected)!.size):hasModels?extent:45}/>
+    <primitive object={imported.context} dispose={null}/>
+    {!hasModels&&<Water/>}
+    {hasModels&&<mesh rotation={[-Math.PI/2,0,0]} position={[center[0],imported.bounds.isEmpty()?-.1:imported.bounds.min.y-.1,center[2]]} receiveShadow onClick={e=>{if(props.arrange){e.stopPropagation();props.place?.(e.point.x,e.point.z)}}}><planeGeometry args={[Math.max(400,extent*3),Math.max(400,extent*3)]}/><meshStandardMaterial color="#65757b" roughness={1}/></mesh>}
+    {!hasModels&&
     <group onClick={e=>{if(props.arrange){e.stopPropagation();props.place?.(Math.round(e.point.x*10)/10,Math.round(e.point.z*10)/10)}}}>
       <Box p={[(minX+maxX)/2,-1.2,depth/2-1]} s={[maxX-minX,2,depth]} c="#65757b"/>
       <Box p={[(minX+maxX)/2,.01,22]} s={[maxX-minX,.05,15]} c="#344652"/>
@@ -120,17 +138,22 @@ function Port(props:Props){
       {Array.from({length:Math.min(120,Math.floor((maxX-minX)/10))},(_,i)=><Box key={i} p={[minX+i*10,.09,22]} s={[4,.06,.12]} c="#e2e2cd"/>)}
       <Box p={[(minX+maxX)/2,.1,1]} s={[maxX-minX,.15,.25]} c="#e5b85c"/>
       {Array.from({length:Math.min(80,Math.floor((maxX-minX)/12))},(_,i)=><group key={i} position={[minX+i*12,.2,1.8]}><Box p={[0,.35,0]} s={[1.2,.7,1]} c="#253942"/><Box p={[0,.9,0]} s={[1.6,.3,.8]} c="#b9c2bb"/></group>)}
-    </group>
+    </group>}
     {plan.assets.filter(a=>!props.hiddenKinds?.includes(a.kind)).map(a=>{
       const state=assetTrack(a,plan,result,hour),q=layout[a.id],chosen=selected===a.id,training=exercise?.exercise.asset_id===a.id
-      const at:Position=a.kind==='vessel'?vesselPosition(a,plan,result,hour,layout):[q.x,0,q.z]
+      const model=imported.assets.get(a.id)
+      if(hasModels&&!model)return null
+      const at:Position=model?[q.x,model.origin[1],q.z]:a.kind==='vessel'?vesselPosition(a,plan,result,hour,layout):[q.x,0,q.z]
       const stopped=state.state==='unavailable'||(training&&effects.has('stop'))
       const stoppedAt=exercise?.actions.find(action=>exercise.exercise.scene_effects?.[action.action]==='stop')?.seconds
       const progress=training?(stoppedAt??exercise!.seconds)/8:state.value
-      const height=a.kind==='crane'?43:a.kind==='vessel'?20:8
+      const radius=model?Math.max(1,Math.hypot(model.size[0],model.size[2])/2):a.kind==='vessel'?47:10
+      const height=model?model.size[1]+1:a.kind==='crane'?43:a.kind==='vessel'?20:8
       const call=plan.calls.find(c=>c.id===state.call_id)??plan.calls.find(c=>c.vessel_id===a.id)
       const cargoFraction=call?Math.max(0,1-state.value/call.cargo_moves):1
       return <group key={a.id} position={at} rotation={[0,q.heading*Math.PI/180,0]} onClick={click(a.id)}>
+        {model&&<primitive object={model.object} dispose={null}/>}
+        {!a.elements.length&&<>
         {a.kind==='vessel'&&<Ship fraction={cargoFraction}/>}
         {a.kind==='crane'&&<Crane progress={progress} stopped={stopped}/>}
         {a.kind==='berth'&&<><Box p={[0,-.15,-3]} s={[112,1,9]} c="#adb6b4"/><Box p={[0,.39,-6]} s={[110,.12,.35]} c="#eec45d"/></>}
@@ -138,24 +161,25 @@ function Port(props:Props){
         {a.kind==='yard'&&<><Box p={[0,.05,0]} s={[42,.08,31]} c="#4c646b"/>{[-20,20].map(x=><Box key={x} p={[x,.13,0]} s={[.15,.06,30]} c="#c7bc86"/>)}<Containers count={(totalCapacity?flow.yard/totalCapacity:0)*54} columns={6} rows={3}/></>}
         {a.kind==='gate'&&<><Box p={[0,6,0]} s={[20,1,2]} c="#d0d8d2"/>{[-9,0,9].map(x=><Box key={x} p={[x,3,0]} s={[.6,6,.6]} c="#c8d0ca"/>)}<Box p={[11,1.8,0]} s={[3,3.6,5]} c="#e1e2d1"/><Box p={[6,3,-.8]} s={[2,1,.2]} c={state.state==='unavailable'?'#e57854':'#67cfac'}/></>}
         {a.kind==='infrastructure'&&<><Box p={[0,5,0]} s={[30,10,16]} c="#9cabb0"/><Box p={[0,10.2,0]} s={[31,.6,17]} c="#4b636d"/>{[-9,0,9].map(x=><Box key={x} p={[x,3.8,-8.1]} s={[5,7,.2]} c="#344e5e"/>)}</>}
-        {chosen&&<mesh rotation={[-Math.PI/2,0,0]} position={[0,.6,0]}><ringGeometry args={[a.kind==='vessel'?47:10,a.kind==='vessel'?48:10.6,64]}/><meshBasicMaterial color="#56efe0" transparent opacity={.9} side={DoubleSide}/></mesh>}
-        {(props.labels||chosen)&&<Html position={[0,height,0]} center zIndexRange={[20,0]}><button className={`port-label ${chosen?'is-selected':''} ${stopped?'is-stopped':''}`} onClick={()=>select(a.id)}><i/>{a.name}{chosen&&<small>{statusLabel[state.state]??a.kind}</small>}</button></Html>}
+        </>}
+        {chosen&&<mesh rotation={[-Math.PI/2,0,0]} position={[0,.6,0]}><ringGeometry args={[radius,radius+Math.max(.15,radius*.04),64]}/><meshBasicMaterial color="#56efe0" transparent opacity={.9} side={DoubleSide}/></mesh>}
+        {(props.labels||chosen)&&<Html position={[0,height,0]} center zIndexRange={[20,0]}><button className={`port-label ${chosen?'is-selected':''} ${stopped?'is-stopped':''}`} data-geometry-source={model?'imported':a.elements.length?'unavailable':'example'} onClick={e=>{e.stopPropagation();select(a.id)}} onPointerDown={e=>e.stopPropagation()}><i/>{a.name}{chosen&&<small>{statusLabel[state.state]??a.kind}</small>}</button></Html>}
       </group>
     })}
     {picked&&<group>
       {plan.calls.filter(c=>c.crane_ids.includes(picked.id)||c.vessel_id===picked.id||c.berth_id===picked.id).slice(0,4).map(c=>{
-        const ids=[c.berth_id,...c.crane_ids],points=ids.filter(id=>layout[id]).map(id=>[layout[id].x,1,layout[id].z+3] as Position)
+        const ids=[c.berth_id,...c.crane_ids],points=ids.filter(id=>layout[id]&&(!hasModels||origins[id])).map(id=>[layout[id].x,(origins[id]?.[1]??0)+1,layout[id].z+3] as Position)
         const yard=plan.assets.find(a=>a.kind==='yard'),gate=plan.assets.find(a=>a.kind==='gate')
-        if(yard)points.push([layout[yard.id].x,1,layout[yard.id].z]);if(gate)points.push([layout[gate.id].x,1,layout[gate.id].z])
+        if(yard&&(!hasModels||origins[yard.id]))points.push([layout[yard.id].x,(origins[yard.id]?.[1]??0)+1,layout[yard.id].z]);if(gate&&(!hasModels||origins[gate.id]))points.push([layout[gate.id].x,(origins[gate.id]?.[1]??0)+1,layout[gate.id].z])
         return points.length>1?<Line key={c.id} points={points} color="#87edda" lineWidth={2} dashed dashScale={.8} dashSize={2} gapSize={2}/>:null
       })}
     </group>}
-    {exercise&&layout[exercise.exercise.asset_id]&&<ExerciseObjects exercise={exercise} position={layout[exercise.exercise.asset_id]} effects={effects}/>}
+    {exercise&&layout[exercise.exercise.asset_id]&&(!hasModels||origins[exercise.exercise.asset_id])&&<ExerciseObjects exercise={exercise} position={layout[exercise.exercise.asset_id]} elevation={origins[exercise.exercise.asset_id]?.[1]??0} effects={effects}/>}
   </>
 }
-function ExerciseObjects({exercise,position,effects}:{exercise:SceneExercise;position:{x:number;z:number;heading:number};effects:Set<SceneEffect|undefined>}){
+function ExerciseObjects({exercise,position,elevation,effects}:{exercise:SceneExercise;position:{x:number;z:number;heading:number};elevation:number;effects:Set<SceneEffect|undefined>}){
   const points:Record<SceneEffect,Position>={identify:[-4,3,4],stop:[9,3,8],secure:[-10,2,14],notify:[14,3,17]}
-  return <group position={[position.x,0,position.z]} rotation={[0,position.heading*Math.PI/180,0]}>
+  return <group position={[position.x,elevation,position.z]} rotation={[0,position.heading*Math.PI/180,0]}>
     <mesh rotation={[-Math.PI/2,0,0]} position={[0,.5,4]}><ringGeometry args={[8,8.4,64]}/><meshBasicMaterial color={effects.has('secure')?'#63e7bb':'#f2ad62'} side={DoubleSide}/></mesh>
     <Box p={[-4,1.7,4]} s={[.8,1.4,.5]} c="#ffad3f"/><mesh position={[-4,2.7,4]}><sphereGeometry args={[.35,12,12]}/><meshStandardMaterial color="#f7d176"/></mesh>
     {[-4.2,-3.8].map(x=><Box key={x} p={[x,.65,4]} s={[.23,1.2,.3]} c="#283d4c"/>)}

@@ -20,6 +20,7 @@ import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
+import { useModelScene } from './modelSceneBridge'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
@@ -291,6 +292,10 @@ function applyElementTransform(object: Object3D, t: ElementTransform | undefined
 
 export function FourD({ active = true }: { active?: boolean } = {}) {
   const { selectedProject } = useProject()
+  const modelScene = useModelScene()
+  const publishModelScene = modelScene?.publish
+  const [modelOwner,setModelOwner] = useState<string>('')
+  const [modelsRestored,setModelsRestored] = useState(false)
   // hasEverBeenActive (2026-07-20, optimization pass) — flips true the
   // first time this tab is actually opened and stays true for the rest of
   // the session (never reverts to false). PersistentFourD mounts this
@@ -305,10 +310,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // still refreshes its data as before; only the "never opened it at all"
   // case is what this closes.
   const undoRevision = useUndoRefresh()
-  const [hasEverBeenActive, setHasEverBeenActive] = useState(active)
+  const [hasEverBeenActive, setHasEverBeenActive] = useState(active || selectedProject?.workspace === 'maritime')
   useEffect(() => {
-    if (active) setHasEverBeenActive(true)
-  }, [active])
+    if (active || selectedProject?.workspace === 'maritime') setHasEverBeenActive(true)
+  }, [active, selectedProject?.workspace])
   // refetchPeriod (2026-07-09 fix, per Maro: "the activity table and gantt
   // still doesnt show what's in the schedule even clicking the refresh
   // icon") — this hook's own `period` only ever gets (re-)resolved once,
@@ -4515,6 +4520,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const previousHandles = ifcHandlesRef.current
       ifcHandlesRef.current = []
       setSceneObjects([])
+      setModelOwner(projectIdForThisRestore)
+      setModelsRestored(false)
       setIfcHandles([])
       setActiveIfcModelId(null)
       setSelectedExpressId(null)
@@ -4711,6 +4718,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           reportRestoreFailure(`"${file.name}" was saved but failed to restore on reload (${detail}).`)
         }
       }
+      if (!stale()) setModelsRestored(true)
     })()
     // No cleanup here (2026-07-21) — see stale()'s own header just above:
     // restoreStartedForProjectIdRef is the real guard against both stale
@@ -5955,6 +5963,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id),
   })), [sceneObjects, hiddenIds])
+  useEffect(() => {
+    if (selectedProject?.workspace !== 'maritime' || !publishModelScene || modelOwner !== selectedProject.id) return
+    publishModelScene({projectId:modelOwner,models:sceneObjects,ifcHandles,ready:modelsRestored,errors:importErrors,revision:transformTick + materializeVersion + undoRevision})
+  }, [publishModelScene, selectedProject?.id, selectedProject?.workspace, modelOwner, sceneObjects, ifcHandles, modelsRestored, importErrors, transformTick, materializeVersion, undoRevision, active])
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
 

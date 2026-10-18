@@ -15,7 +15,7 @@ export function readTrack(rows: ReplaySegment[] | undefined, hour:number): Track
     state:row.state,reason:row.reason,call_id:row.call_id}
 }
 
-export function portLayout(plan:WorkspaceDefinition): Record<string,Placement> {
+export function portLayout(plan:WorkspaceDefinition,modelOrigins:Record<string,Position>={}): Record<string,Placement> {
   const result:Record<string,Placement>={},berths=plan.assets.filter(a=>a.kind==='berth')
   const lists=(kind:string)=>plan.assets.filter(a=>a.kind===kind)
   for(const a of plan.assets){
@@ -35,7 +35,8 @@ export function portLayout(plan:WorkspaceDefinition): Record<string,Placement> {
       const c=plan.calls.find(c=>c.vessel_id===a.id),bi=berths.findIndex(b=>b.id===c?.berth_id)
       p={x:(Math.max(0,bi)-(berths.length-1)/2)*130,z:-27-i*3,heading:0}
     }
-    result[a.id]=a.placement??p
+    const origin=modelOrigins[a.id]
+    result[a.id]=a.placement??(origin?{x:origin[0],z:origin[2],heading:0}:p)
   }
   return result
 }

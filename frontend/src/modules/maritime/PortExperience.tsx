@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
-import { OperationalPortScene, type CameraView } from './OperationalPortScene'
+import { OperationalPortScene, type CameraView, type ModelAssetInfo } from './OperationalPortScene'
+import { usePortModelLinks } from './usePortModelLinks'
 import { assetTrack, flowAt, portLayout, readTrack, runEvents, statusLabel } from './portPlayback'
 import { errorMessage, maritimeRoot as root, starterPlan, useMaritime, type AssetKind, type OperationRun } from './workspaceData'
 import { money } from './WorkspaceFields'
@@ -26,9 +27,12 @@ export function PortExperience({training=false}:{training?:boolean}){
   const [exerciseId,setExerciseId]=useState(''),[seconds,setSeconds]=useState(0),[tour,setTour]=useState<number|null>(null)
   const request=useRef(0),time=useRef(portHour),stage=useRef<HTMLDivElement>(null)
   const current=training?null:portRun,scenePlan=current?.inputs.plan??plan!
+  const modelLinks=usePortModelLinks(selectedProject!.id,scenePlan)
+  const [modelAssets,setModelAssets]=useState<Record<string,ModelAssetInfo>>({})
+  const origins=useMemo(()=>Object.fromEntries(Object.entries(modelAssets).map(([id,a])=>[id,a.origin])),[modelAssets])
   const result=current?.results.scenario??null,end=result?.elapsed_hours??plan!.horizon_hours
   const hour=training?0:Math.min(portHour,end),stale=!!current&&(current.version!==version||dirty)
-  const asset=scenePlan.assets.find(a=>a.id===selectedAssetId),layout=useMemo(()=>portLayout(scenePlan),[scenePlan])
+  const asset=scenePlan.assets.find(a=>a.id===selectedAssetId),layout=useMemo(()=>portLayout(scenePlan,origins),[scenePlan,origins])
   const state=asset?assetTrack(asset,scenePlan,result,hour):null,flow=flowAt(result,scenePlan,hour)
   const events=useMemo(()=>current?runEvents(current):[],[current])
   const exercise=attempt?.exercise??plan!.exercises.find(e=>e.id===exerciseId)??plan!.exercises[0]
@@ -88,13 +92,13 @@ export function PortExperience({training=false}:{training?:boolean}){
           <select aria-label="Open port replay" value={current?.id??''} disabled={loadingRun||busy} onChange={e=>e.target.value?void loadRun(e.target.value):(setPortRun(null),setPlaying(false),setCompare(false))}><option value="">Working layout</option>{runs.filter(r=>r.kind==='operations').map(r=><option value={r.id} key={r.id}>{r.name} · v{r.version}</option>)}</select>
           {current&&<button aria-pressed={compare} onClick={()=>setCompare(v=>!v)}>Compare baseline</button>}
         </>}
-      <span className="port-command-status">{loadingRun?'Opening replay…':stale?'Saved replay · working plan changed':current?`Saved run · v${current.version}`:scenePlan.source==='synthetic'?'Synthetic terminal':'Working layout'}</span>
+      <span className="port-command-status">{modelLinks.loading?'Loading saved models…':loadingRun?'Opening replay…':stale?'Saved replay · working plan changed':current?`Saved run · v${current.version}`:modelLinks.snapshot?.models.length?'Project models':scenePlan.source==='synthetic'?'Synthetic terminal':'Working layout'}</span>
       <div className="port-command-actions"><Link to={`${root}/models`}>Import / open models</Link><button onClick={()=>{setImmersive(v=>!v);setTimeout(()=>window.dispatchEvent(new Event('resize')),0)}}>{immersive?'Exit focus':'Focus view'}</button></div>
     </div>
     <div className="port-stage">
       <div className={`port-canvases ${compare&&!training?'compare':''}`}>
-        {compare&&!training&&current&&<div className="port-canvas"><span className="port-view-tag">Working plan</span><OperationalPortScene plan={scenePlan} result={current.results.baseline} hour={hour} selected={selectedAssetId} select={pick} camera={camera} focus={focus} labels={false} hiddenKinds={hiddenKinds}/></div>}
-        <div className="port-canvas"><span className="port-view-tag">{training?'Exercise':compare?'Alternative':current?.name??'Terminal layout'}</span><OperationalPortScene plan={scenePlan} result={result} hour={hour} selected={selectedAssetId} select={pick} camera={camera} focus={focus} labels={labels} hiddenKinds={hiddenKinds} arrange={arrange}
+        {compare&&!training&&current&&<div className="port-canvas"><span className="port-view-tag">Working plan</span><OperationalPortScene models={modelLinks.snapshot} modelTargets={modelLinks.targets} plan={scenePlan} result={current.results.baseline} hour={hour} selected={selectedAssetId} select={pick} camera={camera} focus={focus} labels={false} hiddenKinds={hiddenKinds}/></div>}
+        <div className="port-canvas"><span className="port-view-tag">{training?'Exercise':compare?'Alternative':current?.name??'Terminal layout'}</span><OperationalPortScene models={modelLinks.snapshot} modelTargets={modelLinks.targets} onModelAssets={setModelAssets} plan={scenePlan} result={result} hour={hour} selected={selectedAssetId} select={pick} camera={camera} focus={focus} labels={labels} hiddenKinds={hiddenKinds} arrange={arrange}
           place={(x,z)=>{if(asset&&!busy)edit(p=>({...p,assets:p.assets.map(a=>a.id===asset.id?{...a,placement:{x,z,heading:layout[a.id].heading}}:a)}))}}
           exercise={attempt?{exercise:attempt.exercise,actions:attempt.actions,seconds,record:recordAction,disabled:attemptSaving}:undefined}/></div>
       </div>
@@ -103,7 +107,9 @@ export function PortExperience({training=false}:{training?:boolean}){
       {inspector&&<aside className="port-inspector">
         {attempt?<><span className="port-eyebrow">EXERCISE · {Math.floor(seconds)}s</span><h2>{attempt.exercise.name}</h2><p>{attempt.exercise.hazard}</p><p className="port-helper">Use the markers in the scene. Your actions are recorded below.</p><div className="port-action-list">{attempt.exercise.required_actions.map(a=>{const done=attempt.actions.find(x=>x.action===a);return <button key={a} disabled={!!done||attemptSaving} onClick={()=>recordAction(a)}><span>{done?'✓':'○'} {a}</span><small>{done?`${done.seconds}s`:attempt.exercise.scene_effects?.[a]?'Scene control':'Record action'}</small></button>})}</div><button className="port-primary" disabled={attemptSaving} onClick={async()=>{const r=await finishAttempt();if(r)navigate(`${root}/debrief?run=${r.id}`)}}>Finish & review</button><button disabled={attemptSaving} onClick={()=>{if(window.confirm('Discard this unsaved attempt?'))discardAttempt()}}>Discard attempt</button></>:
         asset?<><div className="port-inspector-title"><span className="port-eyebrow">{asset.kind}</span><button aria-label="Close asset details" onClick={()=>setInspector(false)}>×</button></div><h2>{asset.name}</h2><span className={`port-status ${state?.state}`}>{statusLabel[state?.state??'ready']}</span>
-          <button onClick={()=>focusAsset(asset.id)}>Focus on asset</button>
+          <button disabled={!!modelLinks.snapshot?.models.length&&!modelAssets[asset.id]} onClick={()=>focusAsset(asset.id)}>Focus on asset</button>
+          <p className="port-helper" role="status">{asset.elements.length?(modelLinks.loading?'Loading linked geometry…':modelAssets[asset.id]?`Imported model · ${modelAssets[asset.id].elements} linked elements${modelAssets[asset.id].elements<asset.elements.length?' · some links are unavailable':''}`:'Linked geometry unavailable. Open Models & Assets to restore or relink it.'):modelLinks.snapshot?.models.length?'No linked geometry · select elements in Models & Assets.':'Example geometry · link your model to replace it.'}</p>
+          {modelAssets[asset.id]&&<p className="port-helper">Original geometry · operating status linked · model motion not configured.</p>}
           {result&&state&&<><div className="port-inspector-values"><div><small>Moves handled</small><strong>{fmt(state.value)}</strong></div><div><small>Rate now</small><strong>{fmt(state.rate)}<small> moves/h</small></strong></div></div><p className="port-reason">{causal?.state==='complete'?'Work completed':causal?.reason||'Available for assigned work'}</p></>}
           <div className="port-related">{selectedCalls.map(c=><button key={c.id} onClick={()=>focusAsset(c.vessel_id)}><small>Linked vessel call</small><span>{c.name}</span><small>{fmt(c.cargo_moves)} moves · arrival {c.arrival_hour} h</small></button>)}</div>
           {arrange&&<div className="port-inline-form"><p>Click the ground to place this asset.</p><label>Heading <input aria-label="Asset layout heading" type="number" min={-360} max={360} value={layout[asset.id].heading} onChange={e=>{const n=e.target.valueAsNumber;if(Number.isFinite(n)&&n>=-360&&n<=360)edit(p=>({...p,assets:p.assets.map(a=>a.id===asset.id?{...a,placement:{...layout[a.id],heading:n}}:a)}))}}/></label><button onClick={()=>edit(p=>({...p,assets:p.assets.map(a=>a.id===asset.id?{...a,placement:null}:a)}))}>Reset placement</button></div>}
@@ -113,7 +119,8 @@ export function PortExperience({training=false}:{training?:boolean}){
           <Link to={`${root}/equipment`}>Edit properties ↗</Link>{asset.activity_id&&<Link to={`${root}/schedule`}>Open delivery schedule ↗</Link>}
         </>:<><span className="port-eyebrow">EXPLORE YOUR TERMINAL</span><h2>Select something in the port</h2><p>See its work, follow its cargo and test a change.</p><div className="port-empty-actions"><button onClick={()=>{const a=scenePlan.assets.find(a=>a.kind==='vessel')??scenePlan.assets[0];if(a)focusAsset(a.id)}}>Find a vessel</button><Link to={`${root}/models`}>Import your models ↗</Link></div></>}
       </aside>}
-      {scenePlan.assets.length===0&&<div className="port-welcome"><span className="port-eyebrow">YOUR PORT STARTS HERE</span><h2>Enter the terminal.</h2><p>Explore an editable example, or build a layout with your own assets and models.</p><button className="port-primary" disabled={busy} onClick={()=>{edit(()=>starterPlan());setInspector(false)}}>Create editable terminal</button><Link to={`${root}/models`}>Import my models</Link></div>}
+      {(modelLinks.error||!!modelLinks.snapshot?.errors.length)&&<div className="port-model-error" role="alert">Some model geometry could not be loaded. <Link to={`${root}/models`}>Open Models & Assets for details</Link></div>}
+      {scenePlan.assets.length===0&&!modelLinks.snapshot?.models.length&&<div className="port-welcome"><span className="port-eyebrow">YOUR PORT STARTS HERE</span><h2>Enter the terminal.</h2><p>Explore an editable example, or build a layout with your own assets and models.</p><button className="port-primary" disabled={busy} onClick={()=>{edit(()=>starterPlan());setInspector(false)}}>Create editable terminal</button><Link to={`${root}/models`}>Import my models</Link></div>}
       {tour!==null&&current&&<div className="port-story"><button className="port-story-close" aria-label="Close walkthrough" onClick={()=>{setTour(null);setPlaying(false)}}>×</button><span className="port-eyebrow">FOLLOW THE CARGO · {tour+1} / 3</span><h2>{['A vessel arrives','An operation changes','Compare the consequence'][tour]}</h2><p>{tour===0?`${scenePlan.calls[0]?.name} brings ${fmt(scenePlan.calls[0]?.cargo_moves??0)} moves. Play to follow the handling.`:tour===1?`${scenePlan.assets.find(a=>a.id===selectedAssetId)?.name??'Equipment'}: ${causal?.reason||state?.reason||'watch the calculated handling state change'}.`: `Vessel finish: ${hours(current.results.baseline.vessel_completion_hour)} in the working plan, ${hours(current.results.scenario.vessel_completion_hour)} in this run.`}</p><div><button onClick={()=>{setPortHour(hour>=end?0:hour);setPlaying(p=>!p)}}>{playing?'Pause':'Watch it happen'}</button><button className="port-primary" onClick={()=>tour===2?(setTour(null),setInspector(true)):tourStep(tour+1,current)}>{tour===2?'Explore yourself':'Next'}</button></div></div>}
       <div className="port-scene-hint">{arrange?'Select an asset, then click the ground to reposition it':camera==='walk'?'Click the scene · WASD / arrows to move · drag to look · Shift to move faster':'Drag to orbit · scroll to zoom · click an asset'}<span>{training?'Interactive exercise layout':'Operational layout · travel paths illustrated'}</span></div>
       {!training&&<div className="port-playback">

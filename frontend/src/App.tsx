@@ -89,7 +89,9 @@ function PersistentFourD() {
     if (active) setHasEverBeenActive(true)
   }, [active])
 
-  if (!hasEverBeenActive) return null
+  // Maritime's port and safety scenes consume the same restored model store.
+  // Keep its loader mounted even when the import editor has not been opened.
+  if (!hasEverBeenActive && selectedProject?.workspace !== 'maritime') return null
 
   return (
     <div className={active ? 'h-full' : 'hidden'}>
