@@ -79,8 +79,7 @@ export function PortExperience({training=false}:{training?:boolean}){
   const stamp=new Date(new Date(scenePlan.start_at).getTime()+hour*3600000).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'UTC'})
 
   return <div ref={stage} className={`port-experience ${immersive?'is-immersive':''}`} aria-label={training?'Safety exercise environment':'Port environment'}>
-    <div className="port-topline"><div><span className="port-eyebrow">{training?'SAFETY & TRAINING':'PORT OPERATIONS'}</span><h1>{selectedProject?.name}</h1></div>
-      <div className="port-top-actions"><Link to={`${root}/models`}>Import / open models</Link><button onClick={()=>{setImmersive(v=>!v);setTimeout(()=>window.dispatchEvent(new Event('resize')),0)}}>{immersive?'Exit focus':'Focus view'}</button></div></div>
+    <h1 className={immersive?'port-focus-title':'sr-only'}>{selectedProject?.name} · {training?'Safety exercise':'Port view'}</h1>
     <div className="port-commandbar">
       {training?<><select aria-label="Scene exercise" disabled={!!attempt} value={exercise?.id??''} onChange={e=>setExerciseId(e.target.value)}>{plan!.exercises.map(e=><option value={e.id} key={e.id}>{e.name}</option>)}</select><Link to={`${root}/setup`}>Edit exercise</Link>{!attempt&&<button className="port-primary" disabled={!exercise||busy||dirty||!version} onClick={start}>Start exercise</button>}{dirty&&<span>Save your changes before training.</span>}</>:
         <><select aria-label="Port scenario" value={scenario} disabled={busy} onChange={e=>setScenario(e.target.value)}><option value="">Working plan</option>{plan!.scenarios.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select>
@@ -90,6 +89,7 @@ export function PortExperience({training=false}:{training?:boolean}){
           {current&&<button aria-pressed={compare} onClick={()=>setCompare(v=>!v)}>Compare baseline</button>}
         </>}
       <span className="port-command-status">{loadingRun?'Opening replay…':stale?'Saved replay · working plan changed':current?`Saved run · v${current.version}`:scenePlan.source==='synthetic'?'Synthetic terminal':'Working layout'}</span>
+      <div className="port-command-actions"><Link to={`${root}/models`}>Import / open models</Link><button onClick={()=>{setImmersive(v=>!v);setTimeout(()=>window.dispatchEvent(new Event('resize')),0)}}>{immersive?'Exit focus':'Focus view'}</button></div>
     </div>
     <div className="port-stage">
       <div className={`port-canvases ${compare&&!training?'compare':''}`}>
