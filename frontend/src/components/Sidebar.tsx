@@ -55,10 +55,8 @@ export function Sidebar() {
     <aside className="no-print flex flex-col w-60 min-h-screen bg-white text-gray-900 dark:bg-prosota-ink dark:text-prosota-paper shrink-0 border-r border-gray-200 dark:border-prosota-line">
       <div className="flex items-center gap-2.5 px-6 py-5 border-b border-gray-200 dark:border-prosota-line">
         <ProsotaLogo size={30} />
-        <span className="font-display text-lg font-bold tracking-tight">PROSOTA<span className="block text-xs font-normal tracking-normal text-gray-500 dark:text-prosota-muted">Construction</span></span>
+        <span className="font-display text-lg font-bold tracking-tight">PROSOTA</span>
       </div>
-
-      <a href="/maritime/workspace" target="_blank" rel="noopener noreferrer" className="px-6 py-2 text-xs text-blue-600 dark:text-prosota-cyan border-b border-gray-200 dark:border-prosota-line">Maritime workspace ↗</a>
 
       {selectedProject && (
         <div className="px-4 py-3 border-b border-gray-200 dark:border-prosota-line">

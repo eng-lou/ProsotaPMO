@@ -964,7 +964,7 @@ def calculate_schedule(
     """Shared in-memory CPM pass. Mutates supplied activities, never accesses storage.
 
     Callers supply non-empty CPM participants and relationships within that set.
-    Saved schedules and isolated Maritime scenarios use exactly the same pass.
+    Saved schedules and isolated calculations use exactly the same pass.
     """
     participant_ids = {a.id for a in participants}
     edges = [(r.predecessor_id, r.successor_id) for r in relationships]

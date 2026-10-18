@@ -104,6 +104,20 @@ export async function pruneCachedFiles(ns: FileCacheNamespace, projectId: string
 
 const gzip = (blob: Blob) => new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob()
 
+// Call only after a successful authenticated project listing. Removed projects
+// must not leave their model/texture/environment downloads cached indefinitely.
+export async function pruneRemovedProjectFiles(projectIds: string[]): Promise<void> {
+  const cache = await openCache()
+  if (!cache) return
+  const keep = new Set(projectIds)
+  try {
+    for (const request of await cache.keys()) {
+      const match = new URL(request.url).pathname.match(/^\/__file-cache\/(?:model|texture|environment)\/([^/]+)\//)
+      if (match && !keep.has(match[1])) await cache.delete(request)
+    }
+  } catch { /* A cache failure must not block project selection. */ }
+}
+
 // Compresses three 1MB samples (start/middle/end) before committing to the
 // whole file — ~50ms, and it spares e.g. a large texture-heavy GLB ~1s per
 // 100MB of compression work that would only save ~1%.

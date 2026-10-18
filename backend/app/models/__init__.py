@@ -161,4 +161,3 @@ __all__ = [
 from app.models.clash_run import ClashRun, ClashReport
 
 from app.models.equipment_rig import EquipmentRig
-from app.models.maritime_workspace import MaritimeWorkspace, MaritimeRun

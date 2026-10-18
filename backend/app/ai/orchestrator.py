@@ -25,9 +25,6 @@ from app.services import object_storage
 
 async def _execute_server_tool(db: AsyncSession, name: str, tool_input: dict, project_id: uuid.UUID,
                                 schedule_period_id: uuid.UUID | None, period_id: uuid.UUID | None) -> dict:
-    if name == "get_maritime_context":
-        from app.ai.maritime_context import get_context
-        return await get_context(db, project_id, tool_input.get('run_id'))
     if name == "get_resource_planning_context":
         from app.ai.resource_context import get_context
         return await get_context(db, project_id, schedule_period_id, **tool_input)

@@ -7021,12 +7021,3 @@ remain visible; actuals outside the planned activity span are not hidden.
 Budget editing remains available within the activity span, including empty
 periods. All 17 IFC regression tests passed with both clinic fixtures; render
 checks covered empty figures, actual-only values, explicit zero and labels.
-
-## 2026-10-17 — Construction and Maritime separation
-
-Added distinct public Construction and Maritime entries and a synthetic Maritime workspace with tab-scoped scenario state. Keep private Construction projects behind their existing authentication and open cross-workspace links in a separate tab. Reuse the existing 4D profile engine for expansion previews; authoritative scheduling is backend/database based, so illustrative day stages must not be presented as rescheduled working-calendar results. The terminal outage model conserves cargo and integrates capacity only after arrival. Default outage adds three hours, not its full six-hour duration, because the other crane continues operating. Seven calculation/reference tests, the production build and built-app browser flows passed. See MARITIME_BUILD.md for scope and remaining integrations.
-
-
-## 2026-10-17 — Maritime scheduling, cost/resource impacts and Poe
-
-Extracted the existing CPM forward/backward pass into calculate_schedule and retained the database wrapper's load/commit/subproject/spread behaviour. Maritime calls that same pass on bounded isolated records, and resource_costing supplies assignment totals. A critical 15-working-day foundation extension adds 21 calendar days, £75,000 and 240 assignment-hours; a four-day procurement extension is absorbed by float. Treat this event as productive duration extension, not uncosted standby. Baseline records remain independent. Calculated dates now drive the 4D sequence; charts/report distinguish forecasts from actuals. Poe receives server-calculated snapshots and returns validated proposals through the existing provider and quota gate, with explicit Apply. A local live-provider check failed for insufficient Anthropic credit, so do not claim live answers verified. 53 backend tests, seven frontend tests, build and real-backend browser flow passed. Run database suites serially: their existing shared truncate/drop fixtures conflict across concurrent pytest processes.

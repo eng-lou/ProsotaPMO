@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import shutil
 import uuid
 from unittest.mock import MagicMock
 
@@ -9,7 +11,26 @@ from sqlalchemy.exc import ProgrammingError
 from deploy_migrations import main, prepare_database
 
 
-def test_upgrade_previous_schema_preserves_rows_and_is_repeatable():
+def test_upgrade_previous_schema_preserves_rows_and_is_repeatable(monkeypatch, tmp_path):
+    # This fixture models the P6 migration only, not the whole application
+    # schema. Keep its migration chain fixed as later product migrations land.
+    import deploy_migrations
+    original_config = deploy_migrations.migration_config
+    source = Path(__file__).resolve().parents[1] / 'alembic'
+    versions = tmp_path / 'versions'
+    versions.mkdir()
+    shutil.copyfile(source / 'env.py', tmp_path / 'env.py')
+    historical = next((source / 'versions').glob('c6a1f823d904_*.py'))
+    shutil.copyfile(historical, versions / historical.name)
+    (versions / 'b4d9e1a7c352_fixture.py').write_text(
+        "revision='b4d9e1a7c352'\ndown_revision=None\n"
+        "def upgrade(): pass\ndef downgrade(): pass\n"
+    )
+    def fixture_config():
+        config = original_config()
+        config.set_main_option('script_location', str(tmp_path))
+        return config
+    monkeypatch.setattr(deploy_migrations, 'migration_config', fixture_config)
     url = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg://postgres:password@localhost:5432/prosotapmo_test")
     engine = create_engine(url)
     try:

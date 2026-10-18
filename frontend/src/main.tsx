@@ -41,12 +41,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     }}
     useRefreshTokens
     cacheLocation="localstorage"
-    onRedirectCallback={state => {
-      // Maritime is outside the authenticated Construction router. A hard
-      // navigation after the root callback selects the correct workspace.
-      if (state?.returnTo === '/maritime/workspace') window.location.replace('/maritime/workspace')
-      else window.history.replaceState({}, document.title, state?.returnTo ?? window.location.pathname)
-    }}
   >
     {/* useRefreshTokens+localStorage: avoids relying on third-party-cookie iframe silent auth, which browsers increasingly block (see AuthTokenProvider.tsx) */}
     <React.StrictMode>

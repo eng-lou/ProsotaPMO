@@ -8,9 +8,9 @@ import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/CurrentUserContext'
 import { useProject, type Project } from '@/lib/ProjectContext'
 import { useFeedbackUnread } from '@/lib/useFeedbackUnread'
+import { pruneRemovedProjectFiles } from '@/lib/fileCache'
 
 export function ProjectSelector() {
-  const maritime = window.location.pathname.startsWith('/maritime/workspace')
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -44,7 +44,7 @@ export function ProjectSelector() {
 
   const refresh = () =>
     api.get<Project[]>('/api/v1/projects/')
-      .then(r => { setProjects(r.data.filter(p => (p.workspace ?? 'construction') === (maritime ? 'maritime' : 'construction'))); setError(null) })
+      .then(r => { setProjects(r.data); setError(null); void pruneRemovedProjectFiles(r.data.map(p => p.id)) })
       .catch(err => {
         // Was a bare "Failed to load projects" with the real error
         // discarded entirely — same swallowed-error bug class this app has
@@ -64,7 +64,7 @@ export function ProjectSelector() {
 
   const handleSelect = (project: Project) => {
     selectProject(project)
-    navigate(maritime ? '/maritime/workspace/project' : '/dashboard')
+    navigate('/dashboard')
   }
 
   const toggleSelected = (id: string) => {
@@ -121,7 +121,6 @@ export function ProjectSelector() {
     try {
       const { data } = await api.post<Project>('/api/v1/projects/', {
         name: newName.trim(),
-        workspace: maritime ? 'maritime' : 'construction',
         client_name: newClient.trim() || null,
       })
       setProjects(prev => [...prev, data])
@@ -188,7 +187,7 @@ export function ProjectSelector() {
       <div className="w-full max-w-2xl">
         <div className="mb-8 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">{maritime ? 'Prosota Maritime projects' : 'Prosota Construction projects'}</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Select a project</h1>
             <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota</p>
           </div>
           <div className="shrink-0 flex items-center gap-3 mt-1">

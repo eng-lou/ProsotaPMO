@@ -817,9 +817,3 @@
   border-radius: 10px;
   flex-shrink: 0;
 }
-
- .homepage .hp-product-nav { display:flex;justify-content:center;gap:30px;border-top:1px solid var(--hp-line);padding:12px 20px;font-size:13px;flex-wrap:wrap; }
-.homepage .hp-product-nav a {color:var(--hp-muted);text-decoration:none;}
-.homepage .hp-product-nav a[aria-current=page] {color:#155bb9;font-weight:600;}
-.homepage .hp-product-nav a:hover {color:#155bb9;}
-.homepage .hp-product-nav span {font-size:10px;color:#16695e;border:1px solid #b2d6d2;border-radius:3px;padding:2px 5px;margin-left:5px;}

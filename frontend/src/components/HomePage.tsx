@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ProsotaLogo } from './ProsotaLogo'
 import './HomePage.css'
 
@@ -177,7 +177,6 @@ function ProgrammePreview() {
 }
 
 export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; onRequestAccess: () => void }) {
-  useEffect(() => { document.title = 'Prosota Construction | BIM and project controls' }, [])
   return (
     <div className="homepage">
       <a className="hp-skip" href="#hp-main">
@@ -200,12 +199,11 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
             Sign in <span aria-hidden="true">↗</span>
           </button>
         </div>
-        <nav className="hp-product-nav" aria-label="Products"><a href="/construction" aria-current="page">Prosota Construction</a><a href="/maritime">Prosota Maritime <span>New</span></a></nav>
       </header>
       <main id="hp-main">
         <section className="hp-hero hp-wrap">
           <div className="hp-eyebrow">
-            <span /> PROSOTA CONSTRUCTION / 4D + PROJECT CONTROLS
+            <span /> 4D SIMULATION + CONNECTED PROJECT CONTROLS
           </div>
           <div className="hp-hero-copy">
             <h1>

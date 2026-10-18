@@ -5,7 +5,6 @@ export interface Project {
   id: string
   org_id: string
   name: string
-  workspace?: 'construction' | 'maritime'
   client_name: string | null
   status: string
 }
@@ -18,13 +17,20 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null)
 
-const STORAGE_KEY = window.location.pathname.startsWith('/maritime/workspace') ? 'prosota_maritime_selected_project' : 'prosota_selected_project'
+const STORAGE_KEY = 'prosota_selected_project'
 
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(() => {
     try {
+      sessionStorage.removeItem('prosota_maritime_selected_project')
+      sessionStorage.removeItem('prosota_maritime_delivery_v1')
       const stored = sessionStorage.getItem(STORAGE_KEY)
-      return stored ? JSON.parse(stored) : null
+      const project = stored ? JSON.parse(stored) : null
+      if (project?.workspace === 'maritime') {
+        sessionStorage.removeItem(STORAGE_KEY)
+        return null
+      }
+      return project
     } catch {
       return null
     }

@@ -394,23 +394,6 @@ async def duplicate_project(db: AsyncSession, project_id: uuid.UUID, new_name: s
                 continue
             db.add(_clone_row(link, uuid.uuid4(), source_id=new_source_id, target_id=new_target_id))
 
-    # Maritime definitions use project-local asset IDs; remap shared planning
-    # references. Model files are not cloned by this service, so geometry links
-    # must be explicitly rebound instead of pointing at the original project.
-    if original.workspace == 'maritime':
-        import copy
-        from app.models.maritime_workspace import MaritimeWorkspace
-        maritime = await db.get(MaritimeWorkspace, project_id)
-        if maritime:
-            definition = copy.deepcopy(maritime.definition)
-            for asset in definition.get('assets', []):
-                asset['elements'] = []
-                for field, mapping in (('resource_id', resource_map), ('activity_id', activity_map)):
-                    old_id = asset.get(field)
-                    mapped = mapping.get(uuid.UUID(old_id)) if old_id else None
-                    asset[field] = str(mapped) if mapped else None
-            db.add(MaritimeWorkspace(project_id=new_project.id, version=1, definition=definition))
-
     await db.commit()
     await db.refresh(new_project)
     return new_project
