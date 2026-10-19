@@ -25,7 +25,7 @@ import { createContext, useContext, useRef, type ReactNode } from 'react'
 // all simple top-down global state) — none already solved "a module
 // exposes live capabilities to something mounted elsewhere," so this is a
 // genuinely new pattern, not a reuse of an existing bridge.
-export type AiFourDToolName = 'highlight_elements' | 'isolate_elements' | 'color_by_criteria' | 'run_clash_detection' | 'get_selected_elements'
+export type AiFourDToolName = 'highlight_elements' | 'isolate_elements' | 'color_by_criteria' | 'run_clash_detection' | 'get_selected_elements' | 'get_loaded_ifc_models' | 'read_ifc_model'
 
 // execute_clash_test_proposal (2026-09-01, per Maro's own described flow:
 // "select the requested elements, put them in their respective

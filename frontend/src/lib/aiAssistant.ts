@@ -28,6 +28,7 @@ export interface AiMessage {
 }
 
 export interface AiChatRequest {
+  purpose?: 'chat' | 'ifc_schedule'
   project_id: string
   schedule_period_id: string | null
   period_id: string | null

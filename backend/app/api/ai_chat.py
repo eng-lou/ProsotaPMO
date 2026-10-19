@@ -35,18 +35,19 @@ async def chat(
         raise HTTPException(404, "Project not found")
     # Save approval results before the next paid request can fail.
     async def checkpoint(messages):
-        await poe_conversation_svc.save_messages(db, data.project_id, messages)
+        if data.purpose == "chat":
+            await poe_conversation_svc.save_messages(db, data.project_id, messages)
 
     await checkpoint(data.messages)
     result = await run_agent_turn(
         db, data.messages, data.project_id, data.schedule_period_id, data.period_id,
-        data.client_tools_available, checkpoint=checkpoint,
+        data.client_tools_available, checkpoint=checkpoint, purpose=data.purpose,
     )
     # Persisted verbatim so a page reload (or coming back later) picks up
     # where the conversation left off (2026-09-06, per Maro: "the chat
     # history needs to persist") — the exact same messages the frontend
     # is about to hold in its own state, so the two can never drift apart.
-    await poe_conversation_svc.save_messages(db, data.project_id, result.messages)
+    await checkpoint(result.messages)
     return AiChatResponse(
         assistant_content=result.assistant_content, stop_reason=result.stop_reason,
         pending_client_tool_calls=result.pending_client_tool_calls,

@@ -1,3 +1,4 @@
+import { createPoeIfcTools } from './poeIfcTools'
 import { undoHistory } from '@/lib/undoHistory'
 import { captureTransform, restoreTransform, type TransformSnapshot } from './transformUndo'
 import { useUndoRefresh } from '@/lib/useUndoRefresh'
@@ -7663,6 +7664,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const aiFourDBridge = useAiFourDBridge()
   useEffect(() => {
     if (!aiFourDBridge) return
+    const modelReaders = createPoeIfcTools(() => ifcHandlesRef.current.map(handle => ({ handle, name: sceneObjects.find(o => o.id === `ifc-${handle.modelID}`)?.name ?? handle.object.name ?? "Imported IFC" })))
+    Object.assign(aiFourDBridge.current, modelReaders)
 
     const resolveActivityIdsByNameOrCode = (names: string[]): Set<string> => {
       const wanted = new Set(names.map(n => n.trim().toLowerCase()))
@@ -7810,6 +7813,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       delete aiFourDBridge.current.isolate_elements
       delete aiFourDBridge.current.color_by_criteria
       delete aiFourDBridge.current.run_clash_detection
+      delete aiFourDBridge.current.get_loaded_ifc_models
+      delete aiFourDBridge.current.read_ifc_model
       delete aiFourDBridge.current.get_selected_elements
       delete aiFourDBridge.current.execute_clash_test_proposal
     }

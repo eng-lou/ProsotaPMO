@@ -9,7 +9,8 @@ export interface TowerSettings {
 }
 export const initialTowerSettings: TowerSettings = { enabled: false, coreIds: [], facadeIds: [], retainedIds: [], levelMap: {}, coreLeadFloors: 1, facadeLagFloors: 2 }
 const field = 'rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel2 text-gray-800 dark:text-prosota-paper p-1'
-export function TowerSequenceControls({ value, onChange, elements, storeys, detection, onPreview, selectedIds }: {
+export function TowerSequenceControls({ value, onChange, elements, storeys, detection, onPreview, selectedIds, aiMode = false, onAiMode }: {
+  aiMode?: boolean; onAiMode?: (enabled: boolean) => void
   value: TowerSettings; onChange: (value: TowerSettings) => void; elements: ExtractedElement[]; storeys: StoreyGroup[]
   detection: TowerDetection; onPreview: (ids: string[], modelId: number) => void; selectedIds: string[]
 }) {
@@ -26,7 +27,7 @@ export function TowerSequenceControls({ value, onChange, elements, storeys, dete
     update(target === 'core' ? { coreIds: [...new Set([...value.coreIds, ...allowed])], facadeIds: value.facadeIds.filter(id => !allowed.includes(id)) } : { facadeIds: [...new Set([...value.facadeIds, ...allowed])], coreIds: value.coreIds.filter(id => !allowed.includes(id)) })
   }
   return <section className="space-y-3 text-xs text-gray-800 dark:text-prosota-paper">
-    <label className="flex items-center gap-2">Sequence <select className={field} value={value.enabled ? 'tower' : 'standard'} onChange={e => update({ enabled: e.target.value === 'tower' })}><option value="standard">Standard</option><option value="tower">Tower</option></select></label>
+    <label className="flex items-center gap-2">Sequence <select className={field} value={aiMode ? 'poe' : value.enabled ? 'tower' : 'standard'} onChange={e => { onAiMode?.(e.target.value === 'poe'); update({ enabled: e.target.value === 'tower' }) }}><option value="standard">Standard</option><option value="tower">Tower</option>{onAiMode && <option value="poe">Poe AI Generation</option>}</select></label>
     {value.enabled && <>
       <p>Suggested groups are ready. Highlight them in the model, then accept or adjust.</p>
       <div className="flex flex-wrap gap-2">

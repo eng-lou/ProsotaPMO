@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel
 
 
 class AiChatRequest(BaseModel):
+    purpose: Literal["chat", "ifc_schedule"] = "chat"
     project_id: uuid.UUID
     schedule_period_id: uuid.UUID | None = None
     period_id: uuid.UUID | None = None

@@ -1,3 +1,4 @@
+import { PoeScheduleGeneration } from './PoeScheduleGeneration'
 import axios from 'axios'
 import { useMemo, useState } from 'react'
 import { TowerSequenceControls, initialTowerSettings } from './TowerSequenceControls'
@@ -157,6 +158,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   // is the "at least give me the option" fallback to today's IFC-scan-only
   // behaviour.
   const [includeFullSchedule, setIncludeFullSchedule] = useState(true)
+  const [aiMode, setAiMode] = useState(false)
   const [tower, setTower] = useState(initialTowerSettings)
   const [confirmedPreview, setConfirmedPreview] = useState('')
 
@@ -420,7 +422,8 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
 
           {step === 'review' && storeys && (
             <div className="space-y-3">
-              <TowerSequenceControls value={tower} onChange={v => { setTower(v); setConfirmedPreview('') }} elements={elements ?? []} storeys={storeys} detection={detection} selectedIds={selectedScanIds} onPreview={(ids, modelId) => onPreviewGroups?.((elements ?? []).filter(e => ids.includes(e.globalId) && e.sourceModelId === modelId), modelId)} />
+              <TowerSequenceControls aiMode={aiMode} onAiMode={setAiMode} value={tower} onChange={v => { setTower(v); setConfirmedPreview('') }} elements={elements ?? []} storeys={storeys} detection={detection} selectedIds={selectedScanIds} onPreview={(ids, modelId) => onPreviewGroups?.((elements ?? []).filter(e => ids.includes(e.globalId) && e.sourceModelId === modelId), modelId)} />
+              {aiMode ? <PoeScheduleGeneration elements={elements ?? []} projectId={projectId} schedulePeriodId={schedulePeriodId} calendarId={calendarId} rootName={rootName} onGenerated={onGenerated} /> : <>
               {preview.error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{preview.error}</p>}
               {tower.enabled && !preview.error && <label className="flex gap-2 text-xs text-gray-700 dark:text-prosota-paper">
                 <input type="checkbox" checked={confirmedPreview === previewKey} onChange={e => setConfirmedPreview(e.target.checked ? previewKey : '')} />
@@ -490,6 +493,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 </tbody></table></div>
               </details>}
               {generateError && <div className="text-xs text-red-600 dark:text-red-400">{generateError}</div>}
+              </>}
             </div>
           )}
         </div>
@@ -525,7 +529,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 {extracting ? 'Scanning…' : 'Scan Model'}
               </button>
             )}
-            {step === 'review' && (
+            {step === 'review' && !aiMode && (
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate}
