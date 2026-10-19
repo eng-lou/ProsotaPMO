@@ -1,10 +1,40 @@
 import * as THREE from 'three'
 import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
-  IFCPROJECT, IFCSTYLEDITEM,
+  IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL,
 } from 'web-ifc'
 import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { buildElementMaterial, disposeEdgesBatch, finalizeIndividualMesh, type BatchState, type EdgesBatch } from './elementBatching'
+
+/** Explicit IFC assembly identity, used only by the opt-in tower recipe. */
+export function getCurtainWallAssemblies(handle: IfcModelHandle): Map<number, string> {
+  const roots = new Map<number, string>()
+  const ids = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCCURTAINWALL)
+  for (let i = 0; i < ids.size(); i++) {
+    const id = ids.get(i)
+    const guid = getGuidFromExpressId(handle, id)
+    if (guid) roots.set(id, guid)
+  }
+  if (!roots.size) return roots
+  const children = new Map<number, number[]>()
+  const rels = handle.api.GetLineIDsWithType(handle.ifcModelID, IFCRELAGGREGATES)
+  for (let i = 0; i < rels.size(); i++) {
+    const rel = handle.api.GetLine(handle.ifcModelID, rels.get(i), false)
+    const parent = rel.RelatingObject?.value
+    if (parent !== undefined && Array.isArray(rel.RelatedObjects)) children.set(parent, [...(children.get(parent) ?? []), ...rel.RelatedObjects.map((r: { value: number }) => r.value)])
+  }
+  const result = new Map(roots)
+  for (const [root, guid] of roots) {
+    const queue = [root], seen = new Set<number>()
+    for (let i = 0; i < queue.length; i++) {
+      const id = queue[i]
+      if (seen.has(id)) continue
+      seen.add(id); result.set(id, guid)
+      for (const child of children.get(id) ?? []) queue.push(child)
+    }
+  }
+  return result
+}
 import { addRealisticPiece, clearRealisticFromBatch, createRealisticModelInfo, type RealisticModelInfo } from './realisticMaterials'
 export { ensureMaterialized, type BatchInstanceInfo, type BatchState } from './elementBatching'
 

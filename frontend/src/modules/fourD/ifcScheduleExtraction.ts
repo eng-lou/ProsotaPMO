@@ -466,6 +466,7 @@ function resolveMepCategory(name: string): ScheduleCategory | null {
 }
 
 export interface ExtractedElement {
+  facadeAssemblyId?: string
   expressID: number
   globalId: string
   name: string
@@ -599,6 +600,7 @@ export async function extractScheduleElements(
   }
 
   const nameInfoByExpressId = ifcModel.getElementNamesAndPredefinedTypes(handle, candidates.map(c => c.expressID))
+  const facadeAssemblies = ifcModel.getCurtainWallAssemblies(handle)
   // Unconditional now (2026-07-25) — buildElementPropertyData's own header
   // explains why: it now also carries Pset_ProductRequirements.Category,
   // needed for every file regardless of whether it has any
@@ -693,6 +695,7 @@ export async function extractScheduleElements(
         : null
       elements.push({
         expressID, globalId, name, ifcType, category,
+        facadeAssemblyId: facadeAssemblies.get(expressID),
         material: classifyMaterial(name),
         storeyName: storey?.name ?? 'Unassigned',
         storeyElevation: storey?.elevationMetres ?? null,

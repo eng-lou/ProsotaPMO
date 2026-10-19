@@ -1,5 +1,6 @@
 import type { ExtractedElement, ScheduleCategory } from './ifcScheduleExtraction'
 import { CATEGORY_ORDER } from './scheduleCategoryOrder'
+import { sequenceTower, type TowerSequencing } from './towerSequencing'
 
 // IFC Schedule Wizard, step 2 (2026-07-13) — groups a proposed WBS (one
 // summary per storey, one child activity per storey+category+construction
@@ -728,6 +729,8 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
 }
 
 export interface CategoryGroup {
+  workstream?: 'core'
+  phaseWork?: Record<string, { quantity: number; elementRefs: string[]; elementLabels: string[] }>
   name: string
   elementRefs: string[]
   // Same order/length as elementRefs — each element's own real Name (2026-07-22,
@@ -1498,6 +1501,7 @@ export function buildStagedSchedule(
   // identical to this function's pre-2026-07-25 behaviour — every new code
   // path below is strictly additive and gated on this flag.
   includeFullSchedule: boolean,
+  tower?: TowerSequencing,
 ): { staged: StagedSchedule; summary: ProposedScheduleSummary } {
   storeys = clampOutlierQuantities(storeys)
   const activities: StagedActivity[] = []
@@ -1817,6 +1821,8 @@ export function buildStagedSchedule(
       const isFacade = FACADE_CATEGORIES.has(category.name)
       const isLate = LATE_CATEGORIES.has(category.name)
       phases.forEach((phase, phaseIndex) => {
+        const phaseWork = tower ? category.phaseWork?.[phase.key] : undefined
+        const phaseQuantity = phaseWork?.quantity ?? category.quantity
         const rate = rates[phaseRowId(category.name, phase.key)] ?? phase.rate
         const tempId = `act-${storeyIndex}-${categoryIndex}-${phaseIndex}`
         // Real material quantity (2026-07-27) — see CategoryRate.
@@ -1831,15 +1837,15 @@ export function buildStagedSchedule(
           : category.materialVolumeM3
         activities.push({
           temp_id: tempId,
-          task_name: `${storey.storeyName} — ${category.name} — ${phase.label}`,
+          task_name: `${storey.storeyName} — ${tower && category.workstream === 'core' ? 'Core walls' : category.name} — ${phase.label}`,
           parent_temp_id: wbsTempId,
-          duration_hours: computeDurationHours(category.quantity, rate),
+          duration_hours: phaseWork && phaseQuantity === 0 ? 0 : computeDurationHours(phaseQuantity, rate),
           // Elements "appear" at their category's completion phase, not
           // every intermediate step — avoids the same IFC elements being
           // linked to N separate activities for one physical installation.
-          element_refs: phaseIndex === phases.length - 1 ? category.elementRefs : [],
-          element_labels: phaseIndex === phases.length - 1 ? category.elementLabels : [],
-          category: category.name, phase_key: phase.key, quantity: category.quantity, activity_type: 'task',
+          element_refs: phaseWork?.elementRefs ?? (phaseIndex === phases.length - 1 ? category.elementRefs : []),
+          element_labels: phaseWork?.elementLabels ?? (phaseIndex === phases.length - 1 ? category.elementLabels : []),
+          category: category.name, phase_key: phase.key, quantity: phaseQuantity, activity_type: 'task',
           discipline: disciplineFor(category.name, phase.key),
           ...(rate.materialName ? {
             material_name: rate.materialName, material_quantity: materialQuantity,
@@ -2322,7 +2328,7 @@ export function buildStagedSchedule(
     }
   }
 
-  const acyclicRelationships = makeRelationshipsAcyclic(activities, relationships)
+  const acyclicRelationships = tower ? sequenceTower(activities, relationships, storeys, tower) : makeRelationshipsAcyclic(activities, relationships)
 
   return {
     staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: calendarId, activities, resources, assignments, relationships: acyclicRelationships },
