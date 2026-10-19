@@ -2,6 +2,7 @@ import axios from 'axios'
 import { useMemo, useState } from 'react'
 import { TowerSequenceControls, initialTowerSettings } from './TowerSequenceControls'
 import { prepareTowerStoreys } from './towerSequencing'
+import { detectTowerGroups } from './towerDetection'
 import { api } from '@/lib/api'
 import type { Calendar } from '@/modules/scheduling/types'
 import { flattenCollectionMemberRefs, type Collection } from './collections'
@@ -35,6 +36,8 @@ interface Props {
   // Maro: "its a single ifc but it has landscape, i dont want the landscape
   // animated... so i dont have to unload it since its still useful").
   collections: Collection[]
+  onPreviewGroups?: (elements: ExtractedElement[], modelId: number) => void
+  selection?: { modelId: number | null; expressIds: Set<number> }
   onCancel: () => void
   onGenerated: () => void
 }
@@ -61,7 +64,7 @@ type Step = 'source' | 'extract' | 'review'
 // motivated it at the time, and the extra path wasn't worth keeping
 // alongside that; see scheduleGeneration.ts's own git history for
 // groupFromCollections if this ever needs resurrecting.)
-export function IfcScheduleWizard({ models, calendars, projectId, projectName, schedulePeriodId, collections, onCancel, onGenerated }: Props) {
+export function IfcScheduleWizard({ models, calendars, projectId, projectName, schedulePeriodId, collections, onCancel, onGenerated, onPreviewGroups, selection }: Props) {
   const [step, setStep] = useState<Step>('source')
   // Defaults to every loaded model selected — matches this app's usual
   // "editable default, not forced choice" convention (same shape as the
@@ -220,7 +223,8 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
       }
       const kept = excludedGlobalIds.size > 0 ? found.filter(el => !excludedGlobalIds.has(el.globalId)) : found
       setExcludedCount(found.length - kept.length)
-      setTower(initialTowerSettings)
+      const suggestions = detectTowerGroups(kept, groupByLevel(kept))
+      setTower({ ...initialTowerSettings, coreIds: suggestions.coreIds, facadeIds: suggestions.facadeIds, levelMap: suggestions.levelMap })
       setConfirmedPreview('')
       setElements(kept)
       const grouped = groupByLevel(kept)
@@ -253,18 +257,20 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   const phaseRows: PhaseRow[] = storeys
     ? [...usedPhaseRows(storeys), ...(includeFullSchedule ? fullSchedulePhaseRows(storeys) : [])]
     : []
+  const detection = useMemo(() => detectTowerGroups(elements ?? [], storeys ?? []), [elements, storeys])
+  const selectedScanIds = (elements ?? []).filter(e => e.sourceModelId === selection?.modelId && selection.expressIds.has(e.expressID)).map(e => e.globalId)
   const preview = useMemo(() => {
     const empty = {
       staged: { project_id: projectId, schedule_period_id: schedulePeriodId, calendar_id: null, activities: [], resources: [], assignments: [], relationships: [] },
       summary: { storeyCount: 0, activityCount: 0, relationshipCount: 0, elementCount: 0 } as ProposedScheduleSummary,
     }
     try {
-      const prepared = storeys && tower.enabled ? prepareTowerStoreys(storeys, elements ?? [], new Set(tower.coreIds), tower.levelMap) : storeys
+      const prepared = storeys && tower.enabled ? prepareTowerStoreys(storeys, elements ?? [], new Set(tower.coreIds), tower.levelMap, new Set(tower.facadeIds), detection.facadeLevels, Object.fromEntries(Object.entries(detection.frameLevelMap).filter(([level]) => tower.levelMap[level] === detection.levelMap[level]))) : storeys
       return { ...(prepared ? buildStagedSchedule(projectId, schedulePeriodId, prepared, rates, rootName, calendarId, includeFullSchedule, tower.enabled ? tower : undefined) : empty), error: '' }
     } catch (error) {
       return { ...empty, error: error instanceof Error ? error.message : 'Unable to prepare the sequence.' }
     }
-  }, [storeys, elements, tower, projectId, schedulePeriodId, rates, rootName, calendarId, includeFullSchedule])
+  }, [storeys, elements, tower, detection, projectId, schedulePeriodId, rates, rootName, calendarId, includeFullSchedule])
   const { staged, summary } = preview
   const previewKey = JSON.stringify([tower, calendarId, includeFullSchedule, schedulePeriodId])
   const canGenerate = !generating && !preview.error && staged.activities.length > 0 && (!tower.enabled || confirmedPreview === previewKey)
@@ -292,8 +298,8 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
   const stepOrder: Step[] = ['source', 'extract', 'review']
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
-      <div className="w-[640px] max-h-[80vh] flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
+    <div className={`fixed inset-0 z-50 flex items-center ${step === 'review' && tower.enabled ? 'justify-end pointer-events-none p-3' : 'justify-center bg-black/30'}`} onClick={step === 'review' && tower.enabled ? undefined : onCancel}>
+      <div className={`${step === 'review' && tower.enabled ? 'w-[410px] max-h-[90vh]' : 'w-[640px] max-h-[80vh]'} pointer-events-auto flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line`} onClick={e => e.stopPropagation()}>
         <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between">
           <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Generate Schedule from IFC Model</h3>
           <div className="flex gap-1">
@@ -414,12 +420,13 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
 
           {step === 'review' && storeys && (
             <div className="space-y-3">
-              <TowerSequenceControls value={tower} onChange={v => { setTower(v); setConfirmedPreview('') }} elements={elements ?? []} storeys={storeys} collections={collections} />
+              <TowerSequenceControls value={tower} onChange={v => { setTower(v); setConfirmedPreview('') }} elements={elements ?? []} storeys={storeys} detection={detection} selectedIds={selectedScanIds} onPreview={(ids, modelId) => onPreviewGroups?.((elements ?? []).filter(e => ids.includes(e.globalId) && e.sourceModelId === modelId), modelId)} />
               {preview.error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{preview.error}</p>}
               {tower.enabled && !preview.error && <label className="flex gap-2 text-xs text-gray-700 dark:text-prosota-paper">
                 <input type="checkbox" checked={confirmedPreview === previewKey} onChange={e => setConfirmedPreview(e.target.checked ? previewKey : '')} />
-                I have reviewed the core, floor mapping and façade lag. Generate a new WBS in the current schedule; existing activities are retained.
+                Accept these groups and generate a new WBS. Existing activities are retained.
               </label>}
+              <details open={!tower.enabled}><summary className="text-xs cursor-pointer text-gray-600 dark:text-prosota-paper">Schedule details · {summary.activityCount} activities</summary>
               <div className="text-xs text-gray-600 dark:text-prosota-muted space-y-1">
                 <div>1 root WBS ("{rootName}") + {summary.storeyCount} storey summary activities</div>
                 <div>{Math.max(0, summary.activityCount - summary.storeyCount - 1)} work activities across {categoryNames.length} categories, {phaseRows.length} construction phases</div>
@@ -472,6 +479,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
               <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1.5">
                 Quantities are bounding-box estimates from the loaded geometry, not a certified takeoff — durations are a first draft, freely editable afterward in Scheduling.
               </p>
+              </details>
               {tower.enabled && !preview.error && <details className="text-xs text-gray-700 dark:text-prosota-paper">
                 <summary className="cursor-pointer font-semibold">Preview activities and dependencies</summary>
                 <div className="max-h-64 overflow-auto mt-2"><table className="w-full text-left"><thead><tr><th>Activity</th><th>Hours</th><th>Waits for</th></tr></thead><tbody>

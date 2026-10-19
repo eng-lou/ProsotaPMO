@@ -9,11 +9,36 @@ export interface TowerSequencing {
 
 export function prepareTowerStoreys(
   storeys: StoreyGroup[], elements: ExtractedElement[], coreIds: Set<string>, levelMap: Record<string, string>,
+  facadeIds: Set<string> = new Set(), facadeLevels: Record<string, string> = {}, frameLevelMap: Record<string, string> = {},
 ): StoreyGroup[] {
   const names = new Set(storeys.map(s => s.storeyName))
   const byId = new Map(elements.map(e => [e.globalId, e]))
   const categoryById = new Map(storeys.flatMap(s => s.categories.flatMap(c => c.elementRefs.map(id => [id, c.name] as const))))
-  if (!coreIds.size) throw new Error('Select the core walls before generating a tower sequence.')
+  // Empty proposals are valid: keep the ordinary frame climb until a core is reviewed.
+  if (facadeIds.size) {
+    const copied = storeys.map(s => ({ ...s, categories: s.categories.map(c => ({ ...c, elementRefs: [...c.elementRefs], elementLabels: [...c.elementLabels] })) }))
+    const moved: { target: string; id: string; label: string; name: string; volume: number }[] = []
+    for (const s of copied) for (const c of s.categories) {
+      const selected = c.elementRefs.filter(id => facadeIds.has(id) && !coreIds.has(id))
+      for (const id of selected) {
+        const e = byId.get(id)
+        if (!e) continue
+        const index = c.elementRefs.indexOf(id)
+        moved.push({ target: facadeLevels[id] ?? s.storeyName, id, label: c.elementLabels[index], name: ['Curtain Walls', 'Windows', 'Facade Ornamentation'].includes(c.name) ? c.name : 'Facade Ornamentation', volume: e.volumeM3 ?? 0 })
+        c.elementRefs.splice(index, 1); c.elementLabels.splice(index, 1)
+        c.quantity = Math.max(0, c.quantity - (['Walls', 'Non-Structural Walls', 'Slabs', 'Roofs', 'Coverings'].includes(c.name) ? e.quantity : 1))
+        c.materialVolumeM3 = Math.max(0, c.materialVolumeM3 - (e.volumeM3 ?? 0))
+      }
+    }
+    for (const m of moved) {
+      const s = copied.find(s => s.storeyName === m.target)
+      if (!s) throw new Error('The supporting façade level is missing. Rescan the model.')
+      let c = s.categories.find(c => c.name === m.name)
+      if (!c) { c = { name: m.name, elementRefs: [], elementLabels: [], quantity: 0, materialVolumeM3: 0 }; s.categories.push(c) }
+      c.elementRefs.push(m.id); c.elementLabels.push(m.label); c.quantity++; c.materialVolumeM3 += m.volume
+    }
+    storeys = copied.map(s => ({ ...s, categories: s.categories.filter(c => c.elementRefs.length) }))
+  }
   for (const id of coreIds) {
     if (!byId.get(id)?.ifcType.startsWith('IfcWall')) throw new Error('Core selections must be walls from this scan.')
     if (!['Walls', 'Non-Structural Walls'].includes(categoryById.get(id) ?? '')) throw new Error('Core walls must belong to a wall category. Review foundation/site classification before selecting them as core.')
@@ -30,10 +55,10 @@ export function prepareTowerStoreys(
   }
   const grouped = new Map<string, CategoryGroup[]>()
   for (const storey of storeys) {
-    const target = destination(storey.storeyName)
-    const categories = grouped.get(target) ?? []
-    grouped.set(target, categories)
     for (const category of storey.categories) {
+      const target = destination(['Columns', 'Beams'].includes(category.name) ? frameLevelMap[storey.storeyName] ?? storey.storeyName : storey.storeyName)
+      const categories = grouped.get(target) ?? []
+      grouped.set(target, categories)
       const selected = category.elementRefs.filter(id => coreIds.has(id))
       const remaining = category.elementRefs.filter(id => !coreIds.has(id))
       for (const [refs, core] of [[remaining, false], [selected, true]] as const) {

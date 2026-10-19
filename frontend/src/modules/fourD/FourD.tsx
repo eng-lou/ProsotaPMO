@@ -8241,6 +8241,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           projectName={selectedProject.name}
           schedulePeriodId={period.id}
           collections={collections}
+          selection={{ modelId: activeIfcHandle?.modelID ?? null, expressIds: selectedExpressIds }}
+          onPreviewGroups={(elements, modelId) => {
+            const objectId = `ifc-${modelId}`
+            setActiveIfcModelId(objectId)
+            setActiveObjectId(objectId)
+            setSelectedObjectIds(new Set(elements.length ? [objectId] : []))
+            setSelectedExpressIds(new Set(elements.map(e => e.expressID)))
+            setSelectedExpressId(elements.length === 1 ? elements[0].expressID : null)
+          }}
           onCancel={() => setScheduleWizardOpen(false)}
           onGenerated={() => {
             setScheduleWizardOpen(false)

@@ -43,7 +43,7 @@ test('merge intermediate levels and split reviewed core without losing quantitie
  assert.equal(out[0].categories.find(c=>c.workstream==='core').materialVolumeM3,6)
  assert.equal(JSON.stringify(ss),before)
  assert.throws(()=>prepareTowerStoreys(ss,elements,new Set(['core']),{Ground:'Stair landing','Stair landing':'Ground'}),/loop/)
- assert.throws(()=>prepareTowerStoreys(ss,elements,new Set(),{}),/Select/)
+ assert.equal(prepareTowerStoreys(ss,elements,new Set(),{}).length,2)
  assert.throws(()=>prepareTowerStoreys(ss,elements,new Set(['slab']),{}),/walls/)
 })
 test('invalid tower assumptions fail before saving',()=>{
@@ -84,4 +84,18 @@ test('conflicting external dependencies are rejected rather than silently remove
  const s=generate(undefined)
  const edge=(a,b)=>({predecessor_temp_id:a,successor_temp_id:b,relationship_type:'FS',lag_hours:0})
  assert.throws(()=>sequenceTower(s.activities,[...s.relationships,edge('act-construction-start','act-substantial-completion'),edge('act-substantial-completion','act-construction-start')],floors,{coreLeadFloors:1,facadeLagFloors:2}),/conflict/)
+})
+
+test('reviewed multi-storey facade waits at supporting floor without changing other roles',()=>{
+ const ss=[{storeyName:'Ground',categories:[cat('Slabs','slab0'),cat('Walls','core'),{...cat('Structural Members','screen'),elementRefs:['screen','brace'],elementLabels:['Screen','Brace'],quantity:2}]},{storeyName:'Upper',categories:[cat('Slabs','slab1')]}]
+ const elements=[{globalId:'core',ifcType:'IfcWall',quantity:20,volumeM3:4},{globalId:'screen',ifcType:'IfcMember',quantity:1,volumeM3:1},{globalId:'brace',ifcType:'IfcMember',quantity:1,volumeM3:1}]
+ const original=JSON.stringify(ss)
+ const prepared=prepareTowerStoreys(ss,elements,new Set(['core']),{},new Set(['screen']),{screen:'Upper'})
+ assert.equal(JSON.stringify(ss),original)
+ assert.deepEqual(prepared[0].categories.find(c=>c.name==='Structural Members').elementRefs,['brace'])
+ assert.deepEqual(prepared[1].categories.find(c=>c.name==='Facade Ornamentation').elementRefs,['screen'])
+ const s=generate({coreLeadFloors:1,facadeLagFloors:0},true,prepared)
+ const screen=s.activities.find(a=>a.element_refs.includes('screen')),slab=s.activities.filter(a=>a.parent_temp_id==='wbs-storey-1'&&a.category==='Slabs').at(-1)
+ assert(reaches(s,slab.temp_id,screen.temp_id))
+ assert.equal(s.activities.flatMap(a=>a.element_refs).length,5)
 })
