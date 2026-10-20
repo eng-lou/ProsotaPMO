@@ -158,6 +158,7 @@ function ZoneGizmo({
         borderColor: null,
         textColor: zone.border_color,
         fontSize: zone.label_font_size,
+        distanceFactor: 12,
         borderRadius: 0,
         bold: true,
         anchor: 'center',

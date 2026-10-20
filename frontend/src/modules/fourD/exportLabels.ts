@@ -42,6 +42,9 @@ export interface ExportLabel {
   borderColor: string | null
   textColor: string
   fontSize: number
+  // Match the source drei Html distanceFactor and any inner CSS scale.
+  distanceFactor?: number
+  localScale?: number
   borderRadius: number
   bold: boolean
   // Where worldPos maps to within the drawn box — mirrors each source
@@ -62,4 +65,26 @@ export type ExportLabelRegistry = Map<string, ExportLabel>
 
 export function createExportLabelRegistry(): ExportLabelRegistry {
   return new Map()
+}
+
+// Mirror drei Html's non-transform objectScale (including its orthographic
+// behavior), then map CSS pixels through the same cover-fit as the scene.
+// Drawing-buffer DPR and report/HUD scale must not affect scene label size.
+export function exportLabelScale(
+  label: ExportLabel, camera: THREE.Camera,
+  cssWidth: number, cssHeight: number, outputWidth: number, outputHeight: number,
+): number {
+  let distanceScale = 1
+  if (label.distanceFactor !== undefined) {
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const distance = label.worldPos.distanceTo(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld))
+      distanceScale = label.distanceFactor / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * distance)
+    } else if (camera instanceof THREE.OrthographicCamera) {
+      distanceScale = camera.zoom * label.distanceFactor
+    } else {
+      distanceScale = label.distanceFactor
+    }
+  }
+  const scale = distanceScale * (label.localScale ?? 1) * Math.max(outputWidth / cssWidth, outputHeight / cssHeight)
+  return Number.isFinite(scale) && scale > 0 ? scale : 0
 }

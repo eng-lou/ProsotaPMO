@@ -55,6 +55,7 @@ export function MeasurementMarker({
       borderColor: selected ? SELECTED_COLOR : color,
       textColor: '#ffffff',
       fontSize: 12,
+      distanceFactor: 8,
       borderRadius: 4,
       bold: false,
       anchor: 'center',

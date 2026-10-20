@@ -343,6 +343,7 @@ function PathGizmo({
         borderColor: path.color,
         textColor: path.color,
         fontSize: 13,
+        distanceFactor: 12,
         borderRadius: 4,
         bold: true,
         anchor: 'bottom-center',

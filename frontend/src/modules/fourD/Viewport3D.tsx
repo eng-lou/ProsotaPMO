@@ -6112,6 +6112,7 @@ export function Viewport3D({
           mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
           camera: cameraRef.current, exportLabels: exportLabelsRef.current,
+          mainCssSize: { width: canvas.clientWidth, height: canvas.clientHeight },
           includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
           includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(timelineDateRef.current),
         })
@@ -6396,6 +6397,7 @@ export function Viewport3D({
           mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
           camera: cameraRef.current, exportLabels: exportLabelsRef.current,
+          mainCssSize: { width: canvas.clientWidth, height: canvas.clientHeight },
           includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
           includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(now),
         })

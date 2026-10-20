@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
-import type { ExportLabel, ExportLabelRegistry } from './exportLabels'
+import { exportLabelScale, type ExportLabel, type ExportLabelRegistry } from './exportLabels'
 import type { RadialChart } from './radialCharts'
 import type { TimelineStrip } from './timelineStrips'
 import type { ExportTimelineStrip } from './exportHuds'
@@ -1034,6 +1034,9 @@ export interface ComposeExportFrameOptions {
   // null (e.g. before the first real frame) just skips this pass.
   camera: THREE.Camera | null
   exportLabels: ExportLabelRegistry
+  // Live CSS viewport size, also required when mainCanvas is an offscreen
+  // AI-enhanced image with no client dimensions.
+  mainCssSize?: { width: number; height: number }
   // Radial Progress Charts (2026-07-31) — includeRadialCharts is the one
   // master opt-in switch (RenderCaptureSettings.includeRadialCharts,
   // matching includeAppearanceLegend's own precedent); each chart's own
@@ -1137,10 +1140,10 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
     if (label.backgroundColor) { ctx.fillStyle = label.backgroundColor; ctx.fill() }
     if (label.borderColor) {
       ctx.strokeStyle = label.borderColor
-      ctx.lineWidth = Math.max(1, 2 * scale)
+      ctx.lineWidth = 2 * scale
       ctx.stroke()
     }
-    ctx.font = `${Math.round(14 * scale)}px system-ui, sans-serif`
+    ctx.font = `${14 * scale}px system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = label.textColor
@@ -1149,7 +1152,7 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
     return
   }
 
-  ctx.font = `${label.bold ? 'bold ' : ''}${Math.round(label.fontSize * scale)}px system-ui, sans-serif`
+  ctx.font = `${label.bold ? 'bold ' : ''}${label.fontSize * scale}px system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   const paddingX = 8 * scale
   const paddingY = 5 * scale
@@ -1177,7 +1180,7 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
   }
   if (label.borderColor) {
     ctx.strokeStyle = label.borderColor
-    ctx.lineWidth = Math.max(1, scale)
+    ctx.lineWidth = scale
     if (label.borderRadius > 0) { roundRectPath(ctx, boxX, boxY, boxWidth, boxHeight, label.borderRadius * scale); ctx.stroke() }
     else ctx.strokeRect(boxX, boxY, boxWidth, boxHeight)
   }
@@ -1195,14 +1198,21 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
 // too).
 function drawExportLabels(
   ctx: CanvasRenderingContext2D, dest: Rect, registry: ExportLabelRegistry,
-  camera: THREE.Camera, sourceWidth: number, sourceHeight: number, scale: number,
+  camera: THREE.Camera, sourceWidth: number, sourceHeight: number,
+  cssWidth: number, cssHeight: number,
 ): void {
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(dest.x, dest.y, dest.width, dest.height)
+  ctx.clip()
   for (const label of registry.values()) {
     if (!label.visible) continue
     const screenPos = projectToDestPixel(label.worldPos, camera, sourceWidth, sourceHeight, dest)
     if (!screenPos) continue
-    drawExportLabel(ctx, screenPos, label, scale)
+    const scale = exportLabelScale(label, camera, cssWidth, cssHeight, dest.width, dest.height)
+    if (scale > 0) drawExportLabel(ctx, screenPos, label, scale)
   }
+  ctx.restore()
 }
 
 // Orchestrator — white background, whichever bands/overlays are enabled,
@@ -1229,7 +1239,9 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
 
   const mv = layout.mainViewRect
   drawCoverFit(ctx, opts.mainCanvas, mv)
-  if (opts.camera) drawExportLabels(ctx, mv, opts.exportLabels, opts.camera, opts.mainCanvas.width, opts.mainCanvas.height, opts.scale)
+  if (opts.camera) drawExportLabels(ctx, mv, opts.exportLabels, opts.camera, opts.mainCanvas.width, opts.mainCanvas.height,
+    opts.mainCssSize?.width || opts.mainCanvas.clientWidth || opts.mainCanvas.width,
+    opts.mainCssSize?.height || opts.mainCanvas.clientHeight || opts.mainCanvas.height)
   drawViewTitle(ctx, mv, opts.mainViewTitle, opts.scale)
   // Per-pane title (2026-09-01, replaces the old single shared
   // baselineViewTitle applied identically to every open pane) — index i
