@@ -154,7 +154,7 @@ export class Dashboard {
     private fileButton(parent: HTMLElement, label: string, kind: 'current' | 'baseline') { const input = node('input'); input.type = 'file'; input.accept = '.ifc'; input.hidden = true; input.onchange = () => { const f = input.files?.[0]; if (f)
         void this.open(f, kind); input.value = ''; }; this.button(parent, label, () => input.click()); parent.append(input); }
     private panel(parent: HTMLElement, label: string) { const section = node('section', '', 'panel'); section.append(node('h3', label)); const content = node('div'); section.append(content); parent.append(section); return content; }
-    async open(file: File, kind: 'current' | 'baseline') {
+    async open(file: File, kind: 'current' | 'baseline', showFinish = false) {
         if (kind === 'baseline' && !this.current.loaded) {
             this.note.textContent = 'Open the current IFC before adding a baseline.';
             return;
@@ -181,6 +181,10 @@ export class Dashboard {
             if (kind === 'current')
                 this.onLoaded?.();
             this.bounds();
+            if (showFinish) {
+                this.now = this.max;
+                this.syncDate();
+            }
             this.renderData();
             this.apply();
             if (this.linked)

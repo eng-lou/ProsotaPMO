@@ -11,7 +11,15 @@ A custom visual following the approved model-left, schedule-right dashboard layo
 5. Use **Start / End**, **Play** or the date slider. Click an activity or linked model element to see details; **Isolate** limits geometry to that activity. **Clear selection** releases it.
 6. Enable **Compare baseline**, then **Open baseline IFC**. Supply an integrated snapshot exported at the baseline date, containing its own model, schedule, assignments and profiles. Playback uses one date but each snapshot's own dates/recipes. Cameras can be linked. Baseline bars appear below current bars. Activities match by ID, then code.
 
-Local IFC files are held in memory for this visual session. **They are not embedded into the PBIX and must be reopened after a report reload**, including by other report viewers. There is no hosted model URL, automatic Prosota login/sync or shared model storage in this preview. Files are not uploaded by the visual (`privileges: []`; IFC WASM is bundled).
+Files selected through **Open IFC** are held in memory for that visual session.
+**Prosota Desktop 0.2 → Reporting & Controls → Open in Power BI** instead generates
+a PBIP report with this visual and a compressed integrated IFC embedded in visual
+properties. That snapshot loads automatically, including after reopening the report.
+The web version offers the same report as a ZIP: extract it and open `Prosota.pbip`
+in Power BI Desktop. Both handoffs have a 256 MB uncompressed IFC limit. Sharing that report also
+shares the embedded model and project data. Opening another file manually does not
+replace the persisted snapshot. There is no live Prosota sync or hosted model URL.
+Files are not uploaded by the visual (`privileges: []`; IFC WASM is bundled).
 
 ## Dashboard controls (1.1)
 

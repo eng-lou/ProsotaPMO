@@ -28,7 +28,8 @@
     "three-mesh-bvh": "^0.8.0",
     "three-stdlib": "^2.35.6",
     "web-ifc": "^0.0.77",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

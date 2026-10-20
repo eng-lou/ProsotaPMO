@@ -6,11 +6,13 @@ import { decompressIfGzip } from '@/lib/fileCache'
 import type { IntegratedIfcData } from './integratedIfcData'
 import { downloadModel3DFile, listModel3DFiles, type Model3DFile } from './model3dFiles'
 
-export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPeriodId, onClose }: {
+export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPeriodId, onClose, destination = 'ifc' }: {
   project: { id: string; name: string }; schedulePeriodId: string; costPeriodId: string; onClose: () => void
+  destination?: 'ifc' | 'powerbi'
 }) {
   const { theme } = useTheme()
   const dark = theme === 'dark'
+  const webPowerBI = destination === 'powerbi' && !(window as any).prosotaDesktop?.openPowerBI
   const foreground = dark ? '#E6EDF7' : '#1F2937'
   const muted = dark ? '#AABBD0' : '#6B7280'
   const fieldStyle = { color: foreground, backgroundColor: dark ? '#101F36' : '#FFFFFF', borderColor: dark ? '#496078' : '#D1D5DB', colorScheme: theme }
@@ -23,6 +25,8 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ url: string; warnings: string[] } | null>(null)
+  const [reportUrl, setReportUrl] = useState<string | null>(null)
+  const reportDownloadUrl = useRef<string | null>(null)
   const worker = useRef<Worker | null>(null)
   const alive = useRef(true)
   const downloadUrl = useRef<string | null>(null)
@@ -34,6 +38,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       alive.current = false
       worker.current?.terminate()
       if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current)
+      if (reportDownloadUrl.current) URL.revokeObjectURL(reportDownloadUrl.current)
     }
   }, [project.id])
   const run = async () => {
@@ -96,7 +101,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       worker.current = w
       const fail = (message: string) => { setError(message); setBusy(false); setStatus(''); w.terminate(); worker.current = null }
       w.onerror = () => fail('The IFC export worker stopped. Large combined models may exceed browser memory; retry with smaller source models.')
-      w.onmessage = event => {
+      w.onmessage = async event => {
         if (!alive.current) return
         if (event.data.type === 'progress') setStatus(event.data.message)
         else if (event.data.type === 'error') fail(event.data.message)
@@ -109,8 +114,28 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
           if (!assignments.length) warnings.push('The active schedule returned no resource assignments. No native assignment resources were exported.')
           if (!costs.length) warnings.push('The active cost period returned no cost items.')
           if (targetSchema === 'IFC4') warnings.push('IFC4 output selected. Converted sources should be checked in the receiving application; original saved models are unchanged.')
-          setResult({ url, warnings }); setBusy(false); setStatus('Export ready.')
           w.terminate(); worker.current = null
+          setResult({ url, warnings })
+          if (destination === 'powerbi') {
+            setStatus('Preparing Power BI report…')
+            try {
+              if (webPowerBI) {
+                const { buildPowerBIReport, downloadPowerBITemplate } = await import('@/lib/powerBIReport')
+                const report = await buildPowerBIReport(`${project.name}-integrated.ifc`, new Uint8Array(event.data.bytes), await downloadPowerBITemplate())
+                if (!alive.current) return
+                const reportUrl = URL.createObjectURL(report)
+                reportDownloadUrl.current = reportUrl
+                setReportUrl(reportUrl)
+                setStatus('Report ready. Download, extract the ZIP, then open Prosota.pbip in Power BI Desktop.')
+              } else {
+                await (window as any).prosotaDesktop.openPowerBI(`${project.name}-integrated.ifc`, new Uint8Array(event.data.bytes))
+                if (alive.current) setStatus('Opened in Power BI. The report contains a saved snapshot of your model and project data.')
+              }
+            } catch (error) {
+              if (alive.current) setError(error instanceof Error ? error.message : 'Could not open Power BI.')
+            }
+          } else setStatus('Export ready.')
+          if (alive.current) setBusy(false)
         }
       }
       w.postMessage({ sources, data, wasmPath: new URL('/wasm-ifc/', location.origin).href }, sources.map(s => s.bytes.buffer))
@@ -126,15 +151,16 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   const filename = `${project.name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')}-integrated.ifc`
   return <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="integrated-ifc-title">
     <div style={{ color: foreground, backgroundColor: dark ? '#0C1A2E' : '#FFFFFF' }} className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-paper rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
-      <h2 style={{ color: foreground }} id="integrated-ifc-title" className="font-semibold text-base mb-3">Export integrated IFC</h2>
+      <h2 style={{ color: foreground }} id="integrated-ifc-title" className="font-semibold text-base mb-3">{destination === 'powerbi' ? 'Open in Power BI' : 'Export integrated IFC'}</h2>
       <p style={{ color: muted }} className="text-gray-500 dark:text-prosota-muted">Export your saved models with schedule and cost data.</p>
-      <label style={{ color: foreground }} className="block my-3">Output format
+      {webPowerBI && <p style={{ color: muted }} className="mt-2">Includes the Prosota visual and model. Requires Power BI Desktop on Windows.</p>}
+      {destination === 'ifc' && <label style={{ color: foreground }} className="block my-3">Output format
         <select style={fieldStyle} value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC2X3' | 'IFC4')} className="mt-2 block w-full border rounded px-3 py-2 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line">
           <option value="source">Keep source</option>
           <option value="IFC2X3">IFC 2x3 (compatible)</option>
           <option value="IFC4">IFC 4</option>
         </select>
-      </label>
+      </label>}
       {synchro && <p className="text-xs text-gray-500 dark:text-prosota-muted">Requires IFC 2x3 source models.</p>}
       {files?.length === 0 && <p>No saved IFC models in this project.</p>}
       <label style={{ color: foreground }} className="block my-3">Currency
@@ -155,8 +181,9 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       {!!result?.warnings.length && <details className="mt-3 text-xs text-amber-700 dark:text-amber-300"><summary className="cursor-pointer">Export notes ({result.warnings.length})</summary><ul className="mt-2 list-disc pl-5">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
       <div className="flex justify-end gap-3 mt-4">
         <button style={{ color: foreground, borderColor: fieldStyle.borderColor }} onClick={onClose} className="border dark:border-prosota-line rounded px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2">{busy ? 'Cancel export' : 'Close'}</button>
-        {result ? <a download={filename} href={result.url} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download IFC</a>
-          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : 'Build IFC'}</button>}
+        {reportUrl ? <a download={filename.replace(/\.ifc$/, '-PowerBI.zip')} href={reportUrl} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download Power BI report</a>
+          : result && !webPowerBI ? <a download={filename} href={result.url} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download IFC</a>
+          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : webPowerBI ? 'Build Power BI report' : destination === 'powerbi' ? 'Build and open' : 'Build IFC'}</button>}
       </div>
     </div>
   </div>

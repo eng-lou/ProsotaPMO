@@ -151,6 +151,13 @@
   "supportsEmptyDataView": true,
   "supportsKeyboardFocus": true,
   "objects": {
+    "prosotaSnapshot": {
+      "displayName": "Prosota snapshot",
+      "properties": {
+        "data": { "type": { "text": true } },
+        "name": { "type": { "text": true } }
+      }
+    },
     "display": {
       "displayName": "Display",
       "properties": {

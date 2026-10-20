@@ -3,6 +3,7 @@ import { FormattingSettingsService } from 'powerbi-visuals-utils-formattingmodel
 import { VisualFormattingSettingsModel } from './settings';
 import { Dashboard } from './dashboard';
 import { readTable } from './bindings';
+import { embeddedSnapshot } from './embeddedSnapshot';
 import '../style/visual.less';
 export class Visual implements powerbi.extensibility.visual.IVisual {
     private dashboard: Dashboard;
@@ -12,6 +13,8 @@ export class Visual implements powerbi.extensibility.visual.IVisual {
     private formatting = new FormattingSettingsService();
     private settings = new VisualFormattingSettingsModel();
     private truncated = false;
+    private snapshotPayload = '';
+    private destroyed = false;
     constructor(options?: powerbi.extensibility.visual.VisualConstructorOptions) {
         if (!options)
             throw new Error('Power BI visual host is required.');
@@ -34,6 +37,14 @@ export class Visual implements powerbi.extensibility.visual.IVisual {
         this.options.host.eventService.renderingStarted(options);
         try {
             const view = options.dataViews?.[0];
+            const snapshot = view?.metadata.objects?.prosotaSnapshot;
+            const payload = snapshot?.data;
+            if (typeof payload === 'string' && payload && payload !== this.snapshotPayload) {
+                this.snapshotPayload = payload;
+                void embeddedSnapshot(payload, String(snapshot?.name || 'Prosota.ifc'))
+                    .then(file => { if (!this.destroyed && this.snapshotPayload === payload) return this.dashboard.open(file, 'current', true); })
+                    .catch(error => { if (!this.destroyed) this.dashboard.message(`Could not open embedded IFC: ${String(error)}`); });
+            }
             this.table = view?.table;
             this.truncated = !!view?.metadata.segment;
             if (view)
@@ -65,5 +76,5 @@ export class Visual implements powerbi.extensibility.visual.IVisual {
         }
     }
     getFormattingModel() { return this.formatting.buildFormattingModel(this.settings); }
-    destroy() { this.dashboard.destroy(); }
+    destroy() { this.destroyed = true; this.dashboard.destroy(); }
 }

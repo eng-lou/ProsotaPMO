@@ -1,6 +1,7 @@
 import {server} from './preview.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {gzipSync} from 'node:zlib';
 import {fixture} from '../tests/fixture.mjs';
 const current=await fixture(),baseline=await fixture(true);
 const browser=await chromium.launch({executablePath:process.env.EDGE_PATH??'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true,args:['--enable-unsafe-swiftshader']});
@@ -64,5 +65,21 @@ try{
  });
  assert.equal(hostResult.budget,'£100');assert.equal(hostResult.selected,1);assert.equal(hostResult.finished,2);assert.ok(hostResult.cards>0);assert.match(hostResult.warning,/part of this dataset/);
  console.log('PASS Power BI adapter mock: field binding, selection, format pane and incomplete data rejection.');
+ await page.evaluate(payload=>{
+  const host={hostCapabilities:{allowInteractions:true},createSelectionManager:()=>({select:()=>Promise.resolve([]),clear:()=>Promise.resolve([])}),
+   eventService:{renderingStarted(){},renderingFinished(){},renderingFailed(_o,error){throw Error(error);}}};
+  window.handoffVisual=new window.Visual({element:document.getElementById('app'),host});
+  window.handoffOptions={dataViews:[{metadata:{columns:[],objects:{prosotaSnapshot:{data:payload,name:'Embedded.ifc'}}}}],viewport:{width:1600,height:1000},type:2};
+  window.handoffVisual.update(window.handoffOptions);
+ },gzipSync(current).toString('base64'));
+ await page.waitForFunction(()=>window.handoffVisual.dashboard.current.loaded?.snapshot.tasks.length===1);
+ const handoff=await page.evaluate(()=>{
+  const d=window.handoffVisual.dashboard;
+  const result={end:d.now===d.max,links:d.current.loaded.snapshot.links.length,resources:d.current.loaded.snapshot.resources.length};
+  d.now=d.min;window.handoffVisual.update(window.handoffOptions);
+  result.preserved=d.now===d.min;window.handoffVisual.destroy();return result;
+ });
+ assert.deepEqual(handoff,{end:true,links:1,resources:1,preserved:true});
+ console.log('PASS embedded report: automatic IFC load with links/resources, initial finish date and stable playback on host updates.');
  console.log('PASS IFC geometry, schedule, resource budget, shared profile playback, baseline dates/IDs/origin, isolate and resize.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
