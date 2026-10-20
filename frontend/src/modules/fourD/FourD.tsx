@@ -1033,7 +1033,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => {
+  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => {
     try {
       setPathError(null)
       const updated = await updatePath(id, data)

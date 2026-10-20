@@ -32,6 +32,7 @@ import * as THREE from 'three'
 export type ExportLabelKind = 'annotation-box' | 'annotation-placemark' | 'zone-label' | 'path-label' | 'measurement-label'
 
 export interface ExportLabel {
+  opacity?: number
   kind: ExportLabelKind
   visible: boolean
   worldPos: THREE.Vector3

@@ -17,6 +17,9 @@ class PathBase(BaseModel):
     points: list[PathPoint] = Field(default_factory=list)
     closed: bool = False
     visible: bool = True
+    opacity: float = Field(default=1, ge=0, le=1)
+    show_in_viewport: bool = True
+    show_in_render: bool = True
     color: str = Field(default="#38bdf8", max_length=9)
     line_style: str = Field(default="solid", max_length=10)
     show_arrow: bool = False
@@ -37,6 +40,9 @@ class PathUpdate(BaseModel):
     points: list[PathPoint] | None = None
     closed: bool | None = None
     visible: bool | None = None
+    opacity: float | None = Field(default=None, ge=0, le=1)
+    show_in_viewport: bool | None = None
+    show_in_render: bool | None = None
     color: str | None = Field(default=None, max_length=9)
     line_style: str | None = Field(default=None, max_length=10)
     show_arrow: bool | None = None

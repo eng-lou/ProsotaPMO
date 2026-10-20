@@ -27,14 +27,10 @@ class Path(Base, TimestampMixin):
     list (add/remove/drag a point rewrites the array wholesale from the
     frontend's own PathGizmo), never queried per-point.
 
-    visible is this path's own live-viewport helper visibility (the curve
-    line + control-point handles) — independent of whether it's actually
-    hidden in a given capture/export, which is a *rendering-time* decision
-    (Viewport3D.tsx forces every path helper invisible right before
-    capturing, then reverts, same pattern already used for the HDR
-    background override) rather than a persisted project setting; visible
-    here is "do I want to see/edit this path's shape right now," matching
-    SectionBox's own identical visible/active split."""
+    visible is the master display switch. show_in_viewport and show_in_render
+    independently control the route in the live animation view and exports.
+    These settings and opacity only affect route decorations; bound objects
+    continue following the curve even when it is hidden."""
 
     __tablename__ = "paths"
 
@@ -46,6 +42,9 @@ class Path(Base, TimestampMixin):
     # to its first point instead of ending at its last one.
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    opacity: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
+    show_in_viewport: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    show_in_render: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     # Route display styling (2026-07-29, per Maro's site-logistics reference
     # — a haul route drawn as a dashed, colored, arrowed, labeled line, e.g.
     # "RIG 1"/"RIG 2"). color's default is PathGizmo.tsx's own pre-existing

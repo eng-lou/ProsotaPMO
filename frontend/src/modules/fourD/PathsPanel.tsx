@@ -52,7 +52,7 @@ interface Props {
   // compensates for an imported model's own authored forward axis not
   // matching three.js's lookAt convention (-Z), in degrees.
   onSetHeadingOffset: (followerId: string, headingOffsetDeg: number) => void
-  onUpdateStyle: (id: string, patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => void
+  onUpdateStyle: (id: string, patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
   // "Key" buttons (2026-07-30, per Maro: "add a key frame buttons to the
   // side. so i can key frame the start and end") — keys the *current
   // playhead* (FourD.tsx's own timelineDateRef) as this path's anim_start/
@@ -106,7 +106,7 @@ function Item({
   onToggleOrient: () => void
   onSetHeadingOffset: (headingOffsetDeg: number) => void
   bindTarget: BindTarget | null
-  onUpdateStyle: (patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop'>>) => void
+  onUpdateStyle: (patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
   onSetElevation: (elevation: number) => void
   animWindow: { start: Date | null; end: Date | null } | undefined
   format: DisplayFormat | null
@@ -226,6 +226,21 @@ function Item({
             <input type="checkbox" checked={path.show_arrow} onChange={e => onUpdateStyle({ show_arrow: e.target.checked })} />
             Show direction arrow
           </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
+            <span className="w-16 shrink-0">Opacity %</span>
+            <input type="number" min={0} max={100} step={5} value={Math.round((path.opacity ?? 1) * 100)}
+              onChange={e => { if (e.target.value !== '') onUpdateStyle({ opacity: Math.max(0, Math.min(100, Number(e.target.value))) / 100 }) }}
+              className="flex-1 w-0 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5" />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
+            <input type="checkbox" checked={path.show_in_viewport ?? true} onChange={e => onUpdateStyle({ show_in_viewport: e.target.checked })} />
+            Show path in viewport / animation
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
+            <input type="checkbox" checked={path.show_in_render ?? true} onChange={e => onUpdateStyle({ show_in_render: e.target.checked })} />
+            Show path in captures / video
+          </label>
+          <p className="text-[10px] text-gray-400 dark:text-prosota-muted">Hide the path to show only its moving object. Binding and motion stay active.</p>
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
             <input type="checkbox" checked={path.show_label} onChange={e => onUpdateStyle({ show_label: e.target.checked })} />
             Show label

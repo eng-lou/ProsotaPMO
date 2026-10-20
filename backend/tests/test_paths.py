@@ -18,6 +18,9 @@ async def test_create_and_list_path(client: AsyncClient, project: Project):
     assert created["name"] == "Path"
     assert created["closed"] is False
     assert created["visible"] is True
+    assert created["opacity"] == 1
+    assert created["show_in_viewport"] is True
+    assert created["show_in_render"] is True
     assert len(created["points"]) == 3
     assert created["color"] == "#38bdf8"
     assert created["line_style"] == "solid"
@@ -39,10 +42,15 @@ async def test_style_path(client: AsyncClient, project: Project):
     resp = await client.patch(f"/api/v1/paths/{created['id']}", json={
         "color": "#ef4444", "line_style": "dashed", "show_arrow": True, "show_label": True, "line_width": 5,
         "dash_size": 1.2, "gap_size": 0.6,
+        "opacity": 0.35, "show_in_viewport": False, "show_in_render": True,
     })
     assert resp.status_code == 200, resp.text
     updated = resp.json()
     assert updated["color"] == "#ef4444"
+    assert updated["opacity"] == 0.35
+    assert updated["show_in_viewport"] is False
+    assert updated["show_in_render"] is True
+    assert updated["points"] == created["points"]
     assert updated["line_style"] == "dashed"
     assert updated["show_arrow"] is True
     assert updated["show_label"] is True

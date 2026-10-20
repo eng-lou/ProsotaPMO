@@ -8,6 +8,7 @@ import type { UpAxis } from './upAxis'
 import { computeRevealProgress } from './timelinePlayback'
 import type { ExportLabelRegistry } from './exportLabels'
 import { effectiveViewDistance } from './cameraProjection'
+import { showPath } from './pathDisplay'
 
 // Handles keep this fixed neutral color regardless of the route's own
 // `path.color` (2026-07-29) — only the line/arrow/label pick up the
@@ -336,6 +337,7 @@ function PathGizmo({
       const p = path.points[0]
       exportLabelsRef.current.set(`${path.id}-label`, {
         kind: 'path-label',
+        opacity: path.opacity ?? 1,
         visible: true,
         worldPos: new THREE.Vector3(p.x, p.y, p.z),
         text: path.name,
@@ -463,6 +465,9 @@ function PathGizmo({
           points={curvePositions}
           color={path.color}
           lineWidth={path.line_width}
+          transparent
+          opacity={path.opacity ?? 1}
+          depthWrite={(path.opacity ?? 1) >= 1}
           dashed={path.line_style === 'dashed'}
           dashSize={path.dash_size}
           gapSize={path.gap_size}
@@ -479,6 +484,7 @@ function PathGizmo({
         >
           <meshBasicMaterial
             color={path.color} side={THREE.DoubleSide}
+            transparent opacity={path.opacity ?? 1} depthWrite={(path.opacity ?? 1) >= 1}
             polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1}
           />
         </mesh>
@@ -486,7 +492,7 @@ function PathGizmo({
       {path.show_label && path.name && path.points.length > 0 && (
         <Html center distanceFactor={12} position={[path.points[0].x, path.points[0].y, path.points[0].z]} style={{ pointerEvents: 'none' }}>
           <div style={{
-            fontWeight: 700, fontSize: 13, color: path.color, whiteSpace: 'nowrap',
+            fontWeight: 700, fontSize: 13, color: path.color, whiteSpace: 'nowrap', opacity: path.opacity ?? 1,
             background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: 4,
             border: `1.5px solid ${path.color}`, transform: 'translateY(-140%)',
           }}>
@@ -532,7 +538,7 @@ export function PathGizmos({
 }) {
   return (
     <>
-      {paths.filter(p => p.visible).map(path => {
+      {paths.filter(p => showPath(p, hideHandles)).map(path => {
         const window = animWindows.get(path.id)
         return (
           <PathGizmo

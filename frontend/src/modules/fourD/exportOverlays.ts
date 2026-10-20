@@ -1132,6 +1132,7 @@ function projectToDestPixel(
 // (background/border/radius/bold), not pixel-identical.
 function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; y: number }, label: ExportLabel, scale: number): void {
   ctx.save()
+  ctx.globalAlpha *= label.opacity ?? 1
   if (label.kind === 'annotation-placemark') {
     const r = 12 * scale
     const cy = screenPos.y - r

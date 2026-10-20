@@ -25,6 +25,9 @@ export interface Path {
   points: PathPoint[]
   closed: boolean
   visible: boolean
+  opacity: number
+  show_in_viewport: boolean
+  show_in_render: boolean
   // Route display styling (2026-07-29, per Maro's site-logistics reference
   // — e.g. a dashed, colored, arrowed, labeled haul route). Purely a
   // display concern — PathFollower's own interpolation along `points`
@@ -66,6 +69,9 @@ export async function createPath(data: {
   points?: PathPoint[]
   closed?: boolean
   visible?: boolean
+  opacity?: number
+  show_in_viewport?: boolean
+  show_in_render?: boolean
   color?: string
   line_style?: PathLineStyle
   show_arrow?: boolean
@@ -85,6 +91,9 @@ export async function updatePath(id: string, data: Partial<{
   points: PathPoint[]
   closed: boolean
   visible: boolean
+  opacity: number
+  show_in_viewport: boolean
+  show_in_render: boolean
   color: string
   line_style: PathLineStyle
   show_arrow: boolean
