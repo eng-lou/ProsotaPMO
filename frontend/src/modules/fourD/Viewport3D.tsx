@@ -5,6 +5,7 @@ import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState } from
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
+import { SelectionGesture, sameSelectionHit } from './selectionGesture'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RealisticGround, computeGroundElevation } from './RealisticGround'
 import type { TimelineFormat } from './TimelinePointInput'
@@ -1202,6 +1203,15 @@ function ModelObjects({
   realisticInfoVersion: number
 }) {
   const upAxis = settings.upAxis
+  const pressedHit = useRef<{ object: string; batchId?: number } | null>(null)
+  const handleModelPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (boxSelectMode || e.button !== 0) return
+    for (let node: THREE.Object3D | null = e.object; node; node = node.parent) {
+      if (!node.visible) return
+    }
+    e.stopPropagation()
+    pressedHit.current = { object: e.object.uuid, batchId: e.batchId }
+  }
 
   // Reparents/un-parents live Object3Ds to match elementParents whenever
   // the loaded object set or the rig relationships themselves change
@@ -2540,6 +2550,8 @@ function ModelObjects({
       if (!node.visible) return
     }
     e.stopPropagation()
+    // Releasing over another mesh must not select through the pressed object.
+    if (!sameSelectionHit(pressedHit.current, e.object.uuid, e.batchId)) return
     const additive = e.ctrlKey || e.metaKey
 
     // Batched-element hit resolution (2026-07-17, per Maro — see
@@ -2610,7 +2622,7 @@ function ModelObjects({
           never individually JSX'd either. */}
       {rootObjects.map(({ id, sourceUpAxis, object, visible }) => (
         <group key={id} rotation={axisCorrectionRotation(sourceUpAxis, upAxis)}>
-          <primitive object={object} visible={visible} onClick={handleClick} />
+          <primitive object={object} visible={visible} onPointerDown={handleModelPointerDown} onClick={handleClick} />
         </group>
       ))}
     </>
@@ -5515,6 +5527,7 @@ export function Viewport3D({
   // the Canvas below; containerRef gives pixel-to-NDC conversion without
   // needing the renderer's own size.
   const [boxSelectMode, setBoxSelectMode] = useState(false)
+  const selectionGesture = useRef(new SelectionGesture())
   const [dragRect, setDragRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [isExportingVideo, setIsExportingVideo] = useState(false)
   // Share of frames rendered so far during an offline video export (0-1).
@@ -6828,6 +6841,17 @@ export function Viewport3D({
     <div
       ref={containerRef}
       className="relative flex-1 min-h-0 bg-gradient-to-b from-sky-100 to-white"
+      onPointerDownCapture={e => {
+        if (e.target instanceof HTMLCanvasElement) selectionGesture.current.begin(e.clientX, e.clientY, e.pointerId)
+      }}
+      onPointerMoveCapture={e => selectionGesture.current.move(e.clientX, e.clientY, e.pointerId)}
+      onPointerUpCapture={e => selectionGesture.current.move(e.clientX, e.clientY, e.pointerId)}
+      onPointerCancelCapture={() => selectionGesture.current.consume()}
+      onClickCapture={e => {
+        if (e.target instanceof HTMLCanvasElement && selectionGesture.current.blocked) {
+          e.stopPropagation()
+        }
+      }}
       onPointerDown={handleBoxPointerDown}
       onPointerMove={handleBoxPointerMove}
       onPointerUp={handleBoxPointerUp}
@@ -7472,6 +7496,7 @@ export function Viewport3D({
             mode={gizmoMode}
             space={gizmoMode === 'scale' ? 'local' : gizmoSpace}
             onMouseDown={() => {
+              selectionGesture.current.consume()
               lastActiveTransformRef.current = { position: activeObject.object.position.clone(), quaternion: activeObject.object.quaternion.clone(), scale: activeObject.object.scale.clone() }
             }}
             onObjectChange={handleGizmoChange}
