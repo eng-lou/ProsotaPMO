@@ -3,6 +3,7 @@ import { memo, lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { AccessPendingScreen } from './components/AccessPendingScreen'
+import { DesktopSignIn } from './components/DesktopSignIn'
 import { HomePage } from './components/HomePage'
 import { Layout } from './components/Layout'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
@@ -50,6 +51,7 @@ const IcdTracker = lazy(() => import('./modules/icd/IcdTracker').then(m => ({ de
 // approval, or straight into the app).
 function LoginPage() {
   const { loginWithRedirect } = useAuth0()
+  if (window.location.pathname === '/desktop-signin') return <DesktopSignIn />
   return (
     <HomePage
       onSignIn={() => loginWithRedirect()}
@@ -188,6 +190,8 @@ function AccessGate() {
   if (!currentUser || currentUser.status !== 'approved') {
     return <AccessPendingScreen />
   }
+
+  if (window.location.pathname === '/desktop-signin') return <DesktopSignIn approved />
 
   return (
     <ProjectProvider>
