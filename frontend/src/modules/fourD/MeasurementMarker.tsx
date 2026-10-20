@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { Html, Line } from '@react-three/drei'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
-import { distanceMetres, formatMeasurementValue } from './measurementGeometry'
+import { pathLengthMetres, formatMeasurementValue } from './measurementGeometry'
 import type { Measurement, MeasurementPoint } from './measurements'
 import type { ExportLabelRegistry } from './exportLabels'
 
@@ -34,8 +34,7 @@ export function MeasurementMarker({
   const color = selected ? SELECTED_COLOR : measurement.kind === 'length' ? LENGTH_COLOR : AREA_COLOR
   const linePositions = useMemo((): [number, number, number][] => {
     const pts = measurement.points.map(p => [p.x, p.y, p.z] as [number, number, number])
-    // Close the loop for an area's own outline — a length is just the one
-    // open segment between its 2 points.
+    // Close area outlines; length routes remain open.
     return measurement.kind === 'area' ? [...pts, pts[0]] : pts
   }, [measurement.points, measurement.kind])
 
@@ -114,10 +113,8 @@ export function MeasurementMarker({
 // measuringPoints state rather than the saved list, and shows a running
 // value using the same per-measurement toMetres FourD.tsx already resolved
 // from the first click (see MeasurementGizmo.tsx's own header). Area
-// (points) was removed 2026-07-19 (per Maro, once Area (face) made it
-// redundant), so this only ever renders 0 or 1 collected point now — kept
-// as its own component rather than inlined since it may as well stay ready
-// for whatever the next multi-point tool turns out to be.
+// (face) uses its own surface outline. Length previews the entire collected
+// route and its cumulative distance until Finish.
 export function MeasurementPreview({
   points, toMetres, unitPreference,
 }: {
@@ -137,7 +134,7 @@ export function MeasurementPreview({
 
   if (points.length === 0) return null
 
-  const value = points.length === 2 ? distanceMetres(points[0], points[1], toMetres) : null
+  const value = points.length >= 2 ? pathLengthMetres(points, toMetres) : null
 
   return (
     <group userData={{ isMeasurementGizmo: true }}>

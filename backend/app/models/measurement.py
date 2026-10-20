@@ -16,8 +16,8 @@ class Measurement(Base, TimestampMixin):
     listed, toggleable, project-scoped, same shape as Annotation/Path/
     SectionBox rather than an ephemeral tool that forgets itself on reload.
 
-    kind="length": exactly 2 points, the straight-line distance between
-    them. kind="area": 3+ points, a planar polygon's area (Newell's method,
+    kind="length": 2+ points, the summed distance along the route.
+    kind="area": 3+ points, a planar polygon's area (Newell's method,
     which is robust to the polygon not being axis-aligned — a wall/roof
     face is rarely perfectly flat to any one global axis).
 

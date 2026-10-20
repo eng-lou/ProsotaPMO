@@ -57,9 +57,19 @@ async def test_create_area_measurement_with_hole_loops(client: AsyncClient, proj
 
 async def test_length_measurement_rejects_wrong_point_count(client: AsyncClient, project: Project):
     resp = await client.post("/api/v1/measurements/", json={
-        "project_id": str(project.id), "kind": "length", "points": _area_points(3), "value": 5.0,
+        "project_id": str(project.id), "kind": "length", "points": _area_points(1), "value": 5.0,
     })
     assert resp.status_code == 422
+
+
+async def test_length_measurement_supports_a_route(client: AsyncClient, project: Project):
+    points = _length_points() + [{"x": 3.0, "y": 4.0, "z": 12.0}]
+    resp = await client.post("/api/v1/measurements/", json={
+        "project_id": str(project.id), "kind": "length", "points": points, "value": 17.0,
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["points"] == points
+    assert resp.json()["value"] == 17.0
 
 
 async def test_area_measurement_rejects_too_few_points(client: AsyncClient, project: Project):

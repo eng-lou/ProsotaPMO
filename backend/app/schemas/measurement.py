@@ -27,15 +27,15 @@ class MeasurementBase(BaseModel):
     value: float = Field(ge=0)
     visible: bool = True
 
-    # A length that isn't exactly 2 points, or an area with fewer than 3,
+    # A length with fewer than 2 points, or an area with fewer than 3,
     # isn't a different shape of measurement — it's not a valid one at all
     # (mirrors the "material has no sensible default utilisation" style
     # cross-field check schedule_bulk_generate.py's own service already
     # does, just simple enough to belong on the schema directly instead).
     @model_validator(mode="after")
     def _check_point_count(self) -> "MeasurementBase":
-        if self.kind == "length" and len(self.points) != 2:
-            raise ValueError("A length measurement needs exactly 2 points")
+        if self.kind == "length" and len(self.points) < 2:
+            raise ValueError("A length measurement needs at least 2 points")
         if self.kind == "area" and len(self.points) < 3:
             raise ValueError("An area measurement needs at least 3 points")
         return self

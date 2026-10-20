@@ -11,7 +11,7 @@ import type { Measurement } from './measurements'
 export type MeasuringTool = 'length' | 'area_face'
 
 const TOOL_OPTIONS: { value: MeasuringTool; label: string; hint: string }[] = [
-  { value: 'length', label: 'Length', hint: 'Click 2 points in the viewport' },
+  { value: 'length', label: 'Length', hint: 'Click two or more points, then Finish' },
   { value: 'area_face', label: 'Area (face)', hint: 'Click a flat element surface' },
 ]
 
@@ -74,6 +74,9 @@ interface Props {
   measuringPointCount: number
   selectedId: string | null
   onStart: (tool: MeasuringTool) => void
+  onFinish: () => void
+  onUndoPoint: () => void
+  saving: boolean
   onRename: (id: string, name: string) => void
   onToggleVisible: (id: string) => void
   onDelete: (id: string) => void
@@ -83,14 +86,14 @@ interface Props {
 // "Measurements" dockable panel (2026-07-19, per Maro: "add a measurement
 // feature, length and areas" then "maybe i can also click element surfaces
 // and it gives me the area") — same shared side-dock treatment as Paths/
-// Annotations/Sections. Length auto-finalizes at 2 clicks; Area (face) is a
+// Annotations/Sections. Length collects a route until Finish; Area (face) is a
 // single click that auto-detects the clicked surface's own flat extent
 // (real boundary + hole tracing, see measurementGeometry.ts). Clicking a
 // tool's own button again while armed cancels it, same toggle convention
 // as every other click-to-place tool in this module (Paths/Annotations).
 export function MeasurementsPanel({
   measurements, error, unitPreference, measuringTool, measuringPointCount, selectedId,
-  onStart, onRename, onToggleVisible, onDelete, onSelect,
+  onStart, onFinish, onUndoPoint, saving, onRename, onToggleVisible, onDelete, onSelect,
 }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
@@ -99,6 +102,7 @@ export function MeasurementsPanel({
           {TOOL_OPTIONS.map(opt => (
             <button
               key={opt.value}
+              disabled={saving}
               onClick={() => onStart(opt.value)}
               title={opt.hint}
               className={`text-xs px-2 py-1 rounded border font-medium ${
@@ -110,7 +114,14 @@ export function MeasurementsPanel({
           ))}
         </div>
         {measuringTool === 'length' && (
-          <p className="text-xs text-gray-500 dark:text-prosota-muted">Click 2 points in the viewport… ({measuringPointCount}/2)</p>
+          <div className="text-xs text-gray-500 dark:text-prosota-muted space-y-2">
+            <p>Click points along the route, then Finish. {measuringPointCount} points</p>
+            <div className="flex gap-2">
+              <button disabled={saving || measuringPointCount < 2} onClick={onFinish} className="rounded bg-sky-600 text-white px-2 py-1 disabled:opacity-40">{saving ? 'Saving…' : 'Finish'}</button>
+              <button disabled={saving || !measuringPointCount} onClick={onUndoPoint} className="border rounded px-2 py-1 disabled:opacity-40">Undo point</button>
+              <button disabled={saving} onClick={() => onStart('length')} className="border rounded px-2 py-1">Cancel</button>
+            </div>
+          </div>
         )}
         {measuringTool === 'area_face' && (
           <p className="text-xs text-gray-500 dark:text-prosota-muted">Click a flat element surface…</p>

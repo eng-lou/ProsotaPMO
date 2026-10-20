@@ -137,7 +137,7 @@ import type { MeasurementHit } from './MeasurementGizmo'
 // pure geometry math with zero web-ifc dependency of its own, so there's no
 // bundle-weight benefit to deferring it the way ifcModel.ts itself needs
 // (see resolveToMetresForHit below, which still dynamic-imports that one).
-import { distanceMetres, measureFacePatch } from './measurementGeometry'
+import { pathLengthMetres, measureFacePatch } from './measurementGeometry'
 import { Viewport3D, type CameraSyncState, type ImportedObject, type ResolvedSectionBox, type VarianceEntry } from './Viewport3D'
 import { ComparisonViewportPane } from './ComparisonViewportPane'
 import { DEFAULT_PANE_CONFIG, useResolvedPaneIsolation, type PaneConfig } from './comparisonPane'
@@ -2515,6 +2515,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // rather than persisted-and-patched per click the way Path's own points
   // are.
   const [measuringPoints, setMeasuringPoints] = useState<MeasurementPoint[]>([])
+  const [measurementSaving, setMeasurementSaving] = useState(false)
+  const measurementBusy = useRef(false)
   // Resolved once per in-progress measurement, from the FIRST click's own
   // hit target only (2026-07-19 v1 simplification, same spirit as
   // sceneClash.ts's own documented "assumes scene units are already
@@ -2540,10 +2542,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const measurementErrorMessage = (err: unknown, fallback: string): string => {
     if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail
+    if (axios.isAxiosError(err) && Array.isArray(err.response?.data?.detail)) {
+      return err.response.data.detail.map((item: { msg?: string }) => item.msg ?? 'Invalid measurement').join('; ')
+    }
     return err instanceof Error ? err.message : fallback
   }
 
   const handleStartMeasuring = (tool: MeasuringTool) => {
+    if (measurementBusy.current) return
+    setMeasurementError(null)
     setMeasuringTool(prev => (prev === tool ? null : tool))
     setMeasuringPoints([])
   }
@@ -2573,43 +2580,57 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setMeasurementError(null)
       const created = await createMeasurement({ project_id: selectedProject.id, kind, points, value, name, hole_loops: holeLoops })
       setMeasurements(prev => [...prev, created])
+      return true
     } catch (err) {
       setMeasurementError(measurementErrorMessage(err, 'Failed to save measurement'))
+      return false
+    }
+  }
+
+  const handleFinishMeasurement = async () => {
+    if (measurementBusy.current || measuringPoints.length < 2) return
+    measurementBusy.current = true
+    setMeasurementSaving(true)
+    try {
+      if (await handleCreateMeasurement('length', measuringPoints, pathLengthMetres(measuringPoints, measuringToMetres), 'Length')) {
+        setMeasuringTool(null)
+        setMeasuringPoints([])
+      }
+    } finally {
+      measurementBusy.current = false
+      setMeasurementSaving(false)
     }
   }
 
   const handleMeasurementHit = async (hit: MeasurementHit) => {
-    if (!measuringTool) return
+    if (!measuringTool || measurementBusy.current) return
+    measurementBusy.current = true
+    try {
 
-    if (measuringTool === 'area_face') {
-      setMeasuringTool(null)
-      if (!hit.object || hit.faceIndex === null || !(hit.object instanceof Mesh)) {
-        setMeasurementError('Click directly on a real element surface to measure its face area')
+      if (measuringTool === 'area_face') {
+        setMeasuringTool(null)
+        if (!hit.object || hit.faceIndex === null || !(hit.object instanceof Mesh)) {
+          setMeasurementError('Click directly on a real element surface to measure its face area')
+          return
+        }
+        const toMetres = await resolveToMetresForHit(hit.object)
+        const patch = measureFacePatch(hit.object, hit.faceIndex, toMetres)
+        if (!patch) {
+          setMeasurementError('Could not measure that surface (unsupported geometry)')
+          return
+        }
+        await handleCreateMeasurement('area', patch.outlinePointsScene, patch.areaMetres, 'Face area', patch.holeLoopsScene)
         return
       }
-      const toMetres = await resolveToMetresForHit(hit.object)
-      const patch = measureFacePatch(hit.object, hit.faceIndex, toMetres)
-      if (!patch) {
-        setMeasurementError('Could not measure that surface (unsupported geometry)')
-        return
-      }
-      await handleCreateMeasurement('area', patch.outlinePointsScene, patch.areaMetres, 'Face area', patch.holeLoopsScene)
-      return
-    }
 
-    // Only 'length' reaches here now (area_points removed 2026-07-19, per
-    // Maro — Area (face)'s automatic flood-fill made manually clicking a
-    // polygon's own corners redundant).
-    const toMetres = measuringPoints.length === 0 ? await resolveToMetresForHit(hit.object) : measuringToMetres
-    if (measuringPoints.length === 0) setMeasuringToMetres(toMetres)
-    const nextPoints = [...measuringPoints, hit.point]
-    if (nextPoints.length < 2) {
-      setMeasuringPoints(nextPoints)
-      return
+      const toMetres = measuringPoints.length === 0 ? await resolveToMetresForHit(hit.object) : measuringToMetres
+      if (measuringPoints.length === 0) setMeasuringToMetres(toMetres)
+      setMeasuringPoints(prev => [...prev, hit.point])
+    } catch (err) {
+      setMeasurementError(measurementErrorMessage(err, 'Could not measure this surface'))
+    } finally {
+      measurementBusy.current = false
     }
-    setMeasuringTool(null)
-    setMeasuringPoints([])
-    await handleCreateMeasurement('length', nextPoints, distanceMetres(nextPoints[0], nextPoints[1], toMetres), 'Length')
   }
 
   const handleRenameMeasurement = async (id: string, name: string) => {
@@ -7482,6 +7503,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           unitPreference={ifcUnitDisplay}
           measuringTool={measuringTool}
           measuringPointCount={measuringPoints.length}
+          saving={measurementSaving}
+          onFinish={handleFinishMeasurement}
+          onUndoPoint={() => setMeasuringPoints(prev => prev.slice(0, -1))}
           selectedId={selectedMeasurementId}
           onStart={handleStartMeasuring}
           onRename={handleRenameMeasurement}

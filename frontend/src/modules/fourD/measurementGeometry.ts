@@ -21,6 +21,10 @@ export function distanceMetres(a: MeasurementPoint, b: MeasurementPoint, toMetre
   return Math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 
+export function pathLengthMetres(points: MeasurementPoint[], toMetres: number): number {
+  return points.slice(1).reduce((sum, point, i) => sum + distanceMetres(points[i], point, toMetres), 0)
+}
+
 export interface FacePatchResult {
   areaMetres: number
   // Scene-space, same "opaque array the frontend owns" convention every
@@ -53,15 +57,14 @@ const FACE_NORMAL_DOT_THRESHOLD = 0.996
 // triangle connected to the clicked one that shares (within tolerance) its
 // own face normal, entirely in world space (mesh.matrixWorld applied to
 // every vertex up front) so the area is correct even under non-uniform
-// scale without a separate normal-matrix correction. Requires indexed
-// geometry — web-ifc's own exported meshes always are, so this only ever
-// returns null for a hand-authored non-indexed mesh import, an edge case
-// worth surfacing as "can't measure this" rather than silently guessing.
+// scale without a separate normal-matrix correction. Supports indexed IFC
+// meshes and non-indexed triangle soup from other model formats.
 export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetres: number): FacePatchResult | null {
   const geometry = mesh.geometry
-  const index = geometry.index
   const position = geometry.attributes.position
-  if (!index || !position) return null
+  if (!position || !Number.isFinite(toMetres) || toMetres <= 0) return null
+  // GLB imports may use triangle soup without an index buffer.
+  const index = geometry.index ?? { count: position.count, getX: (i: number) => i }
   const triCount = index.count / 3
   if (seedFaceIndex < 0 || seedFaceIndex >= triCount) return null
 
@@ -95,6 +98,8 @@ export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetr
   const triAreas: number[] = []
   const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
   const edgeToTris = new Map<string, number[]>()
+  const uniqueTriangles = new Map<string, number>()
+  const canonical: number[] = []
   for (let t = 0; t < triCount; t++) {
     const a = index.getX(t * 3), b = index.getX(t * 3 + 1), c = index.getX(t * 3 + 2)
     triVerts.push([a, b, c])
@@ -103,6 +108,14 @@ export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetr
     triAreas.push(0.5 * cr.length())
     triNormals.push(cr.lengthSq() > 0 ? cr.normalize() : new THREE.Vector3(0, 0, 1))
     const keyA = posKey(va), keyB = posKey(vb), keyC = posKey(vc)
+    // Some equipment meshes contain coincident front/back triangles. Counting
+    // both doubles the area and removes every boundary edge, yielding an empty
+    // outline that the save API correctly rejects with 422.
+    const triangleKey = [keyA, keyB, keyC].sort().join('|')
+    const existing = uniqueTriangles.get(triangleKey)
+    canonical.push(existing ?? t)
+    if (existing !== undefined) continue
+    uniqueTriangles.set(triangleKey, t)
     for (const [p, q] of [[keyA, keyB], [keyB, keyC], [keyC, keyA]] as [string, string][]) {
       const key = edgeKey(p, q)
       const list = edgeToTris.get(key)
@@ -111,6 +124,8 @@ export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetr
     }
   }
 
+  seedFaceIndex = canonical[seedFaceIndex]
+  if (!(triAreas[seedFaceIndex] > 0)) return null
   const seedNormal = triNormals[seedFaceIndex]
   const visited = new Set<number>([seedFaceIndex])
   const queue = [seedFaceIndex]
@@ -237,6 +252,7 @@ export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetr
   const outlinePointsScene = (loopsByArea[0]?.loop ?? []).map(toPoint)
   const holeLoopsScene = loopsByArea.slice(1).map(({ loop }) => loop.map(toPoint))
 
+  if (outlinePointsScene.length < 3 || !Number.isFinite(areaScene) || areaScene <= 0) return null
   return { areaMetres: areaScene * toMetres * toMetres, outlinePointsScene, holeLoopsScene }
 }
 
