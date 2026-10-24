@@ -1,0 +1,6 @@
+runtime/
+release/
+.test-data/
+*.log
+powerbi-template/**/.pbi/
+powerbi-template/**/CustomVisuals/

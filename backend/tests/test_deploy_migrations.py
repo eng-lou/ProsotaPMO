@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 import shutil
 import uuid
@@ -15,6 +16,7 @@ def test_upgrade_previous_schema_preserves_rows_and_is_repeatable(monkeypatch, t
     # This fixture models the P6 migration only, not the whole application
     # schema. Keep its migration chain fixed as later product migrations land.
     import deploy_migrations
+    diagnostic_logger = logging.getLogger("app.migration_diagnostics_regression")
     original_config = deploy_migrations.migration_config
     source = Path(__file__).resolve().parents[1] / 'alembic'
     versions = tmp_path / 'versions'
@@ -58,6 +60,7 @@ def test_upgrade_previous_schema_preserves_rows_and_is_repeatable(monkeypatch, t
 
                 with pytest.raises(RuntimeError, match="migrations are pending"):
                     prepare_database(connection, production=False)
+                assert not diagnostic_logger.disabled, "Migrations must preserve application diagnostics"
                 assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "b4d9e1a7c352"
 
                 prepare_database(connection, production=True)

@@ -132,16 +132,18 @@ function Item({ camera, active, keyframes, format, onLookThrough, onExitLookThro
           />
         ) : (
           <span
+            onClick={onLookThrough}
             onDoubleClick={() => setEditing(true)}
             className="flex-1 text-xs text-gray-700 dark:text-prosota-muted truncate cursor-default"
-            title="Double-click to rename"
+            title="Click to enter camera view; double-click to rename"
           >
             {camera.name}
           </span>
         )}
         <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
-      {expanded && (
+      {expanded && camera.motion && <div className="px-3 pb-3 text-xs text-gray-500 dark:text-prosota-muted">{camera.motion.shots.length} motion shot(s). Open this camera to preview, or use Camera Presets to load and edit its sequence.</div>}
+      {expanded && !camera.motion && (
         <div className="px-3 pb-3 pl-8 space-y-2">
           <LensField
             label="Focal Length" suffix="mm"

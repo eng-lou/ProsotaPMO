@@ -227,6 +227,19 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
               <span className="hp-hero-note">Browser-native · 4D BIM, planning & project controls</span>
             </div>
           </div>
+          <aside className="hp-desktop" aria-label="Try Prosota Desktop">
+            <div>
+              <span className="hp-small">WINDOWS DESKTOP PREVIEW</span>
+              <h2>Take Prosota to your desktop.</h2>
+              <p>Try the desktop app for your modelling, simulation and project controls work.</p>
+            </div>
+            <div className="hp-desktop-download">
+              <a className="hp-button" href="https://github.com/eng-lou/ProsotaPMO/releases/download/desktop-v0.2.35/Prosota-Desktop-Preview-0.2.35-Setup.exe">
+                Download for Windows <span aria-hidden="true">↓</span>
+              </a>
+              <span>Windows 10/11 · Preview 0.2.35 · 268 MB</span>
+            </div>
+          </aside>
           <ProgrammePreview />
           <div className="hp-compat">
             <span>START WITH THE WORK YOU ALREADY HAVE</span>

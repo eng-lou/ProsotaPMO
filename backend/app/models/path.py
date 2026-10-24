@@ -40,6 +40,7 @@ class Path(Base, TimestampMixin):
     points: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     # Cyclic U (2026-07-11) — Blender's own term for a curve that loops back
     # to its first point instead of ending at its last one.
+    curve_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="curved", server_default="curved")
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     opacity: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")

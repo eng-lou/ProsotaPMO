@@ -6,7 +6,9 @@ const clients = []
 globalThis.__downloadClients = clients
 const {outputFiles} = await build({entryPoints:[fileURLToPath(new URL('../src/lib/api.ts',import.meta.url))],bundle:true,write:false,format:'esm',platform:'node',define:{'import.meta.env.VITE_API_URL':'""'},plugins:[{name:'mock-transport',setup(build) {
   build.onResolve({filter:/^axios$/}, () => ({path:'axios',namespace:'mock'}))
-  build.onLoad({filter:/.*/,namespace:'mock'}, () => ({contents:`export default {create() { const client = {get:async()=>{throw new Error('unexpected request')}}; globalThis.__downloadClients.push(client); return client }, isAxiosError(e) {return !!e.isAxiosError}}`}))
+  // api.ts also installs undo interceptors. Downloads replace get directly;
+  // the transport double still needs the Axios interceptor registration API.
+  build.onLoad({filter:/.*/,namespace:'mock'}, () => ({contents:`export default {create() { const client = {interceptors:{request:{use(){}},response:{use(){}}},get:async()=>{throw new Error('unexpected request')}}; globalThis.__downloadClients.push(client); return client }, isAxiosError(e) {return !!e.isAxiosError}}`}))
 }}]})
 const {downloadLargeBlob} = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 test('signed download uses isolated transport and retries a dropped connection', async () => {

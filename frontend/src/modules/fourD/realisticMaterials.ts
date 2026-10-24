@@ -1,3 +1,4 @@
+import { waterTime, waterOptions, waterColour } from './WaterSurface'
 import * as THREE from 'three'
 import type { BatchInstanceInfo, BatchState } from './elementBatching'
 import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
@@ -28,7 +29,7 @@ import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 // material types e.g asphalt"). Appended, never reordered: the shader's
 // class index and texture layer both follow this order.
 export const REALISTIC_CLASSES = [
-  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal',
+  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water',
 ] as const
 export type RealisticClass = typeof REALISTIC_CLASSES[number]
 // 'original' — explicitly keep the imported look for this material, even
@@ -37,6 +38,7 @@ export type RealisticMapping = RealisticClass | 'original'
 export type RealisticMaterialMap = Record<string, RealisticMapping>
 
 export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
+  water: 'Water — animated surface',
   concrete: 'Cast concrete',
   glass: 'Glass',
   metal: 'Exposed metal',
@@ -56,7 +58,7 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
 // Original classes use texture layer index - 1; finish variants reuse layers.
 const CLASS_INDEX: Record<RealisticClass, number> = {
   concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6, asphalt: 7, stone: 8, gravel: 9, soil: 10, tile: 11,
-  render: 12, 'painted-metal': 13,
+  render: 12, 'painted-metal': 13, water: 14,
 }
 export const GLASS_CLASS = CLASS_INDEX.glass
 // Classes whose texture carries its own colour (a brick is brick-coloured
@@ -69,7 +71,7 @@ export const GLASS_CLASS = CLASS_INDEX.glass
 // white and a grey tile, are the modeller's real choice) with texture
 // detail on top; asphalt, gravel and soil read the same whatever flat
 // colour the model gave them.
-const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false]
+const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false, false, false, true]
 export function classReplacesColour(classIndex: number): boolean {
   return REPLACES_COLOUR[classIndex] ?? false
 }
@@ -77,6 +79,7 @@ export function classReplacesColour(classIndex: number): boolean {
 // --- Name-based classification ---------------------------------------------
 
 const CLASS_PATTERNS: [RealisticClass, RegExp][] = [
+  ['water', /^(water|pond|pool|river|lake|ocean)( surface| material)?$/],
   ['glass', /\b(glass|glazing|glazed|glazier|vision panel|verre|glas|pane)\b/],
   ['metal', /\b(steel|metal|metallic|alu|aluminium|aluminum|zinc|copper|iron|stainless|galvani[sz]ed|brass|bronze|corten|chrome|titanium)\b/],
   ['grass', /\b(grass|green roof|greenroof|sedum|vegetation|vegetated|turf|lawn|planting|planted|moss|living roof|biodiverse roof)\b/],
@@ -330,7 +333,7 @@ export function entryModelsByKey(
 ): Record<string, RealisticEntryModel[]> {
   const byKey: Record<string, RealisticEntryModel[]> = {}
   for (const { objectId, name, info, isIfc } of models) {
-    if (!info || !isIfc) continue
+    if (!info || (!isIfc && !objectId.startsWith('site:'))) continue
     for (const entry of info.entries.values()) {
       (byKey[entry.key] ??= []).push({ objectId, name, count: entry.count })
     }
@@ -768,6 +771,7 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [0.6, 0.6], roughness: 0.3, metalness: 0, bump: 0.5, detail: 1, textured: false }, // tile
   { tile: [2.4, 2.4], roughness: 0.8, metalness: 0, bump: 0.05, detail: 0.12, textured: false }, // smooth render
   { tile: [1.5, 1.5], roughness: 0.5, metalness: 0, bump: 0.03, detail: 0.08, textured: false }, // coated metal
+  { tile: [1, 1], roughness: 0.12, metalness: 0, bump: 1, detail: 0, textured: false }, // animated water
 ]
 
 export function realisticTileSize(cls: RealisticClass, scale: number): [number, number] {
@@ -788,7 +792,7 @@ function getClassParamsTexture(): THREE.DataTexture {
   CLASS_PARAMS.forEach((c, i) => {
     // New finishes reuse the original detail layers rather than allocate
     // duplicate texture-array layers. Existing class indices stay stable.
-    const layer = i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
+    const layer = i === CLASS_INDEX.water ? 0 : i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
     data.set([1 / c.tile[0], 1 / c.tile[1], layer, c.textured ? 1 : 0], i * 4)
     data.set([c.roughness, c.metalness, c.bump, c.detail], (n + i) * 4)
   })
@@ -811,6 +815,26 @@ const FRAGMENT_PARS = /* glsl */`
 varying vec3 vRealUvClass;
 uniform highp sampler2DArray realTex;
 uniform highp sampler2D realParams;
+uniform float waterTime;
+uniform vec4 waterOptions;
+uniform vec3 waterColour;
+float waterNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  vec4 n = sin(vec4(dot(i,vec2(127.1,311.7)), dot(i+vec2(1,0),vec2(127.1,311.7)), dot(i+vec2(0,1),vec2(127.1,311.7)), dot(i+vec2(1,1),vec2(127.1,311.7)))) * 43758.5453;
+  n = fract(n);
+  return mix(mix(n.x,n.y,f.x), mix(n.z,n.w,f.x), f.y);
+}
+float waterHeight(vec2 p) {
+  float t = waterTime * waterOptions.x;
+  p /= waterOptions.w;
+  p += .25 * vec2(waterNoise(p*.7 + t*.06), waterNoise(p*.9 - t*.04));
+  return (sin(dot(p, vec2(2.3, 1.7)) + t * 1.3)
+    + .45 * sin(dot(p, vec2(-4.1, 3.6)) - t * 1.8)
+    + .18 * sin(dot(p, vec2(9.2, 5.4)) + t * 2.6)
+    + .08 * sin(dot(p, vec2(-19.3, 12.7)) - t * 3.1)
+    + .5 * waterNoise(p * 5.0 + vec2(t*.45, -t*.3))
+    + .2 * waterNoise(p * 13.0 + vec2(-t*.6, t*.35))) * .035 * waterOptions.y;
+}
 `
 
 function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUniforms, forBatch: boolean) {
@@ -883,13 +907,17 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
       vec2 realUvDx = dFdx( realUv );
       vec2 realUvDy = dFdy( realUv );
       vec4 realSample = vec4( 0.5 );
-      if ( realOn ) {
+      if ( realOn && vRealClass != 14 ) {
         realSample = textureGrad( realTex, vec3( realUv, vRealTex.z ), realUvDx, realUvDy );
         if ( vRealTex.w > 0.5 ) diffuseColor.rgb *= pow( realSample.rgb, vec3( 2.2 ) );
         else diffuseColor.rgb *= 1.0 + ( realSample.r - 0.5 ) * 2.0 * vRealMat.w;
+      }
+      if (vRealClass == 14) {
+        realSample.a = waterHeight(vRealUv);
+        diffuseColor.rgb *= mix(waterColour * .32, mix(waterColour, vec3(.19, .16, .09), .55), waterOptions.z);
       }`)
     .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-      if ( realOn ) roughnessFactor = clamp( vRealMat.x + ( realSample.a - 0.5 ) * 0.12, 0.03, 1.0 );`)
+      if ( realOn ) roughnessFactor = vRealClass == 14 ? mix(.07, .32, waterOptions.z) : clamp( vRealMat.x + ( realSample.a - 0.5 ) * 0.12, 0.03, 1.0 );`)
     .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
       if ( realOn ) metalnessFactor = vRealMat.y;`)
     .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
@@ -898,7 +926,7 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
       vec2 realDh = vec2( dFdx( realSample.a ), dFdy( realSample.a ) ) * vRealMat.z;
       vec3 realSigX = dFdx( -vViewPosition );
       vec3 realSigY = dFdy( -vViewPosition );
-      if ( realOn && vRealMat.z > 0.0 ) {
+      if ( realOn && vRealClass != 14 && vRealMat.z > 0.0 ) {
         // Derivative bump mapping (same maths as three.js's own
         // perturbNormalArb) — needs no tangents, which IFC geometry lacks.
         vec3 realSx = normalize( realSigX );
@@ -908,6 +936,15 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
         float realDet = dot( realSx, realR1 ) * faceDirection;
         vec3 realGrad = sign( realDet ) * ( realDh.x * realR1 + realDh.y * realR2 );
         normal = normalize( abs( realDet ) * normal - realGrad );
+      }
+      if (vRealClass == 14) {
+        vec2 du = dFdx(vRealUv), dv = dFdy(vRealUv);
+        float orientation = sign(du.x * dv.y - du.y * dv.x);
+        vec3 tangent = normalize(realSigX * dv.y - realSigY * du.y) * orientation;
+        vec3 bitangent = normalize(-realSigX * dv.x + realSigY * du.x) * orientation;
+        float h = waterHeight(vRealUv);
+        vec2 slope = vec2(waterHeight(vRealUv + vec2(.005,0.0)) - h, waterHeight(vRealUv + vec2(0.0,.005)) - h) / .005;
+        normal = normalize(normal - tangent * slope.x - bitangent * slope.y);
       }`)
 }
 
@@ -932,6 +969,9 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
   }
   material.userData.realisticUniforms = uniforms
   material.onBeforeCompile = shader => {
+    shader.uniforms.waterTime = waterTime
+    shader.uniforms.waterOptions = waterOptions
+    shader.uniforms.waterColour = waterColour
     shader.uniforms.realTex = uniforms.realTex
     shader.uniforms.realParams = uniforms.realParams
     shader.uniforms.realGlassHidden = uniforms.realGlassHidden
@@ -944,7 +984,7 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
   }
   // Every realistic surface material shares one compiled program per
   // variant kind; uniforms stay per material.
-  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v17' : 'realistic-surface-v17')
+  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v18' : 'realistic-surface-v18')
   return material
 }
 
@@ -1070,6 +1110,7 @@ export function getRealisticVariant(
 export function syncRealisticVariant(source: THREE.MeshStandardMaterial) {
   const variant = source.userData.realisticVariant as THREE.MeshStandardMaterial | undefined
   if (!variant) return
+  variant.userData.channelSignature=source.userData.channelSignature
   const classIndex = variant.userData.realisticClass as number
   const original = variant.userData.realisticOriginal as THREE.Color | undefined
   const override = variant.userData.realisticOverride as THREE.Color | null | undefined

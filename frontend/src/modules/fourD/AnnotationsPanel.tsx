@@ -1,3 +1,4 @@
+import { CalloutContentFields } from './CalloutContentFields'
 import { useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation, AnnotationIcon, AnnotationKind, AnnotationUpdate } from './annotations'
@@ -21,6 +22,11 @@ const ICON_OPTIONS: { value: AnnotationIcon; label: string }[] = [
   { value: 'pin', label: '📍 Pin' },
   { value: 'flag', label: '🚩 Flag' },
   { value: 'comment', label: '💬 Comment' },
+  { value: 'worker', label: 'Worker' },
+  { value: 'entry', label: 'Entry' },
+  { value: 'truck', label: 'Truck' },
+  { value: 'medical', label: 'First aid' },
+  { value: 'info', label: 'Information' },
   { value: 'warning', label: '⚠️ Warning' },
 ]
 
@@ -153,6 +159,8 @@ function Item({
         <button onClick={onDelete} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
       </div>
 
+      {hasLeader && <CalloutContentFields annotation={annotation} onUpdate={onUpdate} />}
+
       {hasLeader && (
         annotation.element_ref ? (
           <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted bg-sky-50 border border-sky-100 rounded px-2 py-1">
@@ -223,6 +231,7 @@ function Item({
               >
                 <option value="rounded">Rounded</option>
                 <option value="rectangle">Rectangle</option>
+                <option value="circle">Circle</option>
               </select>
             </label>
           )}

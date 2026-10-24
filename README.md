@@ -70,12 +70,22 @@ Production credentials must be available to the backend build as well as runtime
 
 ## Testing
 
-```
-cd backend && pytest
-cd frontend && npx tsc --noEmit
+Product improvements and implementation status: [improvement backlog](docs/IMPROVEMENT_BACKLOG.md).
+
+From `backend` with its development environment activated:
+
+```sh
+pytest
 ```
 
-CI runs the full backend test suite against a real Postgres service container on every push/PR to `main`.
+From `frontend`:
+
+```sh
+npm test
+npm run build
+```
+
+CI runs the backend test suite against a real Postgres service container, plus the frontend Node tests and production build, on every push/PR to `main`. Two frontend IFC fixture tests require optional local model paths and are skipped when those files are not supplied.
 
 ## License
 

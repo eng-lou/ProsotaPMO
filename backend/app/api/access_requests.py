@@ -3,16 +3,17 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_db_user, require_super_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.user import AccessRequestSubmit, CurrentUserSummaryResponse, PendingUserResponse, UserResponse
+from app.services.access_notification import deliver_access_notification
 
 router = APIRouter(prefix="/access-requests", tags=["access-requests"])
 
@@ -31,8 +32,27 @@ async def submit_access_request(
     current_user.requested_organisation = data.organisation
     current_user.requested_at = datetime.now(timezone.utc)
     await db.commit()
+    await deliver_access_notification(db, current_user.id)
     await db.refresh(current_user)
     return current_user
+
+
+@router.post("/retry-notifications")
+async def retry_notifications(
+    db: AsyncSession = Depends(get_db),
+    _super_user: User = Depends(require_super_user),
+):
+    """Retry persisted unsent requests after SMTP setup or an outage."""
+    ids = list((await db.execute(select(User.id).where(
+        User.status == "pending", User.requested_at.is_not(None),
+        User.access_notification_sent_at.is_(None),
+        or_(User.access_notification_attempted_at.is_(None),
+            User.access_notification_attempted_at < datetime.now(timezone.utc) - timedelta(minutes=5)),
+    ).order_by(User.requested_at).limit(5))).scalars())
+    sent = 0
+    for user_id in ids:
+        sent += int(await deliver_access_notification(db, user_id))
+    return {"sent": sent, "checked": len(ids)}
 
 
 @router.get("/", response_model=list[PendingUserResponse])

@@ -1,3 +1,4 @@
+import { motionDuration } from './cameraMotion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
 import type { Annotation } from './annotations'
@@ -12,6 +13,7 @@ import { dateFromTimelineValue, formatTimelineValue, FPS_OPTIONS, type TimeDispl
 import type { Zone } from './zones'
 
 interface Props {
+  siteMotionTracks?: {id:string;name:string;start:string;duration:number}[]
   equipmentTracks?: React.ReactNode
   scheduleStart: Date | null
   scheduleEnd: Date | null
@@ -133,7 +135,7 @@ export function TimelineWindow({
   scheduleStart, scheduleEnd, dateRef, onDateChange, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
-  speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
+  siteMotionTracks = [], speedDaysPerSecond, onSpeedChange, timeDisplayMode, onTimeDisplayModeChange, fps, onFpsChange,
   rawAnimationMeshNames, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -591,8 +593,26 @@ export function TimelineWindow({
         <span className="text-xs text-gray-700 dark:text-prosota-muted font-medium">{formatTimelineValue(current, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
         <span>{formatTimelineValue(effectiveEnd, scheduleStart, timeDisplayMode, speedDaysPerSecond, fps)}</span>
       </div>
+      {cameras.filter(camera => camera.motion?.shots.length).map(camera => (
+        <div key={camera.id} className="border-t border-gray-200 dark:border-prosota-border py-2" aria-label={`Camera motion track: ${camera.name}`}>
+          <button type="button" className="text-xs font-medium" onClick={() => { onSelectActor?.('camera', camera.id); setCurrent(scheduleStart) }}>
+            Camera: {camera.name} · {motionDuration(camera.motion!.shots).toFixed(1)}s
+          </button>
+          <div className="flex gap-1 mt-1">
+            {camera.motion!.shots.map((shot, index, shots) => {
+              const offset = motionDuration(shots.slice(0, index)) + (index ? shot.blend : 0)
+              return <button key={shot.id} type="button" className="rounded bg-blue-100 dark:bg-blue-900 px-2 py-1 text-xs" title={`Seek to ${offset.toFixed(1)}s`} onClick={() => { onSelectActor?.('camera', camera.id); setCurrent(new Date(scheduleStart.getTime() + offset * speedDaysPerSecond * DAY_MS)) }}>{shot.name} · {shot.settings.duration}s</button>
+            })}
+          </div>
+        </div>
+      ))}
+      {siteMotionTracks.map(track=><div key={track.id} className="border-t py-2 text-xs" aria-label={`Path motion track: ${track.name}`}>
+        <strong>{track.name} · Follow path · {track.duration.toFixed(1)}s</strong>
+        <div className="flex gap-2 mt-1"><button className="border rounded px-2 py-1" onClick={()=>{setIsPlaying(false);setCurrent(new Date(track.start))}}>Start</button><button className="border rounded px-2 py-1" onClick={()=>{setIsPlaying(false);setCurrent(new Date(Date.parse(track.start)+track.duration*speedDaysPerSecond*DAY_MS))}}>End</button></div>
+      </div>)}
       {equipmentTracks}
       <AnimationActorsList
+        hideEmpty={siteMotionTracks.length > 0 || cameras.some(c=>c.motion?.shots.length)}
         scheduleStart={scheduleStart}
         scheduleEnd={effectiveEnd}
         currentDate={current}

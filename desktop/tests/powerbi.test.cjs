@@ -1,0 +1,21 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const { gunzipSync } = require('node:zlib')
+const { createReport } = require('../powerbi.cjs')
+
+test('Power BI handoff embeds exact IFC bytes and leaves earlier reports untouched', () => {
+  const template = path.resolve(__dirname, '../powerbi-template')
+  const root = path.resolve(__dirname, '../.test-data/powerbi-unit')
+  const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/wall.ifc'))
+  const first = createReport(template, root, "Builder's IFC.ifc", bytes)
+  const second = createReport(template, root, 'Second.ifc', bytes)
+  assert.notEqual(first, second)
+  const file = path.join(path.dirname(first), 'Prosota.Report/definition/pages/05a26ed2de633e48f6a7/visuals/9d55824d9168f5fec173/visual.json')
+  const snapshot = JSON.parse(fs.readFileSync(file)).visual.objects.prosotaSnapshot[0].properties
+  assert.deepEqual(gunzipSync(Buffer.from(snapshot.data.expr.Literal.Value.slice(1, -1), 'base64')), bytes)
+  assert.equal(snapshot.name.expr.Literal.Value, "'Builder''s IFC.ifc'")
+  assert.equal(fs.existsSync(path.join(path.dirname(first), 'Prosota.SemanticModel/.pbi')), false)
+  assert.throws(() => createReport(template, root, 'invalid', Buffer.from('not IFC')), /Expected an IFC/)
+})

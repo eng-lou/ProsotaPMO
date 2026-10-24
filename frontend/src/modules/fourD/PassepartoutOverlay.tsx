@@ -15,7 +15,9 @@ interface Props {
   // View" live in its own toolbar, one level up) — this overlay only
   // renders the button, Viewport3D.tsx's own handleKeyCameraPose does the
   // actual capture.
-  onKeyframe: () => void
+  onKeyframe?: () => void
+  onTogglePlayback?: () => void
+  playing?: boolean
 }
 
 // Blender-style camera-view passepartout (2026-08-03, per Maro's own
@@ -28,7 +30,7 @@ interface Props {
 // and height are already definite), which can't express "contain-fit a
 // fixed-aspect box inside an arbitrarily-sized flex parent" on its own;
 // measuring is simpler to reason about than fighting that edge case.
-export function PassepartoutOverlay({ containerRef, cameraName, resolutionWidth, resolutionHeight, onExit, onKeyframe }: Props) {
+export function PassepartoutOverlay({ containerRef, cameraName, resolutionWidth, resolutionHeight, onExit, onKeyframe, onTogglePlayback, playing }: Props) {
   const [box, setBox] = useState<{ width: number; height: number } | null>(null)
   const frameRef = useRef<{ w: number; h: number }>({ w: resolutionWidth, h: resolutionHeight })
   frameRef.current = { w: resolutionWidth, h: resolutionHeight }
@@ -58,7 +60,7 @@ export function PassepartoutOverlay({ containerRef, cameraName, resolutionWidth,
   if (!box) return null
 
   return (
-    <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+    <div className="absolute inset-0 z-20 overflow-hidden pointer-events-none flex items-center justify-center">
       <div
         className="border border-amber-400/80"
         style={{ width: box.width, height: box.height, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)' }}
@@ -68,19 +70,20 @@ export function PassepartoutOverlay({ containerRef, cameraName, resolutionWidth,
           this same container; on a narrow viewport (a side panel docked)
           they wrap close enough to the horizontal center that a top-2
           label here visually collided with them. */}
-      <div className="absolute top-12 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto">
-        <span className="text-xs font-medium text-white bg-black/70 rounded px-2 py-1">📹 {cameraName}</span>
-        <button
+      <div className="absolute bottom-3 inset-x-2 flex flex-wrap justify-center items-center gap-2 pointer-events-auto">
+        <span className="max-w-[140px] truncate whitespace-nowrap text-xs font-medium text-white bg-black/70 rounded px-2 py-1">📹 {cameraName}</span>
+        {onTogglePlayback && <button className="text-xs text-white bg-black/70 rounded px-2 py-1" onClick={onTogglePlayback}>{playing ? 'Pause camera' : 'Play camera'}</button>}
+        {onKeyframe && <button
           onClick={onKeyframe}
           title="Add Keyframe — captures this camera's current position, aim, and lens at the timeline's current date"
-          className="text-xs font-medium text-white bg-black/70 hover:bg-black/90 rounded px-2 py-1"
+          className="whitespace-nowrap text-xs font-medium text-white bg-black/70 hover:bg-black/90 rounded px-2 py-1"
         >
           🔑 Add Keyframe
-        </button>
+        </button>}
         <button
           onClick={onExit}
           title="Exit Camera View — back to free orbit"
-          className="text-xs font-medium text-white bg-black/70 hover:bg-black/90 rounded px-2 py-1"
+          className="whitespace-nowrap text-xs font-medium text-white bg-black/70 hover:bg-black/90 rounded px-2 py-1"
         >
           Exit Camera View ✕
         </button>

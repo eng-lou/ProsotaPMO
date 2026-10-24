@@ -34,7 +34,8 @@ class Credential(BaseModel):
 
 
 def identity(user):
-    return {"sub": user.auth0_sub, "name": user.display_name, "email": user.email}
+    return {"sub": user.auth0_sub, "name": user.display_name, "email": user.email,
+            "is_super_user": bool(user.is_super_user)}
 
 
 def no_cache(response):

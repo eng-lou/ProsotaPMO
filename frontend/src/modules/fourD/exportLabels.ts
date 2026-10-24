@@ -32,6 +32,8 @@ import * as THREE from 'three'
 export type ExportLabelKind = 'annotation-box' | 'annotation-placemark' | 'zone-label' | 'path-label' | 'measurement-label'
 
 export interface ExportLabel {
+  prepare?: () => Promise<void>
+  paint?: (ctx: CanvasRenderingContext2D, scale: number) => void
   opacity?: number
   kind: ExportLabelKind
   visible: boolean
@@ -88,4 +90,8 @@ export function exportLabelScale(
   }
   const scale = distanceScale * (label.localScale ?? 1) * Math.max(outputWidth / cssWidth, outputHeight / cssHeight)
   return Number.isFinite(scale) && scale > 0 ? scale : 0
+}
+
+export async function prepareExportLabels(registry: ExportLabelRegistry) {
+  await Promise.all([...registry.values()].filter(label => label.visible).map(label => label.prepare?.()))
 }

@@ -1,0 +1,45 @@
+; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	FBXVersion: 7400
+}
+Objects:  {
+	Geometry: 100, "Geometry::Block", "Mesh" {
+		Vertices: *24 {
+			a: -50,0,-50,50,0,-50,50,100,-50,-50,100,-50,-50,0,50,50,0,50,50,100,50,-50,100,50
+		}
+		PolygonVertexIndex: *24 {
+			a: 0,1,2,-4,4,7,6,-6,0,4,5,-2,3,2,6,-8,0,3,7,-5,1,5,6,-3
+		}
+	}
+	Model: 200, "Model::Block", "Mesh" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",0,0,0
+			P: "Lcl Rotation", "Lcl Rotation", "", "A",0,0,0
+			P: "Lcl Scaling", "Lcl Scaling", "", "A",1,1,1
+		}
+	}
+	AnimationStack: 300, "AnimStack::Slide", "" {
+	}
+	AnimationLayer: 301, "AnimLayer::BaseLayer", "" {
+	}
+	AnimationCurveNode: 302, "AnimCurveNode::T", "" {
+	}
+	AnimationCurve: 303, "AnimCurve::", "" {
+		KeyTime: *3 {
+			a: 0,46186158000,92372316000
+		}
+		KeyValueFloat: *3 {
+			a: 0,100,0
+		}
+	}
+}
+Connections:  {
+	C: "OO",100,200
+	C: "OO",200,0
+	C: "OO",301,300
+	C: "OO",302,301
+	C: "OP",302,200,"Lcl Translation"
+	C: "OP",303,302,"d|X"
+}

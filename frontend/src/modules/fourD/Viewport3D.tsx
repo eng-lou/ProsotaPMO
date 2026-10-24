@@ -1,5 +1,17 @@
+import { applyEditablePathRotation, type PathRotationState } from './editablePathRotation'
+import { captureMaterialChannels } from './customMaterial'
+import { WaterSurfaceDriver, waterExportTime } from './WaterSurface'
+import { SceneOverlays, loadOverlays } from './SceneOverlays'
+import { createPortal } from 'react-dom'
+import { CameraPresetsPanel } from './CameraPresetsPanel'
+import { useCameraMotion } from './useCameraMotion'
+import { CameraMotionDriver, CameraMotionHelpers } from './CameraMotionHelpers'
+import { motionDuration, type CameraMotion, type MotionShot, type Vec3 } from './cameraMotion'
+import type { Collection } from './collections'
 import { EquipmentVisualEditor, type EquipmentVisualState } from './EquipmentVisualEditor'
 import { EquipmentPlayback } from './EquipmentPlayback'
+import { SiteSceneLayer, type SiteLayerState } from './SiteSceneLayer'
+import { SitePlacementCatcher } from './SitePlacementCatcher'
 import type { EquipmentRig } from './equipmentRig'
 import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -65,7 +77,7 @@ import type { SectionBoxBounds, SectionBoxRotation } from './sectionBoxes'
 import { SectionBoxGizmos } from './SectionBoxGizmo'
 import type { SectionBoxTool } from './SectionBoxPanel'
 import { SectionBoxCaps } from './SectionBoxCap'
-import type { CameraViewPose } from './cameraViews'
+import type { CameraView, CameraViewPose } from './cameraViews'
 import { CameraGizmo } from './CameraGizmo'
 import { PassepartoutOverlay } from './PassepartoutOverlay'
 import { fovFromFocalLength, focalLengthFromFov, type Camera as CinematicCamera, type CameraPose } from './cameras'
@@ -74,7 +86,7 @@ import { computeCutoutWorldPlanes } from './tileCutoutGeometry'
 import type { SiteContext } from './siteContext'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
-import { createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
+import { prepareExportLabels, createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
 import { generateConceptRenderBlob } from './aiConceptRender'
 import { PathGizmos, PathAddPointCatcher } from './PathGizmo'
@@ -84,11 +96,11 @@ import type { Zone, ZonePoint } from './zones'
 import { RadialChartHud } from './RadialChartHud'
 import { loadRadialChartIcons, type RadialChart } from './radialCharts'
 import { prepareExportHuds } from './exportHuds'
-import { modelsWithElementKeys } from './linkedElements'
+import { modelsWithElementKeys, resolveElementRefsToTargets } from './linkedElements'
 import { TimelineStripHud } from './TimelineStripHud'
 import type { TimelineStrip } from './timelineStrips'
 import type { PathFollower } from './pathFollowers'
-import { buildPathCurve, pointAtProgress, tangentAtProgress } from './pathCurve'
+import { buildPathCurve, pointAtProgress } from './pathCurve'
 import type { Annotation, AnnotationKind } from './annotations'
 import { AnnotationMarker } from './AnnotationMarker'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
@@ -576,6 +588,8 @@ export function computeSunPosition(sunAzimuth: number, sunElevation: number, mod
 }
 
 interface Props {
+  siteScene?: SiteLayerState
+  equipmentObjects?: { name: string; kind: string; object: THREE.Object3D }[]
   equipmentVisual?: EquipmentVisualState | null
   equipmentRigs: EquipmentRig[]
   equipmentPreview: { model: string; values: Record<string, number>; time: number | null } | null
@@ -823,6 +837,15 @@ interface Props {
   // edits in the Cameras panel.
   cameras: CinematicCamera[]
   activeCameraId: string | null
+  cameraPresetsHost?: HTMLElement | null
+  cameraPresetsVisible?: boolean
+  onOpenCameraPresets?: () => void
+  onCloseCameraPresets?: () => void
+  cameraViews?: CameraView[]
+  cameraCollections?: Collection[]
+  cameraProjectId?: string
+  onOpenMotionCamera?: (id: string) => void
+  onSaveMotionCamera?: (name: string, motion: CameraMotion) => Promise<void>
   onAddCamera: (pose: CameraPose) => void
   // Site Context (2026-08-19, per Maro) — Google Photorealistic 3D Tiles,
   // embedded as a real object in this scene (see SiteTilesLayer.tsx's own
@@ -1732,6 +1755,7 @@ function ModelObjects({
         const originals = getOriginalMaterialSlots(child)
         const displayMaterials: THREE.Material[] = []
         materials.forEach((mat, i) => {
+          if(mat instanceof THREE.MeshStandardMaterial && !mat.userData.channelSignature)captureMaterialChannels(mat)
           {
             // flatShading applies on the real PBR material regardless of
             // render mode (2026-07-11) — Flat Shaded stays on
@@ -2991,13 +3015,12 @@ function applyKeyframedTransform(target: ResolvedTimelineTarget, now: Date, upAx
 // is immediately visible rather than silently doing nothing until the first
 // keyframe is added.
 interface ResolvedPathTarget {
+  rotationState: PathRotationState
   object: THREE.Object3D
-  curve: THREE.CatmullRomCurve3 | null
+  curve: THREE.Curve<THREE.Vector3> | null
   singlePoint: THREE.Vector3 | null
   orientToPath: boolean
-  // Degrees, applied as an extra yaw on top of the lookAt result
-  // (2026-08-06) — see path_follower.py's own heading_offset_deg header
-  // for the full "why".
+  // World-up yaw correction, composed with the editable authored orientation.
   headingOffsetDeg: number
   progressTrack: { date: Date; value: number }[]
 }
@@ -3008,64 +3031,19 @@ interface ResolvedPathTarget {
 // sourceUpAxis against the live upAxis setting) — object.position is local
 // to *that* group, not world space. Skipped entirely whenever the two axes
 // already match (identity rotation, worldToLocal is a no-op), which is why
-// this only ever showed up with a source/display up-axis mismatch. lookAt
-// doesn't need the same treatment — three.js's own Object3D.lookAt already
-// converts its target through the parent's world matrix internally.
+// this only ever showed up with a source/display up-axis mismatch.
 function toLocalPoint(object: THREE.Object3D, worldPoint: THREE.Vector3): THREE.Vector3 {
   if (!object.parent) return worldPoint
   object.parent.updateWorldMatrix(true, false)
   return object.parent.worldToLocal(worldPoint.clone())
 }
 
-// Shared, reused rather than allocated fresh every applyPathFollow call
-// (2026-08-06) — rotateOnAxis only reads it, never mutates it.
-const UP_Y_AXIS = new THREE.Vector3(0, 1, 0)
-
 function applyPathFollow(target: ResolvedPathTarget, now: Date, upAxis: UpAxis) {
   const progress = target.progressTrack.length > 0 ? (interpolateKeyframeTrack(target.progressTrack, now) ?? 0) : 0
   if (target.curve) {
     const point = pointAtProgress(target.curve, progress)
     target.object.position.copy(toLocalPoint(target.object, point))
-    if (target.orientToPath) {
-      // target.object.up (2026-08-06, per Maro: "I aligned it up to the
-      // first point in perfect position but when i hit bind it changed
-      // the rotation of the car" — traced into three.js's own
-      // Object3D.lookAt source: it disambiguates roll using `this.up`,
-      // which for an ordinary imported mesh is never touched anywhere in
-      // this app and stays THREE's own default (0,1,0) forever — unlike
-      // the main camera, whose `.up` CameraSettings actively keeps in
-      // sync with `upAxis` (Viewport3D.tsx's own CameraSettings, a few
-      // hundred lines up). lookAt's own parent-matrix premultiply (three's
-      // Object3D.js) correctly converts the computed *world* orientation
-      // into the right *local* rotation relative to this object's own
-      // up-axis-correction wrapper group — that part was already fine, per
-      // this file's own toLocalPoint header — but the disambiguation
-      // reference used to compute that world orientation in the first
-      // place was still silently Y-up regardless of the scene's actual
-      // upAxis setting, so in the (default) Z-up mode the "roll" solved
-      // for made the object's own local up land on world Y instead of
-      // world Z — tipping it onto its side rather than leaving it upright
-      // and just yawing to face the path, exactly matching a car whose
-      // rotation "changed" the moment Bind (which defaults orient_to_path
-      // on) ran the very first lookAt.
-      target.object.up.set(0, upAxis === 'z' ? 0 : 1, upAxis === 'z' ? 1 : 0)
-      const tangent = tangentAtProgress(target.curve, progress)
-      target.object.lookAt(point.clone().add(tangent))
-      // Heading offset (2026-08-06, per Maro's follow-up screenshots —
-      // "see the difference?" — the up-axis fix above stopped the object
-      // tipping onto its side, but a *separate* issue remained: lookAt
-      // always aims whatever this model's own local -Z axis is at the
-      // tangent, and this particular car wasn't authored with -Z as its
-      // own visual front, so it landed 90° off. rotateOnAxis, not a raw
-      // quaternion multiply, applies this in the object's own *local*
-      // space, composed after lookAt's result — local Y at this point is
-      // already the up direction just set above (lookAt's own Gram-Schmidt
-      // construction puts it there), so this is a pure yaw around "up",
-      // never reintroducing any tilt.
-      if (target.headingOffsetDeg !== 0) {
-        target.object.rotateOnAxis(UP_Y_AXIS, THREE.MathUtils.degToRad(target.headingOffsetDeg))
-      }
-    }
+    if (target.orientToPath) applyEditablePathRotation(target.object, target.rotationState, target.curve, progress, target.headingOffsetDeg, upAxis)
   } else if (target.singlePoint) {
     target.object.position.copy(toLocalPoint(target.object, target.singlePoint))
   }
@@ -3523,7 +3501,7 @@ export function TimelinePlayback({
               break
             }
           }
-        } else if (ifcModel) {
+        } else if (link.source_kind === 'ifc' && ifcModel) {
           // Asks every loaded IFC model for a GlobalId match (2026-07-09,
           // per federated/assembly modeling) — a link doesn't record
           // *which* model it belongs to. Applies to EVERY model that has
@@ -3750,9 +3728,11 @@ export function TimelinePlayback({
           if (kf.source_kind !== 'mesh' || kf.field !== 'path_progress' || kf.element_ref !== follower.element_ref) continue
           progressTrack.push({ date: new Date(kf.date), value: kf.value })
         }
+        const previousPath = pathTargetsRef.current.find(target => target.object === so.object)
         nextPathTargets.push({
+          rotationState: previousPath?.rotationState ?? {base:so.object.quaternion.clone(),last:null},
           object: so.object,
-          curve: buildPathCurve(path.points, path.closed),
+          curve: buildPathCurve(path.points, path.closed, path.curve_mode),
           singlePoint: path.points.length === 1 ? new THREE.Vector3(path.points[0].x, path.points[0].y, path.points[0].z) : null,
           orientToPath: follower.orient_to_path,
           headingOffsetDeg: follower.heading_offset_deg,
@@ -3783,6 +3763,13 @@ export function TimelinePlayback({
         }
         targetsRef.current = [...byObject.values()]
         batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
+        for (const previous of pathTargetsRef.current) {
+          const next = nextPathTargets.find(target => target.object === previous.object)
+          if (!next || !next.orientToPath) {
+            previous.object.quaternion.copy(previous.rotationState.base)
+            previous.rotationState.last=null
+          }
+        }
         pathTargetsRef.current = nextPathTargets
         // Immediately reflects the latest keyframe data (2026-07-09) —
         // adding/removing/editing a keyframe elsewhere (TransformPanel's
@@ -5143,7 +5130,7 @@ function worldNormalForHit(hit: THREE.Intersection): THREE.Vector3 | null {
 // either, only a genuine top-facing one is.
 const SNAP_UP_FACING_DOT_THRESHOLD = 0.5
 
-function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], upAxis: UpAxis, modelRadius: number) {
+function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], upAxis: UpAxis, modelRadius: number, restOnBase = false) {
   const up = upAxis === 'z' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)
   const worldPosition = object.getWorldPosition(new THREE.Vector3())
   const origin = worldPosition.clone().addScaledVector(up, modelRadius * 2)
@@ -5190,6 +5177,11 @@ function snapObjectToSurface(object: THREE.Object3D, targets: ImportedObject[], 
   const nextWorldPosition = worldPosition.clone()
   if (upAxis === 'z') nextWorldPosition.z = hit.point.z
   else nextWorldPosition.y = hit.point.y
+  if (restOnBase) {
+    object.updateWorldMatrix(true, true)
+    const bounds = new THREE.Box3().setFromObject(object, true)
+    if (!bounds.isEmpty()) nextWorldPosition[upAxis] += worldPosition[upAxis] - bounds.min[upAxis]
+  }
   object.position.copy(object.parent ? object.parent.worldToLocal(nextWorldPosition) : nextWorldPosition)
 }
 
@@ -5232,8 +5224,9 @@ function ClippingSetup() {
 // re-renders both.
 
 export function Viewport3D({
-  equipmentRigs, equipmentPreview, onEquipmentError, equipmentVisual,
-  settings, importedObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
+  siteScene,
+  equipmentRigs, equipmentPreview, onEquipmentError, equipmentVisual, equipmentObjects,
+  settings, importedObjects: modelObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
   onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
@@ -5242,6 +5235,7 @@ export function Viewport3D({
   sectionBoxes, onSectionBoxDragMove, onSectionBoxDragEnd, onSectionBoxRotateMove, onSectionBoxRotateEnd, sectionBoxTool,
   onSaveCameraView, applyCameraViewRequest, onExportVideo,
   cameras, activeCameraId, onAddCamera, onExitCameraView, onKeyCameraPose,
+  cameraViews = [], cameraCollections = [], cameraProjectId, onSaveMotionCamera, onOpenMotionCamera, cameraPresetsHost, cameraPresetsVisible, onOpenCameraPresets, onCloseCameraPresets,
   siteContext, siteTilesApiKey,
   scheduleStart, scheduleEnd,
   paths, pathAnimWindows, pathFollowers, addingPointsForPathId, onPathDragMove, onPathDragEnd, onAddPathPoint,
@@ -5255,6 +5249,7 @@ export function Viewport3D({
   measurementHoverPoint, onMeasurementHoverPoint,
   comparisonCanvasRefs, onCaptureQualityChange, onCaptureBackgroundChange, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
 }: Props) {
+  const importedObjects = useMemo(() => [...modelObjects, ...(siteScene?.objects || [])], [modelObjects, siteScene?.objects])
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   const activeCamera = cameras.find(c => c.id === activeCameraId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -5393,7 +5388,8 @@ export function Viewport3D({
     if (editPivot && activeObject && gizmoMode !== 'scale') {
       applyGizmoDragAsPivotEdit(activeObject.object, gizmoMode)
     } else if (snapToSurface && gizmoMode === 'translate' && activeObject) {
-      snapObjectToSurface(activeObject.object, importedObjects, settings.upAxis, modelRadius)
+      const isSite = activeObject.id.startsWith('site:')
+      snapObjectToSurface(activeObject.object, importedObjects, settings.upAxis, modelRadius, isSite)
     }
 
     // Reapply this frame's delta to every other selected object — each one
@@ -5410,6 +5406,7 @@ export function Viewport3D({
       const scaleRatio = activeObject.object.scale.clone().divide(last.scale)
       for (const id of selectedObjectIds) {
         if (id === activeObject.id) continue
+        if (siteScene?.items.some(item => 'site:' + item.id === id && item.locked)) continue
         const other = importedObjects.find(o => o.id === id)
         if (!other) continue
         other.object.position.add(deltaPosition)
@@ -5696,9 +5693,72 @@ export function Viewport3D({
   // its point. Writes pass straight through to the real timeline ref, so
   // Export Video's own per-frame `timelineDateRef.current = now` is
   // unchanged.
+  const motionDateOverrideRef = useRef<Date | null>(null)
+  const cameraMotion = useCameraMotion(cameraRef, controlsRef, motionDateOverrideRef, id => {
+    const object = importedObjects.find(o => o.id === id)?.object
+    if (!object) return null
+    object.updateWorldMatrix(true, false)
+    return { position: object.getWorldPosition(new THREE.Vector3()), rotation: object.getWorldQuaternion(new THREE.Quaternion()) }
+  })
+  // Construction can be held at a date while actors travel in presentation seconds.
+  // Use the same schedule origin as the animation timeline, including during export.
+  const pathDateRef = useMemo<React.MutableRefObject<Date | null>>(() => ({
+    get current() {
+      if (cameraMotion.state.current.active && timelineFormat) {
+        let remaining = cameraMotion.state.current.seconds
+        const shots = cameraMotion.state.current.shots
+        const shot = shots.find((s, i) => { const length = s.settings.duration + (i ? s.blend : 0); if (remaining < length) return true; remaining -= length; return false }) || shots[shots.length - 1]
+        if (shot?.actorClock === 'construction') return motionDateOverrideRef.current
+        return new Date(timelineFormat.scheduleStart.getTime() + cameraMotion.state.current.seconds * 86400000 * timelineFormat.speedDaysPerSecond)
+      }
+      return captureDateOverrideRef.current ?? timelineDateRefProp.current
+    },
+    set current(value: Date | null) { timelineDateRefProp.current = value },
+  }), [timelineDateRefProp, timelineFormat?.scheduleStart, timelineFormat?.speedDaysPerSecond])
+
+  const [localCameraPresets, setLocalCameraPresets] = useState(false)
+  const showCameraPresets = cameraPresetsVisible ?? localCameraPresets
+  const setShowCameraPresets = (value: boolean | ((open: boolean) => boolean)) => {
+    const open = typeof value === 'function' ? value(showCameraPresets) : value
+    if (onOpenCameraPresets && onCloseCameraPresets) { if (open) onOpenCameraPresets(); else onCloseCameraPresets() }
+    else setLocalCameraPresets(open)
+  }
+  const cameraPanel = (content: React.ReactNode) => cameraPresetsHost ? createPortal(content, cameraPresetsHost) : content
+  const [motionShot, setMotionShot] = useState<MotionShot | null>(null)
+  const [pickingMotionTarget, setPickingMotionTarget] = useState(false)
+  useEffect(() => { cameraMotion.restore(); setMotionShot(null); setShowCameraPresets(false); setPickingMotionTarget(false) }, [cameraProjectId])
+  const openedMotionCamera = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeCameraId && openedMotionCamera.current) { cameraMotion.restore(); openedMotionCamera.current = null }
+    const saved = cameras.find(c => c.id === activeCameraId)
+    if (saved?.motion) { openedMotionCamera.current = saved.id; setShowCameraPresets(true); setMotionShot(saved.motion.shots[0]); cameraMotion.activate(saved.motion.shots) }
+    else if (activeCameraId) cameraMotion.restore()
+  }, [activeCameraId, activeCamera?.motion])
+  const resolveMotionTarget = async (id: string): Promise<{ target: Vec3; radius: number; tracking?: MotionShot['tracking'] }> => {
+    const box = new THREE.Box3()
+    let ids = id === 'selection' ? selectedObjectIds : new Set(id === 'all' ? importedObjects.map(o => o.id) : [id])
+    let keys = new Set<string>()
+    if (id.startsWith('collection:')) {
+      const collection = cameraCollections.find(c => c.id === id.slice(11))
+      const targets = await resolveElementRefsToTargets(collection?.members || [], importedObjects, ifcHandles)
+      ids = targets.objectIds; keys = targets.expressKeys
+    }
+    for (const o of importedObjects) {
+      const scoped = [...keys].filter(k => k.startsWith(o.id + '::')).map(k => Number(k.slice(o.id.length + 2)))
+      const elements = scoped.length ? scoped : id === 'selection' && ids.has(o.id) ? [...selectedExpressIds] : []
+      if (elements.length) {
+        for (const eid of elements) { const b = getExpressIdWorldBounds(o.object, eid); if (b) box.union(b) }
+      } else if (ids.has(o.id)) box.expandByObject(o.object)
+    }
+    if (box.isEmpty()) throw new Error('No target geometry. Select an object or choose Whole model.')
+    const object = ids.size === 1 && !keys.size && !(id === 'selection' && selectedExpressIds.size) ? importedObjects.find(o => ids.has(o.id)) : undefined
+    object?.object.updateWorldMatrix(true, false)
+    const tracking = object ? { objectId: object.id, position: object.object.getWorldPosition(new THREE.Vector3()).toArray() as Vec3, rotation: object.object.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number] } : null
+    return { tracking, target: box.getCenter(new THREE.Vector3()).toArray(), radius: Math.max(.1, box.getSize(new THREE.Vector3()).length() / 2) }
+  }
   const captureDateOverrideRef = useRef<Date | null>(null)
   const timelineDateRef = useMemo<React.MutableRefObject<Date | null>>(() => ({
-    get current() { return captureDateOverrideRef.current ?? timelineDateRefProp.current },
+    get current() { return captureDateOverrideRef.current ?? motionDateOverrideRef.current ?? timelineDateRefProp.current },
     set current(v: Date | null) { timelineDateRefProp.current = v },
   }), [timelineDateRefProp])
   const [captureTiming, setCaptureTiming] = useState<{ captureAt: Date | null; videoFrom: Date | null; videoTo: Date | null }>({ captureAt: null, videoFrom: null, videoTo: null })
@@ -5790,6 +5850,8 @@ export function Viewport3D({
   // always already did; only PathGizmos/ZoneGizmos' own `hideHandles` prop
   // reads this now, see each component's own matching header.
   const [hidePathHelpers, setHidePathHelpers] = useState(false)
+  const [overlaySettings, setOverlaySettings] = useState(loadOverlays)
+  const overlays = overlaySettings[hidePathHelpers ? 'render' : 'app']
   const [renderCaptureSettings, setRenderCaptureSettings] = useState<RenderCaptureSettings>(loadRenderCaptureSettings)
   const handleRenderCaptureSettingsChange = (next: RenderCaptureSettings) => {
     setRenderCaptureSettings(next)
@@ -5814,6 +5876,15 @@ export function Viewport3D({
     if (!camera || !controls) return
     const box = new THREE.Box3()
     let any = false
+    const siteItem = siteScene?.preview || siteScene?.items.find(i => i.id === siteScene.selected || siteScene.selected?.startsWith(i.id + ':panel:'))
+    if (siteItem && !siteScene?.objects?.some(o => o.id === 'site:' + siteItem.id)) {
+      const points = siteItem.kind === 'fence' ? siteItem.points : [siteItem.position]
+      for (const p of points) box.expandByPoint(new THREE.Vector3(p.x, p.y, p.z))
+      const padding = siteItem.kind === 'fence' ? .1 : Math.hypot(siteItem.width, siteItem.depth) / 2
+      box.expandByScalar(padding)
+      box.max[siteItem.up_axis] += siteItem.height
+      any = true
+    }
     // getExpressIdWorldBounds, not a plain traverse (2026-07-21 fix, per
     // Maro: "its not frame selecting or isolating or nothing" for a panel-
     // driven selection, "if i click in viewport though it works" — a plain
@@ -5838,7 +5909,7 @@ export function Viewport3D({
     // already-materialized element, computed directly off the batch's own
     // stored geometry+instance matrix for one that isn't — without
     // forcing materialization either way.
-    if (selectedExpressIds.size > 0) {
+    if (!any && selectedExpressIds.size > 0) {
       for (const { object } of importedObjects) {
         for (const expressID of selectedExpressIds) {
           const elementBox = getExpressIdWorldBounds(object, expressID)
@@ -5860,7 +5931,8 @@ export function Viewport3D({
     const size = box.getSize(new THREE.Vector3())
     const radius = Math.max(size.length() / 2, 0.5)
     const fovRad = camera instanceof THREE.PerspectiveCamera ? (camera.fov * Math.PI) / 180 : Math.PI / 3
-    const distance = radius / Math.sin(fovRad / 2)
+    const fitFov = siteItem && camera instanceof THREE.PerspectiveCamera ? Math.min(fovRad, 2 * Math.atan(Math.tan(fovRad / 2) * camera.aspect)) : fovRad
+    const distance = radius / Math.sin(fitFov / 2)
     const direction = camera.position.clone().sub(controls.target)
     if (direction.lengthSq() === 0) direction.set(1, 1, 1)
     direction.normalize().multiplyScalar(distance)
@@ -6117,6 +6189,7 @@ export function Viewport3D({
       const ctx = composite.getContext('2d')
       if (ctx) {
         const radialChartProgress = exportHuds.radialChartProgressAt(timelineDateRef.current ?? new Date())
+        await prepareExportLabels(exportLabelsRef.current)
         composeExportFrame(ctx, layout, {
           mainCanvas: mainSource, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
@@ -6164,7 +6237,8 @@ export function Viewport3D({
         onCaptureQualityChange?.(null)
         setCaptureBackgroundOverride(null)
         onCaptureBackgroundChange?.(null)
-        setHidePathHelpers(false)
+        waterExportTime.current = null
+      setHidePathHelpers(false)
       }, 'image/png')
     }
     const supersample = computeSupersampleMultiplier(canvas, resolutionWidth, resolutionHeight)
@@ -6201,7 +6275,8 @@ export function Viewport3D({
       markRenderActivity()
       requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
         const dataUrl = canvas.toDataURL('image/png')
-        setHidePathHelpers(false)
+        waterExportTime.current = null
+      setHidePathHelpers(false)
         resolve(dataUrl)
       })))
     })
@@ -6303,17 +6378,20 @@ export function Viewport3D({
   // (not just a few frames) since this keeps redrawing continuously for
   // durationMs rather than reading back a single frame.
   const handleExportVideo = async () => {
-    if (isExportingVideo || !scheduleStart || !scheduleEnd) return
+    const motionExport = cameraMotion.state.current.active && cameraMotion.state.current.shots.length > 0
+    if (isExportingVideo || (!motionExport && (!scheduleStart || !scheduleEnd))) return
+    const savedMotionTime = cameraMotion.state.current.seconds
+    const exportDuration = motionExport ? motionDuration(cameraMotion.state.current.shots) : renderCaptureSettings.videoDurationSec
     exportCancelRef.current = false
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
     // Chosen From/To (2026-10-02, per Maro: video "just assumes i want to
     // capture the sequence from start to finish") — empty ends fall back to
     // the schedule's own start/finish, exactly the old behaviour.
-    const rangeStart = captureTiming.videoFrom ?? scheduleStart
-    const rangeEnd = captureTiming.videoTo ?? scheduleEnd
+    const rangeStart = captureTiming.videoFrom ?? scheduleStart ?? new Date()
+    const rangeEnd = captureTiming.videoTo ?? scheduleEnd ?? rangeStart
     const totalMs = rangeEnd.getTime() - rangeStart.getTime()
-    if (totalMs <= 0) return
+    if (!motionExport && totalMs <= 0) return
     const activeComparisonCanvases = renderCaptureSettings.includeBaseline
       ? comparisonCanvasRefs.map(ref => ref.current)
       : []
@@ -6335,6 +6413,7 @@ export function Viewport3D({
       },
     )
 
+    if (motionExport) cameraMotion.pause()
     setIsExportingVideo(true)
     setCaptureDraft(renderCaptureSettings.videoDraft)
     // Each view boosted only as far as its own slot in the video needs
@@ -6368,11 +6447,12 @@ export function Viewport3D({
       // empty frames — the views hadn't drawn at export size yet, and at
       // heavy settings three waited frames weren't enough).
       setOfflineExportActive(true)
-      timelineDateRef.current = rangeStart
+      if (motionExport) cameraMotion.seek(0)
+      else timelineDateRef.current = rangeStart
       for (let pass = 0; pass < 8; pass++) renderAllViewsNow()
 
       const fps = renderCaptureSettings.videoFps
-      const durationMs = renderCaptureSettings.videoDurationSec * 1000
+      const durationMs = exportDuration * 1000
       // The recording canvas is always the composite now, sized to the
       // explicit requested output resolution (2026-07-25 rework — see
       // renderCaptureSettings.ts's own header on resolutionWidth/Height and
@@ -6495,13 +6575,17 @@ export function Viewport3D({
               await output.cancel()
               throw EXPORT_CANCELLED
             }
-            const now = new Date(rangeStart.getTime() + totalMs * (frame / (frameCount - 1)))
-            timelineDateRef.current = now
+            const fraction = frame / (frameCount - 1)
+            waterExportTime.current = exportDuration * fraction
+            if (motionExport) { cameraMotion.state.current.seconds = exportDuration * fraction; cameraMotion.applyAt(exportDuration * fraction) }
+            const now = motionExport ? motionDateOverrideRef.current! : new Date(rangeStart.getTime() + totalMs * fraction)
+            if (!motionExport) timelineDateRef.current = now
             // The first frame is usually a long jump from wherever the
             // playhead was, and playback spreads big material changes over a
             // few frames (its needsUpdate budget) — settle before encoding.
             const passes = frame === 0 ? 8 : 1
             for (let pass = 0; pass < passes; pass++) renderAllViewsNow()
+            await prepareExportLabels(exportLabelsRef.current)
             composeAt(now)
             encodeCtx?.drawImage(composite, 0, 0, chosen.width, chosen.height)
             await source.add(frame / fps, 1 / fps)
@@ -6534,13 +6618,16 @@ export function Viewport3D({
         const startTime = performance.now()
         exportStartedAtRef.current = startTime
         let lastPercent = -1
-        await new Promise<void>(resolve => {
-          const step = () => {
+        await new Promise<void>((resolve, reject) => {
+          const step = async () => {
             if (exportCancelRef.current) { resolve(); return }
             const t = Math.min((performance.now() - startTime) / durationMs, 1)
-            const now = new Date(rangeStart.getTime() + totalMs * t)
-            timelineDateRef.current = now
+            waterExportTime.current = exportDuration * t
+            if (motionExport) { cameraMotion.state.current.seconds = exportDuration * t; cameraMotion.applyAt(exportDuration * t) }
+            const now = motionExport ? motionDateOverrideRef.current! : new Date(rangeStart.getTime() + totalMs * t)
+            if (!motionExport) timelineDateRef.current = now
             renderAllViewsNow()
+            try { await prepareExportLabels(exportLabelsRef.current) } catch (error) { recorder.stop(); reject(error); return }
             composeAt(now)
             // Whole percentages only — a state update re-renders this whole
             // component, which shouldn't happen every recorded frame.
@@ -6571,11 +6658,12 @@ export function Viewport3D({
       a.download = `prosota-4d-${new Date().toISOString().replace(/[:.]/g, '-')}.${fileExtension}`
       a.click()
       URL.revokeObjectURL(url)
-      onExportVideo?.(blob, renderCaptureSettings.videoDurationSec)
+      onExportVideo?.(blob, exportDuration)
     } catch (err) {
       if (err !== EXPORT_CANCELLED) throw err
     } finally {
       setOfflineExportActive(false)
+      if (motionExport) cameraMotion.seek(savedMotionTime)
       setIsExportingVideo(false)
       setExportProgress(null)
       setCaptureDraft(false)
@@ -6584,6 +6672,7 @@ export function Viewport3D({
       onCaptureQualityChange?.(null)
       setCaptureBackgroundOverride(null)
       onCaptureBackgroundChange?.(null)
+      waterExportTime.current = null
       setHidePathHelpers(false)
     }
   }
@@ -6598,6 +6687,7 @@ export function Viewport3D({
     const camera = cameraRef.current
     const controls = controlsRef.current
     if (!camera || !controls) return
+    cameraMotion.restore(); onExitCameraView()
     const { pose } = applyCameraViewRequest
     camera.position.set(pose.position_x, pose.position_y, pose.position_z)
     controls.target.set(pose.target_x, pose.target_y, pose.target_z)
@@ -6605,23 +6695,27 @@ export function Viewport3D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyCameraViewRequest?.nonce])
 
+  const boxDragRef = useRef<{x0: number; y0: number; x1: number; y1: number} | null>(null)
   const handleBoxPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!boxSelectMode) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
-    setDragRect({ x0: x, y0: y, x1: x, y1: y })
+    boxDragRef.current = { x0: x, y0: y, x1: x, y1: y }
+    setDragRect(boxDragRef.current)
   }
 
   const handleBoxPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragRect) return
+    if (!boxDragRef.current) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
-    setDragRect(prev => (prev ? { ...prev, x1: e.clientX - rect.left, y1: e.clientY - rect.top } : prev))
+    boxDragRef.current = { ...boxDragRef.current, x1: e.clientX - rect.left, y1: e.clientY - rect.top }
+    setDragRect(boxDragRef.current)
   }
 
   const handleBoxPointerUp = () => {
+    const dragRect = boxDragRef.current
     const rect = containerRef.current?.getBoundingClientRect()
     const camera = cameraRef.current
     if (dragRect && rect && camera) {
@@ -6707,7 +6801,7 @@ export function Viewport3D({
           // from only what's actually visible fixes this for both isolate
           // and the newer per-element hide.
           const box = new THREE.Box3()
-          object.traverse(child => { if (child instanceof THREE.Mesh && child.visible) box.expandByObject(child) })
+          object.traverseVisible(child => { if (child instanceof THREE.Mesh) box.expandByObject(child) })
           if (box.isEmpty()) continue
           const center = box.getCenter(new THREE.Vector3())
           center.project(camera)
@@ -6716,6 +6810,7 @@ export function Viewport3D({
         onBoxSelect(matchedObjectIds, expressIdsByObject)
       }
     }
+    boxDragRef.current = null
     setDragRect(null)
   }
 
@@ -6842,21 +6937,26 @@ export function Viewport3D({
       ref={containerRef}
       className="relative flex-1 min-h-0 bg-gradient-to-b from-sky-100 to-white"
       onPointerDownCapture={e => {
-        if (e.target instanceof HTMLCanvasElement) selectionGesture.current.begin(e.clientX, e.clientY, e.pointerId)
+        if (e.target instanceof HTMLCanvasElement) { selectionGesture.current.begin(e.clientX, e.clientY, e.pointerId); handleBoxPointerDown(e) }
       }}
-      onPointerMoveCapture={e => selectionGesture.current.move(e.clientX, e.clientY, e.pointerId)}
-      onPointerUpCapture={e => selectionGesture.current.move(e.clientX, e.clientY, e.pointerId)}
-      onPointerCancelCapture={() => selectionGesture.current.consume()}
+      onPointerMoveCapture={e => { selectionGesture.current.move(e.clientX, e.clientY, e.pointerId); handleBoxPointerMove(e) }}
+      onPointerUpCapture={e => { selectionGesture.current.move(e.clientX, e.clientY, e.pointerId); handleBoxPointerMove(e); handleBoxPointerUp() }}
+      onPointerCancelCapture={() => { selectionGesture.current.consume(); boxDragRef.current = null; setDragRect(null) }}
       onClickCapture={e => {
         if (e.target instanceof HTMLCanvasElement && selectionGesture.current.blocked) {
           e.stopPropagation()
         }
       }}
-      onPointerDown={handleBoxPointerDown}
-      onPointerMove={handleBoxPointerMove}
-      onPointerUp={handleBoxPointerUp}
     >
+      {showCameraPresets && cameraPanel(<CameraPresetsPanel embedded={!!cameraPresetsHost} key={`${cameraProjectId}:${activeCameraId ?? "draft"}`} savedCamera={activeCamera} onOpenCamera={id => { if (id === activeCameraId && activeCamera?.motion) cameraMotion.activate(activeCamera.motion.shots); else onOpenMotionCamera?.(id) }} controller={cameraMotion} shot={motionShot} onChange={setMotionShot}
+        targets={[{ id: 'all', name: 'Whole model' }, { id: 'selection', name: 'Current selection' }, ...importedObjects.map(o => ({ id: o.id, name: o.name })), ...cameraCollections.map(c => ({ id: 'collection:' + c.id, name: 'Collection: ' + c.name }))]}
+        format={timelineFormat} resolveTarget={resolveMotionTarget} upAxis={settings.upAxis} aspect={cameraRef.current instanceof THREE.PerspectiveCamera ? cameraRef.current.aspect : 1.6}
+        date={timelineDateRefProp.current || new Date()} views={cameraViews} cameras={cameras} onSave={onSaveMotionCamera}
+        picking={pickingMotionTarget} onPick={() => setPickingMotionTarget(v => !v)} exporting={isExportingVideo}
+        onClose={() => { setPickingMotionTarget(false); setShowCameraPresets(false) }} />)}
       <div className="absolute top-2 left-2 z-10 flex flex-wrap gap-1 max-w-[calc(100%-1rem)]">
+
+
         <button
           onClick={handleSelectAllClick}
           title="Select every visible object and IFC element"
@@ -6936,7 +7036,7 @@ export function Viewport3D({
           Frame Selected
         </button>
         <button
-          onClick={handleCaptureImage}
+          onClick={() => { void handleCaptureImage().catch(error => window.alert(`Capture failed: ${error instanceof Error ? error.message : String(error)}`)) }}
           disabled={isEnhancingCapture}
           title={`Capture Image — downloads a ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight} PNG of the current view (see ⚙ Render/Capture Settings)`}
           className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
@@ -6958,11 +7058,13 @@ export function Viewport3D({
         >
           + Camera
         </button>
+        <button className="text-xs px-2 py-1 rounded-md border bg-white/90 text-gray-600" disabled={isExportingVideo} onClick={() => { setShowCameraPresets(true) }}>Camera Presets</button>
+        <SceneOverlays value={overlaySettings} disabled={hidePathHelpers} onChange={value => { setOverlaySettings(value); try { localStorage.setItem('prosota-scene-overlays', JSON.stringify(value)) } catch {} }} />
         <button
-          onClick={handleExportVideo}
-          disabled={isExportingVideo || !scheduleStart || !scheduleEnd}
+          onClick={() => { void handleExportVideo().catch(error => window.alert(`Video export failed: ${error instanceof Error ? error.message : String(error)}`)) }}
+          disabled={isExportingVideo || (!cameraMotion.active && (!scheduleStart || !scheduleEnd))}
           title={
-            !scheduleStart || !scheduleEnd
+            cameraMotion.active ? `Export camera motion (${motionDuration(cameraMotion.state.current.shots)} seconds)` : !scheduleStart || !scheduleEnd
               ? 'Export Video — needs at least one scheduled/linked activity to know what date range to play'
               : `Export Video — records a ${renderCaptureSettings.videoDurationSec}s .${renderCaptureSettings.videoFormat} at ${renderCaptureSettings.resolutionWidth}×${renderCaptureSettings.resolutionHeight}, ${renderCaptureSettings.videoFps}fps, of the timeline playing from ${captureTiming.videoFrom || captureTiming.videoTo ? 'the chosen From to To' : 'schedule start to finish'} (set From/To in ⚙ Render/Capture Settings)`
           }
@@ -7078,6 +7180,7 @@ export function Viewport3D({
           canvas.addEventListener('webglcontextrestored', () => setWebglContextLost(false))
         }}
       >
+        <WaterSurfaceDriver />
         <CameraCapture cameraRef={cameraRef} rendererRef={rendererRef} />
         {active && (
           <IdleRenderDriver
@@ -7086,9 +7189,12 @@ export function Viewport3D({
           />
         )}
         <CameraSync syncRef={cameraSyncRef} controlsRef={controlsRef} fieldOfView={settings.fieldOfView} />
-        <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} overridden={activeCameraId !== null} />
-        <ActiveCameraPose activeCamera={activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />
-        {cameras.filter(c => c.id !== activeCameraId).map(c => <CameraGizmo key={c.id} camera={c} />)}
+        <CameraSettings fov={settings.fieldOfView} near={settings.clipStart} far={settings.clipEnd} upAxis={settings.upAxis} overridden={activeCameraId !== null || cameraMotion.active} />
+        <CameraMotionDriver controller={cameraMotion} timeline={activeCamera?.motion && timelineFormat ? { dateRef: timelineDateRefProp, start: timelineFormat.scheduleStart, daysPerSecond: timelineFormat.speedDaysPerSecond, cameraId: activeCamera.id, shots: activeCamera.motion.shots } : undefined} />
+        {showCameraPresets && motionShot && !cameraMotion.active && overlays.cameras && <CameraMotionHelpers shot={motionShot} onChange={setMotionShot} />}
+        <PathAddPointCatcher active={pickingMotionTarget} upAxis={settings.upAxis} onAddPoint={point => { setMotionShot(s => s ? { ...s, target: [point.x, point.y, point.z] } : s); setPickingMotionTarget(false) }} />
+        <ActiveCameraPose activeCamera={cameraMotion.active || activeCamera?.motion ? null : activeCamera} elementKeyframes={timelineElementKeyframes} timelineDateRef={timelineDateRef} controlsRef={controlsRef} />
+        {overlays.cameras && cameras.filter(c => c.id !== activeCameraId).map(c => <CameraGizmo key={c.id} camera={c} />)}
         <ClippingSetup />
         <ambientLight intensity={lightingForRenderMode(settings.renderMode).ambient} />
         {/* Shadow camera frustum (2026-07-09 fix, per Maro: "check if the
@@ -7245,7 +7351,7 @@ export function Viewport3D({
               object.position/rotation/scale in the object's own *local*
               space, which a wrapper never touches — only where that local
               space ends up pointing in world space. */}
-          {settings.showGrid && (
+          {overlays.grid && settings.showGrid && (
             <group rotation={axisCorrectionRotation('y', settings.upAxis)}>
               <Grid args={[40, 40]} cellColor="#d1d5db" sectionColor="#9ca3af" fadeDistance={40} infiniteGrid />
             </group>
@@ -7289,7 +7395,7 @@ export function Viewport3D({
             </mesh>
           )}
           <ModelObjects
-            objects={importedObjects}
+            objects={modelObjects}
             settings={settings}
             selectedExpressId={selectedExpressId}
             selectedExpressIds={selectedExpressIds}
@@ -7312,7 +7418,7 @@ export function Viewport3D({
             realisticInfoVersion={realisticInfoVersion}
           />
           <SectionBoxGizmos
-            boxes={sectionBoxes}
+            boxes={overlays.helpers ? sectionBoxes : []}
             objects={importedObjects}
             tool={sectionBoxTool}
             onDragStart={() => setSectionBoxDragging(true)}
@@ -7344,13 +7450,18 @@ export function Viewport3D({
             showClashColors={settings.showClashColors}
             renderMode={settings.renderMode}
           />
-          <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={timelineSceneObjects} />
-          <EquipmentPlayback visual={equipmentVisual} rigs={equipmentRigs} objects={timelineSceneObjects} dateRef={timelineDateRef} preview={equipmentPreview} onError={onEquipmentError} />
+          <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={equipmentObjects ?? timelineSceneObjects} />
+          <EquipmentPlayback visual={equipmentVisual} rigs={equipmentRigs} objects={equipmentObjects ?? timelineSceneObjects} dateRef={pathDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
+          {siteScene && <><SiteSceneLayer state={{ ...siteScene, paths, pathDateRef, daysPerSecond: timelineFormat?.speedDaysPerSecond ?? 1, boxSelecting: boxSelectMode }} links={timelineLinks} profiles={timelineProfiles} activities={timelineActivities} dateRef={timelineDateRef} rendering={hidePathHelpers} />
+            <SitePlacementCatcher active={!!siteScene.placing && !hidePathHelpers} upAxis={settings.upAxis}
+              elevation={siteScene.preview?.position[settings.upAxis] || 0}
+              onMove={point => siteScene.onMove?.(point)} onPlace={point => siteScene.onPlace?.(point)} />
+          </>}
           <PathGizmos
-            paths={paths}
+            paths={overlays.paths ? paths : []}
             upAxis={settings.upAxis}
-            hideHandles={hidePathHelpers}
+            hideHandles={!overlays.helpers}
             timelineDateRef={timelineDateRef}
             animWindows={pathAnimWindows}
             exportLabelsRef={exportLabelsRef}
@@ -7364,9 +7475,9 @@ export function Viewport3D({
             onAddPoint={point => { if (addingPointsForPathId) onAddPathPoint(addingPointsForPathId, point) }}
           />
           <ZoneGizmos
-            zones={zones}
+            zones={overlays.zones ? zones : []}
             upAxis={settings.upAxis}
-            hideHandles={hidePathHelpers}
+            hideHandles={!overlays.helpers}
             timelineDateRef={timelineDateRef}
             animWindows={zoneAnimWindows}
             exportLabelsRef={exportLabelsRef}
@@ -7385,7 +7496,7 @@ export function Viewport3D({
             upAxis={settings.upAxis}
             onAddPoint={point => { if (addingPointsForZoneId) onAddZonePoint(addingPointsForZoneId, point) }}
           />
-          {annotations.map(annotation => (
+          {overlays.annotations && annotations.map(annotation => (
             <AnnotationMarker
               key={annotation.id}
               annotation={annotation}
@@ -7405,6 +7516,8 @@ export function Viewport3D({
               onDragStart={() => {}}
               onDragMove={onAnnotationDragMove}
               onDragEnd={onAnnotationDragEnd}
+              timelineStart={timelineFormat?.scheduleStart ?? scheduleStart}
+              timelineDaysPerSecond={timelineFormat?.speedDaysPerSecond ?? 1}
               animationStart={annotationAnimWindows.get(annotation.id)?.start ?? null}
               animationEnd={annotationAnimWindows.get(annotation.id)?.end ?? null}
               onLeaderDragStart={onAnnotationLeaderDragStart}
@@ -7434,20 +7547,20 @@ export function Viewport3D({
             onAddPoint={onPickPivotPoint}
           />
           <MeasurementMarkers
-            measurements={measurements}
+            measurements={overlays.measurements ? measurements : []}
             unitPreference={unitPreference}
             selectedId={selectedMeasurementId}
             onSelect={onSelectMeasurement}
             exportLabelsRef={exportLabelsRef}
           />
-          {measuringTool === 'length' && (
+          {overlays.measurements && measuringTool === 'length' && (
             <MeasurementPreview
               points={measuringPoints}
               toMetres={measuringToMetres}
               unitPreference={unitPreference}
             />
           )}
-          <MeasurementHoverIndicator point={measuringTool !== null ? measurementHoverPoint : null} />
+          <MeasurementHoverIndicator point={overlays.measurements && measuringTool !== null ? measurementHoverPoint : null} />
           {/* Measure tool click-to-place (2026-07-19) — its own catcher
               rather than PathAddPointCatcher, since Area (face) mode needs a
               resolved mesh + faceIndex back, not just a world-space point;
@@ -7473,7 +7586,7 @@ export function Viewport3D({
             (ActiveCameraPose below only re-asserts a resolved keyframed
             pose when the timeline date itself actually changes, so it
             never fights a live drag at a static date). */}
-        <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging} />
+        <StableOrbitControls ref={controlsRef} makeDefault enabled={!boxSelectMode && !sectionBoxDragging && !cameraMotion.active && !pickingMotionTarget} />
         <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
         <MovingQualityDriver controlsRef={controlsRef} syncRef={cameraSyncRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} />
         {/* Suppressed while the active object has a visible Section Box
@@ -7490,7 +7603,7 @@ export function Viewport3D({
             one of the box's own per-face cone handles could land on this
             gizmo's own arm instead, especially in Scale mode, matching
             the reported "scales the whole thing" symptom exactly. */}
-        {activeObject && !equipmentVisual && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
+        {overlays.helpers && activeObject && !siteScene?.items.some(i => 'site:' + i.id === activeObject.id && i.locked) && !equipmentVisual && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
           <TransformControls
             object={activeObject.object}
             mode={gizmoMode}
@@ -7518,7 +7631,7 @@ export function Viewport3D({
             ref={el => { if (el) el.userData.isPathGizmo = true }}
           />
         )}
-        {settings.showAxisIndicator && (
+        {overlays.grid && settings.showAxisIndicator && (
           <GizmoHelper alignment="bottom-left" margin={[80, 80]}>
             <AxisGizmo axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" cameraRef={cameraRef} controlsRef={controlsRef} />
           </GizmoHelper>
@@ -7544,14 +7657,16 @@ export function Viewport3D({
           </button>
         </div>
       )}
-      {activeCamera && (
+      {(activeCamera || cameraMotion.active) && (
         <PassepartoutOverlay
           containerRef={containerRef}
-          cameraName={activeCamera.name}
+          cameraName={activeCamera?.name || 'Camera motion'}
           resolutionWidth={renderCaptureSettings.resolutionWidth}
           resolutionHeight={renderCaptureSettings.resolutionHeight}
-          onExit={onExitCameraView}
-          onKeyframe={handleKeyCameraPose}
+          onExit={() => { cameraMotion.restore(); onExitCameraView() }}
+          onKeyframe={cameraMotion.active || activeCamera?.motion ? undefined : handleKeyCameraPose}
+          onTogglePlayback={cameraMotion.active ? () => cameraMotion.playing ? cameraMotion.pause() : cameraMotion.play() : undefined}
+          playing={cameraMotion.playing}
         />
       )}
       {radialCharts.filter(chart => chart.viewport_slot === null).map(chart => (

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 export type PanelSide = 'left' | 'right'
 
@@ -8,6 +8,7 @@ export interface DockedPanel {
   onToggleDock: () => void
   onClose: () => void
   content: React.ReactNode
+  keepMounted?: boolean
 }
 
 interface Props {
@@ -22,6 +23,7 @@ interface Props {
   // "this component doesn't own layout, just renders what it's told"
   // split DockDivider already has with topDockHeight/bottomDockHeight.
   width: number
+  focusRequest?: { id: string; token: number } | null
 }
 
 // A shared side-dock slot (2026-07-09, per Maro: "make section contextual
@@ -45,8 +47,11 @@ interface Props {
 // falls back to the first panel whenever the currently-active one isn't
 // in the list any more (e.g. it just closed), rather than tracking that
 // as an effect.
-export function SideDock({ side, panels, width }: Props) {
+export function SideDock({ side, panels, width, focusRequest }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null)
+  useEffect(() => {
+    if (focusRequest && panels.some(p => p.id === focusRequest.id)) setActiveId(focusRequest.id)
+  }, [focusRequest])
   if (panels.length === 0) return null
 
   const active = panels.find(p => p.id === activeId) ?? panels[0]
@@ -84,7 +89,9 @@ export function SideDock({ side, panels, width }: Props) {
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
-        {active.content}
+        {panels.filter(p => p.keepMounted || p.id === active.id).map(p => (
+          <div key={p.id} hidden={p.id !== active.id}>{p.content}</div>
+        ))}
       </div>
     </div>
   )

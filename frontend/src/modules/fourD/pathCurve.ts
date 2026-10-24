@@ -12,22 +12,28 @@ import type { PathPoint } from './paths'
 // Needs >= 2 points to define a real curve; fewer than that has no direction
 // to walk along, so callers get null and should treat the target as
 // stationary at the one point that exists (if any).
-export function buildPathCurve(points: PathPoint[], closed: boolean): THREE.CatmullRomCurve3 | null {
+export function buildPathCurve(points: PathPoint[], closed: boolean, mode: 'curved' | 'straight' = 'curved'): THREE.Curve<THREE.Vector3> | null {
   if (points.length < 2) return null
   const vectors = points.map(p => new THREE.Vector3(p.x, p.y, p.z))
-  return new THREE.CatmullRomCurve3(vectors, closed, 'catmullrom', 0.5)
+  if (mode === 'straight') {
+    const curve = new THREE.CurvePath<THREE.Vector3>()
+    for (let i=1;i<vectors.length;i++) curve.add(new THREE.LineCurve3(vectors[i-1],vectors[i]))
+    if(closed) curve.add(new THREE.LineCurve3(vectors[vectors.length-1],vectors[0]))
+    return curve
+  }
+  return new THREE.CatmullRomCurve3(vectors, closed, 'centripetal')
 }
 
 // progress is 0-100 (ElementKeyframe's own path_progress field range, see
 // element_keyframe.py's schema docstring) — converted to the curve's own
 // 0-1 `u` parameterization here so nothing above this module needs to know
 // that split exists.
-export function pointAtProgress(curve: THREE.CatmullRomCurve3, progress: number): THREE.Vector3 {
+export function pointAtProgress(curve: THREE.Curve<THREE.Vector3>, progress: number): THREE.Vector3 {
   const t = THREE.MathUtils.clamp(progress, 0, 100) / 100
   return curve.getPointAt(t)
 }
 
-export function tangentAtProgress(curve: THREE.CatmullRomCurve3, progress: number): THREE.Vector3 {
+export function tangentAtProgress(curve: THREE.Curve<THREE.Vector3>, progress: number): THREE.Vector3 {
   const t = THREE.MathUtils.clamp(progress, 0, 100) / 100
   return curve.getTangentAt(t)
 }

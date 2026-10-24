@@ -23,6 +23,7 @@ export interface Path {
   project_id: string
   name: string
   points: PathPoint[]
+  curve_mode?: 'curved' | 'straight'
   closed: boolean
   visible: boolean
   opacity: number
@@ -67,6 +68,7 @@ export async function createPath(data: {
   project_id: string
   name?: string
   points?: PathPoint[]
+  curve_mode?: 'curved' | 'straight'
   closed?: boolean
   visible?: boolean
   opacity?: number
@@ -89,6 +91,7 @@ export async function createPath(data: {
 export async function updatePath(id: string, data: Partial<{
   name: string
   points: PathPoint[]
+  curve_mode?: 'curved' | 'straight'
   closed: boolean
   visible: boolean
   opacity: number

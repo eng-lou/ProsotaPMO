@@ -4,9 +4,11 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.camera_motion import CameraMotion
 
 
 class CameraBase(BaseModel):
+    motion: CameraMotion | None = None
     name: str = Field(default="Camera", min_length=1, max_length=300)
     base_position_x: float
     base_position_y: float
@@ -24,6 +26,7 @@ class CameraCreate(CameraBase):
 
 
 class CameraUpdate(BaseModel):
+    motion: CameraMotion | None = None
     name: str | None = Field(default=None, min_length=1, max_length=300)
     base_position_x: float | None = None
     base_position_y: float | None = None

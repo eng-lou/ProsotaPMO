@@ -9,6 +9,7 @@ interface PendingUser {
   requested_title: string | null
   requested_organisation: string | null
   requested_at: string | null
+  access_notification_sent_at?: string | null
   created_at: string
 }
 
@@ -109,6 +110,21 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [denyingId, setDenyingId] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [retryingEmails, setRetryingEmails] = useState(false)
+  const [emailResult, setEmailResult] = useState('')
+
+  const retryEmails = async () => {
+    setRetryingEmails(true)
+    try {
+      const { data } = await api.post<{ sent: number; checked: number }>('/api/v1/access-requests/retry-notifications')
+      setEmailResult(`${data.sent} of ${data.checked} eligible notifications sent. Unsent requests remain pending; retries are available after five minutes.`)
+      refresh()
+    } catch {
+      setError('Could not retry email notifications. Access requests are still saved.')
+    } finally {
+      setRetryingEmails(false)
+    }
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -179,6 +195,12 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
         <h3 className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">
           Pending requests{requests && requests.length > 0 ? ` (${requests.length})` : ''}
         </h3>
+        {requests?.some(r => r.requested_at && !r.access_notification_sent_at) && (
+          <button onClick={retryEmails} disabled={retryingEmails} className="text-xs text-blue-600 dark:text-prosota-azure mb-3 disabled:opacity-50">
+            {retryingEmails ? 'Sending…' : 'Retry unsent email notifications'}
+          </button>
+        )}
+        {emailResult && <p role="status" className="text-xs text-gray-500 dark:text-prosota-muted mb-3">{emailResult}</p>}
         {requests === null ? (
           <p className="text-sm text-gray-500 dark:text-prosota-muted mb-5">Loading…</p>
         ) : requests.length === 0 ? (
@@ -206,6 +228,9 @@ export function AccessManagerPanel({ onClose }: { onClose: () => void }) {
                   {!r.requested_at && (
                     <p className="text-xs text-gray-400 dark:text-prosota-muted mt-1 italic">Signed up, hasn't requested access yet</p>
                   )}
+                  {r.requested_at && <p className="text-xs text-gray-500 dark:text-prosota-muted mt-1">
+                    {r.access_notification_sent_at ? 'Email notification sent' : 'Email notification pending'}
+                  </p>}
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
                   <button

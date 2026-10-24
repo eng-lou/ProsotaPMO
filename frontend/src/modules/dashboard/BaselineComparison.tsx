@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { useBaselineSets } from '@/lib/baselineSets'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
-import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
-import type { Activity } from '@/modules/scheduling/types'
+import { useWbsOptions } from '@/lib/useWbsOptions'
+import { WbsScopePicker } from './WbsScopePicker'
 import { formatCurrency, formatDate } from './Overview'
 import type { BaselineComparisonResponse } from './types'
 
@@ -72,14 +73,21 @@ type LinkModule = 'schedule' | 'risk' | 'cost' | 'icd'
 
 export function BaselineComparison() {
   const { selectedProject } = useProject()
+  return <ProjectBaselineComparison key={selectedProject?.id} />
+}
+
+function ProjectBaselineComparison() {
+  const { selectedProject } = useProject()
   const { period } = useActivePeriod(selectedProject?.id)
   const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
-  const { baselineSets, loading: setsLoading, captureAll, createSet, linkBaseline } = useBaselineSets(selectedProject?.id)
+  const { baselineSets, loading: setsLoading, error: setsError, refetch: refetchSets, captureAll, createSet, linkBaseline } = useBaselineSets(selectedProject?.id)
 
   const [selectedSetId, setSelectedSetId] = useState<string>('')
   const [subTab, setSubTab] = useState<SubTab>('Overview')
   const [data, setData] = useState<BaselineComparisonResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState(false)
+  const [comparisonAttempt, setComparisonAttempt] = useState(0)
   const [showCaptureForm, setShowCaptureForm] = useState(false)
   const [captureName, setCaptureName] = useState('')
   const [captureDate, setCaptureDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -91,14 +99,8 @@ export function BaselineComparison() {
   // slicer already uses server-side (app/services/dashboard.py:_schedule_
   // comparison), fetched once here purely to populate the picker, same as
   // Overview.tsx's own wbsNodes.
-  const [scheduleWbsNodes, setScheduleWbsNodes] = useState<Activity[]>([])
-  useEffect(() => {
-    if (!selectedProject || !schedulePeriod) return
-    api.get<Activity[]>('/api/v1/activities/', {
-      params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id },
-    }).then(({ data }) => setScheduleWbsNodes(data.filter(a => a.activity_type === 'wbs_summary')))
-  }, [selectedProject?.id, schedulePeriod?.id])
-  const [scheduleWbsNodeId, setScheduleWbsNodeId] = useState<string>('')
+  const wbsLookup = useWbsOptions(selectedProject?.id, schedulePeriod?.id)
+  const { selectedId: scheduleWbsNodeId } = wbsLookup
   const [scheduleMilestoneOnly, setScheduleMilestoneOnly] = useState(false)
 
   // "Link Existing" (2026-09-03, per Maro: "i set a schedule baseline and
@@ -157,21 +159,27 @@ export function BaselineComparison() {
   }, [baselineSets, selectedSetId])
 
   useEffect(() => {
+    setComparisonError(false)
+    setData(null)
     if (!selectedSetId) {
-      setData(null)
+      setLoading(false)
       return
     }
+    const controller = new AbortController()
     setLoading(true)
     api.get<BaselineComparisonResponse>('/api/v1/dashboard/baseline-comparison', {
+      signal: controller.signal,
       params: {
         baseline_set_id: selectedSetId,
         schedule_wbs_node_activity_id: scheduleWbsNodeId || undefined,
         schedule_milestone_only: scheduleMilestoneOnly || undefined,
       },
     })
-      .then(({ data }) => setData(data))
-      .finally(() => setLoading(false))
-  }, [selectedSetId, scheduleWbsNodeId, scheduleMilestoneOnly])
+      .then(({ data }) => { if (!controller.signal.aborted) setData(data) })
+      .catch(() => { if (!controller.signal.aborted) setComparisonError(true) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [selectedSetId, scheduleWbsNodeId, scheduleMilestoneOnly, comparisonAttempt])
 
   const handleCapture = async () => {
     if (!period || !schedulePeriod || !captureName.trim()) return
@@ -186,8 +194,14 @@ export function BaselineComparison() {
     }
   }
 
+  if (setsError && !baselineSets.length) return <ModuleLoadError message="Couldn’t load baseline sets." onRetry={refetchSets} />
+
   return (
     <div className="space-y-6">
+      {setsError && <div role="alert" className="text-sm text-amber-700 dark:text-prosota-amber">
+        Couldn’t refresh baseline sets. Showing the previous list.{' '}
+        <button className="underline" onClick={refetchSets}>Retry baseline sets</button>
+      </div>}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 text-sm">
           <select
@@ -305,6 +319,11 @@ export function BaselineComparison() {
 
       {setsLoading || loading ? (
         <div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>
+      ) : comparisonError ? (
+        <div role="alert" className="text-sm text-amber-700 dark:text-prosota-amber">
+          Couldn’t load the baseline comparison.{' '}
+          <button className="underline" onClick={() => setComparisonAttempt(n => n + 1)}>Retry comparison</button>
+        </div>
       ) : !data ? (
         <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-8 text-center text-gray-400 dark:text-prosota-muted text-sm">
           No baseline set yet — click "Capture All Now" to snapshot the current Schedule, Risk, Cost, and ICD state,
@@ -328,7 +347,7 @@ export function BaselineComparison() {
           {subTab === 'Overview' && <OverviewSubTab data={data} />}
           {subTab === 'Schedule' && (
             <ScheduleSubTab
-              data={data} wbsNodes={scheduleWbsNodes} wbsNodeId={scheduleWbsNodeId} onWbsNodeIdChange={setScheduleWbsNodeId}
+              data={data} wbsLookup={wbsLookup}
               milestoneOnly={scheduleMilestoneOnly} onMilestoneOnlyChange={setScheduleMilestoneOnly}
             />
           )}
@@ -390,24 +409,21 @@ function OverviewSubTab({ data }: { data: BaselineComparisonResponse }) {
 }
 
 function ScheduleSubTab({
-  data, wbsNodes, wbsNodeId, onWbsNodeIdChange, milestoneOnly, onMilestoneOnlyChange,
+  data, wbsLookup, milestoneOnly, onMilestoneOnlyChange,
 }: {
   data: BaselineComparisonResponse
-  wbsNodes: Activity[]
-  wbsNodeId: string
-  onWbsNodeIdChange: (id: string) => void
+  wbsLookup: ReturnType<typeof useWbsOptions>
   milestoneOnly: boolean
   onMilestoneOnlyChange: (value: boolean) => void
 }) {
+  const { selectedId: wbsNodeId, select: onWbsNodeIdChange } = wbsLookup
   // The WBS picker/milestone toggle render regardless of whether this
   // baseline set has a schedule module linked — a scope choice made here
   // should stick even if the user switches to a set that does have one,
   // same reasoning as Overview.tsx's own always-visible slicer.
   const controls = (
     <div className="flex items-center gap-3 text-xs mb-3">
-      <div className="w-56">
-        <ActivityPicker activities={wbsNodes} value={wbsNodeId} onChange={onWbsNodeIdChange} placeholder="Whole schedule" />
-      </div>
+      <WbsScopePicker lookup={wbsLookup} />
       {wbsNodeId && (
         <button onClick={() => onWbsNodeIdChange('')} className="text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper">
           ✕ Whole schedule

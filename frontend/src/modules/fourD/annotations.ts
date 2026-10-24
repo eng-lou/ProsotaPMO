@@ -10,8 +10,21 @@ import { api } from '@/lib/api'
 // CameraView-attached table, and why Footnote — a third kind here until
 // 2026-08-06 — was scrapped for being functionally identical to Comment).
 export type AnnotationKind = 'placemark' | 'comment'
-export type AnnotationIcon = 'pin' | 'flag' | 'comment' | 'warning'
-export type AnnotationBoxShape = 'rounded' | 'rectangle'
+export type AnnotationIcon = 'pin' | 'flag' | 'comment' | 'warning' | 'worker' | 'entry' | 'truck' | 'medical' | 'info'
+export type AnnotationBoxShape = 'rounded' | 'rectangle' | 'circle'
+
+export interface CalloutContent {
+  mode: 'text' | 'icon' | 'icon_text' | 'image' | 'video'
+  media_id: string | null
+  symbol: string
+  width: number
+  height: number
+  fit: 'cover' | 'contain'
+  loop: boolean
+  start_seconds: number
+}
+export const DEFAULT_CALLOUT: CalloutContent = { mode: 'text', media_id: null, symbol: '', width: 240, height: 160, fit: 'cover', loop: true, start_seconds: 0 }
+export const ANNOTATION_ICONS: Record<AnnotationIcon, string> = { pin: '📍', flag: '🚩', comment: '💬', warning: '⚠️', worker: '👷', entry: '🚪', truck: '🚚', medical: '✚', info: 'ℹ' }
 
 export interface Annotation {
   id: string
@@ -46,6 +59,7 @@ export interface Annotation {
   hide_farther_than: number | null
   // Comment callout box shape (2026-07-30, per Maro: "allow me to pick a
   // standard rectangle shape") — meaningless for kind="placemark".
+  callout?: CalloutContent
   box_shape: AnnotationBoxShape
   // Bent leader (2026-08-06, per Maro: "how the leader works... needs some
   // work") — see annotation.py's own matching docstring for the full
@@ -109,6 +123,7 @@ export interface AnnotationCreate {
   font_size?: number
   hide_closer_than?: number | null
   hide_farther_than?: number | null
+  callout?: CalloutContent
   box_shape?: AnnotationBoxShape
   leader_offset_x?: number
   leader_offset_y?: number

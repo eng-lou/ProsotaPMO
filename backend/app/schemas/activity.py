@@ -261,6 +261,18 @@ class SetDataDateRequest(BaseModel):
     time: time_of_day | None = None
 
 
+class ActivityWbsOption(BaseModel):
+    """Picker data only: no schedule, cost or earned-value calculations."""
+
+    id: uuid.UUID
+    code: str
+    task_name: str
+    wbs_path: str | None
+    activity_type: Literal["wbs_summary"]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ActivityResponse(ActivityBase):
     model_config = ConfigDict(from_attributes=True)
 

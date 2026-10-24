@@ -1,0 +1,15 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.3.0/schema.json",
+  "name": "9d55824d9168f5fec173",
+  "position": {
+    "x": 10,
+    "y": 0,
+    "z": 0,
+    "height": 720,
+    "width": 1270
+  },
+  "visual": {
+    "visualType": "prosotaPowerBI06AB2DAB71384B63AC389556E181B50B",
+    "drillFilterOtherVisuals": true
+  }
+}

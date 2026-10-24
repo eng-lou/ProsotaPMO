@@ -139,6 +139,9 @@ function toStandardMaterial(mat: THREE.Material): THREE.MeshStandardMaterial {
     emissive?: THREE.Color
     emissiveMap?: THREE.Texture | null
     emissiveIntensity?: number
+    alphaMap?: THREE.Texture | null
+    bumpMap?: THREE.Texture | null
+    bumpScale?: number
     alphaTest?: number
   }
   const std = new THREE.MeshStandardMaterial({
@@ -155,6 +158,9 @@ function toStandardMaterial(mat: THREE.Material): THREE.MeshStandardMaterial {
     opacity: mat.opacity,
     side: mat.side,
     alphaTest: legacy.alphaTest ?? 0,
+    alphaMap: legacy.alphaMap ?? null,
+    bumpMap: legacy.bumpMap ?? null,
+    bumpScale: legacy.bumpScale ?? 1,
     // Non-metal, moderately rough default (2026-07-23) — a safe stand-in
     // for the cloth/skin/plastic these files are actually made of, not a
     // guess at any real authored value (classic Phong's specular/shininess
@@ -170,7 +176,7 @@ function toStandardMaterial(mat: THREE.Material): THREE.MeshStandardMaterial {
   return std
 }
 
-function convertMeshesToStandardMaterial(object: THREE.Object3D) {
+export function convertMeshesToStandardMaterial(object: THREE.Object3D) {
   object.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
     child.material = Array.isArray(child.material)

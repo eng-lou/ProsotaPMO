@@ -1,3 +1,4 @@
+import { WaterSurfaceControls } from './WaterSurface'
 import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import {
@@ -50,10 +51,11 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
-  selectionKeys = null,
+  selectionKeys = null, customEditor,
 }: {
   // Materials used by the current viewport selection (null = nothing
   // selected). When set, the list narrows to just those (2026-10-02).
+  customEditor?: React.ReactNode
   selectionKeys?: Set<string> | null
   entries: RealisticMaterialEntry[]
   mapping: RealisticMaterialMap
@@ -92,7 +94,7 @@ export function RealisticMaterialsPanel({
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto">
       <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line space-y-2 shrink-0">
         <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer">
           <input
@@ -106,6 +108,7 @@ export function RealisticMaterialsPanel({
             </span>
           </span>
         </label>
+        <WaterSurfaceControls />
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-gray-600 dark:text-prosota-muted">Material mapping</span>
           {analysing && <span className="text-[10px] text-gray-400 dark:text-prosota-muted">Reading model materials…</span>}
@@ -138,7 +141,7 @@ export function RealisticMaterialsPanel({
       {!analysing && entries.length === 0 && (
         <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">No model materials loaded.</p>
       )}
-      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100 dark:divide-prosota-line">
+      <div className="shrink-0 divide-y divide-gray-100 dark:divide-prosota-line">
         {visible.map(entry => {
           const manual = mapping[entry.key]
           const cls = manual === 'original' ? null : manual ?? entry.autoClass
@@ -219,6 +222,7 @@ export function RealisticMaterialsPanel({
           <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">No materials match.</p>
         )}
       </div>
+      {customEditor}
     </div>
   )
 }

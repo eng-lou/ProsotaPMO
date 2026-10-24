@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Path, PathLineStyle, PathPoint } from './paths'
 import type { PathFollower, PathFollowerTargetKind } from './pathFollowers'
 import type { UpAxis } from './upAxis'
@@ -23,6 +23,7 @@ interface DisplayFormat {
 }
 
 interface Props {
+  siteBindings?: (path: Path) => React.ReactNode
   paths: Path[]
   error: string | null
   addingPointsForPathId: string | null
@@ -52,7 +53,7 @@ interface Props {
   // compensates for an imported model's own authored forward axis not
   // matching three.js's lookAt convention (-Z), in degrees.
   onSetHeadingOffset: (followerId: string, headingOffsetDeg: number) => void
-  onUpdateStyle: (id: string, patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
+  onUpdateStyle: (id: string, patch: Partial<Pick<Path, 'curve_mode' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
   // "Key" buttons (2026-07-30, per Maro: "add a key frame buttons to the
   // side. so i can key frame the start and end") — keys the *current
   // playhead* (FourD.tsx's own timelineDateRef) as this path's anim_start/
@@ -88,9 +89,10 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 }
 
 function Item({
-  path, upAxis, addingPoints, binding, error: _error, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, bindTarget, onUpdateStyle, onSetElevation, animWindow, format, onKeyAnimStart, onKeyAnimEnd,
+  path, siteBindings, upAxis, addingPoints, binding, error: _error, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, bindTarget, onUpdateStyle, onSetElevation, animWindow, format, onKeyAnimStart, onKeyAnimEnd,
 }: {
   path: Path
+  siteBindings?: React.ReactNode
   upAxis: UpAxis
   addingPoints: boolean
   binding: PathFollower | undefined
@@ -106,7 +108,7 @@ function Item({
   onToggleOrient: () => void
   onSetHeadingOffset: (headingOffsetDeg: number) => void
   bindTarget: BindTarget | null
-  onUpdateStyle: (patch: Partial<Pick<Path, 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
+  onUpdateStyle: (patch: Partial<Pick<Path, 'curve_mode' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => void
   onSetElevation: (elevation: number) => void
   animWindow: { start: Date | null; end: Date | null } | undefined
   format: DisplayFormat | null
@@ -125,7 +127,7 @@ function Item({
   }
 
   return (
-    <div className="px-3 py-2 space-y-1.5">
+    <div className="px-3 py-3 space-y-2.5">
       <div className="flex items-center gap-1.5">
         <input type="checkbox" checked={path.visible} onChange={onToggleVisible} title={path.visible ? 'Visible — click to hide the curve' : 'Hidden — click to show the curve'} />
         {editing ? (
@@ -164,13 +166,32 @@ function Item({
         >
           Undo last point
         </button>
-        <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-prosota-muted">
-          <input type="checkbox" checked={path.closed} onChange={onToggleClosed} />
-          Closed
-        </label>
-        <span className="text-xs text-gray-400 dark:text-prosota-muted">{path.points.length} pt{path.points.length === 1 ? '' : 's'}</span>
       </div>
-      <button onClick={() => setStyleOpen(v => !v)} className="text-[11px] text-sky-600 hover:text-sky-800">
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-prosota-line dark:bg-prosota-panel2 space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-medium text-gray-600 dark:text-prosota-muted">Line geometry</span>
+          <kbd title="Switch mode while adding points" className="rounded border border-gray-300 bg-white px-1.5 text-[10px] leading-4 text-gray-500 dark:border-prosota-line dark:bg-prosota-panel dark:text-prosota-muted">L</kbd>
+        </div>
+        <div role="group" aria-label="Line geometry" className="grid grid-cols-2 gap-1 rounded-md bg-white p-1 dark:bg-prosota-panel">
+          {(['curved','straight'] as const).map(mode=>{
+            const active=(path.curve_mode || 'curved')===mode
+            return <button key={mode} type="button" aria-pressed={active} onClick={()=>onUpdateStyle({curve_mode:mode})}
+              className={`flex min-w-0 items-center justify-center gap-2 rounded px-2 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${active?'bg-sky-600 text-white shadow-sm':'text-gray-600 hover:bg-gray-100 dark:text-prosota-muted dark:hover:bg-prosota-panel2'}`}>
+              <svg aria-hidden="true" width="22" height="14" viewBox="0 0 22 14" fill="none" className="shrink-0"><path d={mode==='curved'?'M2 12 C5 12 5 2 11 2 S17 12 20 2':'M2 12 L11 2 L20 12'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              {mode==='curved'?'Curved':'Straight'}
+            </button>
+          })}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-gray-200 pt-2 dark:border-prosota-line">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-600 dark:text-prosota-paper">
+            <input type="checkbox" checked={path.closed} onChange={onToggleClosed} className="accent-sky-600" />
+            Closed loop
+          </label>
+          <span className="text-[11px] tabular-nums text-gray-400 dark:text-prosota-muted">{path.points.length} point{path.points.length === 1 ? '' : 's'}</span>
+        </div>
+        {addingPoints && <p className="text-[10px] leading-4 text-gray-500 dark:text-prosota-muted">Click in the viewport to add points · L switches line geometry</p>}
+      </div>
+      <button onClick={() => setStyleOpen(v => !v)} className="rounded px-1 py-1 text-[11px] font-medium text-sky-600 hover:text-sky-800 dark:text-sky-400 dark:hover:text-sky-300">
         {styleOpen ? '▾' : '▸'} Style
       </button>
       {styleOpen && (
@@ -185,7 +206,7 @@ function Item({
             <select
               value={path.line_style}
               onChange={e => onUpdateStyle({ line_style: e.target.value as PathLineStyle })}
-              className="flex-1 border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5"
+              className="flex-1 border border-gray-200 bg-white text-gray-700 dark:border-prosota-line dark:bg-prosota-panel dark:text-prosota-paper rounded px-1.5 py-0.5"
             >
               <option value="solid">Solid</option>
               <option value="dashed">Dashed</option>
@@ -313,6 +334,7 @@ function Item({
           </label>
         </div>
       )}
+      {siteBindings}
       {binding ? (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted bg-sky-50 border border-sky-100 rounded px-2 py-1">
@@ -384,9 +406,18 @@ function Item({
 // existing point, matching the "click-to-place" spirit of the whole feature
 // rather than mixing in a second, numeric-list editing mode.
 export function PathsPanel({
-  paths, error, addingPointsForPathId, upAxis, bindTarget, followers, animWindows, format,
+  paths, siteBindings, error, addingPointsForPathId, upAxis, bindTarget, followers, animWindows, format,
   onCreate, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, onUpdateStyle, onSetElevation, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if(event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.key.toLowerCase() !== 'l' || (event.target instanceof HTMLElement && (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)))) return
+      const path=paths.find(p=>p.id===addingPointsForPathId)
+      if(path) {event.preventDefault();onUpdateStyle(path.id,{curve_mode:path.curve_mode==='straight'?'curved':'straight'})}
+    }
+    window.addEventListener('keydown',key);return ()=>window.removeEventListener('keydown',key)
+  },[paths,addingPointsForPathId,onUpdateStyle])
+
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
       <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line flex items-center justify-between sticky top-0 bg-white dark:bg-prosota-panel">
@@ -408,6 +439,7 @@ export function PathsPanel({
               path={path}
               upAxis={upAxis}
               addingPoints={addingPointsForPathId === path.id}
+              siteBindings={siteBindings?.(path)}
               binding={followers.find(f => f.path_id === path.id)}
               error={error}
               bindTarget={bindTarget}

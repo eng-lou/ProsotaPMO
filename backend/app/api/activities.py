@@ -13,6 +13,7 @@ from app.schemas.activity import (
     ActivityMoveRequest,
     ActivityResponse,
     ActivityUpdate,
+    ActivityWbsOption,
     BulkDeleteActivitiesRequest,
     BulkDeleteActivitiesResponse,
     DeleteActivityResponse,
@@ -22,6 +23,15 @@ from app.services import activity as svc
 from app.services import scheduling_reschedule
 
 router = APIRouter(prefix="/activities", tags=["activities"])
+
+
+@router.get("/wbs-options", response_model=list[ActivityWbsOption])
+async def list_wbs_options(
+    project_id: uuid.UUID,
+    schedule_period_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list:
+    return await svc.list_wbs_options(db, project_id, schedule_period_id)
 
 
 @router.get("/", response_model=list[ActivityResponse])

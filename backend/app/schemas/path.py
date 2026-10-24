@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +16,7 @@ class PathPoint(BaseModel):
 class PathBase(BaseModel):
     name: str = Field(default="Path", min_length=1, max_length=300)
     points: list[PathPoint] = Field(default_factory=list)
+    curve_mode: Literal["curved", "straight"] = "curved"
     closed: bool = False
     visible: bool = True
     opacity: float = Field(default=1, ge=0, le=1)
@@ -38,6 +40,7 @@ class PathCreate(PathBase):
 class PathUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     points: list[PathPoint] | None = None
+    curve_mode: Literal["curved", "straight"] | None = None
     closed: bool | None = None
     visible: bool | None = None
     opacity: float | None = Field(default=None, ge=0, le=1)

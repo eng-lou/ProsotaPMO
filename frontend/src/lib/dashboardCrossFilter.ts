@@ -44,7 +44,7 @@ export interface RelatedRecordsResponse {
 export type CrossFilterEntityKind = 'activity' | 'cost_element' | 'risk' | 'icd_item'
 
 export async function fetchRelatedRecords(
-  projectId: string, seedType: CrossFilterEntityKind, seedIds: string[],
+  projectId: string, seedType: CrossFilterEntityKind, seedIds: string[], signal?: AbortSignal,
 ): Promise<RelatedRecordsResponse> {
   // Built as a real query string, not axios's own params/paramsSerializer
   // (whose array-serialization default doesn't match what FastAPI's
@@ -53,7 +53,7 @@ export async function fetchRelatedRecords(
   // way, and avoids depending on an axios version detail.
   const search = new URLSearchParams({ project_id: projectId, seed_type: seedType })
   for (const id of seedIds) search.append('seed_ids', id)
-  const { data } = await api.get<RelatedRecordsResponse>(`/api/v1/dashboard/related-records?${search.toString()}`)
+  const { data } = await api.get<RelatedRecordsResponse>(`/api/v1/dashboard/related-records?${search.toString()}`, { signal })
   return data
 }
 
@@ -76,6 +76,6 @@ export function matchesCrossFilter(id: string, kind: CrossFilterEntityKind, scop
 // active clears the cross-filter entirely; clicking a different key (or
 // clicking when nothing is active) sets/replaces it. Callers pass this as
 // their onCrossFilterClick prop's implementation.
-export function toggleCrossFilterKey(current: CrossFilterScope | null, key: string): string | null {
+export function toggleCrossFilterKey(current: Pick<CrossFilterScope, 'key'> | null, key: string): string | null {
   return current?.key === key ? null : key
 }

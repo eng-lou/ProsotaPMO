@@ -1,3 +1,6 @@
+import { SitePathBindings } from './SitePathBindings'
+import { buildPathCurve } from './pathCurve'
+import { motionDuration, type CameraMotion } from './cameraMotion'
 import { createPoeIfcTools } from './poeIfcTools'
 import { undoHistory } from '@/lib/undoHistory'
 import { captureTransform, restoreTransform, type TransformSnapshot } from './transformUndo'
@@ -17,7 +20,7 @@ import { IntegratedIfcExportDialog } from './IntegratedIfcExportDialog'
 import { IntegratedIfcImportDialog } from './IntegratedIfcImportDialog'
 import { hasProsotaPlanning } from './detectIfcPlanning'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Box3, Euler, Mesh, Vector3, type Object3D } from 'three'
+import { Box3, Euler, Group, Mesh, Vector3, type Object3D } from 'three'
 import axios from 'axios'
 import { api } from '@/lib/api'
 import { useAiFourDBridge } from '@/lib/aiFourDBridge'
@@ -33,9 +36,8 @@ import { ResourceUsageProfileWidget } from '@/modules/scheduling/ResourceUsagePr
 import { computeUsageProfileSeries, computeUsageProfileBars, useResourcesTabData } from '@/modules/scheduling/useResourcesTabData'
 import type { Activity, ActivityRelationship, ActualsHistoryItem, Calendar, Resource, ResourceAssignment } from '@/modules/scheduling/types'
 import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
-import { isBundle, packBundle, unpackBundle } from './fileBundle'
+import { isBundle, unpackBundle } from './fileBundle'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
-import { bakeEmbeddedAnimationToKeyframes } from './embeddedAnimationBake'
 import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, saveEnvironment, type SavedEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
@@ -52,6 +54,9 @@ import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sec
 import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
 import { SectionBoxPanel, type SectionBoxTool } from './SectionBoxPanel'
+import { matchingObjectChannels } from './customMaterial'
+import { TextureFields } from './TextureFields'
+import { MaterialPresetPicker } from './MaterialPresetPicker'
 import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
 import { createCameraView, deleteCameraView, isolatedKeysFromSavedView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { createCamera, deleteCamera, listCameras, updateCamera, type Camera as CinematicCamera, type CameraPose } from './cameras'
@@ -91,6 +96,7 @@ import { ensureMaterialized, hasGeometry, removeElementsFromModel } from './elem
 import { DataPanel, type DataPanelTab } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
+import { captureSiteObjectState } from './siteObjectTransform'
 import { computeVisibleActivities, ScheduleWindow, type ScheduleWindowEditableField } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
@@ -102,6 +108,10 @@ import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
+import { SiteToolsPanel } from './SiteToolsPanel'
+import { loadSiteAsset, importSiteAsset } from './siteAssets'
+import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
+import { useSiteScene } from './siteScene'
 import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
 import { ZonesPanel } from './ZonesPanel'
 import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialChart, uploadRadialChartIcon, type RadialChart, type RadialChartCenterMode } from './radialCharts'
@@ -142,7 +152,6 @@ import { Viewport3D, type CameraSyncState, type ImportedObject, type ResolvedSec
 import { ComparisonViewportPane } from './ComparisonViewportPane'
 import { DEFAULT_PANE_CONFIG, useResolvedPaneIsolation, type PaneConfig } from './comparisonPane'
 import { ImportErrorsBadge } from './ImportErrorsBadge'
-import { ImportModelDialog } from './ImportModelDialog'
 import { IfcScheduleWizard } from './IfcScheduleWizard'
 import { UnloadModelDialog } from './UnloadModelDialog'
 import { ReloadIfcDialog } from './ReloadIfcDialog'
@@ -330,6 +339,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
 
   const [activities, setActivities] = useState<Activity[]>([])
+  const siteScene = useSiteScene(selectedProject?.id)
+  const [siteSourceRoots,setSiteSourceRoots]=useState<Map<string,Object3D>>(new Map())
+  const registerSiteSourceRoot=useCallback((id:string,object:Object3D|null)=>{
+    setSiteSourceRoots(old=>{if(old.get(id)===object || (!object&&!old.has(id)))return old;const next=new Map(old);if(object)next.set(id,object);else next.delete(id);return next})
+  },[])
+  const [siteRoots, setSiteRoots] = useState<Map<string, Object3D>>(new Map())
+  const siteGeometryReady = useCallback(() => setSiteRoots(old => new Map(old)), [])
+  const registerSiteRoot = useCallback((id: string, object: Object3D | null) => {
+    setSiteRoots(old => { if (old.get(id) === object || (!object && !old.has(id))) return old; const next = new Map(old); if (object) next.set(id, object); else next.delete(id); return next })
+  }, [])
+  const [siteToolsOpen, setSiteToolsOpen] = useState(false)
+  const [sideDockFocus, setSideDockFocus] = useState<{ id: string; token: number } | null>(null)
+  const [siteToolsDock, setSiteToolsDock] = useState<PanelSide>('right')
   const [relationships, setRelationships] = useState<ActivityRelationship[]>([])
   const [resources, setResources] = useState<Resource[]>([])
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
@@ -1033,7 +1055,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => {
+  const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'curve_mode' | 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => {
     try {
       setPathError(null)
       const updated = await updatePath(id, data)
@@ -1055,6 +1077,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     try {
       setPathError(null)
       await deletePath(id)
+      if (siteScene.scene.items.some(item=>item.path_motion?.path_id===id)) await siteScene.reload()
       setPaths(prev => prev.filter(p => p.id !== id))
       setPathFollowers(prev => prev.filter(f => f.path_id !== id))
       if (addingPointsForPathId === id) setAddingPointsForPathId(null)
@@ -1431,6 +1454,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const handleBindPathFollower = async (pathId: string, targetKind: 'mesh', elementRef: string) => {
     if (!selectedProject) return
+    if (elementRef.startsWith('site:')) {
+      const id = elementRef.slice(5)
+      const start = (timelineDateRef.current ?? new Date()).toISOString()
+      try { await siteScene.save(siteScene.scene.items.map(item => item.id === id && !item.locked ? {...item, path_motion:{bind_origin:{...item.position},path_id:pathId,start,speed:1.4,loop:false,orient:true,heading:0,animation_reference_speed:1.4}} : item), 'Bind object to path'); setPathError(null) }
+      catch(error) { setPathError(pathErrorMessage(error,'Failed to bind path')) }
+      return
+    }
     // Scope boundary (2026-07-12) — see the Element Parenting block's own
     // header on why Follow Path and rig-parenting don't combine on the
     // same object.
@@ -1726,6 +1756,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setCameraError(err instanceof Error ? err.message : 'Failed to create camera')
     }
   }
+  const handleSaveMotionCamera = async (name: string, motion: CameraMotion) => {
+    if (!selectedProject) throw new Error('Select a project first')
+    const camera = await createCamera({ project_id: selectedProject.id, name, ...motion.shots[0].start, motion })
+    setCameras(prev => [...prev, camera])
+  }
   const handleLookThroughCamera = (camera: CinematicCamera) => setActiveCameraId(camera.id)
   const handleExitCameraView = () => setActiveCameraId(null)
   const handleRenameCamera = async (id: string, name: string) => {
@@ -1845,9 +1880,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [equipmentDraft, setEquipmentDraft] = useState<EquipmentRig | null>(null)
   const [equipmentPreview, setEquipmentPreview] = useState<{ model: string; values: Record<string, number>; time: number | null } | null>(null)
   const [equipmentRuntimeError, setEquipmentRuntimeError] = useState<string | null>(null)
+  const instanceEquipment = useMemo(() => {
+    const explicit = equipment.rigs.filter(r=>!r.model_ref.startsWith('asset:'))
+    const inherited = siteScene.scene.items.flatMap(item=>{
+      const template=equipment.rigs.find(r=>r.model_ref==='asset:'+item.asset_id)
+      return template && !explicit.some(r=>r.model_ref==='site:'+item.id) ? [{...template,id:'',model_ref:'site:'+item.id,name:item.name}] : []
+    })
+    return [...explicit,...inherited]
+  },[equipment.rigs,siteScene.scene.items])
   const playbackEquipment = useMemo(() => equipmentDraft
-    ? [...equipment.rigs.filter(r => r.model_ref !== equipmentDraft.model_ref), equipmentDraft]
-    : equipment.rigs, [equipment.rigs, equipmentDraft])
+    ? [...instanceEquipment.filter(r => r.model_ref !== equipmentDraft.model_ref), equipmentDraft]
+    : instanceEquipment, [instanceEquipment, equipmentDraft])
   useEffect(() => { setEquipmentDraft(null); setEquipmentPreview(null) }, [selectedProject?.id])
   const equipmentRange = useMemo(() => {
     const times = playbackEquipment.flatMap(r => r.definition.controls.flatMap(c => c.keys.map(k => Date.parse(k.date)))).filter(Number.isFinite)
@@ -1934,9 +1977,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // could ever accumulate — Play looked like it did nothing, while a manual
   // scrub (self-contained local state inside TimelineWindow, untouched by
   // this) worked fine.
+  const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const timelineRange = useMemo(
-    () => padDegenerateRange(unionRanges(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes)), equipmentRange)),
-    [activities, elementKeyframes.keyframes, equipmentRange],
+    () => {
+      let base = unionRanges(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes)), equipmentRange)
+      for (const item of siteScene.scene.items) {
+        const motion=item.path_motion, path=paths.find(p=>p.id===motion?.path_id)
+        if (!motion || !path) continue
+        const curve=buildPathCurve(path.points,path.closed,path.curve_mode)
+        if (!curve) continue
+        const start=new Date(motion.start), end=new Date(start.getTime()+curve.getLength()/motion.speed*speedDaysPerSecond*86400000)
+        base=unionRanges(base,{start,end})
+      }
+      const motions = cameras.filter(c => c.motion?.shots.length)
+      if (!motions.length) return padDegenerateRange(base)
+      const start = base?.start ?? new Date(Math.min(...motions.map(c => new Date(c.motion!.shots[0].dateStart).getTime())))
+      const duration = Math.max(...motions.map(c => motionDuration(c.motion!.shots)))
+      return { start, end: new Date(Math.max(base?.end.getTime() ?? start.getTime(), start.getTime() + duration * speedDaysPerSecond * 86400000)) }
+    },
+    [activities, elementKeyframes.keyframes, equipmentRange, cameras, speedDaysPerSecond, siteScene.scene.items, paths],
   )
   // Seeds the shared "current date" the moment there's anything to seed it
   // from — schedule or keyframes — falling back to today if there's neither
@@ -1964,7 +2023,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // localStorage keys/defaults unchanged from TimelineWindow.tsx's own
   // former local state, so an existing user's saved preference carries
   // over exactly.
-  const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const [timeDisplayMode, setTimeDisplayMode] = useState<TimeDisplayMode>(() => {
     try {
       const raw = localStorage.getItem('prosota_4d_timeline_display_mode')
@@ -2156,6 +2214,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Dockable Camera Views panel (2026-07-10, per Maro: "add camera too so
   // i can capture the model at different angles like blender") — same
   // shared-side-dock treatment as Section Box/Animation Profiles above.
+  const [cameraPanelTab, setCameraPanelTab] = useState<'views' | 'presets'>('views')
+  const [cameraPresetsHost, setCameraPresetsHost] = useState<HTMLDivElement | null>(null)
+  const openCameraPresets = () => { setCameraPanelOpen(true); setCameraPanelTab('presets'); setSideDockFocus(previous => ({ id: 'cameras', token: (previous?.token ?? 0) + 1 })) }
   const [cameraPanelOpen, setCameraPanelOpen] = useState(() => loadPanelOpen(CAMERA_PANEL_OPEN_KEY, false))
   const toggleCameraPanel = () => {
     setCameraPanelOpen(prev => {
@@ -2982,6 +3043,28 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // own Props doc comment on why this is a composite-key Set<string>, not a
   // flat Set<number> the way selectedExpressIds is.
   const [hiddenExpressIds, setHiddenExpressIds] = useState<Set<string>>(new Set())
+  // Resolve persistent source-file references only once after loading a project.
+  // IFC model IDs are session-local and must never be saved as backup identities.
+  const restoredOperationInputs=useRef(new Set<string>())
+  useEffect(()=>{restoredOperationInputs.current.clear()},[selectedProject?.id])
+  useEffect(() => {
+    if(!siteScene.ready){restoredOperationInputs.current.clear();return}
+    const resolved:string[]=[]
+    for(const ref of siteScene.scene.items.flatMap(item=>item.operation_inputs || [])){
+      if(restoredOperationInputs.current.has(ref))continue
+      let id=ref
+      if(ref.startsWith('file:')){
+        const [fileId,element]=ref.slice(5).split('::')
+        const source=sceneObjects.find(o=>o.fileId===fileId);if(!source)continue
+        id=source.id+(element?'::'+element:'')
+      }
+      resolved.push(id);restoredOperationInputs.current.add(ref)
+    }
+    if(!resolved.length)return
+    setHiddenIds(prev=>new Set([...prev,...resolved.filter(id=>!id.includes('::'))]))
+    setHiddenExpressIds(prev=>new Set([...prev,...resolved.filter(id=>id.includes('::'))]))
+  },[selectedProject?.id,siteScene.ready,sceneObjects])
+
   // Isolate Selected / Show All (2026-07-08, per Maro: "isolate selected,
   // show view focus on selected, show all") — a temporary overlay on top of
   // hiddenIds' own deliberate per-object hide list, not a replacement for
@@ -4005,85 +4088,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const clearImportErrorsForFile = (fileName: string) =>
     setImportErrors(prev => prev.filter(msg => !msg.includes(`"${fileName}"`)))
   const importInputRef = useRef<HTMLInputElement>(null)
-  // Combined "Import Model" flow (2026-07-08, per Maro: "combine the two
-  // import widgets to one... after selecting the model and its type, there
-  // should be an option to set its axis transformations") — one file picker
-  // covering both kinds' extensions. Originally showed ImportModelDialog for
-  // every kind; IFC now skips it entirely (2026-07-17, per Maro: "upon
-  // import of ifc remove ability to rename and the axis... use y axis as
-  // default" — see handleFileSelected's own header) since this queue is
-  // mesh-only these days — GLTF/OBJ/FBX axis convention genuinely varies
-  // file-to-file, unlike IFC.
-  // A queue of BATCHES, not a queue of files (2026-07-28, per Maro: "i said
-  // i didnt want this?" — a 39-file mesh selection was showing the confirm
-  // dialog 39 times in a row, "38 more queued" ticking down one file at a
-  // time; every one of those confirms would've picked the identical Up
-  // Axis anyway. One whole multi-select is now one dialog: confirming it
-  // applies that single axis choice, and includeAnimation=false, to every
-  // file in the batch at once. A single-file pick is just a batch of one —
-  // same dialog, still gets the full per-file axis + animation choice
-  // (isMultiFile below is false for it). This predates a 2026-07-17 fix
-  // (per Maro: "allow me to bulk import ifc files not one by one") for the
-  // same underlying multi-select-picker mechanism.
-  const [pendingImports, setPendingImports] = useState<File[][]>([])
-
+  const pointCloudImportRef=useRef<HTMLInputElement>(null)
+  const [assetImportRequest,setAssetImportRequest]=useState(0)
   const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? [])
+    const files = Array.from(e.target.files ?? []).filter(file=>file.name.toLowerCase().endsWith('.ifc'))
     e.target.value = ''
-    if (files.length === 0) return
-    // IFC files skip the confirm dialog entirely (2026-07-17, per Maro:
-    // "upon import of ifc remove ability to rename and the axis... use y
-    // axis as default") — real IFC filenames (e.g. "Snowdon Towers Sample
-    // Architectural.ifc") are already a fine identity as-is, and 'y' is
-    // already this app's own default guess for IFC (see
-    // defaultSourceUpAxis's own header on why IFC's spec'd Z-up default
-    // turned out wrong against every real test file tried), so a
-    // per-file dialog was pure friction with nothing left worth
-    // overriding. Still funnelled through importQueueRef (not called
-    // directly) — see that ref's own header on why IFC parses must stay
-    // strictly serialized against the shared WASM instance regardless of
-    // how the import was triggered. Mesh imports (GLTF/OBJ/FBX) keep the
-    // dialog — axis convention genuinely varies file-to-file for those,
-    // unlike IFC (see ImportModelDialog.tsx's own header).
-    // Reality Captures — point cloud (.xyz) and textured OBJ (.obj + its
-    // .mtl + referenced textures) detection (2026-08-20) — pulled out of
-    // this selection *before* the ifc/mesh split below, since neither
-    // fits that split's own two buckets (a point cloud isn't parseable by
-    // loadModel3DFile at all; a MatterPak's .mtl/.jpg files aren't
-    // independently importable 3D files the way the existing multi-select
-    // batch assumes every remaining file is). .xyz and .e57 both land here
-    // — .e57 just uploads raw and stops there (see handleImportPointCloud's
-    // own header on why it doesn't parse an .e57 client-side).
-    const pointCloudFiles = files.filter(file => {
-      const ext = file.name.split('.').pop()?.toLowerCase()
-      return ext === 'xyz' || ext === 'e57'
-    })
-    for (const file of pointCloudFiles) {
-      importQueueRef.current = importQueueRef.current.then(() => handleImportPointCloud(file))
-    }
-    const objFiles = files.filter(file => file.name.split('.').pop()?.toLowerCase() === 'obj')
-    const consumedForObj = new Set<File>(pointCloudFiles)
-    for (const objFile of objFiles) {
-      const base = objFile.name.slice(0, -('.obj'.length))
-      const mtlFile = files.find(f => f !== objFile && f.name === `${base}.mtl`)
-      if (!mtlFile) continue // a lone .obj with no matching .mtl falls through to the normal (untextured) mesh path below, unchanged
-      const textureFiles = files.filter(f => f !== objFile && f !== mtlFile && /\.(jpe?g|png)$/i.test(f.name))
-      consumedForObj.add(objFile).add(mtlFile)
-      textureFiles.forEach(f => consumedForObj.add(f))
-      importQueueRef.current = importQueueRef.current.then(() => handleImportTexturedObj(objFile, mtlFile, textureFiles))
-    }
-
-    const remaining = files.filter(file => !consumedForObj.has(file))
-    const ifcFiles = remaining.filter(file => file.name.split('.').pop()?.toLowerCase() === 'ifc')
-    const meshFiles = remaining.filter(file => !ifcFiles.includes(file))
-    for (const file of ifcFiles) {
-      importQueueRef.current = importQueueRef.current.then(
-        () => handleImportIfc(file, defaultSourceUpAxis('ifc'), file.name),
-      )
-    }
-    if (meshFiles.length > 0) {
-      setPendingImports(prev => [...prev, meshFiles])
-    }
+    for(const file of files)importQueueRef.current=importQueueRef.current.then(()=>handleImportIfc(file,defaultSourceUpAxis('ifc'),file.name))
   }
 
   // Uploads a freshly-imported file to the backend so it survives a hard
@@ -4181,83 +4191,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const projectId = selectedProject.id
     const name = `${label.trim().replace(/[^a-zA-Z0-9 _-]/g, '_')}.glb`
     const files = await listModel3DFiles(projectId)
-    if (files.some(f => f.name === name) || sceneObjects.some(o => o.name === name)) throw new Error('Choose a unique equipment name')
+    if (files.some(f => f.name === name) || sceneObjects.some(o => o.name === name) || siteScene.scene.items.some(i=>i.name===name)) throw new Error('Choose a unique equipment name')
     const parts = names.map(n => {
-      const matches = sceneObjects.filter(o => o.kind === 'mesh' && o.name === n)
-      if (matches.length !== 1 || !matches[0].fileId) throw new Error(`Save imports and use unique names first: ${n}`)
+      const matches = equipmentObjects.filter(o => o.kind === 'mesh' && o.name === n)
+      if (matches.length !== 1 || !('fileId' in matches[0] ? matches[0].fileId : matches[0].id.startsWith('site:'))) throw new Error(`Save imports and use unique names first: ${n}`)
       return matches[0]
     })
     const group = assembleEquipment(parts, name)
+    // Use the library pipeline and keep each named part independently riggable.
+    const box = new Box3().setFromObject(group), anchor=box.getCenter(new Vector3())
+    anchor[settings.upAxis]=box.min[settings.upAxis]
+    if(settings.upAxis==='z')group.rotation.x=-Math.PI/2
     const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js')
     const bytes = await new GLTFExporter().parseAsync(group, { binary: true, onlyVisible: false })
     const file = new File([bytes as ArrayBuffer], name, { type: 'model/gltf-binary' })
-    const object = await loadModel3DFile(file)
-    const saved = await uploadModel3DFile(projectId, name, 'mesh', settings.upAxis, file, () => {})
+    const asset=await importSiteAsset(projectId,file,'Equipment',()=>{})
     if (restoreStartedForProjectIdRef.current !== projectId) throw new Error('Assembly saved in the previous project. Open that project to use it.')
-    const id = crypto.randomUUID(); object.name = name; object.userData.sceneObjectId = id
-    setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis: settings.upAxis, object, fileId: saved.id }])
-    setHiddenIds(prev => new Set([...prev, ...parts.map(p => p.id)]))
-    setDataTab('3d')
-    return name
-  }
-
-  const handleImport3D = async (file: File, sourceUpAxis: UpAxis, name: string, includeAnimation: boolean = true) => {
-    setImporting(true)
-    clearImportErrorsForFile(file.name)
-    try {
-      await unloadExistingNamesake(name, 'mesh')
-      const object = await loadModel3DFile(file)
-      const id = crypto.randomUUID()
-      object.name = name
-      object.userData.sceneObjectId = id
-      // "Include this file's animation" (ImportModelDialog.tsx) — bakes
-      // whatever clip(s) import3d.ts's own parse attached into real, dated
-      // ElementKeyframe rows (2026-07-23, per Maro: "we discussed normal 3d
-      // animation before, being able to animate the keyframes independent
-      // of schedule activities. the same thing" — see
-      // embeddedAnimationBake.ts's own header for the full story, including
-      // why an earlier always-looping AnimationMixer preview was scrapped
-      // in favour of this). Starts "today" at local midnight, one calendar
-      // day per clip-second — Maro's own confirmed choice over an explicit
-      // start-date/duration dialog.
-      //
-      // keepRawAnimation (2026-08-22, per Maro's own real Blender particle-
-      // VFX export, "Water Spray.glb") — a clip that animates more than
-      // one node independently (findSingleAnimatedNode's own multi-node
-      // case) can NEVER become keyframes at all, not just "wasn't this
-      // time" — this app's ElementKeyframe schema has no way to express a
-      // per-particle animation, full stop. Rather than just discard it
-      // (the old, only behaviour: object.animations always cleared
-      // afterward, baked or not), that specific case now keeps the raw
-      // clip on the object for Viewport3D.tsx's own EmbeddedAnimationLoop
-      // to play back as an always-looping preview instead — the one case
-      // the earlier "always-looping AnimationMixer" design (scrapped
-      // above) was actually right for. Every other case (baked
-      // successfully, no animation at all, or the checkbox unchecked)
-      // still clears object.animations exactly as before, so a single
-      // rigid-body import stays fully driven by its own real keyframes,
-      // never double-animated by both systems at once.
-      let keepRawAnimation = false
-      if (includeAnimation && object.animations.length > 0) {
-        const startDate = new Date()
-        startDate.setHours(0, 0, 0, 0)
-        const baked = bakeEmbeddedAnimationToKeyframes(object, settings.upAxis, startDate)
-        if (baked === null) {
-          keepRawAnimation = true
-          addImportError(`"${name}" imported — its animation moves more than one part independently (e.g. a particle effect or a rig), which can't become schedule keyframes, so it's playing back as a raw, always-looping preview instead.`)
-        } else {
-          for (const kf of baked) await elementKeyframes.upsert('mesh', name, kf.field, kf.date, kf.value)
-        }
-      }
-      if (!keepRawAnimation) object.animations = []
-      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
-      setDataTab('3d')
-      await enqueueUpload(() => persistModelFile(id, file, 'mesh', sourceUpAxis, name, keepRawAnimation))
-    } catch (err) {
-      addImportError(err instanceof Error ? err.message : 'Failed to import 3D file')
-    } finally {
-      setImporting(false)
-    }
+    const id=crypto.randomUUID(),inputs=parts.map(p=>p.id),previousHidden=new Set(hiddenIds)
+    await siteScene.save([...siteScene.scene.items,{id,name,kind:'asset',asset_id:asset.id,...asset.dimensions,
+      operation_inputs:parts.map(p=>'fileId' in p && p.fileId?'file:'+p.fileId:p.id),generator_version:1,up_axis:settings.upAxis,units:'m',position:{x:anchor.x,y:anchor.y,z:anchor.z},
+      yaw:0,color:'#ffffff',locked:false,activity_id:null,path_id:null,points:[],closed:false,module_length:2,gate_start:0,gate_width:0}],
+      'Assemble equipment',{redo:()=>setHiddenIds(prev=>new Set([...prev,...inputs])),undo:()=>setHiddenIds(prev=>new Set([...prev].filter(value=>!inputs.includes(value)||previousHidden.has(value))))})
+    window.dispatchEvent(new Event('prosota-site-assets-changed'))
+    return 'site:'+id
   }
 
   // Reality Captures — dragging/picking a .xyz or .e57 straight into the
@@ -4321,28 +4277,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // they used to be session-only): the whole set is packed into one file
   // (fileBundle.ts) and persisted as an ordinary mesh Model3DFile, so the
   // restore path below unpacks it and reloads it through loadTexturedObj.
-  const handleImportTexturedObj = async (objFile: File, mtlFile: File, textureFiles: File[]) => {
-    setImporting(true)
-    clearImportErrorsForFile(objFile.name)
-    try {
-      const name = objFile.name
-      await unloadExistingNamesake(name, 'mesh')
-      const object = await loadTexturedObj(objFile, mtlFile, textureFiles)
-      const id = crypto.randomUUID()
-      object.name = name
-      object.userData.sceneObjectId = id
-      const sourceUpAxis = defaultSourceUpAxis('mesh')
-      setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
-      setDataTab('3d')
-      const bundle = new File([await packBundle([objFile, mtlFile, ...textureFiles])], name)
-      await enqueueUpload(() => persistModelFile(id, bundle, 'mesh', sourceUpAxis, name))
-    } catch (err) {
-      addImportError(err instanceof Error ? err.message : 'Failed to import textured OBJ')
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const handleImportIfc = async (file: File, sourceUpAxis: UpAxis, name: string) => {
     setImporting(true)
     clearImportErrorsForFile(file.name)
@@ -4425,20 +4359,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       uploadQueueRef.current.push(() => task().then(resolve, reject))
       runNextUpload()
     })
-  }
-
-  // Mesh-only now (2026-07-17) — IFC files bypass this dialog entirely,
-  // see handleFileSelected's own header. One confirm applies sourceUpAxis
-  // (and includeAnimation, always false for a real multi-file batch — see
-  // ImportModelDialog's own header) to every file in the batch at once
-  // (2026-07-28) — not just pendingImports[0] itself.
-  const handleConfirmImport = (sourceUpAxis: UpAxis, includeAnimation: boolean) => {
-    const batch = pendingImports[0]
-    if (!batch) return
-    setPendingImports(prev => prev.slice(1))
-    for (const file of batch) {
-      importQueueRef.current = importQueueRef.current.then(() => handleImport3D(file, sourceUpAxis, file.name, includeAnimation))
-    }
   }
 
   // Restores every persisted model on load (2026-07-09, per Maro: "if i hard
@@ -5449,6 +5369,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // reasoning.
   const [customTextures, setCustomTextures] = useState<Record<string, CustomTextureSet>>({})
   const [textureError, setTextureError] = useState<string | null>(null)
+  const ownedCustomTextures=useRef(new Set<import('three').Texture>())
+  useEffect(()=>{
+    const next=new Set(Object.values(customTextures).flatMap(set=>Object.values(set).flatMap(value=>value?[value.texture]:[])))
+    for(const texture of ownedCustomTextures.current)if(!next.has(texture))texture.dispose()
+    ownedCustomTextures.current=next
+  },[customTextures])
+  useEffect(()=>()=>{for(const texture of ownedCustomTextures.current)texture.dispose()},[])
   // Manual per-element Opacity (2026-07-26, per Maro: "allow for
   // transparency setting (0-1) for materials so i can simply make the
   // window surfaces less opaque instead of replacing the materials
@@ -5509,7 +5436,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       for (const key of keys) {
         const current = next[key]
         if (!current?.[slot]) continue
-        current[slot]?.texture.dispose()
         const nextSet = { ...current }
         delete nextSet[slot]
         next[key] = nextSet
@@ -5571,6 +5497,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // linkedMaterials.ts's own header for exactly what "linked" means per
   // channel.
   const handleSelectLinkedMaterial = (slot: TextureSlot) => {
+    if(activeObjectId && !getIfcHandleFor(activeObjectId)) {
+      const objects=[...sceneObjects.filter(o=>o.kind==='mesh'),...siteViewportObjects].filter(o=>!siteScene.scene.items.some(i=>'site:'+i.id===o.id && i.locked))
+      setSelectedObjectIds(new Set(matchingObjectChannels(activeObjectId,slot,objects,customTextures))); return
+    }
     const handle = getIfcHandleFor(activeObjectId)
     if (!handle || !activeObjectId || selectedExpressId === null) return
     // findLinkedExpressIds (2026-08-24 perf fix) no longer materializeAll's
@@ -5601,8 +5531,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   const handleApplyToLinkedMaterial = (slot: TextureSlot) => {
     if (!activeTextureKey || !activeObjectId) return
-    const sourceValue = customTextures[activeTextureKey]?.[slot]
+    const sourceValue = customTextures[activeTextureKey]?.[slot] ?? customTextures[resolveActiveTextureKeys()[0]]?.[slot]
     if (!sourceValue) return
+    if(!getIfcHandleFor(activeObjectId)) {
+      const keys=resolveActiveTextureKeys()
+      setCustomTextures(prev=>{const next={...prev};for(const key of keys)next[key]={...next[key],[slot]:sourceValue};return next});return
+    }
     // Materializes exactly the elements actually receiving this override,
     // not the whole model (2026-08-24 perf fix, per Maro: "changing the
     // textures makes the viewport laggy while orbiting" — see
@@ -5978,6 +5912,45 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     visible: !hiddenIds.has(o.id),
   })), [sceneObjects, hiddenIds])
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
+  const siteViewportObjects = useMemo(() => siteScene.scene.items.flatMap(item => {
+    const object = siteRoots.get(item.id)
+    return object ? [{ id: 'site:' + item.id, name: item.name, kind: 'mesh' as const, sourceUpAxis: item.up_axis, object,
+      visible: !hiddenIds.has('site:' + item.id) && (!isolateMode || isolatedObjectIds.has('site:' + item.id)) }] : []
+  }), [siteRoots, siteScene.scene.items, hiddenIds, isolateMode, isolatedObjectIds])
+  const equipmentObjects = useMemo(() => [...sceneObjects, ...siteViewportObjects.filter(o=>!siteScene.scene.items.some(i=>'site:'+i.id===o.id && (i.kind==='array'||i.kind==='scatter'))).map(o=>{
+    let rigRoot: Object3D | undefined
+    o.object.traverse(node=>{if(node.userData.siteAssetRigRoot)rigRoot=node})
+    return {...o,name:o.id,label:o.name,object:rigRoot || o.object}
+  })], [sceneObjects, siteViewportObjects, siteScene.scene.items])
+  const activeSiteItem = siteScene.scene.items.find(item => 'site:' + item.id === activeObjectId)
+  const activeSiteRoot = activeSiteItem ? siteRoots.get(activeSiteItem.id) : null
+  useEffect(() => {
+    if (activeObjectId?.startsWith('site:')) {
+      siteScene.setSelected(activeObjectId.slice(5)); setPropertiesOpen(true); setEditPivot(false)
+    }
+  }, [activeObjectId])
+  useEffect(() => {
+    if (siteScene.selected && siteRoots.has(siteScene.selected) && activeObjectId !== 'site:' + siteScene.selected) {
+      setSelectedExpressId(null); setSelectedExpressIds(new Set());
+      setSelectedObjectIds(new Set(['site:' + siteScene.selected])); setActiveObjectId('site:' + siteScene.selected)
+    }
+  }, [siteScene.selected, siteRoots])
+
+  const persistSiteTransforms = () => {
+    const changes = new Map()
+    for (const item of siteScene.scene.items) {
+      if (item.locked || !selectedObjectIds.has('site:' + item.id)) continue
+      const object = siteRoots.get(item.id)
+      const objectState = object ? captureSiteObjectState(object) : null
+      if (object && (JSON.stringify(objectState) !== JSON.stringify(item.object_state) || (['x', 'y', 'z'] as const).some(axis =>
+        Math.abs(object.position[axis] - item.position[axis]) > 1e-8 ||
+        Math.abs(object.rotation[axis] - (item.rotation?.[axis] ?? 0)) > 1e-8 ||
+        Math.abs(object.scale[axis] - (item.scale?.[axis] ?? 1)) > 1e-8))) changes.set(item.id, { object_state: objectState, position: {x: object.position.x, y: object.position.y, z: object.position.z},
+        rotation: {x: object.rotation.x, y: object.rotation.y, z: object.rotation.z}, scale: {x: object.scale.x, y: object.scale.y, z: object.scale.z} })
+    }
+    if (changes.size) siteScene.updateTransforms(changes)
+    setTransformTick(t => t + 1)
+  }
   const activeSceneObject = sceneObjects.find(o => o.id === activeObjectId) ?? null
 
   // Realistic Materials render mode (2026-09-28, per Maro — see
@@ -5996,6 +5969,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [realisticInfoVersion, setRealisticInfoVersion] = useState(0)
   const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
   const [realisticEntryModels, setRealisticEntryModels] = useState<Record<string, RealisticEntryModel[]>>({})
+  const [siteRealisticSources, setSiteRealisticSources] = useState<{objectId:string; name:string; isIfc:boolean; info:RealisticModelInfo}[]>([])
+  const siteMaterialSignature = JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind]))
   const [realisticAnalysing, setRealisticAnalysing] = useState(false)
   useEffect(() => {
     if (settings.renderMode !== 'realistic') return
@@ -6021,18 +5996,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         if (o.kind === 'ifc' || o.object.userData.realisticMaterialInfo) continue
         o.object.userData.realisticMaterialInfo = extractMeshRealisticInfo(o.object)
       }
+      const siteSources = await Promise.all((JSON.parse(siteMaterialSignature) as string[][]).map(async ([id,assetId,name,kind,finish,placement_kind]) => {
+        if (!assetId) return {objectId:'site:'+id,name,isIfc:false,info:primitiveMaterialInfo({id,name,kind,finish,placement_kind})}
+        try { return {objectId:'site:'+id,name,isIfc:false,info:siteMaterialInfo(await loadSiteAsset(assetId),assetId)} }
+        catch { return null }
+      }))
       if (cancelled) return
+      const siteModels = siteSources.filter((s): s is NonNullable<typeof s> => s !== null)
+      setSiteRealisticSources(siteModels)
       setRealisticAnalysing(false)
-      setRealisticEntries(mergeRealisticEntries(sceneObjects.map(o => o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined)))
-      setRealisticEntryModels(entryModelsByKey(sceneObjects.map(o => ({
+      setRealisticEntries(mergeRealisticEntries([...sceneObjects.map(o => o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined), ...siteModels.map(s=>s.info)]))
+      setRealisticEntryModels(entryModelsByKey([...sceneObjects.map(o => ({
         objectId: o.id, name: o.name, isIfc: o.kind === 'ifc',
         info: o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined,
-      }))))
+      })), ...siteModels]))
       setRealisticInfoVersion(v => v + 1)
     }
     run()
     return () => { cancelled = true }
-  }, [settings.renderMode, ifcHandles, sceneObjects])
+  }, [settings.renderMode, ifcHandles, sceneObjects, siteMaterialSignature])
 
   // Material keys used by the current selection (2026-10-02, per Maro: "when
   // i select the element i want to see filter to see the element in the
@@ -6042,10 +6024,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // object contributes every material it has.
   const selectedRealisticKeys = useMemo<Set<string> | null>(() => {
     if (settings.renderMode !== 'realistic') return null
+
     const ids = new Set(selectedExpressIds)
     if (selectedExpressId !== null) ids.add(selectedExpressId)
     if (ids.size === 0 && selectedObjectIds.size === 0) return null
     const keys = new Set<string>()
+    for(const source of siteRealisticSources)if(selectedObjectIds.has(source.objectId))for(const key of source.info.entries.keys())keys.add(key)
     for (const o of sceneObjects) {
       if (!selectedObjectIds.has(o.id)) continue
       const info = o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
@@ -6058,7 +6042,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
     return keys
     // realisticInfoVersion: re-run once material info has been extracted.
-  }, [settings.renderMode, selectedExpressId, selectedExpressIds, selectedObjectIds, sceneObjects, realisticInfoVersion])
+  }, [settings.renderMode, selectedExpressId, selectedExpressIds, selectedObjectIds, sceneObjects, realisticInfoVersion, siteScene.selected, siteRealisticSources])
 
   // Realistic Materials' own dock panel (2026-09-29, per Maro: mapping +
   // glass were "a bit compressed" inside 3D View Properties — "give them
@@ -6067,7 +6051,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // mode is switched on was "disruptive"). Dock side persists like every
   // other dock panel.
   const [realisticPanelDismissed, setRealisticPanelDismissed] = useState(true)
-  const realisticPanelOpen = settings.renderMode === 'realistic' && !realisticPanelDismissed
+  const realisticPanelOpen = !realisticPanelDismissed
   const [realisticPanelDock, setRealisticPanelDock] = useState<PanelSide>(() => {
     try {
       return localStorage.getItem(REALISTIC_PANEL_DOCK_KEY) === 'left' ? 'left' : 'right'
@@ -6086,6 +6070,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Mapping panel's Select button: every element in one model using that
   // material entry, through the same multi-select path Select by Type uses.
   const handleSelectRealisticEntry = (key: string, objectId: string) => {
+    if(objectId.startsWith('site:')) { handleSelectExpressId(null); handleSelectObject(null); siteScene.setSelected(objectId.slice(5)); return }
     const info = sceneObjects.find(o => o.id === objectId)?.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
     if (!info) return
     handleSelectExpressIds(expressIdsForKey(info, key), false, objectId)
@@ -6155,7 +6140,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // is grouped, even though i select an individual object. using any of the
   // transforms affect the model") — the specific selected sub-element when
   // one's picked, falling back to the whole model otherwise.
-  let activeTransformObject: Object3D | null = activeSceneObject?.object ?? null
+  let activeTransformObject: Object3D | null = activeSceneObject?.object ?? activeSiteRoot ?? null
   let isElementTransform = false
   const activeIfcHandle = activeSceneObject?.kind === 'ifc' ? getIfcHandleFor(activeObjectId) : null
 
@@ -6415,6 +6400,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleTransformChange = () => {
+    persistSiteTransforms()
     recordTransformUndo()
     setTransformTick(t => t + 1)
     persistActiveTransform()
@@ -6634,7 +6620,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const resolveActiveTextureKeys = (): string[] =>
     activeIfcHandle && activeObjectId && selectedExpressIds.size > 0
       ? [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
-      : activeTextureKey ? [activeTextureKey] : []
+      : selectedObjectIds.size > 0 ? [...selectedObjectIds].filter(id => !siteScene.scene.items.some(i => 'site:'+i.id===id && i.locked)) : activeTextureKey ? [activeTextureKey] : []
   const hasAnyActiveTextureOverride = resolveActiveTextureKeys().some(key => {
     const set = customTextures[key]
     return (set && Object.keys(set).length > 0) || customOpacity[key] !== undefined
@@ -6648,7 +6634,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       for (const key of keys) {
         const current = next[key]
         if (!current) continue
-        disposeCustomTextureSet(current)
         delete next[key]
         changed = true
       }
@@ -6692,7 +6677,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   // Select Linked / Apply to Linked only make sense for one specific IFC
   // sub-element — see handleSelectLinkedMaterial's own comment above.
-  const linkedMaterialsAvailable = isElementTransform && !!activeIfcHandle
+  const linkedMaterialsAvailable = (isElementTransform && !!activeIfcHandle) || (!!activeObjectId && !activeIfcHandle)
 
   // Keyframe support for whichever object is active (2026-07-08, per Maro:
   // "the blender way with the keyframes as long as you have 3d/ifc object
@@ -6809,7 +6794,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // per-sub-element one yet). Whatever's currently the "active" whole
   // object (same target TransformPanel itself edits), not a bulk/multi
   // selection — a Path binds exactly one target.
-  const pathBindTarget = activeSceneObject?.kind === 'mesh'
+  const pathBindTarget = activeSiteItem && !activeSiteItem.locked
+    ? {kind:'mesh' as const, ref:'site:'+activeSiteItem.id,label:activeSiteItem.name}
+    : activeSceneObject?.kind === 'mesh'
     ? { kind: 'mesh' as const, ref: activeSceneObject.name, label: activeSceneObject.name || 'Object' }
     : null
 
@@ -6965,6 +6952,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'timeline':
         return (
           <TimelineWindow
+            siteMotionTracks={siteScene.scene.items.flatMap(item=>{const motion=item.path_motion,path=paths.find(p=>p.id===motion?.path_id);const curve=path?buildPathCurve(path.points,path.closed,path.curve_mode):null;return motion&&curve?[{id:item.id,name:item.name,start:motion.start,duration:curve.getLength()/motion.speed}]:[]})}
             equipmentTracks={<EquipmentTracks rigs={equipment.rigs} start={timelineRange?.start ?? null} end={timelineRange?.end ?? null} onSeek={handleSeekTimelineTo} onSave={equipment.save} disabled={equipment.busy || equipmentEditing} />}
             scheduleStart={timelineRange?.start ?? null}
             scheduleEnd={timelineRange?.end ?? null}
@@ -7140,12 +7128,70 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // below into what SideDock.tsx actually renders. Adding a third dockable
   // panel later is just a third entry here, not a new rendering path.
   const dockablePanels: (DockedPanel & { dock: PanelSide })[] = []
+  if (siteToolsOpen && selectedProject) dockablePanels.push({
+    id: 'site-tools', label: 'Site Tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
+    onClose: () => { setSiteToolsOpen(false); siteScene.setDraft(null) },
+    content: <SiteToolsPanel selectedShapeSources={() => {
+      if (selectedExpressIds.size && activeObjectId) {
+        const handle = getIfcHandleFor(activeObjectId)
+        if (!handle) return []
+        const sources = [...selectedExpressIds].map(id => {
+          ensureMaterialized(handle.object, id)
+          const group = new Group()
+          handle.object.updateWorldMatrix(true, true)
+          const meshes = handle.object.userData.expressIdMeshIndex?.get(id) as Mesh[] | undefined
+          for (const mesh of meshes || []) { const copy = new Mesh(mesh.geometry, mesh.material); copy.name=mesh.name; copy.userData={...mesh.userData}; copy.matrixAutoUpdate = false; copy.matrix.copy(mesh.matrixWorld); group.add(copy) }
+          const source=sceneObjects.find(o=>o.id===activeObjectId)
+          return { backupRef:source?.fileId?'file:'+source.fileId+'::'+id:undefined, id: activeObjectId+'::'+id, name: 'IFC element '+id, object: group }
+        })
+        setMaterializeVersion(v => v+1)
+        return sources
+      }
+      return [...sceneObjects.filter(o=>o.kind==='mesh' && selectedObjectIds.has(o.id)).map(o=>({id:o.id,backupRef:o.fileId?'file:'+o.fileId:undefined,name:o.name,object:o.object})),
+        ...siteScene.scene.items.flatMap(item=>{const object=siteSourceRoots.get(item.id);return object && (selectedObjectIds.has('site:'+item.id)||siteScene.selected===item.id)?[{id:'site:'+item.id,name:item.name,object}]:[]})]
+    }} hideShapeSources={ids => {
+      const whole=ids.filter(id=>!id.includes('::')), elements=ids.filter(id=>id.includes('::'))
+      const addedWhole=whole.filter(id=>!hiddenIds.has(id)), addedElements=elements.filter(id=>!hiddenExpressIds.has(id))
+      for(const id of ids){const [objectId,element]=id.split('::');const source=sceneObjects.find(o=>o.id===objectId);restoredOperationInputs.current.add(source?.fileId?'file:'+source.fileId+(element?'::'+element:''):id)}
+      setHiddenIds(prev=>new Set([...prev,...whole]));setHiddenExpressIds(prev=>new Set([...prev,...elements]))
+      return ()=>{setHiddenIds(prev=>new Set([...prev].filter(id=>!addedWhole.includes(id))));setHiddenExpressIds(prev=>new Set([...prev].filter(id=>!addedElements.includes(id))))}
+    }} importRequest={assetImportRequest} sceneSources={[...sceneObjects.filter(o=>o.kind==='mesh').map(o=>({id:o.id,backupRef:o.fileId?'file:'+o.fileId:undefined,name:o.name,object:o.object})),...siteScene.scene.items.flatMap(i=>{const object=siteSourceRoots.get(i.id);return object?[{id:'site:'+i.id,name:i.name,object}]:[]})]} key={selectedProject.id} projectId={selectedProject.id} paths={paths} zones={zones} activities={activities}
+      links={modelElementLinks} profiles={animationProfiles.profiles} linkError={linkError}
+      onUnlink={handleUnlinkElement} onAssignProfile={handleAssignProfile}
+      onLink={async (item, activityId, profileId) => {
+        try {
+          setLinkError(null)
+          const link = await createModelElementLink({ activity_id: activityId, source_kind: 'site', element_ref: item.id, element_label: item.name, animation_profile_id: profileId })
+          setModelElementLinks(previous => [...previous.filter(l => l.id !== link.id), link])
+        } catch (error) { setLinkError(error instanceof Error ? error.message : 'Unable to link site object') }
+      }}
+      upAxis={settings.upAxis} state={siteScene} openPaths={() => {
+        setPathsPanelOpen(true)
+        localStorage.setItem(PATHS_PANEL_OPEN_KEY, 'true')
+        setSideDockFocus(previous => ({ id: 'paths', token: (previous?.token ?? 0) + 1 }))
+      }} focusSite={() => { handleSelectExpressId(null); handleSelectObject(null); setAddingPointsForPathId(null); setAddingPointsForZoneId(null); setAddingAnnotationKind(null); setMeasuringTool(null); setPivotPicking(false) }} />,
+  })
   if (realisticPanelOpen) {
     dockablePanels.push({
-      id: 'realistic-materials', label: 'Realistic Materials', dock: realisticPanelDock,
+      id: 'realistic-materials', label: 'Materials', dock: realisticPanelDock,
       onToggleDock: toggleRealisticPanelDock, onClose: () => setRealisticPanelDismissed(true),
       content: (
         <RealisticMaterialsPanel
+          customEditor={<div className="py-3 space-y-2" data-testid="custom-material-editor">
+            <div className="px-3 text-xs font-semibold">Custom material & presets</div>
+            <p className="px-3 text-[11px] text-gray-500 dark:text-prosota-muted">{activeObjectId ? `Editing ${selectedExpressIds.size || selectedObjectIds.size || 1} selected ${selectedExpressIds.size ? 'element(s)' : 'object(s)'}. Custom textures take priority over automatic finishes. Clear Materials restores the underlying finish.` : 'Select objects or IFC elements to assign a material. You can create and manage presets here.'}</p>
+            <MaterialPresetPicker presets={materialPresets.presets} loading={materialPresets.loading}
+              currentTextures={customTextures[resolveActiveTextureKeys()[0]] ?? {}} onApply={handleApplyMaterialPreset}
+              onCreate={materialPresets.create} onUpdate={materialPresets.update} onDelete={materialPresets.remove} canApply={resolveActiveTextureKeys().length>0 && !activeSiteItem?.locked} />
+            {activeObjectId && <fieldset disabled={!!activeSiteItem?.locked}>
+              <TextureFields textures={customTextures[resolveActiveTextureKeys()[0]]} opacity={customOpacity[resolveActiveTextureKeys()[0]]}
+                onOpacityChange={handleOpacityChange} onUploadTexture={handleUploadActiveTexture} onClearTexture={handleClearActiveTexture}
+                onFieldChange={handleTextureFieldChange} lengthUnitToMetres={activeIfcLengthUnitToMetres} unitDisplay={ifcUnitDisplay}
+                onClearAll={handleClearAllActiveTextures} hasAnyOverride={hasAnyActiveTextureOverride}
+                linkedAvailable={linkedMaterialsAvailable} onSelectLinked={handleSelectLinkedMaterial} onApplyToLinked={handleApplyToLinkedMaterial} />
+            </fieldset>}
+            {textureError && <p role="alert" className="px-3 text-xs text-red-500">{textureError}</p>}
+          </div>}
           entries={realisticEntries} mapping={realisticMapping} onMappingChange={setRealisticMapping}
           analysing={realisticAnalysing} entryModels={realisticEntryModels} onSelectEntry={handleSelectRealisticEntry}
           selectionKeys={selectedRealisticKeys}
@@ -7192,9 +7238,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   if (cameraPanelOpen) {
     dockablePanels.push({
-      id: 'cameras', label: 'Camera Views', dock: cameraPanelDock,
+      id: 'cameras', label: 'Camera Views & Presets', dock: cameraPanelDock, keepMounted: true,
       onToggleDock: toggleCameraPanelDock, onClose: toggleCameraPanel,
       content: (
+        <div className="flex flex-col min-h-0 flex-1">
+          <div className="flex gap-1 p-2 border-b border-gray-200 dark:border-prosota-line">
+            <button className={`flex-1 text-xs p-2 rounded ${cameraPanelTab === 'views' ? 'bg-blue-600 text-white' : ''}`} onClick={() => setCameraPanelTab('views')}>Saved Views</button>
+            <button className={`flex-1 text-xs p-2 rounded ${cameraPanelTab === 'presets' ? 'bg-blue-600 text-white' : ''}`} onClick={() => setCameraPanelTab('presets')}>Motion Presets</button>
+          </div>
+          <div className={cameraPanelTab === 'views' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
         <CameraViewPanel
           views={cameraViews}
           error={cameraViewError}
@@ -7202,6 +7254,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onRename={handleRenameCameraView}
           onDelete={handleDeleteCameraView}
         />
+          </div>
+          <div ref={setCameraPresetsHost} className={cameraPanelTab === 'presets' ? 'flex-1 min-h-0 overflow-y-auto' : 'hidden'} />
+        </div>
       ),
     })
   }
@@ -7280,6 +7335,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           error={pathError}
           addingPointsForPathId={addingPointsForPathId}
           upAxis={settings.upAxis}
+          siteBindings={path => <SitePathBindings path={path} items={siteScene.scene.items} busy={siteScene.busy} onChange={(id,motion) => { void siteScene.save(siteScene.scene.items.map(item=>item.id===id?{...item,path_motion:motion}:item),'Change path motion').catch(error=>setPathError(pathErrorMessage(error,'Failed to update path motion'))) }} />}
           bindTarget={pathBindTarget}
           followers={pathFollowers}
           onCreate={handleCreatePath}
@@ -7396,7 +7452,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           annotations={resolvedAnnotations}
           error={annotationError}
           addingKind={addingAnnotationKind}
-          bindTarget={pathBindTarget}
+          bindTarget={activeSceneObject?.kind === 'mesh' ? {ref:activeSceneObject.name,label:activeSceneObject.name} : null}
           activities={activities}
           modelElementLinks={modelElementLinks}
           animationProfiles={animationProfiles.profiles}
@@ -7476,9 +7532,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
       content: (
         <div className="flex-1 overflow-y-auto">
-        <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={sceneObjects} rigs={equipment.rigs}
+        <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={equipmentObjects} rigs={instanceEquipment}
           busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
-          onVisual={setEquipmentVisual} onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
+          onSaveAsset={async rig=>{
+            const item=siteScene.scene.items.find(i=>'site:'+i.id===rig.model_ref)
+            if(!item?.asset_id)throw Error('Place an imported library asset to save a reusable equipment rig.')
+            const existing=equipment.rigs.find(r=>r.model_ref==='asset:'+item.asset_id)
+            const ok=await equipment.save({...rig,id:existing?.id || '',version:existing?.version || 1,model_ref:'asset:'+item.asset_id})
+            if(!ok)throw Error('Could not save the library equipment rig.')
+            const assets=await api.get('/api/v1/site-assets/',{params:{project_id:selectedProject?.id}})
+            const asset=assets.data.find((a:any)=>a.id===item.asset_id)
+            await api.patch('/api/v1/site-assets/'+item.asset_id,{name:asset?.name || item.name,category:'Equipment'})
+            window.dispatchEvent(new Event('prosota-site-assets-changed'))
+          }} onVisual={setEquipmentVisual} onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
         <ElementRigPanel
           elementParents={elementParents}
           error={elementParentError}
@@ -7529,7 +7595,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // duplicating the entire prop list.
   const viewport3DElement = (
     <Viewport3D
-      equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
+      siteScene={{ customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? realisticMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: siteScene.place, onMove: point => siteScene.setDraft(old => old ? { ...old, position: point } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => { handleSelectExpressId(null); if (siteRoots.has(id)) { handleSelectObject('site:' + id, additive); setPropertiesOpen(true); setEditPivot(false) } else handleSelectObject(null); siteScene.setSelected(id); setSiteToolsOpen(true) } }}
+      equipmentObjects={equipmentObjects} equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
       importedObjects={viewportObjects}
@@ -7537,10 +7604,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       meshAnimWindows={meshAnimWindows}
       selectedExpressId={selectedExpressId}
       selectedExpressIds={selectedExpressIds}
-      onSelect={handleSelectExpressId}
+      onSelect={(id, additive, objectId) => { siteScene.setSelected(null); handleSelectExpressId(id, additive, objectId) }}
       activeObjectId={activeObjectId}
       selectedObjectIds={selectedObjectIds}
-      onSelectObject={handleSelectObject}
+      onSelectObject={(id, additive) => { siteScene.setSelected(null); handleSelectObject(id, additive) }}
       onSelectAll={handleSelectAll}
       materializeVersion={materializeVersion}
       realisticMapping={realisticMapping}
@@ -7605,6 +7672,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       cameras={cameras}
       activeCameraId={activeCameraId}
       onAddCamera={handleAddCamera}
+      cameraViews={cameraViews}
+      cameraPresetsHost={cameraPresetsHost}
+      cameraPresetsVisible={cameraPanelOpen}
+      onOpenCameraPresets={openCameraPresets}
+      onCloseCameraPresets={() => setCameraPanelOpen(false)}
+      cameraCollections={collections}
+      cameraProjectId={selectedProject?.id}
+      onSaveMotionCamera={handleSaveMotionCamera}
+      onOpenMotionCamera={setActiveCameraId}
       onExitCameraView={handleExitCameraView}
       onKeyCameraPose={handleKeyCameraPose}
       siteContext={siteContext}
@@ -7894,7 +7970,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             cameraPanelOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2'
           }`}
         >
-          Camera Views
+          Camera Views & Presets
         </button>
         <button
           onClick={toggleCamerasPanel}
@@ -7921,6 +7997,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           Split by Level
         </button>
+        <button className={`text-xs px-2.5 py-1 rounded-md border font-medium ${siteToolsOpen ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel dark:text-prosota-paper dark:border-prosota-line'}`}
+          onClick={() => { setSiteToolsOpen(v => !v); siteScene.setDraft(null) }}>Site Tools</button>
         <button
           onClick={togglePathsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
@@ -8027,15 +8105,18 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           </button>
         )}
         <div className="w-px h-4 bg-gray-200 mx-1" />
-        <input ref={importInputRef} type="file" accept=".glb,.gltf,.obj,.fbx,.ifc,.mtl,.jpg,.jpeg,.png,.xyz,.e57" multiple onChange={handleFileSelected} className="hidden" />
+        <input ref={importInputRef} type="file" accept=".ifc" multiple onChange={handleFileSelected} className="hidden" />
         <button
           onClick={() => importInputRef.current?.click()}
           disabled={importing}
-          title="Import a GLTF/GLB, OBJ, FBX, or IFC model into the viewport. Exporting from Revit? File type IFC (not IfcXML/zip) — turn on Export base quantities (Property Sets tab) and Keep Tessellated Geometry as Triangulation (Advanced tab)."
+          title="Import an IFC model into the viewport. Exporting from Revit? File type IFC (not IfcXML/zip) — turn on Export base quantities (Property Sets tab) and Keep Tessellated Geometry as Triangulation (Advanced tab)."
           className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50"
         >
-          ⬆ Import Model
+          ⬆ Import IFC
         </button>
+        <button className="text-xs px-2.5 py-1 rounded-md border dark:border-prosota-line" onClick={()=>{setSiteToolsOpen(true);setAssetImportRequest(v=>v+1);setSideDockFocus(previous=>({id:'site-tools',token:(previous?.token??0)+1}))}}>Import 3D</button>
+        <input hidden ref={pointCloudImportRef} type="file" accept=".xyz,.e57" multiple onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value='';for(const file of files)importQueueRef.current=importQueueRef.current.then(()=>handleImportPointCloud(file))}} />
+        <button className="text-xs px-2.5 py-1 rounded-md border dark:border-prosota-line" onClick={()=>pointCloudImportRef.current?.click()}>Import point cloud</button>
         <button
           onClick={() => setIntegratedIfcExportOpen(true)}
           disabled={!selectedProject || !period || !costPeriod || importing || uploadProgress.size > 0}
@@ -8094,21 +8175,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
       <div className="flex flex-1 min-h-0">
         <PropertiesPanel
-          equipmentPivot={equipmentVisual?.joint && equipmentVisual.pivot && sceneObjects.find(o=>o.name===equipmentVisual.model)
-            ? {state:equipmentVisual,root:sceneObjects.find(o=>o.name===equipmentVisual.model)!.object} : null}
+          siteSelectionPanel={activeSiteItem ? <div className="px-3 text-xs">{siteScene.busy ? "Saving object…" : siteScene.error}</div> : null}
+          equipmentPivot={equipmentVisual?.joint && equipmentVisual.pivot && equipmentObjects.find(o=>o.name===equipmentVisual.model)
+            ? {state:equipmentVisual,root:equipmentObjects.find(o=>o.name===equipmentVisual.model)!.object} : null}
           open={propertiesOpen}
           onToggle={toggleProperties}
           settings={settings}
           onSettingsChange={setSettings}
           realisticPanelOpen={realisticPanelOpen}
-          onOpenRealisticPanel={() => setRealisticPanelDismissed(false)}
+          onOpenRealisticPanel={() => { setSettings({...settings,renderMode:'realistic'}); setRealisticPanelDismissed(false); setSideDockFocus(previous => ({ id: 'realistic-materials', token: (previous?.token ?? 0) + 1 })) }}
           environmentName={customEnvironment?.name ?? null}
           onUploadEnvironment={handleUploadEnvironment}
           onClearEnvironment={handleClearEnvironment}
           environmentError={environmentError}
           activeObject={activeSceneObject && activeTransformObject ? {
             id: activeSceneObject.id, name: activeSceneObject.name, sourceUpAxis: activeSceneObject.sourceUpAxis, object: activeTransformObject,
-          } : null}
+          } : activeSiteItem && activeSiteRoot ? {id: 'site:'+activeSiteItem.id,name:activeSiteItem.name,sourceUpAxis:activeSiteItem.up_axis,object:activeSiteRoot,isSite:true,locked:activeSiteItem.locked} : null}
           isElementTransform={isElementTransform}
           onTransformChange={handleTransformChange}
           lengthUnitToMetres={activeIfcLengthUnitToMetres}
@@ -8121,31 +8203,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onEditPivotChange={setEditPivot}
           snapToSurface={snapToSurface}
           onSnapToSurfaceChange={setSnapToSurface}
-          /* First of resolveActiveTextureKeys(), not activeTextureKey (2026-07-29
-             fix, alongside the same function's write-path fix above) — for a
-             real multi-element selection activeTextureKey resolves to the
-             whole-object key, which nothing here writes to any more, so the
-             panel would otherwise show "no override" even right after
-             applying one. Showing the primary/first selected element's own
-             state keeps this preview honest about what a Clear click would
-             actually remove. */
-          activeObjectTextures={resolveActiveTextureKeys()[0] ? customTextures[resolveActiveTextureKeys()[0]] : undefined}
-          activeOpacity={resolveActiveTextureKeys()[0] ? customOpacity[resolveActiveTextureKeys()[0]] : undefined}
-          onOpacityChange={handleOpacityChange}
-          onUploadTexture={handleUploadActiveTexture}
-          onTextureFieldChange={handleTextureFieldChange}
-          onClearAllTextures={handleClearAllActiveTextures}
-          hasAnyActiveTextureOverride={hasAnyActiveTextureOverride}
-          onClearTexture={handleClearActiveTexture}
-          materialPresets={materialPresets.presets}
-          materialPresetsLoading={materialPresets.loading}
-          onApplyMaterialPreset={handleApplyMaterialPreset}
-          onCreateMaterialPreset={materialPresets.create}
-          onUpdateMaterialPreset={materialPresets.update}
-          onDeleteMaterialPreset={materialPresets.remove}
-          linkedMaterialsAvailable={linkedMaterialsAvailable}
-          onSelectLinkedMaterial={handleSelectLinkedMaterial}
-          onApplyToLinkedMaterial={handleApplyToLinkedMaterial}
           keyframeSupport={keyframeSupport}
           pathProgress={pathProgressSupport}
           pivot={pivotSupport}
@@ -8154,7 +8211,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         />
         {leftDockPanels.length > 0 && (
           <>
-            <SideDock side="left" panels={leftDockPanels} width={leftDockWidth} />
+            <SideDock side="left" panels={leftDockPanels} width={leftDockWidth} focusRequest={sideDockFocus} />
             <DockDivider axis="x" onDrag={dx => setLeftDockWidth(w => Math.max(200, w + dx))} />
           </>
         )}
@@ -8197,7 +8254,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         {rightDockPanels.length > 0 && (
           <>
             <DockDivider axis="x" onDrag={dx => setRightDockWidth(w => Math.max(200, w - dx))} />
-            <SideDock side="right" panels={rightDockPanels} width={rightDockWidth} />
+            <SideDock side="right" panels={rightDockPanels} width={rightDockWidth} focusRequest={sideDockFocus} />
           </>
         )}
         <DataPanel
@@ -8250,15 +8307,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onAssignProfile={handleAssignProfile}
         />
       </div>
-      {pendingImports[0] && (
-        <ImportModelDialog
-          files={pendingImports[0]}
-          kind="mesh"
-          queuePosition={pendingImports.length > 1 ? { remaining: pendingImports.length } : undefined}
-          onConfirm={handleConfirmImport}
-          onCancel={() => setPendingImports(prev => prev.slice(1))}
-        />
-      )}
       {scheduleWizardOpen && selectedProject && period && (
         <IfcScheduleWizard
           models={ifcHandles.map(handle => ({

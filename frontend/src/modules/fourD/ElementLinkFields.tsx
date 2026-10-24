@@ -69,7 +69,7 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
               className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
               title={inheritedProfileName ? `Inherits "${inheritedProfileName}" from this activity unless overridden here` : undefined}
             >
-              <option value="">{inheritedProfileName ? `Default (activity: ${inheritedProfileName})` : 'Default (no animation profile)'}</option>
+              <option value="">{inheritedProfileName ? `Default (activity: ${inheritedProfileName})` : 'Default profile'}</option>
               {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
@@ -84,7 +84,7 @@ export function ElementLinkFields({ activities, links, animationProfiles, onLink
             className="w-full text-[11px] border border-gray-200 dark:border-prosota-line rounded px-1.5 py-0.5 text-gray-500 dark:text-prosota-muted"
             title="Animation profile the new link starts with — picking an activity below creates it with this already set, no separate step needed"
           >
-            <option value="">Default (no animation profile)</option>
+            <option value="">Use activity profile (or Default)</option>
             {animationProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}

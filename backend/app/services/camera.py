@@ -19,7 +19,10 @@ async def list_cameras(db: AsyncSession, project_id: uuid.UUID) -> list[CameraRe
 
 
 async def create_camera(db: AsyncSession, data: CameraCreate) -> CameraResponse:
-    row = Camera(**data.model_dump())
+    values = data.model_dump()
+    if data.motion:
+        values["motion"] = data.motion.model_dump(mode="json")
+    row = Camera(**values)
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -31,6 +34,8 @@ async def update_camera(db: AsyncSession, camera_id: uuid.UUID, data: CameraUpda
     if row is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     for field, value in data.model_dump(exclude_unset=True).items():
+        if field == "motion" and data.motion:
+            value = data.motion.model_dump(mode="json")
         setattr(row, field, value)
     await db.commit()
     await db.refresh(row)

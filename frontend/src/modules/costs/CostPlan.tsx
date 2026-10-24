@@ -203,13 +203,18 @@ function uniqueGroups(elements: CostElement[]): string[] {
 
 export function CostPlan() {
   const { selectedProject } = useProject()
+  return <ProjectCostPlan key={selectedProject?.id} />
+}
+
+function ProjectCostPlan() {
+  const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
   // Scheduling's own schedule-variant/period pair (distinct from `period`
   // above — Risk/Cost/ICD's shared Period) — needed to fetch resource
   // assignments/activities for "Group by Resource" and the Rate Card's
   // child-activity rollup (2026-07-10, per Maro). Same hook Scheduling.tsx
   // itself uses, so it resolves to the exact same live schedule.
-  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
+  const { period: schedulePeriod, loading: scheduleLoading, error: scheduleError, refetch: refetchSchedule } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
@@ -219,8 +224,23 @@ export function CostPlan() {
   const [projectDetails, setProjectDetails] = useState<ProjectDetails | null>(null)
   const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
+  const [scheduleDataError, setScheduleDataError] = useState(false)
+  const [scheduleDataAttempt, setScheduleDataAttempt] = useState(0)
+  const [loadedScheduleId, setLoadedScheduleId] = useState<string | null>(null)
+  const scheduleDataReady = !!schedulePeriod && !scheduleLoading && loadedScheduleId === schedulePeriod.id
+  const scheduleDataNotice = !scheduleDataReady && (
+    <div role={scheduleDataError || scheduleError ? 'alert' : 'status'} className="my-3 text-sm text-amber-700 dark:text-prosota-amber">
+      {scheduleDataError || scheduleError ? <>
+        Schedule and resource details couldn’t load.{' '}
+        <button className="underline" onClick={() => { if (!schedulePeriod || scheduleError) refetchSchedule(); else setScheduleDataAttempt(n => n + 1) }}>Retry schedule details</button>
+      </> : 'Loading schedule and resource details…'}
+      {' '}Resource grouping and linked rate breakdowns are unavailable until these load.
+    </div>
+  )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [loadedPeriodId, setLoadedPeriodId] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingElement, setEditingElement] = useState<CostElement | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -296,6 +316,7 @@ export function CostPlan() {
     async function load() {
       try {
         setLoading(true)
+        setError(null)
         const [costRes, riskRes, criteriaRes, projectRes] = await Promise.all([
           api.get<CostElement[]>('/api/v1/cost-elements/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
           api.get<RiskSummary[]>('/api/v1/risks/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
@@ -303,6 +324,7 @@ export function CostPlan() {
           api.get<ProjectDetails>(`/api/v1/projects/${selectedProject!.id}`),
         ])
         if (cancelled) return
+        setLoadedPeriodId(period!.id)
         setElements(costRes.data)
         setRisks(riskRes.data)
         setCriteria(criteriaRes.data.sort((a, b) => a.level - b.level))
@@ -316,7 +338,7 @@ export function CostPlan() {
 
     load()
     return () => { cancelled = true }
-  }, [selectedProject, period])
+  }, [selectedProject, period, loadAttempt])
 
   // Resource assignments + activities for "Group by Resource" and the Rate
   // Card's child-activity rollup (2026-07-10, per Maro) — loaded separately
@@ -324,20 +346,29 @@ export function CostPlan() {
   // schedule-variant/period, which resolves independently (and later, since
   // it bootstraps its own variant on first load).
   useEffect(() => {
+    setLoadedScheduleId(null)
+    setScheduleDataError(false)
+    setResourceAssignments([])
+    setScheduleActivities([])
     if (!selectedProject || !schedulePeriod) return
-    let cancelled = false
+    const controller = new AbortController()
     async function loadScheduleData() {
-      const [assignmentsRes, activitiesRes] = await Promise.all([
-        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
-        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
-      ])
-      if (cancelled) return
-      setResourceAssignments(assignmentsRes.data)
-      setScheduleActivities(activitiesRes.data)
+      try {
+        const [assignmentsRes, activitiesRes] = await Promise.all([
+          api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { signal: controller.signal, params: { schedule_period_id: schedulePeriod!.id } }),
+          api.get<Activity[]>('/api/v1/activities/', { signal: controller.signal, params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
+        ])
+        if (controller.signal.aborted) return
+        setResourceAssignments(assignmentsRes.data)
+        setScheduleActivities(activitiesRes.data)
+        setLoadedScheduleId(schedulePeriod!.id)
+      } catch {
+        if (!controller.signal.aborted) setScheduleDataError(true)
+      }
     }
     loadScheduleData()
-    return () => { cancelled = true }
-  }, [selectedProject, schedulePeriod])
+    return () => controller.abort()
+  }, [selectedProject, schedulePeriod, scheduleDataAttempt])
 
   // Fires window.print() only after printMode has committed to the DOM.
   useEffect(() => {
@@ -665,6 +696,7 @@ export function CostPlan() {
   }
 
   const handlePrintList = () => {
+    if (groupBy === 'resource' && !scheduleDataReady) return
     setPrintMode('list')
     setPrintTrigger(t => t + 1)
   }
@@ -820,12 +852,12 @@ export function CostPlan() {
                   )}
                 </div>
               )}
-              <CostRateLines
+              {el.linked_activity_id && !scheduleDataReady ? scheduleDataNotice : <CostRateLines
                 costElementId={el.id}
                 isScheduleLinked={el.source === 'schedule'}
                 childRows={el.linked_activity_id ? childRowsFor(el.linked_activity_id) : []}
                 childRowsFor={childRowsFor}
-              />
+              />}
               <CostCommitments costElementId={el.id} />
               <ReassessmentLog
                 recordType="cost_element"
@@ -842,7 +874,8 @@ export function CostPlan() {
   }
 
   if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
-  if (loading || periodLoading) {
+  if (error && !loading) return <ModuleLoadError message={error} onRetry={() => setLoadAttempt(n => n + 1)} />
+  if (loading || periodLoading || loadedPeriodId !== period?.id) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading cost plan…</div>
   }
 
@@ -1005,6 +1038,7 @@ export function CostPlan() {
       </div>
       {costTabSwitcher}
 
+      {scheduleDataNotice}
       {(error || periodError) && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/30 rounded-md text-red-700 dark:text-red-400 text-sm">{error ?? periodError}</div>
       )}
@@ -1087,7 +1121,7 @@ export function CostPlan() {
           onChange={e => setGroupBy(e.target.value as GroupByField)}
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted"
         >
-          {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value}>↕ Group: {o.label}</option>)}
+          {GROUP_OPTIONS.map(o => <option key={o.value} value={o.value} disabled={o.value === 'resource' && !scheduleDataReady}>↕ Group: {o.label}</option>)}
         </select>
         <select
           value={projectDetails?.eac_method ?? 'cpi'}
@@ -1106,6 +1140,7 @@ export function CostPlan() {
         </button>
         <button
           onClick={handlePrintList}
+          disabled={groupBy === 'resource' && !scheduleDataReady}
           className="text-xs px-3 py-1.5 rounded-md font-medium border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
           title="Print the cost plan exactly as currently shown (respecting search/filters/grouping)."
         >
@@ -1240,7 +1275,7 @@ export function CostPlan() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '16px', alignItems: 'start' }}>
-        <div className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden overflow-x-auto">
+        <div hidden={groupBy === 'resource' && !scheduleDataReady} className="bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg overflow-hidden overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 dark:bg-prosota-panel2 border-b border-gray-200 dark:border-prosota-line text-left text-xs text-gray-500 dark:text-prosota-muted font-medium uppercase tracking-wide">
@@ -1340,7 +1375,7 @@ export function CostPlan() {
         />
       </div>
     </div>
-    <CostPrintView
+    {(printMode !== 'list' || groupBy !== 'resource' || scheduleDataReady) && <CostPrintView
       mode={printMode}
       printRows={printMode === 'list' ? printRows : undefined}
       printColumns={printMode === 'list' ? printColumns : undefined}
@@ -1349,7 +1384,7 @@ export function CostPlan() {
       projectName={selectedProject.name}
       letterhead={letterhead}
       gfaM2={projectDetails?.gfa_m2 ?? null}
-    />
+    />}
     </>
   )
 }

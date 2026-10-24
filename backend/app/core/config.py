@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    access_request_notify_email: str = "sotalouisx@gmail.com"
     public_app_url: str = ""
     secret_key: str = "change-me-in-production"
     environment: str = "development"

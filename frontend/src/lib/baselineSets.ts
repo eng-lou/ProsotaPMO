@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BaselineSet } from '@/modules/dashboard/types'
 import { api } from './api'
 
@@ -11,22 +11,28 @@ export type BaselineModule = 'risk' | 'cost' | 'icd' | 'schedule'
 export function useBaselineSets(projectId: string | undefined) {
   const [baselineSets, setBaselineSets] = useState<BaselineSet[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const requestVersion = useRef(0)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!projectId) return
+    const version = ++requestVersion.current
     setLoading(true)
+    setError(false)
     try {
       const { data } = await api.get<BaselineSet[]>('/api/v1/baseline-sets/', { params: { project_id: projectId } })
-      setBaselineSets(data)
+      if (version === requestVersion.current) setBaselineSets(data)
+    } catch {
+      if (version === requestVersion.current) setError(true)
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
-  }
+  }, [projectId])
 
   useEffect(() => {
     load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId])
+    return () => { requestVersion.current++ }
+  }, [load])
 
   const captureAll = async (name: string, baselineDate: string, periodId: string, schedulePeriodId: string) => {
     const { data } = await api.post<BaselineSet>('/api/v1/baseline-sets/capture-all', {
@@ -51,5 +57,5 @@ export function useBaselineSets(projectId: string | undefined) {
     await api.post('/api/v1/baseline-sets/link', { module, baseline_id: baselineId, baseline_set_id: baselineSetId })
   }
 
-  return { baselineSets, loading, captureAll, createSet, linkBaseline, refetch: load }
+  return { baselineSets, loading, error, captureAll, createSet, linkBaseline, refetch: load }
 }

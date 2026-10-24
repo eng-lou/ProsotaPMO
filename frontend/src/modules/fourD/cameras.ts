@@ -1,3 +1,4 @@
+import type { CameraMotion } from './cameraMotion'
 import { api } from '@/lib/api'
 
 // Frontend for camera.py's backend — a named, keyframeable cinematic
@@ -12,6 +13,7 @@ import { api } from '@/lib/api'
 // rows (source_kind="camera", element_ref=camera.id) instead of columns
 // here.
 export interface Camera {
+  motion?: CameraMotion | null
   id: string
   project_id: string
   name: string
@@ -46,7 +48,7 @@ export async function listCameras(projectId: string): Promise<Camera[]> {
 }
 
 export async function createCamera(
-  data: { project_id: string; name?: string } & CameraPose,
+  data: { project_id: string; name?: string; motion?: CameraMotion } & CameraPose,
 ): Promise<Camera> {
   const res = await api.post<Camera>('/api/v1/cameras/', data)
   return res.data
@@ -54,7 +56,7 @@ export async function createCamera(
 
 export async function updateCamera(
   id: string,
-  data: Partial<CameraPose> & { name?: string },
+  data: Partial<CameraPose> & { name?: string; motion?: CameraMotion | null },
 ): Promise<Camera> {
   const res = await api.patch<Camera>(`/api/v1/cameras/${id}`, data)
   return res.data

@@ -1,3 +1,4 @@
+import { dataUriToBlob } from './dataUriBlob'
 import { useRef, useState } from 'react'
 import axios from 'axios'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
@@ -8,6 +9,7 @@ import {
 import type { CustomTextureSet, TextureSlot } from './customTextures'
 
 interface Props {
+  canApply?: boolean
   presets: MaterialPreset[]
   loading: boolean
   // The texture set currently applied to the active element/object, if
@@ -74,7 +76,7 @@ function EditorSlotRow({ label, name, onUpload, onClear }: {
 // has no active override) — applying/switching/deleting a preset only ever
 // changes the current customTextures override, so the original is always
 // one "None"/clear away.
-export function MaterialPresetPicker({ presets, loading, currentTextures, onApply, onCreate, onUpdate, onDelete }: Props) {
+export function MaterialPresetPicker({ presets, loading, currentTextures, onApply, onCreate, onUpdate, onDelete, canApply = true }: Props) {
   const [editingId, setEditingId] = useState<'new' | string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [draftConfig, setDraftConfig] = useState<MaterialPresetConfig>(EMPTY_MATERIAL_PRESET_CONFIG)
@@ -104,7 +106,7 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
     await Promise.all(Object.entries(seed).map(async ([slot, value]) => {
       if (!value) return
       config[slot as TextureSlot] = { id: '', slot: slot as TextureSlot, name: value.name }
-      const blob = await (await fetch(value.dataUri)).blob()
+      const blob=dataUriToBlob(value.dataUri)
       files[slot as TextureSlot] = new File([blob], value.name, { type: blob.type })
     }))
     setDraftConfig(config)
@@ -212,13 +214,13 @@ export function MaterialPresetPicker({ presets, loading, currentTextures, onAppl
           onChange={e => {
             const value = e.target.value
             if (value === '__new__') startNew({})
-            else if (value) onApply(presets.find(p => p.id === value)!)
+            else if (value && canApply) onApply(presets.find(p => p.id === value)!)
             e.target.value = ''
           }}
           className="flex-1 min-w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"
         >
           <option value="" disabled>{loading ? 'Loading presets…' : 'Material preset…'}</option>
-          {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {presets.map(p => <option key={p.id} value={p.id} disabled={!canApply}>{p.name}</option>)}
           <option value="__new__">+ New preset…</option>
         </select>
         <button

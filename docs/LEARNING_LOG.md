@@ -1,5 +1,23 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-24 — Recover the established publishing route before asking
+
+I incorrectly treated a signed-out GitHub CLI and absent Vercel CLI link as missing
+publishing access. This checkout already uses Windows Git Credential Manager;
+`git push --dry-run origin main` succeeded. Check the actual Git publishing path
+first. The public homepage now has a desktop preview invitation locally; its
+versioned installer release must be available before publishing that link.
+
+Access-request emails now preserve the saved approval request when SMTP fails,
+record successful delivery, and expose pending email status/retry in Access
+Manager. Five mocked delivery tests pass. Gmail production credentials and real
+inbox verification remain outstanding. See WEB_RELEASE_AND_EMAIL.md.
+
+Both loader copies are saved in Sample and desktop 0.2.35 is installed. The rig
+definition is prepared, but attaching/saving it to the placed copy and verifying
+the controls in the updated app remain unfinished while the game is using focus.
+Do not confuse an imported file named "rigged-copy" with a verified saved rig.
+
 ## 2026-10-16 — Explicit IFC export dialog theme colours
 
 The earlier dark-mode utility classes were confirmed in the public deployed bundle, but the user still saw dark foregrounds. The export dialog now reads the selected app theme and sets explicit foreground, muted text, field surfaces and native control colour scheme. Rendered the actual component with production CSS in Edge: headings, labels, input, select and Close resolve to #E6EDF7 in dark mode and #1F2937 in light mode. Visually checked both themes; frontend production build passed. Export behaviour is unchanged.
@@ -7021,3 +7039,111 @@ remain visible; actuals outside the planned activity span are not hidden.
 Budget editing remains available within the activity span, including empty
 periods. All 17 IFC regression tests passed with both clinic fixtures; render
 checks covered empty figures, actual-only values, explicit zero and labels.
+
+## 2026-10-24 — Catch-up: 3D/IFC integration, Kevin path playback and camera regressions
+
+This is a retrospective entry, not evidence that the log was maintained during
+each change. The last existing dated entry was 16 October; the file's prior
+modification time was 18 October. Recent detailed checks were recorded in outputs/
+but were not reconciled here. Keep this log updated with causes, fixes, evidence
+and remaining gaps, rather than only producing release notes.
+
+The user reported that new site assets and legacy imports exposed different
+selection, transform and material controls, and that viewport IFC selection no
+longer exposed assigned materials/transforms. Treat integration as a system-wide
+contract: viewport and panel selection must resolve the same object/element and
+the same controls. The instruction to leave IFC alone remains an acceptance
+constraint. Do not infer that working 3D import controls prove IFC still works.
+The historical screenshots establish regressions; do not claim a full-app audit
+has passed without running and documenting it.
+
+Kevin import/path work (0.2.30–0.2.32):
+- Infer FBX axis and units from source metadata; Kevin is Z-up and centimetres.
+  Test actual imported dimensions, not only a synthetic mesh. Previously baked
+  incorrect conversions still require reimport.
+- Path motion needs a fixed binding origin. Recomputing the anchor from edited
+  object position cancels user corrections on the next frame. Keep authored
+  rotation/scale and surface offsets independently editable.
+- For animated skinned meshes, stale bounds can reject a visible viewport click.
+  Resetting bounding spheres every frame fixed picking but caused a major orbit
+  regression: Three.js also recomputes null spheres for rendering/sorting.
+  Retain render bounds and bypass stale bounds only for precise picking.
+- Isolated actual-Kevin orbit measurements improved typical frame intervals from
+  about 410ms to 7ms. This is a fixture result, not a full IFC-project FPS promise.
+  See outputs/Prosota-0.2.30-Kevin-review.txt, 0.2.31-selection-review.txt and
+  0.2.32-orbit-review.txt for scope and tests.
+
+Camera work (0.2.33–0.2.34):
+- Construction date and presentation time are different clocks. Holding the
+  construction date must not accidentally determine every actor's playback.
+  Expose the choice: actor animation follows preview time or construction time.
+- A saved Pan must not replace a draft Hold on the preview driver's initial
+  frame. Timeline ownership transfers only on an actual clock change.
+- Fixed/Hold ignores differing end offsets. Target tracking is explicit:
+  fixed, aim, translate with target, or translate and follow turns.
+- Persist the target ID and reference transform; evaluate tracking after actor
+  transforms. Do not recompute animated vertex bounds on each camera frame.
+- Auto-framing sizes are starting points. Adjust framing unlocks normal orbit,
+  pan and zoom; capture the composed view without applying alignment twice.
+- Reuse TimelinePointInput and timeline FPS for date/seconds/frame conversion.
+  Store durations in seconds and endpoints as dates, not ambiguous frame numbers.
+- Actual Kevin tests covered curved-path tracking, native wheel zoom, capture of
+  custom framing, frame-mode UI, API persistence, construction Hold/Advance,
+  fixed-camera playback, reset, and timeline handover. Twelve camera/path unit
+  tests and TypeScript passed. Full video encoding and full-app audit were not
+  performed for these updates. See outputs/Prosota-0.2.33-camera-review.txt and
+  outputs/Prosota-0.2.34-camera-review.txt.
+
+Current work in progress — shape operations and terrain:
+Copy-based booleans should preserve source geometry (including IFC), create
+ordinary selectable/material-editable/profile-linkable results, and retain an
+excavated section when requested. The user additionally requested subdivision,
+simplification and local raise/lower deformation for bumps and dips. Implementation
+and validation are in progress; this entry does not mark those features complete.
+
+
+### 2026-10-24 — Shape operations, terrain and equipment-library integration
+
+Implemented copy-based subtraction, union, intersection and excavation (remaining
+solid plus separately retained red removed section). Terrain supports subdivision,
+local raise/lower with falloff, simplify for a single untextured material and local
+preview undo. Results use normal site-asset transforms, materials and activity
+links; original inputs remain recoverable. See SHAPE_OPERATIONS.md.
+
+The user's real 77-file backhoe exposed two omissions in the unified import work:
+Import 3D rejected multiple model files, and Equipment Controls still enumerated
+only the legacy scene collection. Fixed both. Multi-file imports preserve authored
+relative positions and named hierarchy; separate scene assemblies now also save
+through the asset-library pipeline. Construction equipment can retain a project
+library rig template, inherited independently by placed copies, with per-instance
+rig overrides. Paths move the parent while rigging poses the children. Equipment
+playback uses the actor clock during camera previews. See EQUIPMENT_ASSET_WORKFLOW.md.
+
+Lessons from actual verification:
+- Test the removed entry point's dependent workflows, not only import/render.
+  A working asset library is incomplete if rigging cannot enumerate its instances.
+- Imported hierarchy, rig references, material editing and root/path transforms
+  must share the same live object identity. Persist site IDs, not display names.
+- Do not recenter each part of an equipment assembly. Centre the finished asset.
+- Source IFC IDs are runtime-local; retained-input references use persisted file
+  IDs plus element IDs and resolve after restoration.
+- Three.js single-material meshes ignore geometry material groups. Converting an
+  extrusion to a material array without normalizing groups can hide its side faces.
+- Object3D.clone serializes userData. A material cached there becomes plain data,
+  not a live Material; copy IFC geometry/material references explicitly before the
+  independent snapshot, and validate cached material objects before using them.
+- CSG results can contain split edges/T-junctions. Closed-solid validation must
+  account for disjoint edge matching so a valid result can be cut again.
+- Compare canonical, server-accepted site recipes for undo. Property order and
+  server-added defaults must not be mistaken for a user edit.
+
+Verification: geometry/assembly tests; full frontend test suite; TypeScript;
+12 backend site-engine tests; desktop excavation/terrain creation, material and
+transform controls, native surface picking, undo/redo and reload; IFC viewport
+selection/material assignment and IFC-copy source hash; real backhoe import
+(77 source files, 83 mesh parts), independent poses, path motion, reusable rig
+reload/save, multi-file picker/review and separate-object assembly. Main-module
+navigation smoke test passed seven route visits. This is bounded regression
+coverage, not an exhaustive audit of every feature or a fully authored mechanical
+backhoe rig. Video encoding and complex self-intersecting mesh cases were not
+validated in this change.

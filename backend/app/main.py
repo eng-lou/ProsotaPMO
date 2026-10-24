@@ -85,6 +85,8 @@ from app.api.timeline_strips import router as timeline_strips_router
 from app.api.user_defined_fields import router as user_defined_fields_router
 from app.api.users import router as users_router
 from app.api.desktop_auth import router as desktop_auth_router
+from app.api.site_scenes import router as site_scenes_router
+from app.api.site_assets import router as site_assets_router
 from app.api.zones import router as zones_router
 from app.core.auth import get_approved_user, get_current_user
 
@@ -110,6 +112,8 @@ app.add_middleware(
 app.include_router(users_router, prefix="/api/v1", dependencies=_auth)
 # Handoff uses Auth0; exchange/session validate their own opaque credentials.
 app.include_router(desktop_auth_router, prefix="/api/v1")
+app.include_router(site_scenes_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(site_assets_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(access_requests_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(projects_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(periods_router, prefix="/api/v1", dependencies=_auth_approved)

@@ -3,7 +3,9 @@ import * as THREE from 'three'
 import { Html } from '@react-three/drei'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import type { Activity } from '@/modules/scheduling/types'
-import type { Annotation, AnnotationIcon } from './annotations'
+import { ANNOTATION_ICONS, DEFAULT_CALLOUT, type Annotation } from './annotations'
+import { calloutLayout, drawCallout } from './calloutDrawing'
+import { useCalloutMedia, calloutVideoTime, seekCalloutVideo } from './calloutMedia'
 import type { ExportLabelRegistry } from './exportLabels'
 import type { AnimationProfile } from './animationProfiles'
 import { DEFAULT_ANIMATION_CONFIG } from './animationProfiles'
@@ -19,7 +21,7 @@ import { densifyBorderForReveal, sliceRevealVectors } from './zoneGeometry'
 import type { UpAxis } from './upAxis'
 import { effectiveViewDistance } from './cameraProjection'
 
-const ICON_GLYPH: Record<AnnotationIcon, string> = { pin: '📍', flag: '🚩', comment: '💬', warning: '⚠️' }
+const ICON_GLYPH = ANNOTATION_ICONS
 
 // background_opacity (2026-07-30, per Maro: "opacity controls for the
 // background fill") — background_color is stored as a plain #rrggbb hex
@@ -128,7 +130,7 @@ export interface AnnotationDragPoint {
 // else, same as `shown` itself (see annotation.py's own matching header).
 export function AnnotationMarker({
   annotation, dateRef, activities, modelElementLinks, animationProfiles, elementKeyframes, upAxis,
-  animationStart, animationEnd,
+  animationStart, animationEnd, timelineStart = null, timelineDaysPerSecond = 1,
   leaderTargetObject, selected, onSelect, onDragStart, onDragMove, onDragEnd,
   onLeaderDragStart, onLeaderDragMove, onLeaderDragEnd,
   exportLabelsRef,
@@ -146,6 +148,8 @@ export function AnnotationMarker({
   // "anim_start"/"anim_end") by FourD.tsx — see PathGizmo.tsx's own
   // matching animationStart/animationEnd header for the full rationale;
   // identical convention here.
+  timelineStart?: Date | null
+  timelineDaysPerSecond?: number
   animationStart: Date | null
   animationEnd: Date | null
   // Resolved once per frame by the caller (Viewport3D already has the
@@ -200,12 +204,29 @@ export function AnnotationMarker({
   // Hoisted above useFrame (2026-07-30) so both it (export-label registry
   // writes) and the JSX return below can read the same values — used to
   // live only just above the return.
+  const content = { ...DEFAULT_CALLOUT, ...annotation.callout }
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const media = useCalloutMedia(content.mode === 'text' ? null : content.media_id, content.mode === 'video')
+  const liveSeek = useRef(false)
+  const lastPaint = useRef<unknown[]>([])
+  const mediaTime = () => {
+    const origin = animationStart ?? timelineStart
+    const seconds = origin && dateRef.current ? (dateRef.current.getTime() - origin.getTime()) / (86400000 * Math.max(.000001, timelineDaysPerSecond)) : 0
+    const source = media.current.source
+    return source instanceof HTMLVideoElement ? calloutVideoTime(seconds - content.start_seconds, source.duration, content.loop) : 0
+  }
+  const prepareMedia = async () => {
+    await media.current.ready
+    if (media.current.error) throw Error(media.current.error)
+    if (media.current.source instanceof HTMLVideoElement) await seekCalloutVideo(media.current.source, mediaTime())
+  }
+  const paint = (ctx: CanvasRenderingContext2D, selectedBorder = false) => drawCallout(ctx, annotation, media.current.source, media.current.error, selectedBorder)
   const borderWidth = annotation.thick_border ? 3 : 1
   // box_shape (2026-07-30, per Maro: "allow me to pick a standard
   // rectangle shape") — 'rounded' keeps the original fixed 14px radius,
   // 'rectangle' is sharp corners. Only isBox (kind="comment") ever renders
   // this; Placemark's balloon pin uses its own hardcoded radius below.
-  const boxBorderRadius = annotation.box_shape === 'rectangle' ? 0 : 14
+  const boxBorderRadius = annotation.box_shape === 'circle' ? content.width / 2 : annotation.box_shape === 'rectangle' ? 0 : 14
 
   // Recomputed only when the underlying data actually changes, not every
   // frame — pickActiveLink/interpolateKeyframeTrack themselves still run
@@ -267,6 +288,27 @@ export function AnnotationMarker({
   useFrame(() => {
     if (!groupRef.current) return
     const now = dateRef.current
+    if (content.mode === 'video' && media.current.source instanceof HTMLVideoElement && !liveSeek.current) {
+      liveSeek.current = true
+      void seekCalloutVideo(media.current.source, mediaTime()).catch(error => { media.current.error = String(error) }).finally(() => { liveSeek.current = false })
+    }
+    const canvas = canvasRef.current, ctx = canvas?.getContext('2d')
+    const mediaSource = media.current.source
+    const paintKey = [annotation, selected, mediaSource, media.current.error, window.devicePixelRatio, mediaSource instanceof HTMLVideoElement ? `${mediaSource.readyState}:${mediaSource.currentTime}:${mediaSource.seeking}` : mediaSource?.complete]
+    if (canvas && ctx && paintKey.some((value, i) => value !== lastPaint.current[i])) {
+      lastPaint.current = paintKey
+      const layout = calloutLayout(ctx, annotation)
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const width = Math.ceil(layout.width * dpr), height = Math.ceil(layout.height * dpr)
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height }
+      canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, layout.width, layout.height)
+      paint(ctx, selected)
+      if (htmlRef.current) {
+        htmlRef.current.style.transform = `translate(${-layout.anchorX}px, ${-layout.anchorY}px) rotate(${annotation.leader_rotation}deg) scale(${annotation.leader_scale})`
+        htmlRef.current.style.transformOrigin = `${layout.anchorX}px ${layout.anchorY}px`
+      }
+    }
 
     let x = annotation.position_x
     let y = annotation.position_y
@@ -321,7 +363,7 @@ export function AnnotationMarker({
       (annotation.hide_farther_than === null || distance <= annotation.hide_farther_than)
 
     const shown = annotation.visible && visible && opacity > 0.01 && withinDistance
-    if (meshRef.current) meshRef.current.scale.setScalar(selected ? 1.4 : 1)
+    if (meshRef.current) { meshRef.current.scale.setScalar(selected ? 1.4 : 1); meshRef.current.visible = !isBox || annotation.leader_visible || selected }
     if (materialRef.current) materialRef.current.opacity = opacity
     if (htmlRef.current) htmlRef.current.style.opacity = String(opacity)
 
@@ -338,6 +380,7 @@ export function AnnotationMarker({
     // the html box below, so the whole annotation (not just the line)
     // disappears before the reveal window starts.
     let revealShown = shown
+    let revealOpacity = opacity
     if (isBox) {
       const targetLocal = leaderTargetObject
         ? (() => {
@@ -369,6 +412,7 @@ export function AnnotationMarker({
       if (annotation.animate) {
         const revealNow = now ?? new Date()
         const progress = computeRevealProgress(revealNow, animationStart, animationEnd, annotation.animation_loop)
+        revealOpacity *= Math.max(0, Math.min(1, progress))
         const sliced = sliceRevealVectors(densifyBorderForReveal(leaderPoints), progress)
         leaderPoints = sliced ?? []
         leaderVisible = shown && sliced !== null
@@ -386,7 +430,7 @@ export function AnnotationMarker({
     }
 
     groupRef.current.visible = revealShown
-    if (htmlRef.current) htmlRef.current.style.display = revealShown ? 'flex' : 'none'
+    if (htmlRef.current) { htmlRef.current.style.display = revealShown ? 'flex' : 'none'; htmlRef.current.style.opacity = String(revealOpacity) }
 
     // Capture/Export Video text visibility (2026-07-30, per Maro: "the
     // text boxes and texts dont show up in the captured renders") — see
@@ -396,6 +440,14 @@ export function AnnotationMarker({
     if (isBox) {
       exportLabelsRef.current.set(`${annotation.id}-box`, {
         kind: 'annotation-box',
+        opacity: revealOpacity,
+        prepare: prepareMedia,
+        paint: (ctx, scale) => {
+          const layout = calloutLayout(ctx, annotation)
+          ctx.save(); ctx.scale(scale, scale); ctx.rotate(annotation.leader_rotation * Math.PI / 180)
+          ctx.translate(-layout.anchorX, -layout.anchorY)
+          paint(ctx); ctx.restore()
+        },
         visible: revealShown,
         worldPos: groupRef.current.localToWorld(calloutGroupRef.current ? calloutGroupRef.current.position.clone() : new THREE.Vector3()),
         text: annotation.text || '(empty)',
@@ -630,39 +682,12 @@ export function AnnotationMarker({
               and transformOrigin is pinned to that same bottom-left corner
               so rotating/scaling never moves the point touching the line. */}
           <Html distanceFactor={8} style={{ pointerEvents: 'none' }}>
-            <div
-              ref={htmlRef}
-              style={{
-                display: 'flex', flexDirection: 'column', gap: 2,
-                // width: 'max-content' (2026-07-30 fix, per Maro: "adaptable
-                // textbox width" — a screenshot showed "SENSITIVE" broken
-                // mid-word into "SENSITIV"/"E") — without an explicit width,
-                // this flex item could render narrower than its own text's
-                // natural width, and wordBreak: 'break-word' (below) would
-                // then force a break *inside* a word that would easily have
-                // fit a slightly wider box. max-content makes the box hug
-                // its text exactly, from minWidth up to maxWidth, so a short
-                // note never wraps at all and a long one only wraps at
-                // actual word boundaries.
-                width: 'max-content', minWidth: 80, maxWidth: 240,
-                transform: `translateY(-100%) rotate(${annotation.leader_rotation}deg) scale(${annotation.leader_scale})`,
-                transformOrigin: '0% 100%',
-                background: annotation.has_background ? hexToRgba(annotation.background_color, annotation.background_opacity) : 'transparent',
-                border: `${borderWidth}px solid ${selected ? '#0ea5e9' : annotation.border_color}`,
-                borderRadius: boxBorderRadius, padding: '6px 8px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
-              }}
-            >
-              <span style={{
-                fontSize: annotation.font_size, color: annotation.text_color, whiteSpace: 'pre-wrap',
-                // overflowWrap (not wordBreak: 'break-word', see the box's
-                // own header above) — only breaks a word mid-character as a
-                // last resort, once the box is genuinely already at
-                // maxWidth and normal space-wrapping alone isn't enough.
-                overflowWrap: 'break-word',
-              }}>
-                {annotation.text || '(empty)'}
-              </span>
+            <div ref={htmlRef} style={{ display: 'flex', width: 'max-content',
+              transform: `translate(${annotation.box_shape === 'circle' ? '-50%' : '0'}, -100%) rotate(${annotation.leader_rotation}deg) scale(${annotation.leader_scale})`,
+              transformOrigin: annotation.box_shape === 'circle' ? '50% 100%' : '0% 100%',
+              pointerEvents: 'auto', cursor: 'pointer',
+            }} onClick={event => { event.stopPropagation(); onSelect(annotation.id) }}>
+              <canvas ref={canvasRef} aria-label={annotation.text || `${content.mode} callout`} />
             </div>
           </Html>
           {/* Leader-offset drag handle (2026-08-06) — a small invisible-

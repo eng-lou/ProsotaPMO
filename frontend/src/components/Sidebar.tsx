@@ -94,6 +94,12 @@ export function Sidebar() {
 
       <div className="px-4 py-4 border-t border-gray-200 dark:border-prosota-line">
         <UndoControls />
+        {(window as any).prosotaDesktop && (
+          <button onClick={() => (window as any).prosotaDesktop.openSettings()}
+            className="w-full text-left text-xs text-gray-600 dark:text-prosota-paper mb-2">
+            ⚙ Settings
+          </button>
+        )}
         <button
           onClick={toggleTheme}
           title="Switch between light and dark mode"

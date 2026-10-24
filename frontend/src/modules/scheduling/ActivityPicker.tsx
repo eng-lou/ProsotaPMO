@@ -4,7 +4,10 @@ import { activityRowBackground, type GanttStyle } from '@/lib/ganttLayout'
 import { formatDateTime } from './dateTime'
 import type { Activity } from './types'
 
-function depthOf(a: Activity): number {
+export type ActivityPickerOption = Pick<Activity, 'id' | 'code' | 'task_name' | 'wbs_path' | 'activity_type'>
+  & Partial<Pick<Activity, 'is_archived' | 'is_archive_container' | 'is_critical' | 'start' | 'finish'>>
+
+function depthOf(a: ActivityPickerOption): number {
   return a.wbs_path ? a.wbs_path.split('.').length - 1 : 0
 }
 
@@ -16,7 +19,7 @@ function depthOf(a: Activity): number {
 // other currently-checked activity, which can't be its own candidate
 // either) rather than assuming the immediate neighbour is always valid.
 export function nearestOtherActivityId(
-  orderedActivities: Activity[], anchorId: string | undefined, excludedIds: Set<string>
+  orderedActivities: ActivityPickerOption[], anchorId: string | undefined, excludedIds: Set<string>
 ): string | undefined {
   if (!anchorId) return undefined
   const anchorIndex = orderedActivities.findIndex(a => a.id === anchorId)
@@ -38,7 +41,7 @@ export function nearestOtherActivityId(
 export function ActivityPicker({
   activities, value, onChange, placeholder = 'Select activity…', className = '', scrollToId, showDates = false, ganttStyle,
 }: {
-  activities: Activity[]
+  activities: ActivityPickerOption[]
   value: string
   onChange: (id: string) => void
   placeholder?: string
@@ -102,7 +105,7 @@ export function ActivityPicker({
     }
   }, [open])
 
-  const handleSelect = (a: Activity) => {
+  const handleSelect = (a: ActivityPickerOption) => {
     onChange(a.id)
     setQuery('')
     setOpen(false)
@@ -166,7 +169,7 @@ export function ActivityPicker({
               // uses for the same reason (Scheduling.tsx).
               style={{ height: rowHeight,
                 backgroundColor: a.id === value || !ganttStyle ? undefined : activityRowBackground(ganttStyle, {
-                  isArchived: a.is_archived || a.is_archive_container,
+                  isArchived: !!(a.is_archived || a.is_archive_container),
                   isCritical: a.is_critical ?? false,
                   activityType: a.activity_type,
                   depth: depthOf(a),
@@ -179,7 +182,7 @@ export function ActivityPicker({
               </div>
               {showDates && (
                 <div className="truncate text-[10px] text-gray-400 dark:text-prosota-muted">
-                  {formatDateTime(a.start, false)} → {formatDateTime(a.finish, false)}
+                  {formatDateTime(a.start ?? null, false)} → {formatDateTime(a.finish ?? null, false)}
                 </div>
               )}
             </button>

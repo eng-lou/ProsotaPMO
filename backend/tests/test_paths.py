@@ -204,3 +204,26 @@ async def test_deleting_path_cascades_its_followers(client: AsyncClient, project
 
     listing = (await client.get("/api/v1/path-followers/", params={"project_id": str(project.id)})).json()
     assert all(f["id"] != follower["id"] for f in listing)
+
+async def test_site_path_binding_survives_reload_and_route_deletion(client: AsyncClient, project: Project):
+    path = (await client.post('/api/v1/paths/', json={'project_id': str(project.id), 'points': _points()})).json()
+    motion = dict(bind_origin=dict(x=23,y=-15,z=-31), path_id=path['id'], start='2026-10-23T00:00:00Z', speed=1.4, loop=False,
+                  orient=True, heading=-90, animation_reference_speed=1.4)
+    items = [dict(id=str(uuid.uuid4()), name='Same name', kind='context', up_axis='z',
+                  position=dict(x=0,y=0,z=0), path_motion=motion) for _ in range(2)]
+    url = f'/api/v1/site-scenes/{project.id}'
+    saved = await client.put(url, json=dict(command_id=str(uuid.uuid4()), expected_revision=0, items=items))
+    assert saved.status_code == 200, saved.text
+    loaded = (await client.get(url)).json()
+    assert len(loaded['items']) == 2
+    assert all(i['path_motion'] == motion for i in loaded['items'])
+    assert (await client.delete(f"/api/v1/paths/{path['id']}")).status_code == 204
+    cleared = (await client.get(url)).json()
+    assert cleared['revision'] == loaded['revision'] + 1
+    assert all(i['path_motion'] is None for i in cleared['items'])
+    assert [i['id'] for i in cleared['items']] == [i['id'] for i in items]
+    # No dangling binding may prevent subsequent transforms.
+    changed = [{k:v for k,v in i.items() if k != 'layout'} for i in cleared['items']]
+    changed[0]['rotation']['z'] = 1.5
+    edited = await client.put(url, json=dict(command_id=str(uuid.uuid4()), expected_revision=cleared['revision'], items=changed))
+    assert edited.status_code == 200, edited.text

@@ -1133,6 +1133,12 @@ function projectToDestPixel(
 function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; y: number }, label: ExportLabel, scale: number): void {
   ctx.save()
   ctx.globalAlpha *= label.opacity ?? 1
+  if (label.paint) {
+    ctx.translate(screenPos.x, screenPos.y)
+    label.paint(ctx, scale)
+    ctx.restore()
+    return
+  }
   if (label.kind === 'annotation-placemark') {
     const r = 12 * scale
     const cy = screenPos.y - r

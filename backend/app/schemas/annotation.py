@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.annotation_callout import CalloutContent
 
 AnnotationKind = Literal["placemark", "comment"]
-AnnotationIcon = Literal["pin", "flag", "comment", "warning"]
-AnnotationBoxShape = Literal["rounded", "rectangle"]
+AnnotationIcon = Literal["pin", "flag", "comment", "warning", "worker", "entry", "truck", "medical", "info"]
+AnnotationBoxShape = Literal["rounded", "rectangle", "circle"]
 
 
 class AnnotationBase(BaseModel):
@@ -30,6 +31,7 @@ class AnnotationBase(BaseModel):
     font_size: int = Field(default=14, ge=8, le=72)
     hide_closer_than: float | None = Field(default=None, ge=0)
     hide_farther_than: float | None = Field(default=None, ge=0)
+    callout: CalloutContent = Field(default_factory=CalloutContent)
     box_shape: AnnotationBoxShape = "rounded"
     leader_offset_x: float = 2.0
     leader_offset_y: float = 0.0
@@ -67,6 +69,7 @@ class AnnotationUpdate(BaseModel):
     font_size: int | None = Field(default=None, ge=8, le=72)
     hide_closer_than: float | None = Field(default=None, ge=0)
     hide_farther_than: float | None = Field(default=None, ge=0)
+    callout: CalloutContent | None = None
     box_shape: AnnotationBoxShape | None = None
     leader_offset_x: float | None = None
     leader_offset_y: float | None = None

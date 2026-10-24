@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "Prosota"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "7045edc9-afc7-49a0-a370-3b758d77cde9"
+  }
+}

@@ -16,7 +16,7 @@ export type SourceKind = 'ifc' | 'mesh'
 // (collections.ts) widens its *own* independently-declared source_kind
 // literal to include this too — it's not derived from SourceKind either,
 // so both need updating in step whenever a new kind is added.
-export type ModelElementLinkSourceKind = SourceKind | 'annotation' | 'ifc_split'
+export type ModelElementLinkSourceKind = SourceKind | 'annotation' | 'ifc_split' | 'site'
 
 export interface ModelElementLink {
   id: string

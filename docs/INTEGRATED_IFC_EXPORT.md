@@ -293,3 +293,47 @@ No production exporter change was made. All 17 IFC integration tests passed
 again with both local clinic fixtures, including geometry preservation,
 standard product-output links, Synchro process links, native standard-export
 resources/cost associations and appearance properties.
+
+### Native resource import recheck (2026-10-18)
+
+Still unresolved in installed SYNCHRO 4D Pro **6.5.6.30**. A fresh, empty
+local project reproduces the failure using the wizard defaults with Resources,
+Resource assignments and IfcResources enabled. The two-resource ASCII probe
+fails at creation of its human resource. Independently, the production
+exporter's IFC2X3 regression fixture fails with:
+
+```text
+Error: cannot add the Resources to Synchro project.
+Error: cannot create a Resource for IfcResource [Team_(#166)].
+```
+
+The latter fixture contains six native construction resources and six process
+assignments. IfcOpenShell schema/EXPRESS validation reports **zero diagnostics**.
+It can be regenerated from `frontend` using the existing test output hook:
+
+```powershell
+$env:PROSOTA_IFC_OUTPUT = Join-Path (Resolve-Path ../outputs) 'Prosota-native-resource-regression.ifc'
+node --test tests/integratedIfcExport.test.mjs
+```
+
+The fixture deliberately tests Unicode and backslashes too; Synchro reports
+additional string-parser warnings for those names. The separate ASCII probe
+reproduces the resource-creation failure without those warnings, so they do
+not explain the resource blocker.
+
+Read-only inspection narrows the earlier resource-root hypothesis: the native
+reader checks synchronization option 57 (Human Resources) and 58 (Equipment
+Resources) before creating resource roots, but the installed IFC defaults
+initialize option 56 (IfcResources) without initializing 57/58. Those separate
+options are also absent from the import wizard. This is static evidence, not
+a Bentley-confirmed diagnosis; no proprietary binaries or registry values
+were modified. The supported global-settings export exposed no corresponding
+switch. The installed help nevertheless describes IfcResources as importing
+crew/labour entities.
+
+No working native labour/equipment import mapping was established. Re-enabling
+those entities in compatible mode remains a known failure, not an implemented
+fix. A supported importer correction or a verified native allocation fixture
+is needed before changing that path. All 17 integration tests passed with both
+clinic fixtures enabled; standard/Bonsai and compatible model-link and
+appearance behavior remain unchanged.

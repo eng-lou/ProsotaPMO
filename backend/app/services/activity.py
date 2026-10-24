@@ -9,6 +9,7 @@ from typing import Literal
 from fastapi import HTTPException
 from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
@@ -389,6 +390,25 @@ def _dfs_order(activities: list[Activity]) -> list[Activity]:
 
     visit(None)
     return ordered
+
+
+async def list_wbs_options(
+    db: AsyncSession, project_id: uuid.UUID, schedule_period_id: uuid.UUID,
+) -> list[Activity]:
+    # Every ancestor of a summary is itself a summary. Fetch just these rows
+    # and the fields needed to preserve the same outline order as the schedule.
+    result = await db.execute(
+        select(Activity).where(
+            Activity.project_id == project_id,
+            Activity.schedule_period_id == schedule_period_id,
+            Activity.activity_type == "wbs_summary",
+        ).options(load_only(
+            Activity.id, Activity.code, Activity.task_name, Activity.wbs_path,
+            Activity.activity_type, Activity.parent_id, Activity.sort_order,
+            Activity.created_at,
+        ))
+    )
+    return _dfs_order(list(result.scalars().all()))
 
 
 async def list_activities(

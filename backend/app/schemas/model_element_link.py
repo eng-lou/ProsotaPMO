@@ -14,7 +14,7 @@ class ModelElementLinkBase(BaseModel):
     # one level-slice of an element recorded in ElementSplit
     # (element_split.py); element_ref is that parent's GlobalId plus a
     # `::split:<index>` suffix, never a real IFC entity's own identity.
-    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split"]
+    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split", "site"]
     element_ref: str = Field(min_length=1, max_length=300)
     element_label: str = Field(min_length=1, max_length=300)
 
@@ -58,7 +58,7 @@ class ModelElementLinkResponse(ModelElementLinkBase):
 # has no reason to target more than one), so this only needs one Activity
 # lookup for the whole batch, not one per element.
 class ModelElementLinkBulkMember(BaseModel):
-    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split"]
+    source_kind: Literal["ifc", "mesh", "annotation", "ifc_split", "site"]
     element_ref: str = Field(min_length=1, max_length=300)
     element_label: str = Field(min_length=1, max_length=300)
 

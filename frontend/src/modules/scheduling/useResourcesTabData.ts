@@ -24,14 +24,15 @@ export function useResourcesTabData(
   const [spreadFetchError, setSpreadFetchError] = useState<string | null>(null)
 
   const activitiesById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
+  const assignedResourceIds = useMemo(() => new Set(resourceAssignments.map(a => a.resource_id)), [resourceAssignments])
 
   const trackedResources = useMemo(
     () => resources.filter(r =>
       (r.resource_type === 'labour' || r.resource_type === 'equipment' || r.resource_type === 'crew')
-      && resourceAssignments.some(a => a.resource_id === r.id)
+      && assignedResourceIds.has(r.id)
       && (selectedResourceIds.size === 0 || selectedResourceIds.has(r.id))
     ),
-    [resources, resourceAssignments, selectedResourceIds]
+    [resources, assignedResourceIds, selectedResourceIds]
   )
 
   // Base grouping only (no sort/filter) — Resource Tracking applies its own

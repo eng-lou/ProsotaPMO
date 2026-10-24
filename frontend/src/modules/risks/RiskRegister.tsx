@@ -75,23 +75,25 @@ function uniqueValues(risks: Risk[], field: 'category' | 'area'): string[] {
 
 export function RiskRegister() {
   const { selectedProject } = useProject()
+  return <ProjectRiskRegister key={selectedProject?.id} />
+}
+
+function ProjectRiskRegister() {
+  const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
-  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
+  const { period: schedulePeriod, loading: scheduleLoading, error: scheduleError } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [risks, setRisks] = useState<Risk[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
-  // Schedule + resource data for "Generate Risk Register" (2026-07-18) — see
-  // riskGeneration.ts's own header on why these are needed (per-discipline
-  // resourced cost, overall programme duration).
-  const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
-  const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [generatingRisks, setGeneratingRisks] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
   const [generateRiskMessage, setGenerateRiskMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [loadedPeriodId, setLoadedPeriodId] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingRisk, setEditingRisk] = useState<Risk | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -119,11 +121,13 @@ export function RiskRegister() {
     async function load() {
       try {
         setLoading(true)
+        setError(null)
         const [riskRes, costRes] = await Promise.all([
           api.get<Risk[]>('/api/v1/risks/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
           api.get<CostElementSummary[]>('/api/v1/cost-elements/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
         ])
         if (cancelled) return
+        setLoadedPeriodId(period!.id)
         setRisks(riskRes.data)
         setCostElements(costRes.data)
       } catch {
@@ -135,27 +139,7 @@ export function RiskRegister() {
 
     load()
     return () => { cancelled = true }
-  }, [selectedProject, period])
-
-  // Schedule + resource data for "Generate Risk Register" (2026-07-18) —
-  // loaded separately from the main Risk Register fetch above since it
-  // comes from Scheduling's own schedule-variant/period, same split
-  // CostPlan.tsx already uses for the identical reason.
-  useEffect(() => {
-    if (!selectedProject || !schedulePeriod) return
-    let cancelled = false
-    async function loadScheduleData() {
-      const [assignmentsRes, activitiesRes] = await Promise.all([
-        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
-        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
-      ])
-      if (cancelled) return
-      setResourceAssignments(assignmentsRes.data)
-      setScheduleActivities(activitiesRes.data)
-    }
-    loadScheduleData()
-    return () => { cancelled = true }
-  }, [selectedProject, schedulePeriod])
+  }, [selectedProject, period, loadAttempt])
 
   // Fires window.print() only after printMode has committed to the DOM (state
   // updates are batched/async, so calling print() directly after setPrintMode
@@ -215,15 +199,25 @@ export function RiskRegister() {
   // in costElements here too (used for whatever cost-linked display this
   // register already shows).
   const handleGenerateRisks = async () => {
-    if (!period) return
-    const drafts = buildRiskDraft(scheduleActivities, resourceAssignments)
-    if (drafts.length === 0) {
-      setGenerateRiskMessage('No committed schedule found to draft risks from yet.')
+    if (!period || generatingRisks) return
+    if (!schedulePeriod || scheduleLoading || scheduleError) {
+      setGenerateRiskMessage(scheduleError || 'The schedule is still loading. Try again shortly.')
       return
     }
     setGeneratingRisks(true)
     setGenerateRiskMessage(null)
     try {
+      // These inputs are only needed for generation. Read them on demand so
+      // opening the register stays light and each rescan uses current data.
+      const [activitiesRes, assignmentsRes] = await Promise.all([
+        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id } }),
+        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod.id } }),
+      ])
+      const drafts = buildRiskDraft(activitiesRes.data, assignmentsRes.data)
+      if (drafts.length === 0) {
+        setGenerateRiskMessage('No committed schedule found to draft risks from yet.')
+        return
+      }
       const { data } = await api.post('/api/v1/risk-bulk-generate/', {
         project_id: selectedProject.id, period_id: period.id, risks: drafts,
       })
@@ -411,7 +405,8 @@ export function RiskRegister() {
   )
 
   if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
-  if (loading || periodLoading) {
+  if (error && !loading) return <ModuleLoadError message={error} onRetry={() => setLoadAttempt(n => n + 1)} />
+  if (loading || periodLoading || loadedPeriodId !== period?.id) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading risk register…</div>
   }
 

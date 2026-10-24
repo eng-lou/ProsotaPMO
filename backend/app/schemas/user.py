@@ -39,6 +39,7 @@ class PendingUserResponse(BaseModel):
     requested_title: str | None
     requested_organisation: str | None
     requested_at: datetime | None
+    access_notification_sent_at: datetime | None = None
     created_at: datetime
 
 

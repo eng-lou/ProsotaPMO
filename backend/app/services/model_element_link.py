@@ -7,6 +7,8 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.site_scene import SiteScene
+from app.models.animation_profile import AnimationProfile
 from app.models.model_element_link import ModelElementLink
 from app.schemas.model_element_link import (
     ModelElementLinkBulkCreate,
@@ -28,6 +30,7 @@ async def create_link(db: AsyncSession, data: ModelElementLinkCreate) -> ModelEl
     activity = await db.get(Activity, data.activity_id)
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found")
+    await validate_site_link(db, activity.project_id, data.source_kind, data.element_ref, data.animation_profile_id)
 
     existing = (await db.execute(
         select(ModelElementLink).where(
@@ -65,6 +68,8 @@ async def create_links_bulk(db: AsyncSession, data: ModelElementLinkBulkCreate) 
         raise HTTPException(status_code=404, detail="Activity not found")
     if not data.members:
         return ModelElementLinkBulkResponse(created=[], skipped_duplicates=0)
+    for member in data.members:
+        await validate_site_link(db, activity.project_id, member.source_kind, member.element_ref, data.animation_profile_id)
 
     existing = (await db.execute(
         select(ModelElementLink.source_kind, ModelElementLink.element_ref).where(
@@ -103,10 +108,23 @@ async def update_link(db: AsyncSession, link_id: uuid.UUID, data: ModelElementLi
     row = await db.get(ModelElementLink, link_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Model element link not found")
+    await validate_site_link(db, row.project_id, row.source_kind, row.element_ref, data.animation_profile_id)
     row.animation_profile_id = data.animation_profile_id
     await db.commit()
     await db.refresh(row)
     return ModelElementLinkResponse.model_validate(row)
+
+
+async def validate_site_link(db, project_id, kind, ref, profile_id):
+    if kind != "site":
+        return
+    scene = await db.get(SiteScene, project_id)
+    if not scene or not any(item["id"] == ref for item in scene.items):
+        raise HTTPException(422, "Save a site object in this project before linking it")
+    if profile_id:
+        profile = await db.get(AnimationProfile, profile_id)
+        if not profile or profile.project_id != project_id:
+            raise HTTPException(422, "Choose an animation profile from this project")
 
 
 async def delete_link(db: AsyncSession, link_id: uuid.UUID) -> None:

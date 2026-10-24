@@ -3,11 +3,7 @@ import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { ColorPickerPopover, normalizeHex } from '@/components/ColorPickerPopover'
-import type { CustomTextureSet, TextureSlot } from './customTextures'
 import { ResettableNumberInput } from './ResettableNumberInput'
-import { TextureFields } from './TextureFields'
-import { MaterialPresetPicker } from './MaterialPresetPicker'
-import type { MaterialPreset } from './materialPresets'
 import { TransformPanel, type GizmoMode, type GizmoSpace, type KeyframeSupport, type PathProgressSupport, type PivotRotationSupport, type PivotSupport } from './TransformPanel'
 import { DEFAULT_VIEWER_SETTINGS, type ViewerSettings } from './viewerSettings'
 import type { UpAxis } from './upAxis'
@@ -15,6 +11,8 @@ import { applyTransformKeepPosition } from './applyTransform'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
 
 interface ActiveObject {
+  isSite?: boolean
+  locked?: boolean
   id: string
   name: string
   sourceUpAxis: UpAxis
@@ -22,6 +20,7 @@ interface ActiveObject {
 }
 
 interface Props {
+  siteSelectionPanel?: React.ReactNode
   equipmentPivot?: { state: EquipmentVisualState; root: THREE.Object3D } | null
   open: boolean
   onToggle: () => void
@@ -64,49 +63,6 @@ interface Props {
   onEditPivotChange: (editPivot: boolean) => void
   snapToSurface: boolean
   onSnapToSurfaceChange: (snap: boolean) => void
-  activeObjectTextures: CustomTextureSet | undefined
-  // Manual per-element Opacity (2026-07-26, per Maro: "allow for
-  // transparency setting (0-1) for materials so i can simply make the
-  // window surfaces less opaque instead of replacing the materials
-  // completely") — undefined means "no override", TextureFields.tsx shows
-  // that as 1 (fully opaque). Passed through to every currently-selected
-  // element at once, not just this one — see FourD.tsx's own
-  // handleOpacityChange header.
-  activeOpacity: number | undefined
-  onOpacityChange: (value: number) => void
-  onUploadTexture: (slot: TextureSlot, file: File) => void
-  onClearTexture: (slot: TextureSlot) => void
-  // Tile Size/Rotation's own forced-rerender, passed straight through to
-  // TextureFields — see its own Props header for why this is separate from
-  // onTransformChange (which also persists a transform save, meaningless
-  // for a texture edit).
-  onTextureFieldChange: () => void
-  // Clear Materials (2026-07-11) — passed straight through to TextureFields.
-  onClearAllTextures: () => void
-  // Whether *any* currently-selected element (not just the single primary
-  // one activeObjectTextures itself reflects) has a texture override —
-  // drives the Clear Materials button's own visibility, so it can't stay
-  // hidden just because the primary/last-clicked element happens to carry
-  // no override while other selected elements do (2026-07-11 fix, see
-  // FourD.tsx's own hasAnyActiveTextureOverride for the full story).
-  hasAnyActiveTextureOverride: boolean
-  // Material Preset library (2026-07-09, per Maro: "Save the default
-  // materials for the whole model... I can then add a new preset which
-  // allows me to change the materials, i can save it, edit and delete") —
-  // see MaterialPresetPicker.tsx's own header for the full design.
-  materialPresets: MaterialPreset[]
-  materialPresetsLoading: boolean
-  onApplyMaterialPreset: (preset: MaterialPreset) => void
-  onCreateMaterialPreset: (name: string, files: Partial<Record<TextureSlot, Blob>>) => Promise<MaterialPreset>
-  onUpdateMaterialPreset: (presetId: string, name: string, files: Partial<Record<TextureSlot, Blob>>, clearedSlots: TextureSlot[]) => Promise<void>
-  onDeleteMaterialPreset: (presetId: string) => Promise<void>
-  // Select Linked / Apply to Linked, per channel (2026-07-09, per Maro) —
-  // see linkedMaterials.ts's own header. Only available with one specific
-  // IFC sub-element active (linkedMaterialsAvailable) — TextureFields.tsx
-  // hides the two buttons per row entirely otherwise.
-  linkedMaterialsAvailable: boolean
-  onSelectLinkedMaterial: (slot: TextureSlot) => void
-  onApplyToLinkedMaterial: (slot: TextureSlot) => void
   keyframeSupport: KeyframeSupport | null
   pathProgress: PathProgressSupport | null
   pivot: PivotSupport
@@ -171,12 +127,9 @@ function SectionHeader({ label }: { label: string }) {
 // that actually do something given "the 3D capabilities" this pass actually
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
-  open, onToggle, settings, onSettingsChange, realisticPanelOpen, onOpenRealisticPanel,
+  siteSelectionPanel, open, onToggle, settings, onSettingsChange, realisticPanelOpen, onOpenRealisticPanel,
   environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
-  equipmentPivot, activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange, activeObjectTextures, activeOpacity, onOpacityChange, onUploadTexture, onClearTexture, onTextureFieldChange, onClearAllTextures, hasAnyActiveTextureOverride,
-  materialPresets, materialPresetsLoading, onApplyMaterialPreset,
-  onCreateMaterialPreset, onUpdateMaterialPreset, onDeleteMaterialPreset,
-  linkedMaterialsAvailable, onSelectLinkedMaterial, onApplyToLinkedMaterial,
+  equipmentPivot, activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange,
   keyframeSupport, pathProgress, pivot, pivotRotation, onChangeSourceUpAxis,
 }: Props) {
   const hdrInputRef = useRef<HTMLInputElement>(null)
@@ -236,7 +189,7 @@ export function PropertiesPanel({
           <option value="realistic">Realistic Materials</option>
         </select>
       </Row>
-      {settings.renderMode === 'realistic' && !realisticPanelOpen && (
+      {!realisticPanelOpen && (
         <Row label="Materials">
           <button
             onClick={onOpenRealisticPanel}
@@ -461,6 +414,7 @@ export function PropertiesPanel({
       </Row>
 
       {equipmentPivot && <EquipmentPivotControls upAxis={settings.upAxis} state={equipmentPivot.state} root={equipmentPivot.root} mode={gizmoMode} space={gizmoSpace} onMode={onGizmoModeChange} onSpace={onGizmoSpaceChange} />}
+      {siteSelectionPanel}
       {activeObject && !equipmentPivot && (
         <>
           <SectionHeader label={isElementTransform ? `Selected element (in ${activeObject.name || 'model'})` : `Selected: ${activeObject.name || 'Object'}`} />
@@ -470,7 +424,9 @@ export function PropertiesPanel({
               vary, especially FBX). Same two buttons as ImportModelDialog.tsx's
               own Up Axis picker, on purpose — one control, same choice,
               available both at import time and any time after. */}
-          <Row label="Source Up Axis">
+          <fieldset disabled={activeObject.locked} className="min-w-0">
+          {activeObject.locked && <p className="px-3 text-xs">Unlock this object in Site Tools to edit it.</p>}
+          {!activeObject.isSite && <Row label="Source Up Axis">
             <div className="flex gap-1">
               {(['z', 'y'] as const).map(axis => (
                 <button
@@ -484,7 +440,7 @@ export function PropertiesPanel({
                 </button>
               ))}
             </div>
-          </Row>
+          </Row>}
           {/* Apply Transform (2026-07-09, per Maro: "allow me to apply
               transforms to the selected object. in essence zeroing out all
               transform parameters while maintaining position") — Blender's
@@ -526,31 +482,13 @@ export function PropertiesPanel({
             object={activeObject.object} mode={gizmoMode} onModeChange={onGizmoModeChange}
             space={gizmoSpace} onSpaceChange={onGizmoSpaceChange}
             editPivot={editPivot} onEditPivotChange={onEditPivotChange}
-            snapToSurface={snapToSurface} onSnapToSurfaceChange={onSnapToSurfaceChange} upAxis={settings.upAxis}
+            snapToSurface={snapToSurface} onSnapToSurfaceChange={onSnapToSurfaceChange} upAxis={activeObject.isSite ? 'y' : settings.upAxis}
             lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
             keyframes={keyframeSupport} pathProgress={pathProgress} pivot={pivot} pivotRotation={pivotRotation} onFieldChange={onTransformChange}
           />
 
-          <SectionHeader label="Material / Texture" />
-          <MaterialPresetPicker
-            presets={materialPresets}
-            loading={materialPresetsLoading}
-            currentTextures={activeObjectTextures ?? {}}
-            onApply={onApplyMaterialPreset}
-            onCreate={onCreateMaterialPreset}
-            onUpdate={onUpdateMaterialPreset}
-            onDelete={onDeleteMaterialPreset}
-          />
-          <TextureFields
-            textures={activeObjectTextures} onUploadTexture={onUploadTexture} onClearTexture={onClearTexture}
-            onFieldChange={onTextureFieldChange} lengthUnitToMetres={lengthUnitToMetres} unitDisplay={unitDisplay}
-            onClearAll={onClearAllTextures} hasAnyOverride={hasAnyActiveTextureOverride}
-            linkedAvailable={linkedMaterialsAvailable}
-            onSelectLinked={onSelectLinkedMaterial}
-            onApplyToLinked={onApplyToLinkedMaterial}
-            opacity={activeOpacity}
-            onOpacityChange={onOpacityChange}
-          />
+          </fieldset>
+          <button className="mx-3 my-2 rounded border border-prosota-line px-2 py-1 text-xs" onClick={onOpenRealisticPanel}>Open Materials</button>
         </>
       )}
 

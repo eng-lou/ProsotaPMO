@@ -5,8 +5,8 @@ import { api } from '@/lib/api'
 import { useProject } from '@/lib/ProjectContext'
 import { useActivePeriod } from '@/lib/usePeriod'
 import { useActiveScheduleVariant } from '@/lib/useScheduleVariant'
-import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
-import type { Activity } from '@/modules/scheduling/types'
+import { useWbsOptions } from '@/lib/useWbsOptions'
+import { WbsScopePicker } from './WbsScopePicker'
 import { fetchRelatedRecords, toggleCrossFilterKey, type CrossFilterEntityKind, type CrossFilterScope } from '@/lib/dashboardCrossFilter'
 import { DashboardGrid } from './DashboardGrid'
 import type { DashboardOverviewResponse } from './types'
@@ -39,21 +39,12 @@ function ProjectOverview() {
   // any real WBS node, fetched once here purely to populate the picker
   // (get_overview itself does its own scoped query server-side; this list
   // is never used to compute anything client-side).
-  const [wbsNodes, setWbsNodes] = useState<Activity[]>([])
-  useEffect(() => {
-    if (!selectedProject || !schedulePeriod) return
-    const controller = new AbortController()
-    api.get<Activity[]>('/api/v1/activities/', {
-      signal: controller.signal,
-      params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id },
-    }).then(({ data }) => {
-      if (!controller.signal.aborted) setWbsNodes(data.filter(a => a.activity_type === 'wbs_summary'))
-    }).catch(() => {})
-    return () => controller.abort()
-  }, [selectedProject?.id, schedulePeriod?.id])
-
-  const [wbsNodeId, setWbsNodeId] = useState<string>('')
+  const wbsLookup = useWbsOptions(selectedProject?.id, schedulePeriod?.id)
+  const { options: wbsNodes, selectedId: wbsNodeId, select: setWbsNodeId } = wbsLookup
   const [data, setData] = useState<DashboardOverviewResponse | null>(null)
+  const requestedScope = `${period?.id}:${schedulePeriod?.id}:${wbsNodeId}`
+  const [loadedScope, setLoadedScope] = useState('')
+  const scopeMatches = loadedScope === requestedScope
   const [loading, setLoading] = useState(true)
   // error (2026-09-16, per Maro: this screen — the default landing page
   // after sign-in — got stuck on "Loading…" forever on a work laptop where
@@ -81,11 +72,15 @@ function ProjectOverview() {
         wbs_node_activity_id: wbsNodeId || undefined,
       },
     })
-      .then(({ data }) => { if (!controller.signal.aborted) setData(data) })
+      .then(({ data }) => {
+        if (controller.signal.aborted) return
+        setData(data)
+        setLoadedScope(requestedScope)
+      })
       .catch(() => { if (!controller.signal.aborted) setError(true) })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId, retryCount])
+  }, [selectedProject?.id, period?.id, schedulePeriod?.id, wbsNodeId, requestedScope, retryCount])
 
   // Cross-widget "click to filter" (2026-09-06, per Maro — see
   // lib/dashboardCrossFilter.ts's own header for the full design).
@@ -96,14 +91,21 @@ function ProjectOverview() {
   // 2026-09-07 from activity-only to any of the four kinds.
   const [crossFilterSeed, setCrossFilterSeed] = useState<{ key: string; seedType: CrossFilterEntityKind; seedIds: string[] } | null>(null)
   const [crossFilter, setCrossFilter] = useState<CrossFilterScope | null>(null)
+  const [crossFilterLoading, setCrossFilterLoading] = useState(false)
+  const [crossFilterError, setCrossFilterError] = useState(false)
+  const [crossFilterAttempt, setCrossFilterAttempt] = useState(0)
+  useEffect(() => { setCrossFilterSeed(null) }, [period?.id, schedulePeriod?.id])
   useEffect(() => {
+    setCrossFilter(null)
+    setCrossFilterError(false)
     if (!selectedProject || !crossFilterSeed) {
-      setCrossFilter(null)
+      setCrossFilterLoading(false)
       return
     }
-    let cancelled = false
-    fetchRelatedRecords(selectedProject.id, crossFilterSeed.seedType, crossFilterSeed.seedIds).then(related => {
-      if (cancelled) return
+    const controller = new AbortController()
+    setCrossFilterLoading(true)
+    fetchRelatedRecords(selectedProject.id, crossFilterSeed.seedType, crossFilterSeed.seedIds, controller.signal).then(related => {
+      if (controller.signal.aborted) return
       setCrossFilter({
         key: crossFilterSeed.key,
         activityIds: new Set(related.activity_ids),
@@ -111,11 +113,15 @@ function ProjectOverview() {
         riskIds: new Set(related.risk_ids),
         icdItemIds: new Set(related.icd_item_ids),
       })
+    }).catch(() => {
+      if (!controller.signal.aborted) setCrossFilterError(true)
+    }).finally(() => {
+      if (!controller.signal.aborted) setCrossFilterLoading(false)
     })
-    return () => { cancelled = true }
-  }, [selectedProject?.id, crossFilterSeed])
+    return () => controller.abort()
+  }, [selectedProject?.id, crossFilterSeed, crossFilterAttempt])
   const handleCrossFilterClick = (key: string, seedType: CrossFilterEntityKind, seedIds: string[]) => {
-    const nextKey = toggleCrossFilterKey(crossFilter, key)
+    const nextKey = toggleCrossFilterKey(crossFilterSeed, key)
     setCrossFilterSeed(nextKey ? { key: nextKey, seedType, seedIds } : null)
   }
 
@@ -149,16 +155,21 @@ function ProjectOverview() {
   return (
     <div className="space-y-6">
       {error && <div role="alert" className="text-sm text-amber-700 dark:text-prosota-amber">
-        Couldn’t refresh the dashboard. Showing the previous results.{' '}
+        {scopeMatches ? 'Couldn’t refresh the dashboard. Showing the previous results.' : 'Couldn’t load the requested view. Previous figures are hidden until it loads.'}{' '}
         <button className="underline" onClick={() => setRetryCount(c => c + 1)}>Retry</button>
       </div>}
-      <div className="rounded-lg border border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel p-4 flex flex-wrap items-center justify-between gap-4">
+      {crossFilterError && <div role="alert" className="text-sm text-amber-700 dark:text-prosota-amber">
+        Related-record filter couldn’t load. No related-record filter is applied.{' '}
+        <button className="underline" onClick={() => setCrossFilterAttempt(n => n + 1)}>Retry filter</button>
+      </div>}
+      {crossFilterLoading && <p role="status" className="text-xs text-gray-500 dark:text-prosota-muted">Applying related-record filter…</p>}
+      <div style={{ display: scopeMatches ? undefined : 'none' }} className="rounded-lg border border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel p-4 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-gray-900 dark:text-prosota-paper">Project controls snapshot</h2>
           <p className="mt-1 text-xs text-gray-500 dark:text-prosota-muted">
             Data date: {formatDate(data.project_info.data_date)} · {data.project_info.total_activities} activities · {data.project_info.has_baseline ? 'Baseline assigned' : 'No baseline assigned'}
           </p>
-          <p className="mt-1 text-xs text-gray-500 dark:text-prosota-muted">{wbsNodeId ? wbsNodes.find(a => a.id === wbsNodeId)?.task_name : 'Whole schedule'}{crossFilterSeed ? ' · Related-record filter active on supported widgets' : ''}</p>
+          <p className="mt-1 text-xs text-gray-500 dark:text-prosota-muted">{wbsNodeId ? wbsNodes.find(a => a.id === wbsNodeId)?.task_name || 'Selected WBS' : 'Whole schedule'}{crossFilter ? ' · Related-record filter active on supported widgets' : ''}</p>
         </div>
         <button disabled={loading} onClick={() => setRetryCount(c => c + 1)} className="no-print text-xs px-3 py-2 rounded border border-gray-300 dark:border-prosota-line hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-50">{loading ? 'Refreshing…' : 'Refresh figures'}</button>
       </div>
@@ -179,14 +190,7 @@ function ProjectOverview() {
               updates in place — and a lightweight "Refreshing…" label covers
               the "still fetching" case instead of unmounting the whole grid. */}
           {loading && <span className="text-xs text-gray-400 dark:text-prosota-muted">Refreshing…</span>}
-          <div className="w-56">
-            <ActivityPicker
-              activities={wbsNodes}
-              value={wbsNodeId}
-              onChange={setWbsNodeId}
-              placeholder="Whole schedule"
-            />
-          </div>
+          <WbsScopePicker lookup={wbsLookup} />
           {wbsNodeId && (
             <button
               onClick={() => setWbsNodeId('')}
@@ -202,13 +206,13 @@ function ProjectOverview() {
               title="Clear the cross-filter and show everything again"
               className="text-xs px-2 py-1 rounded-md bg-prosota-amber/20 text-prosota-ink dark:text-prosota-paper border border-prosota-amber/40 hover:bg-prosota-amber/30"
             >
-              ✕ Cross-filter active
+              {crossFilter ? '✕ Cross-filter active' : '✕ Clear filter request'}
             </button>
           )}
         </div>
       </div>
 
-      <div className={loading ? 'opacity-60 pointer-events-none transition-opacity' : 'transition-opacity'}>
+      <div hidden={!scopeMatches} aria-busy={loading || crossFilterLoading} className={loading || crossFilterLoading ? 'opacity-60 pointer-events-none transition-opacity' : 'transition-opacity'}>
         <DashboardGrid
           projectId={selectedProject?.id}
           widgetProps={{

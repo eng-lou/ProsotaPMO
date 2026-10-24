@@ -162,3 +162,5 @@ from app.models.clash_run import ClashRun, ClashReport
 
 from app.models.equipment_rig import EquipmentRig
 from app.models.desktop_session import DesktopSession
+from app.models.site_scene import SiteScene, SiteSceneCommand
+from app.models.site_asset import SiteAsset

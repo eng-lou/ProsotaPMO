@@ -1,3 +1,4 @@
+import { buildPathCurve } from './pathCurve'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { Html, Line } from '@react-three/drei'
@@ -273,22 +274,11 @@ function PathGizmo({
 
   const curvePositions = useMemo(() => {
     if (path.points.length < 2) return null
-    const vectors = path.points.map(p => new THREE.Vector3(p.x, p.y, p.z))
-    // 'centripetal', not the earlier explicit 'catmullrom' (2026-07-29, per
-    // Maro: "at bends, its not looking good" — confirmed live via
-    // screenshot: a sharp turn rendered as a jumbled cross-hatch instead of
-    // a smooth curve). Verified directly in three.js's own
-    // CatmullRomCurve3.js — its own file header literally describes
-    // 'centripetal' as "useful for avoiding cusps and self-intersections in
-    // non-uniform Catmull-Rom curves" (a cited paper, not a guess) and it's
-    // the library's own default when no type is given at all; the uniform
-    // 'catmullrom' type this used to pass explicitly is exactly the
-    // variant prone to the loop/overshoot artifacts at a sharp, unevenly-
-    // spaced turn that a real haul-route bend produces.
-    const curve = new THREE.CatmullRomCurve3(vectors, path.closed, 'centripetal')
+    if (path.curve_mode === 'straight') return [...path.points, ...(path.closed ? [path.points[0]] : [])].map(p=>[p.x,p.y,p.z] as [number,number,number])
+    const curve = buildPathCurve(path.points,path.closed,path.curve_mode)!
     const samples = Math.max(CURVE_SAMPLES_MIN, path.points.length * CURVE_SAMPLES_PER_POINT)
     return curve.getPoints(samples).map(v => [v.x, v.y, v.z] as [number, number, number])
-  }, [path.points, path.closed])
+  }, [path.points, path.closed, path.curve_mode])
 
   // Arrowhead orientation (2026-07-29, `path.show_arrow`) — lies flat
   // against the ground (FLAT_ARROW_GEOMETRY's own local XY plane, normal

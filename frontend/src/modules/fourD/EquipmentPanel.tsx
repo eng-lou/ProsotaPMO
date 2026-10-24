@@ -13,10 +13,11 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual }: {
+export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset }: {
+  onSaveAsset?: (rig: EquipmentRig) => Promise<void>
   onVisual?: (state: EquipmentVisualState | null) => void
   onAssemble?: (names: string[], name: string) => Promise<string>
-  projectId: string; objects: { name: string; kind: string; object: THREE.Object3D }[]; rigs: EquipmentRig[]
+  projectId: string; objects: { name: string; label?: string; kind: string; object: THREE.Object3D }[]; rigs: EquipmentRig[]
   busy: boolean; error: string | null; runtimeError: string | null; dateRef: React.MutableRefObject<Date | null>
   onSave: (r: EquipmentRig) => Promise<boolean>; onRemove: (r: EquipmentRig) => Promise<void>
   onEditing: (editing: boolean) => void
@@ -116,14 +117,14 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
     <p className="text-gray-500 dark:text-prosota-muted">Animate rigid parts inside an imported model. Use its root transform or path to move the whole machine.</p>
     <select aria-label="Equipment model" className={input} disabled={dirty || busy} value={model} onChange={e => { setModel(e.target.value); onDraft(null); onPreview(null); setNotice(null) }}>
       <option value="">Select equipment model…</option>
-      {objects.filter(o => o.kind === 'mesh').map((o, i) => <option key={i} value={o.name}>{o.name}</option>)}
+      {objects.filter(o => o.kind === 'mesh').map((o, i) => <option key={i} value={o.name}>{o.label || o.name}</option>)}
     </select>
     {onAssemble && <details><summary>Assemble separate imports</summary>
       <p>Select the parts of one machine. Saves an assembled copy at the current pose; originals remain as hidden backups. Existing links and animations stay with the originals.</p>
       <input aria-label="Assembly name" className={input} value={assemblyName} onChange={e => setAssemblyName(e.target.value)} />
       <button className={button} disabled={dirty} onClick={() => setAssemblyParts(objects.filter(o => o.kind === 'mesh').map(o => o.name))}>Select all imports</button>
       <button className={button} onClick={() => setAssemblyParts([])}>Clear</button>
-      <div className="max-h-48 overflow-y-auto">{objects.filter(o => o.kind === 'mesh').map((o, i) => <label key={i} className="flex gap-2"><input type="checkbox" checked={assemblyParts.includes(o.name)} onChange={e => setAssemblyParts(p => e.target.checked ? [...p, o.name] : p.filter(n => n !== o.name))} />{o.name}</label>)}</div>
+      <div className="max-h-48 overflow-y-auto">{objects.filter(o => o.kind === 'mesh').map((o, i) => <label key={i} className="flex gap-2"><input type="checkbox" checked={assemblyParts.includes(o.name)} onChange={e => setAssemblyParts(p => e.target.checked ? [...p, o.name] : p.filter(n => n !== o.name))} />{o.label || o.name}</label>)}</div>
       <button className={button} disabled={dirty || assemblyParts.length < 2 || !assemblyName.trim()} onClick={async () => {
         setAssembling(true); setNotice('Saving assembled equipment…')
         try { const name = await onAssemble(assemblyParts, assemblyName); setModel(name); onDraft(null); onPreview(null); setNotice('Assembly saved. Click Create equipment rig to configure its controls.'); setAssemblyParts([]) }
@@ -132,13 +133,17 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
       }}>{assembling ? 'Assembling…' : `Assemble ${assemblyParts.length} imports`}</button>
     </details>}
     {(error || runtimeError || notice) && <p role="status" className="text-amber-700 dark:text-amber-300 break-words">{error || runtimeError || notice}</p>}
-    {model && !draft && <button className={button} onClick={() => change({ id: '', project_id: projectId, model_ref: model, name: model, version: 1, definition: emptyEquipment() })}>Create equipment rig</button>}
+    {model && !draft && <button className={button} onClick={() => change({ id: '', project_id: projectId, model_ref: model, name: object?.label || model, version: 1, definition: emptyEquipment() })}>Create equipment rig</button>}
     {draft && <>
       <label className="block">Equipment name<input className={input} value={draft.name} onChange={e => change({ ...draft, name: e.target.value })} /></label>
       <div className="flex flex-wrap gap-1">
         <button className={button} disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rig & keys'}</button>
         <button className={button} disabled={busy || !dirty} onClick={() => { undoHistory.remove(owner.current); setDirty(false); setDraft(saved ? structuredClone(saved) : null); onDraft(null); onPreview(null) }}>Discard edits</button>
-        {saved && <button className={button} disabled={busy || dirty} onClick={() => { if (window.confirm('Remove this equipment rig and its control keyframes? Imported geometry will remain.')) void onRemove(saved) }}>Remove rig</button>}
+        {onSaveAsset && model.startsWith('site:') && <button className={button} disabled={busy || dirty || !saved} onClick={async()=>{
+          try {validate();await onSaveAsset(draft);setNotice('Saved to the library as Construction equipment. New copies inherit this rig; existing instance overrides stay independent.')}
+          catch(e){setNotice((e as Error).message)}
+        }}>Save rig to asset library</button>}
+        {saved?.id && <button className={button} disabled={busy || dirty} onClick={() => { if (window.confirm('Remove this equipment rig and its control keyframes? Imported geometry will remain.')) void onRemove(saved) }}>Remove rig</button>}
       </div>
       {dirty && <p>Unsaved changes — save before closing this panel.</p>}
       <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>setTab('setup')}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>

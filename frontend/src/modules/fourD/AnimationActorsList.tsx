@@ -462,12 +462,14 @@ function ActorRow({
 // list, occasionally unblocking just long enough to paint whichever date
 // the (still-advancing, wall-clock-driven) playhead had reached by then.
 export const AnimationActorsList = memo(function AnimationActorsList({
+  hideEmpty = false,
   scheduleStart, scheduleEnd, currentDate, activities, modelElementLinks, elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras,
   rawAnimationMeshNames,
   timeDisplayMode, speedDaysPerSecond, fps,
   onJumpTo, onMoveKeyframes, onDeleteKeyframes, onCreateKeyframes, onReverseKeyframes, onSelectActor,
   onKeyAnimStart, onKeyAnimEnd,
 }: {
+  hideEmpty?: boolean
   scheduleStart: Date
   scheduleEnd: Date
   // Paste's own anchor (2026-07-23) — "at the current playhead date," per
@@ -697,6 +699,7 @@ export const AnimationActorsList = memo(function AnimationActorsList({
   const profileById = useMemo(() => new Map(animationProfiles.map(p => [p.id, p])), [animationProfiles])
 
   if (actors.length === 0) {
+    if (hideEmpty) return null
     return <p className="px-3 py-3 text-xs text-gray-400 dark:text-prosota-muted">No animated actors yet — link an object to an Activity+Profile, bind it to a Path, or keyframe its Transform to see it here.</p>
   }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -190,6 +190,7 @@ class Annotation(Base, TimestampMixin):
     font_size: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
     hide_closer_than: Mapped[float | None] = mapped_column(Float, nullable=True)
     hide_farther_than: Mapped[float | None] = mapped_column(Float, nullable=True)
+    callout: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     box_shape: Mapped[str] = mapped_column(String(12), nullable=False, default="rounded")  # "rounded" | "rectangle"
     leader_offset_x: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)
     leader_offset_y: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
@@ -203,3 +204,17 @@ class Annotation(Base, TimestampMixin):
     leader_scale: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     placemark_scale: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     placemark_rotation: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class AnnotationMedia(Base, TimestampMixin):
+    __tablename__ = "annotation_media"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    @property
+    def storage_key(self):
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm"}[self.content_type]
+        return f"annotation-media/{self.id}.{ext}"

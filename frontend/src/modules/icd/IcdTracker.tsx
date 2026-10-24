@@ -55,24 +55,26 @@ function uniqueValues(items: IcdItem[], field: 'owner' | 'status'): string[] {
 
 export function IcdTracker() {
   const { selectedProject } = useProject()
+  return <ProjectIcdTracker key={selectedProject?.id} />
+}
+
+function ProjectIcdTracker() {
+  const { selectedProject } = useProject()
   const { period, loading: periodLoading, error: periodError, refetch: refetchPeriod } = useActivePeriod(selectedProject?.id)
-  const { period: schedulePeriod } = useActiveScheduleVariant(selectedProject?.id)
+  const { period: schedulePeriod, loading: scheduleLoading, error: scheduleError } = useActiveScheduleVariant(selectedProject?.id)
   const { letterhead, save: saveLetterhead } = useProjectLetterhead(selectedProject?.id)
   const [letterheadWidgetOpen, setLetterheadWidgetOpen] = useState(false)
   const [baselineWidgetOpen, setBaselineWidgetOpen] = useState(false)
   const [items, setItems] = useState<IcdItem[]>([])
   const [risks, setRisks] = useState<RiskSummary[]>([])
   const [costElements, setCostElements] = useState<CostElementSummary[]>([])
-  // Schedule + resource data for "Generate ICD" (2026-07-20) — see
-  // icdGeneration.ts's own header; same split RiskRegister.tsx/CostPlan.tsx
-  // already use for the identical reason.
-  const [scheduleActivities, setScheduleActivities] = useState<Activity[]>([])
-  const [resourceAssignments, setResourceAssignments] = useState<ResourceAssignment[]>([])
   const [generatingIcd, setGeneratingIcd] = useState(false)
   const [generateIcdMessage, setGenerateIcdMessage] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [loadedPeriodId, setLoadedPeriodId] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<IcdItem | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -99,12 +101,14 @@ export function IcdTracker() {
     async function load() {
       try {
         setLoading(true)
+        setError(null)
         const [itemRes, riskRes, costRes] = await Promise.all([
           api.get<IcdItem[]>('/api/v1/icd-items/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
           api.get<RiskSummary[]>('/api/v1/risks/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
           api.get<CostElementSummary[]>('/api/v1/cost-elements/', { params: { project_id: selectedProject!.id, period_id: period!.id } }),
         ])
         if (cancelled) return
+        setLoadedPeriodId(period!.id)
         setItems(itemRes.data)
         setRisks(riskRes.data)
         setCostElements(costRes.data)
@@ -117,26 +121,7 @@ export function IcdTracker() {
 
     load()
     return () => { cancelled = true }
-  }, [selectedProject, period])
-
-  // Schedule + resource data for "Generate ICD" (2026-07-20) — loaded
-  // separately since it comes from Scheduling's own schedule-variant/period,
-  // same split RiskRegister.tsx already uses for the identical reason.
-  useEffect(() => {
-    if (!selectedProject || !schedulePeriod) return
-    let cancelled = false
-    async function loadScheduleData() {
-      const [assignmentsRes, activitiesRes] = await Promise.all([
-        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod!.id } }),
-        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject!.id, schedule_period_id: schedulePeriod!.id } }),
-      ])
-      if (cancelled) return
-      setResourceAssignments(assignmentsRes.data)
-      setScheduleActivities(activitiesRes.data)
-    }
-    loadScheduleData()
-    return () => { cancelled = true }
-  }, [selectedProject, schedulePeriod])
+  }, [selectedProject, period, loadAttempt])
 
   // Fires window.print() only after printMode has committed to the DOM (state
   // updates are batched/async, so calling print() directly after setPrintMode
@@ -220,15 +205,24 @@ export function IcdTracker() {
   // rescan, not a one-shot: re-running this later only touches items whose
   // own discipline actually shifted (backend: icd_bulk_generate.py).
   const handleGenerateIcd = async () => {
-    if (!period) return
-    const drafts = buildIcdDraft(scheduleActivities, resourceAssignments)
-    if (drafts.length === 0) {
-      setGenerateIcdMessage('No committed, resourced schedule found to draft from yet.')
+    if (!period || generatingIcd) return
+    if (!schedulePeriod || scheduleLoading || scheduleError) {
+      setGenerateIcdMessage(scheduleError || 'The schedule is still loading. Try again shortly.')
       return
     }
     setGeneratingIcd(true)
     setGenerateIcdMessage(null)
     try {
+      // Generation needs current schedule inputs; browsing the log does not.
+      const [activitiesRes, assignmentsRes] = await Promise.all([
+        api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject.id, schedule_period_id: schedulePeriod.id } }),
+        api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: schedulePeriod.id } }),
+      ])
+      const drafts = buildIcdDraft(activitiesRes.data, assignmentsRes.data)
+      if (drafts.length === 0) {
+        setGenerateIcdMessage('No committed, resourced schedule found to draft from yet.')
+        return
+      }
       const { data } = await api.post('/api/v1/icd-bulk-generate/', {
         project_id: selectedProject.id, period_id: period.id, items: drafts,
       })
@@ -388,7 +382,8 @@ export function IcdTracker() {
   )
 
   if (!period && periodError) return <ModuleLoadError message={periodError} onRetry={refetchPeriod} />
-  if (loading || periodLoading) {
+  if (error && !loading) return <ModuleLoadError message={error} onRetry={() => setLoadAttempt(n => n + 1)} />
+  if (loading || periodLoading || loadedPeriodId !== period?.id) {
     return <div className="p-8 text-sm text-gray-400 dark:text-prosota-muted">Loading ICD tracker…</div>
   }
 
