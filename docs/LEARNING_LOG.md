@@ -7426,3 +7426,6 @@ on explicit owner approval, not automatically after tests. The initial baseline
 had already been published to both branches; this clarification supersedes the
 earlier public early-access interpretation. Existing public GitHub Preview
 installers are unchanged; do not claim they are private. No AI keys were shared.
+
+## 2026-10-25 — Stable Web launch button
+The Stable Web CTA linked to the homepage itself, so signed-out visitors never entered sign-in. Wired the Stable homepage CTA to the existing HomePage onSignIn callback; Preview still links to the Stable origin. Added a click assertion to the rendered release-page check. Visual/link-only checks missed this: primary actions need behavioral checks. This is a targeted repair of the published Stable page, not promotion of unrelated Preview work.

@@ -1,6 +1,6 @@
-import { plannerReleases } from '@/lib/releases'
+import { plannerReleases, releaseChannel } from '@/lib/releases'
 
-export function PlannerReleases() {
+export function PlannerReleases({ onSignIn }: { onSignIn: () => void }) {
   const release = plannerReleases.stable
   return <section className="hp-releases" id="releases" aria-labelledby="planner-releases-title">
     <p className="hp-small">PROSOTA PLANNER · STABLE RELEASES</p>
@@ -13,7 +13,9 @@ export function PlannerReleases() {
         <p>Open Planner in your browser. New releases are published after review and approval.</p>
         <div className="hp-release-actions">
           {release.web.available
-            ? <a className="hp-button" href={release.web.url}>Open Stable Web <span aria-hidden="true">↗</span></a>
+            ? releaseChannel === 'stable'
+              ? <button className="hp-button" onClick={onSignIn}>Open Stable Web <span aria-hidden="true">↗</span></button>
+              : <a className="hp-button" href={release.web.url}>Open Stable Web <span aria-hidden="true">↗</span></a>
             : <span className="hp-release-pending">Preparing release</span>}
         </div>
         <small>Version {release.web.version}</small>

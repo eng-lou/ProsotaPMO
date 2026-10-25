@@ -229,7 +229,7 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
               <span className="hp-hero-note">Browser-native · 4D BIM, planning & project controls</span>
             </div>
           </div>
-          <PlannerReleases />
+          <PlannerReleases onSignIn={onSignIn} />
           <ProgrammePreview />
           <div className="hp-compat">
             <span>START WITH THE WORK YOU ALREADY HAVE</span>
