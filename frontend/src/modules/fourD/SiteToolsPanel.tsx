@@ -201,7 +201,7 @@ export function SiteToolsPanel({ selectedShapeSources, hideShapeSources, importR
       <button className={button} disabled={chosen.locked || busy} onClick={() => void update(chosen, null)}>Remove</button>
     </div>}
     {chosen && <p>Selected: {selected?.includes(':panel:') ? 'panel at ' + selected.split(':panel:')[1] + ' m' : chosen.name}. Use Frame Selected in the viewport.</p>}
-    {chosen?.asset_id && !edit && <SiteAnimationControls item={chosen} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} />}
+    {chosen?.asset_id && !edit && <SiteAnimationControls item={chosen} projectId={projectId} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} onApplyMotion={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Import motion for ${chosen.name}`)}} />}
     {chosen && !edit && <section className="border-t pt-2 space-y-2 dark:border-prosota-line">
       <strong>Activity links & profiles</strong>
       <ToolVisualGuide topic="links"/>

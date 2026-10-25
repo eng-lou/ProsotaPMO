@@ -1,6 +1,8 @@
 import { fbxSourceSettings } from './fbxSourceSettings'
 import { exportMorphTracks } from './exportMorphTracks'
 import { dataUriToBlob } from './dataUriBlob'
+import { prepareImportedOpacity } from './importOpacity'
+import { applyInitialAssetPose, captureAssetBindPose } from './assetPose'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
@@ -69,11 +71,13 @@ export async function convertSiteImport(file:File, companions:File[], options:Im
     const texture=new THREE.CanvasTexture(canvas),source=base || alpha
     texture.flipY=source.flipY;texture.colorSpace=THREE.SRGBColorSpace;texture.offset.copy(source.offset);texture.repeat.copy(source.repeat);texture.center.copy(source.center);texture.rotation=source.rotation;texture.wrapS=source.wrapS;texture.wrapT=source.wrapT
     material.map=texture;material.alphaMap=null
+    prepareImportedOpacity(material,pixels.data)
   }
   const root=new THREE.Group();root.name='Prosota import';root.scale.setScalar(unitScale)
   if(upAxis==='z')root.rotation.x=-Math.PI/2
   root.add(object)
   const animations=options.includeAnimation?exportMorphTracks(root,object.animations):[]
+  if(ext==='fbx'){captureAssetBindPose(object);applyInitialAssetPose(object)}
   const bytesOut=await new GLTFExporter().parseAsync(root,{binary:true,animations,onlyVisible:false})
   return new File([bytesOut as ArrayBuffer],file.name.replace(/\.[^.]+$/,'.glb'),{type:'model/gltf-binary'})
  } finally {urls.forEach(url=>URL.revokeObjectURL(url))}

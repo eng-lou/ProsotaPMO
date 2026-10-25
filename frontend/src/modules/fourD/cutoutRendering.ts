@@ -9,6 +9,10 @@ export function prepareCutoutRendering(root: THREE.Object3D) {
     let cutout = false
     for (const material of materials) {
       if (!(material instanceof THREE.MeshStandardMaterial) || (!material.map && !material.alphaMap)) continue
+      // Character atlases have opaque skin/clothes with small masked details.
+      // Keep their authored cutoff: stochastic coverage makes compressed white
+      // mask pixels sparkle across otherwise solid surfaces.
+      if (material.userData.prosotaOpacityMode === 'cutout') continue
       if (material.alphaTest > 0 && !material.transparent) {
         material.alphaTest = 0
         material.alphaHash = true

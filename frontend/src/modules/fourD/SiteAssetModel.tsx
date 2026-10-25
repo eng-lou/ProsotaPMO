@@ -20,6 +20,7 @@ export function SiteAssetModel({ id, preview = false, selected = false, fit = fa
   const mixer=useRef<THREE.AnimationMixer>(),elapsed=useRef(0),lastPoseTime=useRef<number|null>(null)
   useEffect(()=>{
     if(!object?.animations.length)return
+    elapsed.current=0
     const value=new THREE.AnimationMixer(object);mixer.current=value
     value.clipAction(object.animations[Math.min(clip,object.animations.length-1)]).play();value.setTime(elapsed.current);lastPoseTime.current=elapsed.current;invalidateBounds()
     return ()=>{value.stopAllAction();value.uncacheRoot(object);mixer.current=undefined}
