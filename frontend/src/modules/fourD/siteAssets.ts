@@ -40,7 +40,9 @@ const loaded = new Map<string, Promise<THREE.Group>>()
 export async function loadSiteAsset(id: string) {
   let pending = loaded.get(id)
   if (!pending) {
-    pending = downloadLargeBlob(`/api/v1/site-assets/${id}/download`).then(blob => blob.arrayBuffer()).then(parseAsset).then(result => result.object)
+    pending = api.get<{ download_url: string }>(`/api/v1/site-assets/${id}/download`, { params: { direct: true } })
+      .then(({ data }) => downloadLargeBlob(data.download_url, true))
+      .then(blob => blob.arrayBuffer()).then(parseAsset).then(result => result.object)
     loaded.set(id, pending)
     pending.catch(() => loaded.delete(id))
   }

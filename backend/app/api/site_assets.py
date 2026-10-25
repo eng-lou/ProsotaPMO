@@ -115,11 +115,16 @@ async def ready(id: UUID, data: Dimensions, db: AsyncSession = Depends(get_db), 
 
 
 @router.get("/{id}/download")
-async def download(id: UUID, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+async def download(id: UUID, direct: bool = False, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
     row = await owned(db, id, user)
     if row.status not in ("ready", "archived"):
         raise HTTPException(409, "Asset is not ready")
-    return RedirectResponse(object_storage.presigned_get_url(row.storage_key))
+    url = object_storage.presigned_get_url(row.storage_key)
+    # Fetch storage separately from the authenticated API request. Keep the
+    # redirect for older clients, but avoid cross-origin redirects in new ones.
+    if direct:
+        return {"download_url": url}
+    return RedirectResponse(url)
 
 
 @router.patch("/{id}")
