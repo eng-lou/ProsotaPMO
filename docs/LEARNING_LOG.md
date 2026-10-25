@@ -7417,3 +7417,12 @@ isolated database regression tests and the web build pass; Preview deployment
 9c4fee9 successfully restores the cube. Keep bucket origins exact and storage
 private instead of broadening CORS to work around redirects. Preview AI scope
 approval and Gmail delivery remain outstanding. See WEB_RELEASE_AND_EMAIL.md.
+
+## 2026-10-25 — Owner-only Preview workflow clarification
+The owner clarified Preview is for his ongoing development/testing, while www
+hosts reviewed Stable web/desktop releases. Removed public Preview invitations
+from the homepage. Future work goes to preview, with main/Stable promotion only
+on explicit owner approval, not automatically after tests. The initial baseline
+had already been published to both branches; this clarification supersedes the
+earlier public early-access interpretation. Existing public GitHub Preview
+installers are unchanged; do not claim they are private. No AI keys were shared.

@@ -143,3 +143,16 @@ is awaiting user confirmation. Do not claim Poe is verified in Preview. Gmail
 SMTP configuration and inbox delivery also remain unverified. The published
 0.2.41 desktop packages use local signed storage and do not require the web
 cross-origin redirect correction; their exact source remains recorded above.
+
+## Owner clarification: promotion policy
+Preview is the owner's development environment, not a public tester channel.
+The www.prosota.com homepage advertises only Stable Web and Stable Desktop.
+Develop and push ongoing changes to the preview branch. Promote to main and
+publish a new Stable installer only after the owner explicitly approves a
+reviewed version. Passing automated checks alone is not promotion authority.
+Today's initial release setup was already pushed to both branches before this
+clarification; the public catalogue correction is the final setup adjustment.
+Preview database approvals remain separate: do not approve other Preview users
+without the owner's instruction. Existing public Preview GitHub artifacts have
+not been deleted or made private; hiding a website link does not revoke those
+previously published downloads. AI key scope has not been expanded.
