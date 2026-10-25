@@ -10,7 +10,7 @@ export const plannerReleases = {
     desktop: { version: '0.2.41', url: 'https://github.com/eng-lou/ProsotaPMO/releases/download/planner-stable-v0.2.41/Prosota-Planner-Stable-0.2.41-Setup.exe', available: true },
   },
   preview: {
-    web: { version: '0.2.41', url: 'https://preview.prosota.com', available: false },
+    web: { version: '0.2.41', url: 'https://preview.prosota.com', available: true },
     desktop: { version: '0.2.41', url: 'https://github.com/eng-lou/ProsotaPMO/releases/download/planner-preview-v0.2.41/Prosota-Planner-Preview-0.2.41-Setup.exe', available: true },
   },
 } as const

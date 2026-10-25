@@ -7403,3 +7403,17 @@ Added official provider key links beside Desktop Settings fields for OpenAI, Cla
 
 ## 2026-10-25 — Isolated Planner release channels
 Stable remains www.prosota.com; Preview uses preview.prosota.com and the preview Git branch. Separate Neon schema-only branch and private R2 bucket are configured; Production database/bucket credentials no longer apply to new Preview deployments. Preview R2 token is bucket-limited, saved only in Vercel Preview after explicit approval. Auth0 Preview callback/logout/origin entries are saved. Initial Preview build is Ready at 47d0d69; Namecheap DNS and live sign-in/upload verification remain pending. Do not advertise parity or working Preview links until these pass. Both 0.2.41 installers are packaged with clean source manifests; publication is in progress. Full checks: backend 1107 passed, frontend 199 passed, desktop config 11 passed, packaged backend smoke and responsive release-page checks passed. Deployment setup/status is maintained in WEB_RELEASE_AND_EMAIL.md; never put cloud secrets in logs or docs.
+
+## 2026-10-25 — Live Planner channels and asset restore correction
+Namecheap Preview CNAME is saved; HTTPS, Google sign-in, isolated project creation,
+synthetic OBJ import, scene save and full refresh/download/render now pass.
+Stable login and existing project/dashboard checks passed. Stable/Preview 0.2.41
+installers are public on GitHub with verified hashes; both are unsigned.
+A fresh upload rendering from the in-memory cache is not a storage restore test:
+the real reload exposed an authenticated cross-origin redirect failure. Site
+assets now obtain an owner-checked signed URL as JSON and download with a separate
+client without the app bearer token. Legacy redirects remain supported. Four
+isolated database regression tests and the web build pass; Preview deployment
+9c4fee9 successfully restores the cube. Keep bucket origins exact and storage
+private instead of broadening CORS to work around redirects. Preview AI scope
+approval and Gmail delivery remain outstanding. See WEB_RELEASE_AND_EMAIL.md.
