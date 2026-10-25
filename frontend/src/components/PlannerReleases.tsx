@@ -1,6 +1,28 @@
 import { plannerReleases, releaseChannel } from '@/lib/releases'
 
 export function PlannerReleases({ onSignIn }: { onSignIn: () => void }) {
+  if (releaseChannel === 'preview') return <section className="hp-releases" id="releases" aria-labelledby="planner-releases-title">
+    <p className="hp-small">PROSOTA PLANNER · DEVELOPMENT PREVIEW</p>
+    <h2 id="planner-releases-title">Your Preview workspace.</h2>
+    <p>Ongoing development for your review. Preview projects and files are separate from Stable. Changes reach Stable only after approval.</p>
+    <div className="hp-release-grid">
+      <article className="hp-release-card">
+        <span className="hp-small">PREVIEW WEB</span>
+        <h3>Latest development version</h3>
+        <p>Includes character transparency and pose fixes, plus separate FBX motion import.</p>
+        <div className="hp-release-actions"><button className="hp-button" onClick={onSignIn}>Open Preview Web <span aria-hidden="true">↗</span></button></div>
+        <small>Version {plannerReleases.preview.web.version}</small>
+      </article>
+      <article className="hp-release-card">
+        <span className="hp-small">PREVIEW DESKTOP</span>
+        <h3>Latest Preview installer</h3>
+        <p>Includes the same character and motion-import improvements as Preview Web. Projects stay on your PC.</p>
+        <div className="hp-release-actions"><a className="hp-button" href={plannerReleases.preview.desktop.url}>Download Preview for Windows <span aria-hidden="true">↓</span></a></div>
+        <small>Version {plannerReleases.preview.desktop.version}</small>
+      </article>
+    </div>
+    <p className="hp-release-note">Reviewed releases remain on <a href={plannerReleases.stable.web.url}>www.prosota.com</a>. Windows installers are unsigned.</p>
+  </section>
   const release = plannerReleases.stable
   return <section className="hp-releases" id="releases" aria-labelledby="planner-releases-title">
     <p className="hp-small">PROSOTA PLANNER · STABLE RELEASES</p>
