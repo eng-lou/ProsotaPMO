@@ -991,3 +991,7 @@ PROPOSAL_TOOL_NAMES = PROPOSAL_TOOL_NAMES | {"propose_planning_changes"}
 
 from app.ai.resource_context import TOOL as RESOURCE_CONTEXT_TOOL
 TOOLS.append(RESOURCE_CONTEXT_TOOL)
+
+from app.ai.equipment_tools import TOOLS as EQUIPMENT_TOOLS
+TOOLS.extend(EQUIPMENT_TOOLS)
+CLIENT_TOOL_NAMES = CLIENT_TOOL_NAMES | {'inspect_equipment', 'draft_equipment_rig'}

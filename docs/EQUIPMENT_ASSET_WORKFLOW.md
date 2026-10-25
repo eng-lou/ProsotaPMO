@@ -30,6 +30,20 @@ as path travel during camera previews. Set sensible travel speed and heading in
 the path controls. Wheel rotation is not inferred from geometry: configure its
 rig control/keyframes (or use an existing embedded wheel animation).
 
+**Key & save** persists the current rig and the key at the playhead; wait for the
+saved confirmation. Other setup/keyframe edits require **Save rig & keys**.
+Unsaved edits block closing Rigging and trigger a browser refresh warning.
+
+Poe's `inspect_equipment` tool lists loaded equipment and returns paginated part
+paths, root-local matrices, mesh bounds and the saved rig. Bounds describe the
+current pose and model units, not automatically identified hinge centres. Its
+`draft_equipment_rig` tool validates exact node paths and opens a proposal in
+Rigging, including the rationale/assumptions. Review the setup and save to approve;
+staging alone does not save or animate the machine. Existing drafts cannot be
+overwritten. Poe can propose joint member groups, controls, pivots, limits,
+followers and keyframes, but cannot reconstruct geometry groups, place copies or
+bind a path with these tools. Mechanism calibration still requires motion checks.
+
 The 77-file backhoe regression uses the user's actual GLBs and a test hinge. It
 verifies preserved parts, articulation, path movement, independent copies and
 library rig reload. It does not automatically author a mechanically complete

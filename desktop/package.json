@@ -1,20 +1,24 @@
 {
   "name": "prosota-desktop",
-  "productName": "Prosota Desktop",
-  "version": "0.2.35",
+  "productName": "Prosota Planner",
+  "version": "0.2.41",
+  "releaseChannel": "preview",
   "private": true,
-  "description": "Local Windows edition of Prosota",
+  "description": "Prosota Planner for Windows",
   "author": "Prosota",
   "main": "main.cjs",
   "scripts": {
     "build:ui": "node ../frontend/node_modules/vite/bin/vite.js build --config vite.config.mjs",
     "start": "electron .",
     "package": "electron-builder --win nsis --x64",
+    "package:preview": "node package-channel.cjs preview",
+    "package:stable": "node package-channel.cjs stable",
     "test": "node --test tests/*.test.cjs"
   },
   "build": {
     "appId": "com.prosota.desktop.preview",
-    "productName": "Prosota Desktop Preview",
+    "productName": "Prosota Planner Preview",
+    "executableName": "Prosota Desktop Preview",
     "directories": {
       "output": "release"
     },
@@ -23,6 +27,8 @@
       "auth.cjs",
       "preload.cjs",
       "settings.cjs",
+      "provider-links.cjs",
+      "release-channel.cjs",
       "powerbi.cjs",
       "package.json",
       "assets/prosota.ico"

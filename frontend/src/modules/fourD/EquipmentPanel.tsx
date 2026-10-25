@@ -1,5 +1,7 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { undoHistory } from '@/lib/undoHistory'
 import { EquipmentSetup } from './EquipmentSetup'
+import type { EquipmentProposal } from './poeEquipmentTools'
 import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type * as THREE from 'three'
@@ -13,7 +15,9 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset }: {
+export function EquipmentPanel({ proposal, onProposalConsumed, projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset }: {
+  proposal?: EquipmentProposal | null
+  onProposalConsumed?: () => void
   onSaveAsset?: (rig: EquipmentRig) => Promise<void>
   onVisual?: (state: EquipmentVisualState | null) => void
   onAssemble?: (names: string[], name: string) => Promise<string>
@@ -38,6 +42,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   const draftRef = useRef(draft); draftRef.current = draft
   const [dirty, setDirty] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [poeRationale, setPoeRationale] = useState<string | null>(null)
   const [time, setTime] = useState(dateRef.current?.getTime() ?? Date.now())
   const [preview, setPreview] = useState<Record<string, number>>({})
   const [jointIndex, setJointIndex] = useState(0)
@@ -49,6 +54,19 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   useEffect(() => {
     if (!dirty) setDraft(saved ? structuredClone(saved) : null)
   }, [saved, model, dirty])
+  useEffect(() => {
+    if (!proposal || proposal.rig.project_id !== projectId) return
+    setModel(proposal.rig.model_ref); setDraft(structuredClone(proposal.rig)); setDirty(true)
+    setPreview({}); onPreview(null); setPoeRationale(proposal.rationale)
+    setNotice('Poe draft — review the setup, then Save rig & keys to approve. Nothing has been saved.')
+    onProposalConsumed?.()
+  }, [proposal?.token])
+  useEffect(() => {
+    if (!dirty && !busy) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty, busy])
   useEffect(() => {
     const timer = window.setInterval(() => setTime(dateRef.current?.getTime() ?? Date.now()), 100)
     return () => clearInterval(timer)
@@ -105,6 +123,19 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
       if (await onSave(draft!)) { undoHistory.remove(owner.current); setDirty(false); onDraft(null); setNotice('Equipment saved'); onPreview(null) }
     } catch (e) { setNotice((e as Error).message) }
   }
+  // Key is a persistence action, not merely a transient viewport preview.
+  const keyAndSave = async (controlId: string, value: number) => {
+    if (!draftRef.current || !object || busy) return
+    const next = structuredClone(draftRef.current)
+    const control = next.definition.controls.find(c => c.id === controlId)!
+    const keyTime = dateRef.current?.getTime() ?? time
+    control.keys = [...control.keys.filter(k => Date.parse(k.date) !== keyTime), { date: new Date(keyTime).toISOString(), value, interpolation: 'linear' }]
+    change(next)
+    try {
+      validateEquipment(next.definition, nodes)
+      if (await onSave(next)) { undoHistory.remove(owner.current); setDirty(false); onDraft(null); onPreview(null); setPreview({}); setNotice('Keyframe and rig saved') }
+    } catch (e) { setNotice((e as Error).message) }
+  }
   const nodePicker = (value: string, changeNode: (v: string) => void, allowRoot = false) => <select aria-label="Model part" className={input} value={value} onChange={e => changeNode(e.target.value)}>
     <option value="">{allowRoot ? 'Equipment root' : 'Choose part…'}</option>
     {Array.from(nodes).filter(([key]) => key).map(([key, node]) => <option key={key} value={key}>{`${'· '.repeat(key.split('/').length - 2)}${node.name || node.type} (${key.split('/').slice(-1)[0]?.split(':')[0]})`}</option>)}
@@ -114,6 +145,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
   const follower = draft?.definition.followers[followerIndex]
   return <fieldset disabled={busy || assembling} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
     <strong>Equipment Controls</strong>
+    {poeRationale && <details open><summary>Poe rig proposal — review assumptions</summary><p className="whitespace-pre-wrap">{poeRationale}</p></details>}
     <p className="text-gray-500 dark:text-prosota-muted">Animate rigid parts inside an imported model. Use its root transform or path to move the whole machine.</p>
     <select aria-label="Equipment model" className={input} disabled={dirty || busy} value={model} onChange={e => { setModel(e.target.value); onDraft(null); onPreview(null); setNotice(null) }}>
       <option value="">Select equipment model…</option>
@@ -159,7 +191,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
             <input aria-label={`${c.name} value`} className={`${input} !w-16`} type="number" min="0" max="1" step="0.001" value={Number(value.toFixed(3))} onChange={e => { const v = Math.max(0, Math.min(1, Number(e.target.value))); const values = { ...preview, [c.id]: v }; setPreview(values); onPreview({ model, values, time }); edit(d => { d.controls.find(x => x.id === c.id)!.value = values[c.id] }) }} />
           </div>
           <div className="flex flex-wrap gap-1">
-            <button className={button} onClick={() => edit(d => { const control = d.controls.find(x => x.id === c.id)!; const keyTime = dateRef.current?.getTime() ?? time; control.keys = [...control.keys.filter(k => Date.parse(k.date) !== keyTime), { date: new Date(keyTime).toISOString(), value, interpolation: 'linear' }] })}>◆ Key</button>
+            <button className={button} title="Save this keyframe and current rig settings" onClick={() => void keyAndSave(c.id, value)}>◆ Key & save</button>
             <button className={button} onClick={() => edit(d => { d.controls.find(x => x.id === c.id)!.value = value })}>Set unkeyed value</button>
             <button className={button} onClick={() => { const values = { ...preview, [c.id]: c.rest }; setPreview(values); onPreview({ model, values, time }); edit(d => { d.controls.find(x => x.id === c.id)!.value = values[c.id] }) }}>Rest pose</button>
           </div>
@@ -189,6 +221,7 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
           <label>Part{nodePicker(joint.node, v => edit(d => { d.joints[jointIndex].node = v }))}</label>
           <label>Parent joint<select className={input} value={joint.parent ?? ''} onChange={e => edit(d => { d.joints[jointIndex].parent = e.target.value || null })}><option value="">Equipment root</option>{draft.definition.joints.filter(j => j.id !== joint.id).map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select></label>
           <label>Control (shared controls link joints)<select className={input} value={joint.control} onChange={e => edit(d => { d.joints[jointIndex].control = e.target.value })}><option value="">Choose control…</option>{draft.definition.controls.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <ToolVisualGuide topic="rig" mode={joint.kind}/>
           <label>Motion<select className={input} value={joint.kind} onChange={e => edit(d => { d.joints[jointIndex].kind = e.target.value as 'hinge' | 'slide' })}><option value="hinge">Hinge rotation</option><option value="slide">Linear slide</option></select></label>
           <VectorInput label="Pivot X / Y / Z" value={joint.pivot} change={v => edit(d => { d.joints[jointIndex].pivot = v })} />
           <VectorInput label="Axis X / Y / Z" value={joint.axis} change={v => edit(d => { d.joints[jointIndex].axis = v; d.joints[jointIndex].pivot_rotation = undefined })} />
@@ -220,14 +253,20 @@ export function EquipmentPanel({ projectId, objects, rigs, busy, error, runtimeE
           const url = URL.createObjectURL(new Blob([JSON.stringify({ name: draft.name, definition: def }, null, 2)], { type: 'application/json' }))
           const a = document.createElement('a'); a.href = url; a.download = `${draft.name.replace(/[^\w-]/g, '_')}-equipment.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
         } catch (e) { setNotice((e as Error).message) }
-      }}>Export reusable preset</button>
+      }}>Export rig settings</button>
+        <p className="text-gray-500 dark:text-prosota-muted">Settings require the same model hierarchy and part groups. To reuse a complete rigged machine, save it to the asset library and place a new copy.</p>
         <label className="block">Import preset onto this model<input type="file" accept=".json" className="w-full" onChange={async e => {
           const file = e.target.files?.[0]; if (!file) return
           try {
             if (file.size > 2000000) throw new Error('Preset exceeds 2 MB')
             const data = JSON.parse(await file.text()); validateEquipment(data.definition)
+            // Reject incompatible presets before replacing the current draft or preview.
+            // A settings file does not contain geometry or recreate authored model groups.
+            try { validateEquipment(data.definition, nodes) }
+            catch (err) { throw new Error(`Preset not imported: ${(err as Error).message}. This model must contain the same part groups. Place a copy of the rigged library asset instead. Your current rig settings have not been changed.`) }
             data.definition.controls.forEach((c: EquipmentDefinition['controls'][number]) => { c.keys = []; c.value = c.rest })
-            change({ ...draft, name: typeof data.name === 'string' ? data.name : draft.name, definition: data.definition }); setNotice('Preset imported. Match any missing parts in joint/cylinder setup, then save.')
+            setPreview({}); onPreview(null)
+            change({ ...draft, name: typeof data.name === 'string' ? data.name : draft.name, definition: data.definition }); setNotice('Rig settings imported. Test the controls, then save.')
           } catch (err) { setNotice((err as Error).message) }
           e.target.value = ''
         }} /></label>

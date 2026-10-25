@@ -49,7 +49,7 @@ export function AccessPendingScreen() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-prosota-ink px-4">
       <div className="max-w-md w-full text-center">
         <ProsotaLogo size={40} className="mx-auto mb-3" />
-        <h1 className="font-display text-2xl font-bold text-gray-900 dark:text-prosota-paper mb-1">Prosota</h1>
+        <h1 className="font-display text-2xl font-bold text-gray-900 dark:text-prosota-paper mb-1">Prosota Planner</h1>
         <p className="text-gray-500 dark:text-prosota-muted mb-6 text-sm">
           Prosota is currently in private beta — access is by approval only.
         </p>

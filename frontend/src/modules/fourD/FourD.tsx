@@ -2,6 +2,7 @@ import { SitePathBindings } from './SitePathBindings'
 import { buildPathCurve } from './pathCurve'
 import { motionDuration, type CameraMotion } from './cameraMotion'
 import { createPoeIfcTools } from './poeIfcTools'
+import { createPoeEquipmentTools, type EquipmentProposal } from './poeEquipmentTools'
 import { undoHistory } from '@/lib/undoHistory'
 import { captureTransform, restoreTransform, type TransformSnapshot } from './transformUndo'
 import { useUndoRefresh } from '@/lib/useUndoRefresh'
@@ -1878,6 +1879,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }, [equipmentVisual?.model])
   const [equipmentEditing, setEquipmentEditing] = useState(false)
   const [equipmentDraft, setEquipmentDraft] = useState<EquipmentRig | null>(null)
+  const [equipmentProposal, setEquipmentProposal] = useState<EquipmentProposal | null>(null)
   const [equipmentPreview, setEquipmentPreview] = useState<{ model: string; values: Record<string, number>; time: number | null } | null>(null)
   const [equipmentRuntimeError, setEquipmentRuntimeError] = useState<string | null>(null)
   const instanceEquipment = useMemo(() => {
@@ -2517,6 +2519,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // as every panel above.
   const [rigPanelOpen, setRigPanelOpen] = useState(() => loadPanelOpen(RIG_PANEL_OPEN_KEY, false))
   const toggleRigPanel = () => {
+    if (rigPanelOpen && (equipmentEditing || equipment.busy)) {
+      window.alert('Save or discard your rig changes before closing Rigging.'); return
+    }
     setRigPanelOpen(prev => {
       const next = !prev
       localStorage.setItem(RIG_PANEL_OPEN_KEY, String(next))
@@ -7207,6 +7212,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleProfilePanelDock, onClose: toggleProfilePanel,
       content: (
         <AnimationProfilePanel
+          speedDaysPerSecond={speedDaysPerSecond}
+          fps={fps}
           profiles={animationProfiles.profiles}
           loading={animationProfiles.loading}
           onCreate={animationProfiles.create}
@@ -7532,7 +7539,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
       content: (
         <div className="flex-1 overflow-y-auto">
-        <EquipmentPanel key={selectedProject?.id} projectId={selectedProject?.id ?? ''} objects={equipmentObjects} rigs={instanceEquipment}
+        <EquipmentPanel key={selectedProject?.id} proposal={equipmentProposal?.rig.project_id === selectedProject?.id ? equipmentProposal : null} onProposalConsumed={() => setEquipmentProposal(null)} projectId={selectedProject?.id ?? ''} objects={equipmentObjects} rigs={instanceEquipment}
           busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
           onSaveAsset={async rig=>{
             const item=siteScene.scene.items.find(i=>'site:'+i.id===rig.model_ref)
@@ -7762,6 +7769,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // whichever test was most recently created if more than one exists,
   // since this tool's own input takes no arguments to disambiguate.
   const aiFourDBridge = useAiFourDBridge()
+  const poeEquipmentState = useRef({ projectId: selectedProject?.id ?? '', objects: equipmentObjects, rigs: instanceEquipment, editing: equipmentEditing || equipment.busy || !!equipmentProposal })
+  poeEquipmentState.current = { projectId: selectedProject?.id ?? '', objects: equipmentObjects, rigs: instanceEquipment, editing: equipmentEditing || equipment.busy || !!equipmentProposal }
+  useEffect(() => {
+    if (!aiFourDBridge || !selectedProject?.id) return
+    const handlers = createPoeEquipmentTools(() => poeEquipmentState.current, proposal => {
+      setEquipmentProposal(proposal); setRigPanelOpen(true)
+    })
+    Object.assign(aiFourDBridge.current, handlers)
+    return () => { delete aiFourDBridge.current.inspect_equipment; delete aiFourDBridge.current.draft_equipment_rig }
+  }, [aiFourDBridge, selectedProject?.id])
   useEffect(() => {
     if (!aiFourDBridge) return
     const modelReaders = createPoeIfcTools(() => ifcHandlesRef.current.map(handle => ({ handle, name: sceneObjects.find(o => o.id === `ifc-${handle.modelID}`)?.name ?? handle.object.name ?? "Imported IFC" })))

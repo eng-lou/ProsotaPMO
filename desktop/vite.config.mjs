@@ -16,7 +16,7 @@ export default defineConfig({
     name: 'desktop-html',
     transformIndexHtml(html) {
       return html.replace(/<link\b[^>]*https:\/\/fonts\.[^>]*>/g, '')
-        .replace('<title>Prosota</title>', '<title>Prosota Desktop Preview</title>')
+        .replace('<title>Prosota Planner</title>', '<title>Prosota Planner Desktop</title>')
     },
   }],
   css: { postcss: { plugins: [

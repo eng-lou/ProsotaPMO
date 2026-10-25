@@ -33,7 +33,7 @@ async function browserSignIn(shell, BrowserWindow) {
         }
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
           'Content-Security-Policy': "default-src 'none'", 'Referrer-Policy': 'no-referrer' })
-        res.end('<title>Prosota Desktop</title><h2>Returning to Prosota Desktop…</h2><p>You can close this browser tab.</p>')
+        res.end('<title>Prosota Planner Desktop</title><h2>Returning to Prosota Planner Desktop…</h2><p>You can close this browser tab.</p>')
         resolve(url.searchParams.get('code'))
       })
       server.on('error', reject)
@@ -41,7 +41,7 @@ async function browserSignIn(shell, BrowserWindow) {
         try {
           const url = new URL('/desktop-signin', cloud)
           url.search = new URLSearchParams({ callback: `http://127.0.0.1:${server.address().port}/callback`, state, challenge })
-          window = new BrowserWindow({ icon: path.join(__dirname, 'assets/prosota.ico'), width: 490, height: 280, resizable: false, title: 'Prosota Desktop · Sign in',
+          window = new BrowserWindow({ icon: path.join(__dirname, 'assets/prosota.ico'), width: 490, height: 280, resizable: false, title: 'Prosota Planner Desktop · Sign in',
             webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } })
           window.setMenu(null)
           window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -75,8 +75,8 @@ async function authenticate(config, save, electron) {
         if ([401, 403].includes(error.status)) { delete config.desktopToken; save(config) }
       }
     }
-    const answer = await electron.dialog.showMessageBox({ title: 'Prosota Desktop', type: 'info',
-      message: 'Welcome to Prosota', detail: message,
+    const answer = await electron.dialog.showMessageBox({ title: 'Prosota Planner Desktop', type: 'info',
+      message: 'Welcome to Prosota Planner', detail: message,
       buttons: config.desktopToken ? ['Retry', 'Sign in again', 'Exit'] : ['Sign in / Request access', 'Exit'],
       defaultId: 0, cancelId: config.desktopToken ? 2 : 1 })
     if (answer.response === (config.desktopToken ? 2 : 1)) return null

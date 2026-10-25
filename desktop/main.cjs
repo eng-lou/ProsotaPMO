@@ -5,12 +5,15 @@ const path = require('node:path')
 const net = require('node:net')
 const crypto = require('node:crypto')
 const { updateSettings, publicSettings } = require('./settings.cjs')
+const { isProviderSetupLink } = require('./provider-links.cjs')
+const { channelSettings } = require('./release-channel.cjs')
+const release = channelSettings(require('./package.json').releaseChannel)
 const { createReport } = require('./powerbi.cjs')
 const { authenticate, request: authRequest } = require('./auth.cjs')
 
-app.setName('Prosota Desktop Preview')
-app.setAppUserModelId('com.prosota.desktop.preview')
-app.setPath('userData', path.join(app.getPath('appData'), 'Prosota Desktop Preview'))
+app.setName(release.title)
+app.setAppUserModelId(release.appId)
+app.setPath('userData', path.join(app.getPath('appData'), release.dataFolder))
 if (!app.requestSingleInstanceLock()) app.quit()
 else app.whenReady().then(start).catch(async () => {
   dialog.showErrorBox('Prosota Desktop could not start', 'The local services could not start. Check backend.log and postgres.log in the desktop data folder. Your saved projects have not been removed.')
@@ -106,6 +109,10 @@ function makeWindow(options) {
     if (new URL(url).origin !== origin) event.preventDefault()
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isProviderSetupLink(url)) {
+      shell.openExternal(url).catch(() => dialog.showErrorBox('Could not open setup page', 'Open your browser and visit the provider’s API key settings.'))
+      return { action: 'deny' }
+    }
     // Existing report/print flows create a blank or local blob window.
     if (url === 'about:blank' || (url.startsWith('blob:') && new URL(url).origin === origin)) {
       return { action: 'allow', overrideBrowserWindowOptions: { icon: path.join(__dirname, 'assets/prosota.ico'), webPreferences: {
@@ -124,7 +131,7 @@ function makeWindow(options) {
 }
 function openSettings() {
   if (settingsWindow) return settingsWindow.focus()
-  settingsWindow = makeWindow({ width: 690, height: 840, parent: mainWindow, title: 'Prosota Desktop · Settings' })
+  settingsWindow = makeWindow({ width: 690, height: 840, parent: mainWindow, title: `${release.title} · Settings` })
   settingsWindow.on('closed', () => { settingsWindow = null })
   settingsWindow.loadURL(`${origin}/desktop-settings.html`)
 }
@@ -138,6 +145,7 @@ async function start() {
   if (!signedInUser) { app.quit(); return }
   authenticating = false
   ipcMain.handle('desktop:identity', event => { trustedMain(event); return signedInUser })
+  ipcMain.handle('desktop:release-info', event => { trustedMain(event); return { channel: release.channel, version: app.getVersion() } })
   ipcMain.handle('desktop:logout', async event => {
     trustedMain(event)
     const oldToken = config.desktopToken
@@ -247,7 +255,7 @@ async function start() {
     return publicSettings(config)
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'Prosota Desktop', submenu: [
+    { label: release.title, submenu: [
       { label: 'Settings…', click: openSettings },
       { label: 'Open local data folder', click: () => shell.openPath(dataDir) },
       { type: 'separator' }, { role: 'quit' },
@@ -256,7 +264,7 @@ async function start() {
       { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
   ]))
-  mainWindow = makeWindow({ width: 1440, height: 940, title: 'Prosota Desktop Preview · Local workspace' })
+  mainWindow = makeWindow({ width: 1440, height: 940, title: `${release.title} · Local workspace` })
   mainWindow.webContents.on('page-title-updated', event => event.preventDefault())
   await mainWindow.loadURL(origin)
   mainWindow.on('closed', () => { mainWindow = null })

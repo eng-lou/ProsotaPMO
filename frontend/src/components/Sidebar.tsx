@@ -9,6 +9,7 @@ import { useTheme } from '@/lib/ThemeContext'
 import { useFeedbackUnread } from '@/lib/useFeedbackUnread'
 import { FeedbackPanel } from './FeedbackPanel'
 import { ProsotaLogo } from './ProsotaLogo'
+import { PlannerReleaseBadge } from './PlannerReleaseBadge'
 
 // Exported (2026-07-25) — Layout.tsx's own document-title effect reuses
 // this same route->label mapping rather than duplicating it, so the
@@ -55,9 +56,10 @@ export function Sidebar() {
     <aside className="no-print flex flex-col w-60 min-h-screen bg-white text-gray-900 dark:bg-prosota-ink dark:text-prosota-paper shrink-0 border-r border-gray-200 dark:border-prosota-line">
       <div className="flex items-center gap-2.5 px-6 py-5 border-b border-gray-200 dark:border-prosota-line">
         <ProsotaLogo size={30} />
-        <span className="font-display text-lg font-bold tracking-tight">PROSOTA</span>
+        <span className="font-display text-lg font-bold tracking-tight">Prosota <span className="font-normal">Planner</span></span>
       </div>
 
+      <PlannerReleaseBadge />
       {selectedProject && (
         <div className="px-4 py-3 border-b border-gray-200 dark:border-prosota-line">
           <p className="text-xs text-gray-500 dark:text-prosota-muted mb-0.5">Project</p>

@@ -1,0 +1,12 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const { channelSettings } = require('../release-channel.cjs')
+test('Planner upgrades retain the existing preview workspace and isolate stable data', () => {
+  const preview = channelSettings('preview'), stable = channelSettings('stable')
+  assert.equal(preview.dataFolder, 'Prosota Desktop Preview')
+  assert.equal(preview.appId, 'com.prosota.desktop.preview')
+  assert.equal(preview.executableName, 'Prosota Desktop Preview')
+  for (const key of ['dataFolder', 'appId', 'executableName']) assert.notEqual(preview[key], stable[key])
+  assert.deepEqual(channelSettings(), preview)
+  assert.throws(() => channelSettings('other'))
+})

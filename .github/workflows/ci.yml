@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, preview]
   pull_request:
-    branches: [main]
+    branches: [main, preview]
 
 jobs:
   frontend:
@@ -22,6 +22,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Desktop configuration checks
+        working-directory: .
+        run: node --test desktop/tests/*.test.cjs
 
   test:
     runs-on: ubuntu-latest

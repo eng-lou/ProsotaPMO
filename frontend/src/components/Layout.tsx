@@ -27,7 +27,7 @@ function useDocumentTitle() {
   const { selectedProject } = useProject()
   useEffect(() => {
     const page = NAV.find(({ to }) => location.pathname.startsWith(to))?.label
-    document.title = [page, selectedProject?.name, 'Prosota'].filter(Boolean).join(' — ')
+    document.title = [page, selectedProject?.name, 'Prosota Planner'].filter(Boolean).join(' — ')
   }, [location.pathname, selectedProject])
 }
 

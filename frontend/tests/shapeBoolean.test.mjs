@@ -46,3 +46,15 @@ test('boolean output can be used in a second cut',()=>{
  const next=computeShapeBoolean(mesh,box(2,8,2,3,0,0),'y','subtract');assert.ok(volume(next[0].mesh.geometry)>0)
  disposeBooleanResults(first);disposeBooleanResults(next)
 })
+
+test('material-split closed shells remain usable, but missing faces are rejected',()=>{
+ const geometry=new T.BoxGeometry(4,4,4).toNonIndexed(), shell=new T.Group()
+ for(const group of geometry.groups){
+   const g=new T.BufferGeometry()
+   for(const name of ['position','normal','uv']){const a=geometry.getAttribute(name);g.setAttribute(name,new T.BufferAttribute(a.array.slice(group.start*a.itemSize,(group.start+group.count)*a.itemSize),a.itemSize))}
+   shell.add(new T.Mesh(g,new T.MeshStandardMaterial()))
+ }
+ const r=computeShapeBoolean(shell,box(2,6,2),'y','subtract');near(volume(r[0].mesh.geometry),48);disposeBooleanResults(r)
+ shell.remove(shell.children[0])
+ assert.throws(()=>computeShapeBoolean(shell,box(2,6,2),'y','subtract'),/closed solids/)
+})

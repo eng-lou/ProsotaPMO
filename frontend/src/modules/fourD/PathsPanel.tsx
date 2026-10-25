@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { useEffect, useState } from 'react'
 import type { Path, PathLineStyle, PathPoint } from './paths'
 import type { PathFollower, PathFollowerTargetKind } from './pathFollowers'
@@ -337,6 +338,7 @@ function Item({
       {siteBindings}
       {binding ? (
         <div className="space-y-1">
+          <ToolVisualGuide topic="path" mode={binding.orient_to_path?"orient":"fixed"} heading={binding.heading_offset_deg ?? 0}/>
           <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted bg-sky-50 border border-sky-100 rounded px-2 py-1">
             <span className="flex-1 truncate">Bound: {binding.target_kind} · {binding.element_ref || '(whole)'}</span>
             <label className="flex items-center gap-1 shrink-0">

@@ -30,6 +30,8 @@ class AnimationProfileConfig(BaseModel):
     # class's own header) and the frontend's own AnimationProfileConfig
     # TransformKind union is the actual source of truth for the full set.
     transform_kind: Literal["none", "translate", "scale", "rotate", "pop", "spiral", "fall", "grow"] = "none"
+    # None preserves existing trigger-dependent grow behaviour.
+    grow_mode: Literal["reveal", "remove"] | None = None
     axis: Literal["x", "y", "z"] = "z"
     direction: Literal[1, -1] = 1
     distance: float = 1.0

@@ -188,7 +188,7 @@ export function ProjectSelector() {
         <div className="mb-8 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-prosota-paper">Select a project</h1>
-            <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota</p>
+            <p className="text-gray-500 dark:text-prosota-muted text-sm mt-1">Choose a project to continue into Prosota Planner</p>
           </div>
           <div className="shrink-0 flex items-center gap-3 mt-1">
             <button

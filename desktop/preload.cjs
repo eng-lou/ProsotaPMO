@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('prosotaDesktop', {
+  releaseInfo: () => ipcRenderer.invoke('desktop:release-info'),
   identity: () => ipcRenderer.invoke('desktop:identity'),
   signOut: () => ipcRenderer.invoke('desktop:logout'),
   openSettings: () => ipcRenderer.invoke('desktop:open-settings'),

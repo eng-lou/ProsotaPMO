@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { equipmentNodes, jointNodes, validateEquipment, type EquipmentRig, type Vec3 } from './equipmentRig'
@@ -80,6 +81,7 @@ export function EquipmentSetup({rig,object,onChange,onState,disabled=false}: {di
    }}>Highlight group and children</button>
    <label>Parent group<select aria-label="Parent group" className={input} value={joint.parent??''} onChange={e=>updateJoint({parent:e.target.value||null})}><option value="">Equipment root</option>{rig.definition.joints.filter(j=>j.id!==joint.id).map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></label>
    <button className={button} onClick={()=>setMode('parent')}>Pick parent in viewport</button>
+   <ToolVisualGuide topic="rig" mode={joint.kind}/>
    <label>Motion<select className={input} value={joint.kind} onChange={e=>{setAmount(0);setEnds([null,null]);updateJoint({kind:e.target.value})}}><option value="hinge">Hinge rotation</option><option value="slide">Linear slide</option></select></label>
    <strong className="block">3. Place the pivot and choose an axis</strong>
    <button className={button} onClick={()=>{setMode('pivot');setAmount(0)}}>Place pivot in viewport</button>

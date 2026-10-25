@@ -45,3 +45,17 @@ test('stagger order stable by site position and supports reverse',()=>{
  ps[0].config.stagger_reverse=true
  assert.equal(resolveSiteLinks('cabin',ls,activities,ps,items)[0].staggerFraction,1)
 })
+
+test('explicit removal clips opaque site geometry and restores original state on reverse scrub/unlink',()=>{
+ for(const axis of ['x','y','z'])for(const direction of [-1,1]){
+ const f=fixture(), config={...defaults,transform_kind:'grow',grow_mode:'remove',axis,direction,opacity_from:1,opacity_to:1,color_from:'#c53522',color_to:null}
+ const resolved=resolve([links[0]],[{id:'fade',config}])
+ at(f,'2026-09-30',resolved);assert.equal(f.root.visible,true);assert.equal(f.mat.color.getHexString(),'123456')
+ at(f,'2026-10-06',resolved);assert.equal(f.mat.opacity,1);assert.equal(f.mat.color.getHexString(),'c53522')
+ const plane=f.mat.clippingPlanes[0], retained=f.base.clone(),removed=f.base.clone();retained[axis]-=direction*.25;removed[axis]+=direction*.25
+ assert.ok(plane.distanceToPoint(retained)>0);assert.ok(plane.distanceToPoint(removed)<0)
+ at(f,'2026-10-12',resolved);assert.equal(f.root.visible,false)
+ at(f,'2026-09-30',resolved);assert.equal(f.root.visible,true);assert.equal(f.mat.color.getHexString(),'123456')
+ at(f,null,[],false);assert.equal(f.mat.clippingPlanes,null);assert.equal(f.mat.opacity,1)
+ }
+})

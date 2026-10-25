@@ -1,3 +1,5 @@
+import { ProfileDiagram } from './ProfilePreview'
+import { PROFILE_FAMILIES, profileFamily } from './profilePresentation'
 import { useMemo, useRef, useState } from 'react'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { downloadJson, readJsonFile } from '@/lib/exportImport'
@@ -5,6 +7,8 @@ import { AnimationProfileEditor } from './AnimationProfileEditor'
 import { BUILTIN_PRESETS, DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig } from './animationProfiles'
 
 interface Props {
+  speedDaysPerSecond?: number
+  fps?: number
   profiles: AnimationProfile[]
   loading: boolean
   onCreate: (name: string, config: AnimationProfileConfig) => Promise<AnimationProfile>
@@ -38,7 +42,9 @@ function isAnimationProfileConfig(v: unknown): v is AnimationProfileConfig {
 // owns the chrome for both panels now, and shares one w-72 slot between
 // them as a small tab strip whenever they land on the same side, rather
 // than each hand-rolling its own chrome the way this component used to.
-export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, onDelete }: Props) {
+export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, onDelete, speedDaysPerSecond=7, fps=30 }: Props) {
+  const [family, setFamily] = useState('All')
+  const [search, setSearch] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -99,29 +105,32 @@ export function AnimationProfilePanel({ profiles, loading, onCreate, onUpdate, o
           onCancel={() => setDraft(null)}
           saveLabel={draft.id ? 'Update Profile' : 'Save Profile'}
           recentColors={recentColors}
+          speedDaysPerSecond={speedDaysPerSecond}
+          fps={fps}
         />
       ) : (
         <>
-          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide px-1 pt-1">Built-in</div>
-          {BUILTIN_PRESETS.map(preset => (
-            <div key={preset.name} className="flex items-center gap-1.5 py-1 px-1">
-              <span className="flex-1 min-w-0 truncate text-xs text-gray-500 dark:text-prosota-muted" title={preset.name}>{preset.name}</span>
-              <button
-                onClick={() => setDraft({ id: null, name: preset.name, config: preset.config })}
-                title="Duplicate to customise and save"
-                className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0"
-              >
-                + Save
-              </button>
-            </div>
+          <p className="text-xs text-gray-500 dark:text-prosota-muted p-1 mb-2">Choose a recipe, preview it, then save. Saving creates a reusable profile; assign it through an activity or selected element’s Activity links &amp; profiles controls.</p>
+          <input aria-label="Search animation presets" placeholder="Find a movement…" value={search} onChange={e=>setSearch(e.target.value)} className="w-full text-xs rounded border dark:border-prosota-line dark:bg-prosota-panel2 px-2 py-2 mb-2"/>
+          <select aria-label="Movement family" value={family} onChange={e=>setFamily(e.target.value)} className="w-full text-xs rounded border dark:border-prosota-line dark:bg-prosota-panel2 px-2 py-2 mb-2">{PROFILE_FAMILIES.map(f=><option key={f}>{f}</option>)}</select>
+          <div className="text-[10px] font-bold uppercase px-1 py-1">Built-in · choose to preview</div>
+          <div className="grid grid-cols-2 gap-1.5">
+          {BUILTIN_PRESETS.filter(p=>(family==='All'||profileFamily(p.config)===family)&&p.name.toLowerCase().includes(search.toLowerCase())).map(preset => (
+            <button key={preset.name} onClick={() => setDraft({id:null,name:preset.name,config:preset.config})} className="text-left rounded border border-gray-200 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 hover:border-blue-400 focus-visible:outline-blue-400 p-2" title={`Preview and customise ${preset.name}`}>
+              <span className="text-[10px] text-gray-500 dark:text-prosota-muted">{profileFamily(preset.config)}</span>
+              <ProfileDiagram config={preset.config}/>
+              <span className="text-xs block">{preset.name}</span>
+            </button>
           ))}
+          </div>
+          {!BUILTIN_PRESETS.some(p=>(family==='All'||profileFamily(p.config)===family)&&p.name.toLowerCase().includes(search.toLowerCase()))&&<p className="text-xs p-2">No matching presets. Try another family or search.</p>}
 
           <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide px-1 pt-2">Your profiles</div>
           {loading && <p className="px-1 py-2 text-xs text-gray-400 dark:text-prosota-muted">Loading…</p>}
           {!loading && profiles.length === 0 && <p className="px-1 py-2 text-xs text-gray-400 dark:text-prosota-muted">None saved yet.</p>}
           {profiles.map(profile => (
             <div key={profile.id} className="flex items-center gap-1.5 py-1 px-1">
-              <span className="flex-1 min-w-0 truncate text-xs text-gray-700 dark:text-prosota-muted" title={profile.name}>{profile.name}</span>
+              <button onClick={() => setDraft({ id: profile.id, name: profile.name, config: profile.config })} className="flex-1 min-w-0 text-left text-xs" title="Preview and edit saved profile"><span className="block w-24"><ProfileDiagram config={profile.config}/></span>{profile.name}</button>
               <button onClick={() => downloadJson(`${profile.name}.json`, { name: profile.name, config: profile.config })} title="Export" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">⇩</button>
               <button onClick={() => setDraft({ id: profile.id, name: profile.name, config: profile.config })} title="Edit" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-700 dark:hover:text-prosota-paper shrink-0">✎</button>
               <button onClick={() => handleDelete(profile)} title="Delete" className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>

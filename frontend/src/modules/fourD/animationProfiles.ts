@@ -17,6 +17,8 @@ export type StaggerOrder = 'along_x' | 'along_y' | 'vertical' | 'random'
 export interface AnimationProfileConfig {
   trigger: Trigger
   transform_kind: TransformKind
+  // Missing/null preserves legacy trigger-dependent growth.
+  grow_mode?: 'reveal' | 'remove' | null
   axis: Axis
   direction: Direction
   distance: number
@@ -109,6 +111,7 @@ export const BUILTIN_PRESETS: { name: string; config: AnimationProfileConfig }[]
   // gives top-to-bottom for the rarer reverse case.
   { name: 'Grow Z', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'z' } },
   { name: 'Grow -Z', config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow', axis: 'z', direction: -1 } },
+  ...(['x', 'y', 'z'] as const).map(axis => ({ name: `Remove ${axis.toUpperCase()}`, config: { ...DEFAULT_ANIMATION_CONFIG, transform_kind: 'grow' as const, grow_mode: 'remove' as const, axis, opacity_from: 1, opacity_to: 1, color_from: '#c53522', color_to: '#c53522' } })),
   // Maro's own "remove site office" example — red while the demolition task
   // is ongoing, then gone: an on_finish trigger (the disappearance itself
   // is instant at the end of the task) with the colour held red across the

@@ -79,7 +79,7 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     if (!def.controls.some(c => c.id === j.control)) throw new Error(`Choose a control for ${j.name}`)
     if (j.pivot_rotation && !vector(j.pivot_rotation)) throw new Error('Invalid pivot orientation')
     if (!vector(j.axis) || Math.hypot(...j.axis) < 1e-6 || !vector(j.pivot) || !finite(j.minimum) || !finite(j.maximum) || !['hinge', 'slide'].includes(j.kind)) throw new Error(`Invalid joint settings: ${j.name}`)
-    if (!Array.isArray(j.response) || j.response.length < 2 || j.response[0][0] !== 0 || j.response[j.response.length - 1][0] !== 1 || j.response.some((p, i) => !unit(p[0]) || !unit(p[1]) || (i > 0 && p[0] <= j.response[i - 1][0]))) throw new Error(`Invalid response curve: ${j.name}`)
+    if (!Array.isArray(j.response) || j.response.length < 2 || j.response.length > 100 || j.response[0][0] !== 0 || j.response[j.response.length - 1][0] !== 1 || j.response.some((p, i) => !unit(p[0]) || !unit(p[1]) || (i > 0 && p[0] <= j.response[i - 1][0]))) throw new Error(`Invalid response curve: ${j.name}`)
     const seen = new Set([j.id]); let parent = j.parent
     while (parent) {
       if (seen.has(parent)) throw new Error('Joint hierarchy contains a cycle')

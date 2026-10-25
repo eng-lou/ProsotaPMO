@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { ShapeOperationsPanel, type ShapeSource } from './ShapeOperationsPanel'
 import type { Object3D } from 'three'
 import { arraySourceSnapshot, disposeArraySnapshot } from './arraySourceSnapshot'
@@ -156,6 +157,7 @@ export function SiteToolsPanel({ selectedShapeSources, hideShapeSources, importR
         <label>Tag<input className={input} value={edit.tag || ''} onChange={e=>change({tag:e.target.value})} placeholder="Water, landscaping, access…" /></label>
         {edit.kind==='shape' && <><p>Close a path or choose a zone to create a solid footprint.</p>{number('Height / thickness (m)','height')}<label>Surface<select className={input} value={edit.finish || 'default'} onChange={e=>change({finish:e.target.value as 'default'|'water'})}><option value="default">Standard · edit in Materials</option><option value="water">Animated water</option></select></label></>}
         {(edit.kind==='array'||edit.kind==='scatter') && <>
+          <ToolVisualGuide topic="placement" mode={edit.kind}/>
           <label>Use an existing scene object<select className={input} value={sourceId} disabled={capturing} onChange={e=>setSourceId(e.target.value)}><option value="">Choose imported or created object…</option>{sceneSources.filter(s=>s.id!=='site:'+edit.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
           <button className={button} disabled={!sourceId || capturing} onClick={()=>void useSceneSource()}>{capturing?'Preparing source…':'Use object as source'}</button>
           <p>Creates a reusable copy of its current geometry and pose. The original stays in place; copies survive unloading it.</p>
@@ -202,6 +204,7 @@ export function SiteToolsPanel({ selectedShapeSources, hideShapeSources, importR
     {chosen?.asset_id && !edit && <SiteAnimationControls item={chosen} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} />}
     {chosen && !edit && <section className="border-t pt-2 space-y-2 dark:border-prosota-line">
       <strong>Activity links & profiles</strong>
+      <ToolVisualGuide topic="links"/>
       <ElementLinkFields key={chosen.id} activities={activities} links={links.filter(l => l.source_kind === 'site' && l.element_ref === chosen.id)} animationProfiles={profiles}
         onLink={(activityId, profileId) => onLink(chosen, activityId, profileId)} onUnlink={onUnlink} onAssignProfile={onAssignProfile} />
       {linkError && <p role="alert" className="text-red-600 dark:text-red-400">{linkError}</p>}

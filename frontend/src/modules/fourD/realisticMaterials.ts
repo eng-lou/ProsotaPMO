@@ -29,7 +29,7 @@ import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 // material types e.g asphalt"). Appended, never reordered: the shader's
 // class index and texture layer both follow this order.
 export const REALISTIC_CLASSES = [
-  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water',
+  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water', 'moquette', 'grass-mown', 'grass-dry', 'green-roof', 'moquette-checkered',
 ] as const
 export type RealisticClass = typeof REALISTIC_CLASSES[number]
 // 'original' — explicitly keep the imported look for this material, even
@@ -42,7 +42,12 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
   concrete: 'Cast concrete',
   glass: 'Glass',
   metal: 'Exposed metal',
-  grass: 'Grass / green roof',
+  grass: 'Rough site grass',
+  'grass-mown': 'Mown lawn',
+  'grass-dry': 'Dry grass',
+  'green-roof': 'Green roof',
+  moquette: 'Architectural turf / moquette',
+  'moquette-checkered': 'Checkered moquette turf',
   brick: 'Brick',
   timber: 'Timber',
   asphalt: 'Asphalt / tarmac',
@@ -58,7 +63,7 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
 // Original classes use texture layer index - 1; finish variants reuse layers.
 const CLASS_INDEX: Record<RealisticClass, number> = {
   concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6, asphalt: 7, stone: 8, gravel: 9, soil: 10, tile: 11,
-  render: 12, 'painted-metal': 13, water: 14,
+  render: 12, 'painted-metal': 13, water: 14, moquette: 15, 'grass-mown': 16, 'grass-dry': 17, 'green-roof': 18, 'moquette-checkered': 19,
 }
 export const GLASS_CLASS = CLASS_INDEX.glass
 // Classes whose texture carries its own colour (a brick is brick-coloured
@@ -71,7 +76,7 @@ export const GLASS_CLASS = CLASS_INDEX.glass
 // white and a grey tile, are the modeller's real choice) with texture
 // detail on top; asphalt, gravel and soil read the same whatever flat
 // colour the model gave them.
-const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false, false, false, true]
+const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false, false, false, true, true, true, true, true, true]
 export function classReplacesColour(classIndex: number): boolean {
   return REPLACES_COLOUR[classIndex] ?? false
 }
@@ -79,6 +84,7 @@ export function classReplacesColour(classIndex: number): boolean {
 // --- Name-based classification ---------------------------------------------
 
 const CLASS_PATTERNS: [RealisticClass, RegExp][] = [
+  ['moquette', /\b(moquette|architectural turf|model turf|green felt)\b/],
   ['water', /^(water|pond|pool|river|lake|ocean)( surface| material)?$/],
   ['glass', /\b(glass|glazing|glazed|glazier|vision panel|verre|glas|pane)\b/],
   ['metal', /\b(steel|metal|metallic|alu|aluminium|aluminum|zinc|copper|iron|stainless|galvani[sz]ed|brass|bronze|corten|chrome|titanium)\b/],
@@ -584,8 +590,51 @@ const grassLayer: LayerFn = (u, v) => {
   r += (GRASS_TONES[3][0] - r) * dryMix
   g += (GRASS_TONES[3][1] - g) * dryMix
   b += (GRASS_TONES[3][2] - b) * dryMix
-  const shade = 0.72 + blade * 0.5
-  return [r * shade / 255, g * shade / 255, b * shade / 255, 0.3 + blade * 0.6]
+  // Short overlapping fibres: shading detail only, no blade geometry or animation loop.
+  const nap = valueNoise(u, v, 96, 192, 34)
+  const shade = 0.86 + blade * 0.19 + (nap - 0.5) * 0.08
+  return [r * shade / 255, g * shade / 255, b * shade / 255, 0.42 + blade * 0.12 + nap * 0.08]
+}
+
+// Muted sage felt for architectural models. Dense, shallow pile keeps clean outlines.
+// Generated once into the existing mipmapped atlas; no added meshes or draw calls.
+const moquetteLayer: LayerFn = (u, v) => {
+  const broad = fbm(u, v, 3, 3, 3, 131)
+  const nap = valueNoise(u, v, 96, 192, 132)
+  // Short curved pile strands baked once. Neighbour cells wrap for seamless repeats.
+  const x=u*32,y=v*32,ix=Math.floor(x),iy=Math.floor(y)
+  let fibre=0
+  for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+    const cx=ix+dx,cy=iy+dy,hx=(cx+32)%32,hy=(cy+32)%32
+    const angle=hash2(hx,hy,133)*Math.PI*2
+    const px=x-cx-(.15+.7*hash2(hx,hy,134)),py=y-cy-(.15+.7*hash2(hx,hy,135))
+    const along=px*Math.cos(angle)+py*Math.sin(angle)
+    const across=-px*Math.sin(angle)+py*Math.cos(angle)-.12*Math.sin(along*5)
+    const end=Math.max(0,Math.abs(along)-.47)
+    const distance=Math.sqrt(across*across+end*end)
+    fibre=Math.max(fibre,Math.exp(-distance*distance/0.018))
+  }
+  const tuft=fbm(u,v,12,12,3,136)
+  const shade=.83+fibre*.28+(broad-.5)*.20+(tuft-.5)*.14+(nap-.5)*.07
+  return [(119+(broad-.5)*15)*shade/255,(132+(tuft-.5)*12)*shade/255,(94-(broad-.5)*8)*shade/255,.38+fibre*.24+(tuft-.5)*.12+(nap-.5)*.05]
+}
+
+// Baked variations retain the same single texture sample and draw cost as grass.
+const mownLayer: LayerFn = (u, v) => {
+  const patch = fbm(u, v, 4, 4, 3, 141), fibre = valueNoise(u, v, 128, 256, 142)
+  const tone = 1 + (patch - .5) * .22 + (fibre - .5) * .12
+  return [91*tone/255, 123*tone/255, 55*tone/255, .48+fibre*.06]
+}
+const dryGrassLayer: LayerFn = (u, v) => {
+  const patch = fbm(u,v,4,4,4,151), fibre = valueNoise(u,v,128,256,152)
+  const green = clamp01((patch-.48)*3), soil = clamp01((fbm(u,v,7,7,3,153)-.58)*4)
+  const shade = .9+fibre*.18
+  return [(167-65*green-35*soil)*shade/255,(145-25*green-45*soil)*shade/255,(84-34*green-25*soil)*shade/255,.43+fibre*.12]
+}
+const greenRoofLayer: LayerFn = (u, v) => {
+  const clump = fbm(u,v,18,18,3,161), patch = fbm(u,v,4,4,3,162), fibre=valueNoise(u,v,256,256,163)
+  const earth=clamp01((patch-.55)*4),shade=.85+clump*.25+(fibre-.5)*.08
+  return [(91+35*earth)*shade/255,(120-25*earth)*shade/255,(60-10*earth)*shade/255,.4+clump*.2+fibre*.05]
 }
 
 const BRICK_TONES: [number, number, number][] = [[150, 70, 50], [134, 60, 44], [164, 86, 60], [120, 54, 40], [156, 96, 70], [142, 66, 48]]
@@ -705,7 +754,7 @@ const tileLayer: LayerFn = (u, v) => {
 // Original class layers. Additional finish presets reuse these textures.
 const LAYERS: LayerFn[] = [
   concreteLayer, glassLayer, metalLayer, grassLayer, brickLayer, timberLayer,
-  asphaltLayer, stoneLayer, gravelLayer, soilLayer, tileLayer,
+  asphaltLayer, stoneLayer, gravelLayer, soilLayer, tileLayer, moquetteLayer, mownLayer, dryGrassLayer, greenRoofLayer,
 ]
 const LAYER_COUNT = LAYERS.length
 
@@ -761,7 +810,7 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [2.4, 2.4], roughness: 0.86, metalness: 0, bump: 0.35, detail: 1, textured: false }, // concrete / render
   { tile: [1, 1], roughness: 0.05, metalness: 0, bump: 0, detail: 0, textured: true }, // glass
   { tile: [1.5, 1.5], roughness: 0.32, metalness: 1, bump: 0.2, detail: 1, textured: false }, // metal
-  { tile: [2.2, 2.2], roughness: 0.95, metalness: 0, bump: 0.9, detail: 0, textured: true }, // grass
+  { tile: [2.2, 2.2], roughness: 0.95, metalness: 0, bump: 0.55, detail: 0, textured: true }, // grass
   { tile: [0.45, 0.3], roughness: 0.88, metalness: 0, bump: 1.4, detail: 0, textured: true }, // brick
   { tile: [1.2, 0.6], roughness: 0.62, metalness: 0, bump: 0.6, detail: 0, textured: true }, // timber
   { tile: [2, 2], roughness: 0.92, metalness: 0, bump: 0.4, detail: 0, textured: true }, // asphalt
@@ -772,6 +821,11 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [2.4, 2.4], roughness: 0.8, metalness: 0, bump: 0.05, detail: 0.12, textured: false }, // smooth render
   { tile: [1.5, 1.5], roughness: 0.5, metalness: 0, bump: 0.03, detail: 0.08, textured: false }, // coated metal
   { tile: [1, 1], roughness: 0.12, metalness: 0, bump: 1, detail: 0, textured: false }, // animated water
+  { tile: [0.6, 0.6], roughness: 0.96, metalness: 0, bump: 0.18, detail: 0, textured: true }, // short-pile moquette
+  { tile: [1.8, 1.8], roughness: 0.93, metalness: 0, bump: 0.25, detail: 0, textured: true }, // mown lawn
+  { tile: [2.2, 2.2], roughness: 0.98, metalness: 0, bump: 0.45, detail: 0, textured: true }, // dry grass
+  { tile: [1.4, 1.4], roughness: 0.96, metalness: 0, bump: 0.5, detail: 0, textured: true }, // green roof
+  { tile: [0.6, 0.6], roughness: 0.96, metalness: 0, bump: 0.18, detail: 0, textured: true }, // checkered moquette
 ]
 
 export function realisticTileSize(cls: RealisticClass, scale: number): [number, number] {
@@ -792,7 +846,7 @@ function getClassParamsTexture(): THREE.DataTexture {
   CLASS_PARAMS.forEach((c, i) => {
     // New finishes reuse the original detail layers rather than allocate
     // duplicate texture-array layers. Existing class indices stay stable.
-    const layer = i === CLASS_INDEX.water ? 0 : i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
+    const layer = i === CLASS_INDEX['moquette-checkered'] ? 11 : i >= CLASS_INDEX.moquette ? i - 4 : i === CLASS_INDEX.water ? 0 : i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
     data.set([1 / c.tile[0], 1 / c.tile[1], layer, c.textured ? 1 : 0], i * 4)
     data.set([c.roughness, c.metalness, c.bump, c.detail], (n + i) * 4)
   })
@@ -915,6 +969,25 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
       if (vRealClass == 14) {
         realSample.a = waterHeight(vRealUv);
         diffuseColor.rgb *= mix(waterColour * .32, mix(waterColour, vec3(.19, .16, .09), .55), waterOptions.z);
+      }
+      if (vRealClass == 15 || vRealClass == 19) {
+        // Low-frequency variation spans many fibre tiles, avoiding a uniform carpet
+        // or a visibly repeated patch. Static shading: no animation/frame loop.
+        float turfPatch = waterNoise(realUv * .42 + vec2(17.3, 9.1));
+        float turfNap = waterNoise(realUv * 1.7 + vec2(4.7, 21.2));
+        float turfTone = (turfPatch - .5) * .26 + (turfNap - .5) * .10;
+        diffuseColor.rgb *= vec3(1.0 + turfTone, 1.0 + turfTone * .86, 1.0 + turfTone * .65);
+      }
+      if (vRealClass == 19) {
+        // Two fibre directions form a continuous turf surface, not geometric tiles.
+        // Derivative filtering fades the pattern before distant checks can shimmer.
+        vec2 checks = realUv * .8;
+        vec2 wave = sin(checks * 3.14159265);
+        vec2 aa = max(fwidth(checks) * 3.14159265, vec2(.035));
+        vec2 bands = smoothstep(-aa, aa, wave) * 2.0 - 1.0;
+        float fade = 1.0 - smoothstep(.25, .75, max(fwidth(checks.x), fwidth(checks.y)));
+        float napContrast = .10 + .07 * waterNoise(floor(checks) + vec2(13.7, 2.1));
+        diffuseColor.rgb *= 1.0 + napContrast * bands.x * bands.y * fade;
       }`)
     .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
       if ( realOn ) roughnessFactor = vRealClass == 14 ? mix(.07, .32, waterOptions.z) : clamp( vRealMat.x + ( realSample.a - 0.5 ) * 0.12, 0.03, 1.0 );`)
@@ -946,6 +1019,13 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
         vec2 slope = vec2(waterHeight(vRealUv + vec2(.005,0.0)) - h, waterHeight(vRealUv + vec2(0.0,.005)) - h) / .005;
         normal = normalize(normal - tangent * slope.x - bitangent * slope.y);
       }`)
+    .replace('#include <opaque_fragment>', `
+      if (vRealClass == 15 || vRealClass == 19) {
+        // Low-energy diffuse grazing lift approximates short felt pile, not gloss.
+        float pileRim = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+        outgoingLight *= 1.0 + .10 * pileRim;
+      }
+      #include <opaque_fragment>`)
 }
 
 interface SurfaceUniforms {
@@ -984,7 +1064,7 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
   }
   // Every realistic surface material shares one compiled program per
   // variant kind; uniforms stay per material.
-  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v18' : 'realistic-surface-v18')
+  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v20' : 'realistic-surface-v20')
   return material
 }
 

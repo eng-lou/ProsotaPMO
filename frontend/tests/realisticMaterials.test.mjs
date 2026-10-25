@@ -10,6 +10,26 @@ const { outputFiles } = await build({
 })
 const m = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text + '\n//# sourceURL=realistic-materials-tests.mjs').toString('base64')}`)
 
+test('moquette uses its own matte atlas layer and retains saved mapping transforms', () => {
+  const mapping = JSON.parse(JSON.stringify(m.withTextureSettings({ lawn: 'moquette' }, 'lawn', { scale: 2, rotation: 90 })))
+  const index = m.classIndexForKey('lawn', undefined, mapping)
+  assert.equal(index, 15)
+  assert.equal(m.classIndexForKey('water', undefined, { water: 'water' }), 14)
+  assert.deepEqual(m.textureSettingsForKey('lawn', mapping), { scale: 2, rotation: 90 })
+  const source = new THREE.MeshStandardMaterial()
+  const material = m.getRealisticVariant(source, index)
+  const uniforms = material.userData.realisticUniforms
+  const params = uniforms.realParams.value.image
+  assert.equal(params.data[index * 4 + 2], 11)
+  assert.ok(params.data[(params.width + index) * 4] >= 0.9)
+  const atlas = uniforms.realTex.value.image
+  assert.equal(atlas.depth, 15)
+  assert.equal(atlas.data.length, 256 * 256 * 4 * 15)
+  const checked = m.getRealisticVariant(source, m.classIndexForKey('lawn', undefined, { lawn: 'moquette-checkered' }))
+  assert.equal(checked.userData.realisticUniforms.realParams.value.image.data[19 * 4 + 2], 11)
+  m.disposeRealisticVariant(source); source.dispose()
+})
+
 test('legacy mappings retain class IDs and default texture transform', () => {
   assert.equal(m.classIndexForKey('wall', undefined, { wall: 'concrete' }), 1)
   assert.equal(m.classIndexForKey('frame', undefined, { frame: 'metal' }), 3)

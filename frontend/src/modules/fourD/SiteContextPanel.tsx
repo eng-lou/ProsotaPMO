@@ -141,6 +141,12 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
             </button>
             {apiKey && <span className="text-[11px] text-gray-400 dark:text-prosota-muted">configured ✓</span>}
           </div>
+          <p className="text-[11px] leading-relaxed text-gray-500 dark:text-prosota-muted">
+            <a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 underline">Get a Google Maps API key ↗</a>
+            {' · '}
+            <a href="https://developers.google.com/maps/documentation/tile/get-api-key" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 underline">Setup guide ↗</a>
+            <br />Enable billing and the Map Tiles API in your Google Cloud project for 3D site context.
+          </p>
         </div>
 
         <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">

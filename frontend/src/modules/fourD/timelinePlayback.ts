@@ -394,8 +394,18 @@ export function computeAppliedAnimationStateAt(
     rotationOffsetDeg = profile.direction * 360 * awayAmount
   }
 
-  const opacity = profile.opacity_from + (profile.opacity_to - profile.opacity_from) * eased
-  const growProgress = profile.transform_kind === 'grow' ? eased : null
+  // Explicit reveal/removal follows chronological progress for all triggers.
+  // Legacy recipes keep their original trigger-dependent opacity/clipping.
+  const explicitGrow = profile.transform_kind === 'grow' && profile.grow_mode != null
+  const forwardEased = explicitGrow
+    ? clamp01(applyEasing(profile.trigger === 'on_finish' ? 1 - rawProgress : rawProgress, profile.interpolation))
+    : eased
+  let opacity = profile.opacity_from + (profile.opacity_to - profile.opacity_from) * forwardEased
+  const growProgress = profile.transform_kind === 'grow'
+    ? (explicitGrow ? (profile.grow_mode === 'remove' ? 1 - forwardEased : forwardEased) : eased)
+    : null
+  // A fully clipped solid must not leave a coplanar end face visible.
+  if (explicitGrow && growProgress! <= 0) opacity = 0
 
   return { positionOffset, rotationOffsetDeg, scaleMultiplier, opacity, color, growProgress }
 }

@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><title>Prosota Desktop settings</title>
+<html lang="en"><meta charset="utf-8"><title>Prosota Planner Desktop settings</title>
 <style>
 body{font:15px system-ui;background:#101a2d;color:#edf3ff;margin:32px;max-width:600px}
 h1{font-size:24px}p{color:#b6c5dd;line-height:1.5}label{display:block;margin:20px 0 6px}
 input,select{box-sizing:border-box;width:100%;padding:10px;background:#1b2940;color:white;border:1px solid #64748b;border-radius:6px}
 button{padding:10px 16px;margin:20px 10px 0 0;border:0;border-radius:6px;cursor:pointer}
 #status{white-space:pre-wrap;color:#8fddca}small{color:#b6c5dd}
+.key-help{margin:7px 0 0;font-size:13px}a{color:#9cc9ff;text-underline-offset:3px}a:hover{color:white}a:focus-visible{outline:2px solid #9cc9ff;outline-offset:3px}
 </style>
 <h1>Settings</h1>
 <p>Connect your own accounts. Saving keys makes no paid requests.</p>
@@ -14,12 +15,16 @@ button{padding:10px 16px;margin:20px 10px 0 0;border:0;border-radius:6px;cursor:
 <select id="provider"><option value="off">Off — use Prosota offline</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select>
 <label for="model">Model ID</label><input id="model" autocomplete="off" placeholder="Enter a model available on your account">
 <label for="openaiKey">OpenAI API key</label><input id="openaiKey" type="password" autocomplete="new-password">
+<p class="key-help"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an OpenAI API key ↗</a></p>
 <label for="anthropicKey">Anthropic API key</label><input id="anthropicKey" type="password" autocomplete="new-password">
+<p class="key-help"><a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Get an Anthropic / Claude API key ↗</a></p>
 <label for="googleMapsKey">Google Maps Platform API key</label><input id="googleMapsKey" type="password" autocomplete="new-password">
+<p class="key-help"><a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noopener noreferrer">Get a Google Maps API key ↗</a> · <a href="https://developers.google.com/maps/documentation/tile/get-api-key" target="_blank" rel="noopener noreferrer">Setup guide ↗</a><br>Enable billing and the Map Tiles API in your Google Cloud project for 3D site context.</p>
 <details><summary>AI concept renders</summary>
 <label for="renderProvider">Image provider</label><select id="renderProvider"><option value="off">Off</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select>
 <label for="imageModel">OpenAI image model ID</label><input id="imageModel" autocomplete="off" placeholder="Model available on your account">
 <label for="geminiKey">Gemini API key</label><input id="geminiKey" type="password" autocomplete="new-password">
+<p class="key-help"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a Gemini API key in Google AI Studio ↗</a></p>
 <p><small>Renders send the selected image and prompt to the image provider. OpenAI uses the key above.</small></p></details>
 <p><small>Poe sends relevant project context to your selected provider. Maps loads Google 3D Tiles using your key. Your providers bill usage. Restrict the Maps key to the required APIs in Google Cloud.</small></p>
 <p><small>Saved keys are encrypted for your Windows account and never shown again. Leave a key blank to keep it.</small></p>

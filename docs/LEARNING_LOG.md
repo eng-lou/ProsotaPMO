@@ -1,5 +1,52 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-10-25 — Release channels must isolate data before publication
+
+The user approved Stable at www.prosota.com and Preview at preview.prosota.com,
+with separate data, under the product name Prosota Planner. Inspection found the
+existing Vercel database and R2 settings shared between Production and Preview.
+Do not equate a different hostname with an isolated workspace. Restricted the
+existing database variable to Production and created a schema-only Neon Preview
+branch without copying production records. Preview connection, storage, sign-in,
+and publication are still pending. A schema-only clone also omits Alembic's
+revision record; verify its source revision before stamping or migrating it.
+Desktop channels use separate identities and data folders, retaining the old
+Preview folder for existing projects. Keep download links disabled until the
+actual installer and live deployment have been verified.
+
+## 2026-10-25 — Distinguish saved links from the new-link form
+
+The user saw two identical profile dropdowns under one activity and reasonably
+read them as duplicate links. One edited the existing link; the other was a
+profile for the next link. Label both, and hide the new-link form behind
+"Link another activity" once an object is linked. Preserve selecting a profile
+before creating a link. Replace the three-tab link guide with one explanation:
+activity = when, profile = how; saving a recipe is separate from assigning it.
+Electron regression checks verify the single initial selector, explicit new-link
+form/cancel, and the existing assignment callback. TypeScript passes.
+Desktop 0.2.40 installed after the user saved and closed Prosota; installer exit
+0 and installed ProductVersion 0.2.40.0 verified.
+
+## 2026-10-25 — Visual guides across seven tools
+
+Added collapsible, local example diagrams for shape operations, path binding,
+array/scatter, rig joints, material appearance, camera tracking, and activity/profile
+links. Relevant tool settings select the example; example controls never write
+project state. Both model and site-object paths/links are covered. These are
+schematics, including material illustrations, not promises of rendered appearance.
+
+Keep examples static until requested. Render examples only while expanded,
+allow only one guide animation at a time, cancel on close, and respect reduced
+motion. Explain current limits honestly: embedded clip pacing differs from rigid
+rig keyframes; wheel rigs are not automatically driven by path distance.
+
+Validation: TypeScript and production UI build pass. Isolated Electron checks cover
+all seven topics and example choices, setting synchronisation, idle rendering,
+exclusive playback and cancellation. Reviewed the rendered guide layout. No
+changes to IFC import, selection, geometry or animation evaluators in this update.
+Desktop 0.2.39 packaged and installed successfully (installer exit 0; installed
+ProductVersion 0.2.39.0 verified) after the user closed Prosota.
+
 ## 2026-10-24 — Recover the established publishing route before asking
 
 I incorrectly treated a signed-out GitHub CLI and absent Vercel CLI link as missing
@@ -7147,3 +7194,209 @@ navigation smoke test passed seven route visits. This is bounded regression
 coverage, not an exhaustive audit of every feature or a fully authored mechanical
 backhoe rig. Video encoding and complex self-intersecting mesh cases were not
 validated in this change.
+
+### 2026-10-24 — Authored loader rig saved and exercised in Sample
+
+Placed the original and a separate rigged copy of the user's 77-part equipment.
+The source is an articulated front wheel loader. Saved the copy's six joint groups
+and hydraulic/linkage followers in Sample and saved its rig to the Construction
+equipment library. Exercised lift, bucket tilt and chassis steering in the desktop
+UI. Exercised the wheel control, but did not establish visual wheel-motion accuracy.
+Bound the copy to a separate two-point test path (1.4 m/s, about 10.1 seconds),
+scrubbed the timeline to verify assembled travel while the original remained still,
+then returned time to zero. Reopening Rigging restored the saved definition.
+This was panel reload verification, not a full application restart test.
+
+Two authoring failures required correction: exported nested rig-root metadata made
+the app's node paths differ from the outer import wrapper, and a 101-sample linkage
+response exceeded the backend's 100-sample limit. Remap against the actual selected
+rig root, convert root-space pivots/attachments, and validate the final JSON with
+the backend Definition schema before importing. The saved preset has 51 samples;
+the reproducible remapping script now caps generated responses at 100.
+
+Remaining limitation: wheel rotation is manual/keyframed; the rig does not yet
+derive wheel rotation from path distance. Do not describe path travel alone as
+automatic locomotion synchronization. Source textures were absent, so the white
+source appearance remains. Local authored equipment files are not public releases.
+
+### 2026-10-24 — Teach Poe the verified equipment workflow
+
+Added equipment assembly, rig authoring, preview versus saved pose/keyframes, library
+templates, path binding and camera-clock guidance to Poe's runtime system prompt.
+Included the actual nested-root and response-sample save failures and the requirement
+to preserve an original. Explicitly distinguishes manual rig wheels from embedded-clip
+path synchronization. Poe currently lacks equipment inspection and rig proposal tools:
+this teaches guidance/troubleshooting, not autonomous geometry editing. It must not
+claim to have rigged, saved or tested a machine using its existing read-only IFC tools.
+This source change needs deployment/repackaging before running installations receive it.
+
+### 2026-10-24 — Rig settings are not a portable assembly recipe
+
+User exported the authored loader's preset and imported it onto the untouched original.
+It failed because Front_chassis and the other authored groups exist only in the modified
+GLB. The JSON stores node references, not group construction or original-part mappings.
+Our previous verification covered placed copies of the rigged asset, not transferring
+the definition to the ungrouped source. Those are different compatibility claims.
+Changed the panel to validate against the selected model before changing the draft,
+reject incompatible imports atomically, and describe export as rig settings. Reuse of
+the complete machine uses its saved library asset. General transfer onto an ungrouped
+source remains unimplemented and requires a persistent assembly/part mapping; do not
+claim the validation fix implements that transfer. Existing invalid drafts can be
+discarded. This change still needs desktop packaging/deployment.
+
+### 2026-10-24 — Poe equipment tools and explicit key persistence
+
+Added viewer-local inspect_equipment and draft_equipment_rig. Inspection reads
+actual named part paths, current root-local transforms/bounds and saved definitions.
+Drafting requires prior inspection of the same live root, rejects animated or
+ambiguous models, validates node references, preserves existing record/version,
+and stages a review in Rigging without server writes or posing geometry. The user
+saves the proposal through the normal versioned equipment API. Existing drafts
+are protected. Tool schemas derive from backend Definition, and frontend response
+sample limits now match its maximum of 100. No IFC handlers were changed.
+
+The reported disappearing keys exposed that Key only changed an in-memory draft;
+closing the panel cleared that draft. Key & save now persists the complete rig and
+key through the existing save API. Closing Rigging is blocked while editing/saving,
+and refresh warns about unsaved changes. Other edits still require explicit save.
+This resolves the identified unsaved-key path; it does not establish that every
+reported animation loss had that cause.
+
+Validation: TypeScript; 23 frontend equipment/Poe/IFC regression tests, including
+geometry non-mutation, staged-only edits, stale/invalid model rejection and
+serialized-keyframe runtime recreation. Six backend tool-schema/equipment API
+tests passed on a disposable PostgreSQL cluster (default test database access
+failed first). No live Poe model conversation or packaged desktop close/refresh
+test has been performed for these changes. Deployment/desktop packaging remains.
+
+### 2026-10-24 — Lightweight grass and architectural moquette
+
+User preferred a carpet/felt architectural turf appearance and explicitly raised
+orbiting performance concerns about individual grass blades. Added Architectural
+turf / moquette as an appended material class (15; existing IDs unchanged), with
+muted sage colour, shallow fibre bump and high roughness. Natural grass retains
+patch/dry variation with softer short-fibre shading. Both use the existing material
+mapping, colour override, scale and direction controls and cached texture atlas.
+No blades, shell layers, new scene meshes, wind animation or continuous frame loop.
+One additional 256-square RGBA atlas layer is about 256 KiB before mipmaps.
+
+Verification: synthetic WebGL render of both finishes on gently deformed surfaces
+compiled without shader errors and used two draw calls for two meshes (8100 total
+triangles from the test surfaces, none added by the material). Visually inspected
+outputs/turf-preview.png. Eleven material tests pass, including new class/layer,
+serialization, legacy indices and existing IFC batching. This is not a full-scene
+FPS measurement, video-export test or installed desktop validation. Packaging is
+still needed before the user can select this finish in the running desktop app.
+
+### 2026-10-24 — Remove terrain editor; turf variants and split-shell repair
+
+Removed the Terrain operation and its subdivision/brush/simplify controls from
+Shape Operations at the user's request. Boolean operations remain; saved assets
+are not deleted. Added mown lawn, dry grass and green-roof material variants beside
+rough grass and moquette. All are static baked surface shading without blades or
+wind animation. The labeled synthetic preview is outputs/turf-preview.png.
+
+User reported closed-solid errors joining exported excavation results. Reproduced
+the material-split shell case: glTF can separate faces by material, making each
+primitive open even though their combined shell is closed. Boolean collection now
+validates combined primitives when individual validation fails, preserving material
+groups. Truly open shells still fail. This does not prove every problematic asset
+is repaired; the user's exact scene has not been retested. Twelve targeted tests
+and TypeScript passed. Preview shaders rendered without errors. Not yet packaged.
+
+### 2026-10-24 — Refine moquette toward the approved visual target
+
+Replaced soft noise-only moquette with baked short curved fibre relief, randomized
+within periodic cells, muted olive/sage colour and a small grazing-angle diffuse
+lift. Added checkered moquette (class 19), sharing the same atlas layer. Checks
+are shader colour modulation with derivative filtering, not seams or geometry;
+default check width is 0.75 m and follows the existing scale/direction controls.
+No blades or continuous animation. Updated shader cache version for both ordinary
+and batched materials. Synthetic in-engine preview compiled and was visually
+reviewed; four draw calls include two label sprites and two surfaces. Material
+regressions pass. It remains visibly simpler than the AI concept, with no claim
+of equivalent photorealism or full-scene performance. Desktop packaging remains.
+
+### 2026-10-24 — More variation in moquette
+
+User found the engine result too uniform. Added intermediate tuft relief, subtle
+olive/sage colour differences, broad static spatial variation across fibre tiles,
+and varying checker contrast. Reduced the first pass's excessive mottling after
+visual review. Synthetic renderer remains four draw calls (two surfaces plus two
+labels), with unchanged geometry; shader arithmetic increases slightly, so this
+does not imply zero GPU cost. Six material regression tests passed and shaders
+compiled in the synthetic preview. The running desktop has not been updated yet.
+
+### 2026-10-24 — Profile visual guidance review
+
+User likes the camera preset diagrams and wants equivalent guidance for animation
+profiles. Reviewed the library/editor: flat names, no preview, frames-only duration
+input and mixed concerns make configuration hard to understand. Also found Grow
+presets lack a corresponding editable movement choice/axis condition. Recorded
+the proposed cards, evaluator-backed preview, timing/assignment explanations and
+other suitable tools in ANIMATION_PROFILE_UX_REVIEW.md. This is a design review,
+not a profile engine or IFC assignment change in 0.2.36.
+
+### 2026-10-24 — Desktop 0.2.36 applied
+
+Built and installed 0.2.36 after the user approved restarting Prosota. Includes
+the moquette/checkered turf and grass variants, terrain-tool removal, material-
+split boolean shell handling, rig save/import safeguards and Poe inspection/
+draft tooling described above. Installed executable version verified as 0.2.36;
+desktop opened and the Shape and Grass Tut project was selected successfully.
+TypeScript, 16 focused frontend tests and four desktop settings/Power BI tests
+passed. Packaged isolated backend smoke passed including IFC conversion,
+backup/reopen, assets, site recipes and paths. Its old fence fixture needed an
+explicit straight curve mode to match its recipe; no application validation was
+relaxed. AO/shadow turf preview was a synthetic renderer test, not a measured
+large-scene performance benchmark. User's own grass scene awaits visual testing.
+
+
+### 2026-10-24 — Visual animation profiles
+
+Implemented visual recipe cards, search/family filters and a production-evaluator
+SVG preview with scrub/play, easing curve and stagger example. Restored Grow in
+the editor and grouped settings. Corrected the misleading frames label: the
+legacy field is evaluated as days. Days/seconds/frames entry now converts using
+the current timeline speed/FPS without altering the stored clock semantics.
+Found bounce/twist flags unused by current playback; preserve them, explain the
+limitation and expose functioning easing/Spiral choices rather than fake controls.
+No IFC selection, assignment or animation evaluator changes. TypeScript and
+conversion/evaluator tests pass; isolated rendered UI verifies cards, Grow, unit
+switching and save preservation. Visually reviewed library/editor screenshots.
+
+Desktop 0.2.37 installed successfully (installer exit 0, installed executable version verified). Activity-profile assignment regressions also pass; backend and IFC playback code unchanged by this update.
+
+
+### 2026-10-25 — Explicit reveal versus removal
+
+User reversed Grow opacity to make red removal; geometry still grew while fading.
+Added optional grow_mode (reveal/remove, null for unchanged legacy behaviour) to
+frontend config and backend validation. Explicit modes use chronological trigger
+progress after stagger, independently from opacity; fully clipped solids become
+invisible so no coplanar end face remains. Choosing an explicit mode sets both
+opacity values to 1 with clear UI guidance. Added red Remove X/Y/Z recipes.
+Existing recipes are not automatically rewritten. Preview and viewport share the
+same evaluator; no changes to IFC source geometry or assignment logic.
+Tests cover all triggers/stagger positions, legacy behaviour, before/during/after
+colours and clipping, reverse scrub/unlink and save/reload. Backend round-trip
+passed in an isolated database; rendered editor check verifies Remove saves with
+opaque geometry. Desktop 0.2.38 packaging in progress.
+
+Packaged smoke also passed, including explicit grow_mode preservation, IFC
+conversion and backup/reopen. Video capture uses the viewport renderer; a full
+user-scene video export was not performed. Installation authorized after the user
+confirmed Prosota was saved and closed.
+
+Desktop 0.2.38 installed successfully; installer exit 0 and installed executable version 0.2.38 verified.
+
+## 2026-10-25 — Zelena Park reference scene
+Created and saved a new Prosota project from the user's park reference using a self-contained generated GLB and Poly Haven vegetation. Source, preview and provenance: outputs/zelena-park/README.md. Import material review rejects extensionsRequired, including EXT_mesh_gpu_instancing; export ordinary nodes sharing geometry for compatibility. Verified placement visually; user started reviewing before a refresh check. This task changed scene artifacts only, not IFC or app behavior. Native path recipes are not preserved in this imported scene.
+
+## 2026-10-25 — Original PPE worker modelling and walk study
+User explicitly authorised Blender for an original reference-inspired worker and walk. Created outputs/ppe-worker/PPE-Worker-Walk.glb and editable .blend: stylised orange vest / navy clothing / yellow helmet, 16-bone skin, 17,116 triangles, one-second in-place walk intended for 1 m/s path travel. No purchased Reallusion data used. Export was re-imported into Blender; verified actual vertex deformation, finite coordinates and exact loop closure, then rendered the delivered GLB's 30-frame preview. Prosota runtime playback is not yet tested; do not describe this as verified inside Prosota. Full details: outputs/ppe-worker/README.md.
+Procedural rig lesson: when assigning parent/child pose matrices in sequence, update the view layer after each assignment; stale parent transforms caused detached extremities and a non-closing loop in the initial draft. Corrected and rechecked the final export. Use Blender --factory-startup for batch asset work to avoid user add-ons interfering with background execution.
+
+## 2026-10-25 — Release parity check and provider setup links
+Production branch checked remotely: main remains d2abb32 (24 October). Live www.prosota.com returns HTTP 200; its index-BUbRiMyu.js bundle still advertises desktop-v0.2.35. Local desktop manifest/package is 0.2.40, with newer uncommitted profile/material/rigging changes. Do not tell testers web and desktop are at parity.
+Added official provider key links beside Desktop Settings fields for OpenAI, Claude, Maps and Gemini, plus Maps credentials/setup links in Site Context. Electron previously denied these popups: added a narrow exact-URL allowlist opening in the system browser, with module included in packaging. Five targeted settings/link tests pass; main-process syntax and frontend TypeScript pass. These source changes are not yet packaged, installed or deployed.

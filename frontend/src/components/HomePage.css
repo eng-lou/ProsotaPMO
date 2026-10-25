@@ -199,6 +199,21 @@
 .homepage .hp-desktop p { color:var(--hp-muted); font-size:14px; max-width:480px; }
 .homepage .hp-desktop-download { display:flex; flex-direction:column; gap:8px; }
 .homepage .hp-desktop-download>span { color:var(--hp-muted); font-size:11px; }
+.homepage .hp-brand-product { font-weight:400; }
+.homepage .hp-releases { margin:0 0 36px; padding:28px; border:1px solid var(--hp-line); border-radius:12px; background:#eaf1fc; scroll-margin-top:100px; }
+.homepage .hp-releases h2 { font-size:26px; line-height:1.2; margin:8px 0; }
+.homepage .hp-releases>p { color:var(--hp-muted); }
+.homepage .hp-release-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:22px; }
+.homepage .hp-release-card { display:flex; flex-direction:column; padding:24px; border:1px solid var(--hp-line); border-radius:8px; background:#fff; }
+.homepage .hp-release-stable { border-top:3px solid #4c7af0; }
+.homepage .hp-release-preview { border-top:3px solid #b88435; }
+.homepage .hp-release-card h3 { font-size:23px; margin:10px 0; }
+.homepage .hp-release-card p { font-size:14px; line-height:1.6; color:var(--hp-muted); margin-bottom:20px; }
+.homepage .hp-release-actions { display:flex; align-items:flex-start; flex-direction:column; gap:15px; margin-top:auto; }
+.homepage .hp-release-card small { margin-top:18px; color:var(--hp-muted); }
+.homepage .hp-release-pending { font-size:13px; color:var(--hp-muted); }
+.homepage .hp-releases .hp-release-note { margin-top:18px; font-size:12px; line-height:1.6; }
+@media(max-width:700px) { .homepage .hp-release-grid { grid-template-columns:1fr; } .homepage .hp-releases { padding:18px; } }
 .homepage .hp-preview {
   background:#0C1A2E;
   color:#E6EDF7;

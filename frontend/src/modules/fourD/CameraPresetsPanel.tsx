@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
 import { useEffect, useState } from 'react'
 import type { Camera, CameraPose } from './cameras'
@@ -96,6 +97,7 @@ export function CameraPresetsPanel(p: Props) {
           <option value="translate" disabled={!shot.tracking}>Move with target</option>
           <option value="aligned" disabled={!shot.tracking}>Move with target and follow turns</option>
         </select></label>
+        <ToolVisualGuide topic="camera" mode={shot.followMode || "fixed"}/>
         {!shot.tracking && <p className="text-xs">Choose a single object as the target to enable tracking.</p>}
         <label className="block text-xs">Actor animation<select className={input} value={shot.actorClock || 'presentation'} onChange={e => change({ ...shot, actorClock: e.target.value as MotionShot['actorClock'] })}>
           <option value="presentation">Play with preview time</option><option value="construction">Follow construction time</option>

@@ -115,8 +115,14 @@ try:
     project = request("/api/v1/projects/", "POST", {"name": "Desktop persistence test"})
     assert project["name"] == "Desktop persistence test"
     project_id = project["id"]
+    removal = request('/api/v1/animation-profiles/', 'POST', {
+        'project_id': project_id, 'name': 'Opaque removal', 'config': {
+            'transform_kind': 'grow', 'grow_mode': 'remove', 'opacity_from': 1, 'opacity_to': 1}})
+    saved_profiles = request('/api/v1/animation-profiles/?project_id=' + project_id)
+    assert next(p for p in saved_profiles if p['id'] == removal['id'])['config']['grow_mode'] == 'remove'
+    print('PASS: packaged backend preserves explicit removal profile mode')
     import uuid
-    site_path = request('/api/v1/paths/', 'POST', {'project_id': project_id, 'name': 'Site fence path',
+    site_path = request('/api/v1/paths/', 'POST', {'project_id': project_id, 'name': 'Site fence path', 'curve_mode': 'straight',
         'points': [{'x': 0, 'y': 0, 'z': 0}, {'x': 12, 'y': 0, 'z': 0}]})
     site_item = dict(id=str(uuid.uuid4()), name='Boundary fence', kind='fence', up_axis='z',
         position={'x':0,'y':0,'z':0}, path_id=site_path['id'], points=site_path['points'], gate_start=4, gate_width=2)

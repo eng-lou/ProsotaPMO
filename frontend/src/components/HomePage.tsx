@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ProsotaLogo } from './ProsotaLogo'
+import { PlannerReleases } from './PlannerReleases'
 import './HomePage.css'
 
 const activities = [
@@ -184,16 +185,17 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
       </a>
       <header className="hp-header">
         <div className="hp-wrap hp-nav">
-          <a className="hp-brand" href="#hp-main" aria-label="Prosota home">
+          <a className="hp-brand" href="#hp-main" aria-label="Prosota Planner home">
             <ProsotaLogo size={32} />
             <span>
-              PROSOTA<span className="hp-brand-dot">.</span>
+              Prosota <span className="hp-brand-product">Planner</span>
             </span>
           </a>
           <nav aria-label="Main navigation">
             <a href="#workflow">The workflow</a>
             <a href="#capabilities">Capabilities</a>
-            <a href="#about">Why Prosota</a>
+            <a href="#about">Why Planner</a>
+            <a href="#releases">Releases</a>
           </nav>
           <button className="hp-signin" onClick={onSignIn}>
             Sign in <span aria-hidden="true">↗</span>
@@ -227,19 +229,7 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
               <span className="hp-hero-note">Browser-native · 4D BIM, planning & project controls</span>
             </div>
           </div>
-          <aside className="hp-desktop" aria-label="Try Prosota Desktop">
-            <div>
-              <span className="hp-small">WINDOWS DESKTOP PREVIEW</span>
-              <h2>Take Prosota to your desktop.</h2>
-              <p>Try the desktop app for your modelling, simulation and project controls work.</p>
-            </div>
-            <div className="hp-desktop-download">
-              <a className="hp-button" href="https://github.com/eng-lou/ProsotaPMO/releases/download/desktop-v0.2.35/Prosota-Desktop-Preview-0.2.35-Setup.exe">
-                Download for Windows <span aria-hidden="true">↓</span>
-              </a>
-              <span>Windows 10/11 · Preview 0.2.35 · 268 MB</span>
-            </div>
-          </aside>
+          <PlannerReleases />
           <ProgrammePreview />
           <div className="hp-compat">
             <span>START WITH THE WORK YOU ALREADY HAVE</span>
@@ -340,9 +330,9 @@ export function HomePage({ onSignIn, onRequestAccess }: { onSignIn: () => void; 
                 the delivery plan becomes something the whole team can explore.
               </p>
               <p>
-                Prosota was founded by Louis Oghenemaro Sota, a Senior Planner and 4D Project Controls Specialist,
-                around that idea. Built for the people responsible for turning complex work into a credible delivery
-                sequence.
+                Prosota Planner is the planning and simulation software from Prosota, founded by Louis Oghenemaro Sota,
+                a Senior Planner and 4D Project Controls Specialist. Built for the people responsible for turning
+                complex work into a credible delivery sequence.
               </p>
               <div className="hp-founder">
                 <ProsotaLogo size={36} />

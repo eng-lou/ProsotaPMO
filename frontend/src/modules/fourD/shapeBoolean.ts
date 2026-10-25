@@ -1,5 +1,6 @@
 
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { Brush, Evaluator, HalfEdgeMap, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg'
 import { arraySourceSnapshot, disposeArraySnapshot } from './arraySourceSnapshot'
 export type ShapeOperation = 'subtract' | 'excavate' | 'union' | 'intersect'
@@ -43,7 +44,34 @@ export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, 
     const collect=(source:THREE.Object3D)=>{
       const snapshot=arraySourceSnapshot(source,upAxis,'Boolean input',false);inputs.push(snapshot)
       let combined:Brush|null=null
-      for(const node of snapshot.children){
+      let pieces = snapshot.children as THREE.Mesh[]
+      // glTF splits a multi-material solid into surface primitives. Validate their
+      // combined shell before treating each primitive as a separate solid.
+      if (pieces.length > 1 && pieces.some(mesh => { try { checkSolid(mesh.geometry); return false } catch { return true } })) {
+        const count=pieces.reduce((n,m)=>n+(m.geometry.index?.count??m.geometry.getAttribute('position').count)/3,0)
+        if(triangleCount+count>20000)throw Error('Use individual solids under 20,000 triangles in total, rather than a whole detailed model.')
+        const parts:THREE.BufferGeometry[]=[], materials:THREE.Material[]=[], groups:{start:number;count:number;materialIndex:number}[]=[]
+        let offset=0
+        try {
+          for(const mesh of pieces){
+            const g=compact(mesh.geometry);parts.push(g)
+            if(!g.getAttribute('normal'))g.computeVertexNormals()
+            if(!g.getAttribute('uv'))g.setAttribute('uv',new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count*2),2))
+            const mats=Array.isArray(mesh.material)?mesh.material:[mesh.material],base=materials.length;materials.push(...mats)
+            const size=g.getAttribute('position').count
+            for(const group of g.groups.length?g.groups:[{start:0,count:size,materialIndex:0}])groups.push({start:offset+group.start,count:group.count,materialIndex:base+(group.materialIndex??0)})
+            offset+=size
+          }
+          const joined=mergeGeometries(parts,false)
+          if(!joined)throw Error('Cannot combine the material surfaces of this solid.')
+          try {checkSolid(joined)}catch(e){joined.dispose();throw e}
+          for(const g of groups)joined.addGroup(g.start,g.count,g.materialIndex)
+          const brush=new Brush(joined,materials);brush.updateMatrixWorld();brushes.push(brush)
+          triangleCount+=count
+          return brush
+        } finally {parts.forEach(g=>g.dispose())}
+      }
+      for(const node of pieces){
         const mesh=node as THREE.Mesh,g=mesh.geometry
         triangleCount+=(g.index?.count ?? g.getAttribute('position').count)/3
         if(triangleCount>20000)throw Error('Use individual solids under 20,000 triangles in total, rather than a whole detailed model.')

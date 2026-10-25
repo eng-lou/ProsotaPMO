@@ -1,0 +1,31 @@
+const { app, BrowserWindow } = require('electron')
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict')
+const repo = path.resolve(__dirname, '../..')
+app.whenReady().then(async () => {
+  let win
+  try {
+    const { build } = require(path.join(repo, 'frontend/node_modules/esbuild'))
+    const out = path.join(repo, 'outputs/planner-release-page')
+    fs.mkdirSync(out, { recursive: true })
+    await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {HomePage} from './src/components/HomePage';createRoot(document.getElementById('root')).render(<HomePage onSignIn={()=>{}} onRequestAccess={()=>{}}/>);`, resolveDir: path.join(repo, 'frontend'), loader: 'tsx' }, bundle: true, outfile: path.join(out, 'page.js'), define: { 'import.meta.env': '{}', 'process.env.NODE_ENV': '"production"' } })
+    fs.writeFileSync(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="page.css"><div id="root"></div><script src="page.js"></script>')
+    win = new BrowserWindow({ width: 1440, height: 1100, show: false, webPreferences: { contextIsolation: true } })
+    const errors = []
+    win.webContents.on('console-message', (_event, level, message) => { if (level === 3 && !message.includes('ERR_FILE_NOT_FOUND')) errors.push(message) })
+    await win.loadFile(path.join(out, 'index.html'))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await win.webContents.executeJavaScript(`document.getElementById('releases').scrollIntoView();`)
+    fs.writeFileSync(path.join(out, 'desktop.png'), (await win.webContents.capturePage()).toPNG())
+    const text = await win.webContents.executeJavaScript('document.body.innerText')
+    for (const label of ['Prosota Planner', 'Stable', 'Preview', 'preparing release']) assert.ok(text.includes(label), label)
+    win.setSize(390, 1100)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await win.webContents.executeJavaScript(`document.getElementById('releases').scrollIntoView();`)
+    assert.ok(await win.webContents.executeJavaScript('document.documentElement.scrollWidth <= innerWidth'), 'Mobile page overflows')
+    fs.writeFileSync(path.join(out, 'mobile.png'), (await win.webContents.capturePage()).toPNG())
+    assert.deepEqual(errors, [])
+    fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ passed: true, desktop: '1440x1100', mobile: '390x1100', horizontalOverflow: false, rendererErrors: errors }, null, 2))
+    console.log('PASS: Planner release choices render at desktop/mobile sizes without horizontal overflow or renderer errors')
+  } catch (error) { console.error(error); process.exitCode = 1 }
+  finally { win?.destroy(); app.quit() }
+})

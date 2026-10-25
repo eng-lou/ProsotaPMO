@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { WaterSurfaceControls } from './WaterSurface'
 import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
@@ -95,6 +96,7 @@ export function RealisticMaterialsPanel({
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto">
+      <div className="px-3 py-2"><ToolVisualGuide topic="materials"/></div>
       <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line space-y-2 shrink-0">
         <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer">
           <input
@@ -212,6 +214,7 @@ export function RealisticMaterialsPanel({
                   {tile && <p>Pattern repeat: {Number(tile[0].toFixed(3))} × {Number(tile[1].toFixed(3))} m. Preview changes in the model.</p>}
                 </details>
               )}
+              {(cls === 'grass' || cls === 'moquette' || cls === 'moquette-checkered') && <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{cls === 'moquette-checkered' ? 'Fine felt turf with alternating mowing tones. Checks are 0.75 m at default scale; scale adjusts both checks and fibres.' : cls === 'moquette' ? 'Soft matte sage turf with fine felt texture and smooth edges.' : 'Natural grass with patch variation and short fibre shading.'} Surface texture only: no individual blades. Use the colour swatch, scale and direction to adjust the finish.</p>}
               {customised && <button onClick={() => onMappingChange(resetRealisticEntry(mapping, entry.key))}
                 title="Restore automatic mapping, original colour and default texture settings for this material"
                 className="text-[10px] text-left underline text-gray-500 dark:text-prosota-muted">Reset material</button>}

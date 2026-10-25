@@ -1,8 +1,12 @@
+import { ProfilePreview } from './ProfilePreview'
+import { durationDays, durationValue } from './profilePresentation'
 import { useEffect, useRef, useState } from 'react'
 import { ColorPickerPopover, normalizeHex } from '@/components/ColorPickerPopover'
 import type { AnimationProfileConfig, Axis, Direction, Interpolation, StaggerOrder, Trigger, TransformKind } from './animationProfiles'
 
 interface Props {
+  speedDaysPerSecond?: number
+  fps?: number
   name: string
   config: AnimationProfileConfig
   onSave: (name: string, config: AnimationProfileConfig) => void
@@ -82,18 +86,15 @@ function ColorField({ value, onChange, recentColors }: { value: string | null; o
   )
 }
 
-const NEEDS_AXIS: TransformKind[] = ['translate', 'scale', 'rotate', 'pop', 'spiral', 'fall']
-const NEEDS_BOUNCE: TransformKind[] = ['rotate', 'pop']
-const NEEDS_TWIST: TransformKind[] = ['pop', 'spiral']
+const NEEDS_AXIS: TransformKind[] = ['translate', 'rotate', 'pop', 'spiral', 'fall', 'grow']
 
 // The form behind AnimationProfilePanel.tsx's "+ New" / "✎ Edit" — every
 // named preset ("Pop Up Y", "Fall Down Z", ...) reduces to these same
 // fields (2026-07-11, per Maro, referencing a Blender add-on's own preset
-// UI: axis + direction/distance + bounce/twist, plus Bonsai's colour-while-
-// ongoing idea folded in as an optional colour transition here). No live
-// preview — this only edits the saved recipe; seeing it play out is the
-// timeline playback engine's job once that exists.
-export function AnimationProfileEditor({ name: initialName, config: initialConfig, onSave, onCancel, saveLabel, recentColors }: Props) {
+// UI: axis + direction/distance, plus Bonsai's colour-while-
+// Preview uses the production evaluator on a sample activity without scene edits.
+export function AnimationProfileEditor({ name: initialName, config: initialConfig, onSave, onCancel, saveLabel, recentColors, speedDaysPerSecond=7, fps=30 }: Props) {
+  const [durationUnit, setDurationUnit] = useState('days')
   const [name, setName] = useState(initialName)
   const [config, setConfig] = useState(initialConfig)
   useEffect(() => { setName(initialName); setConfig(initialConfig) }, [initialName, initialConfig])
@@ -102,8 +103,6 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
     setConfig(prev => ({ ...prev, [key]: value }))
 
   const showAxis = NEEDS_AXIS.includes(config.transform_kind)
-  const showBounce = NEEDS_BOUNCE.includes(config.transform_kind)
-  const showTwist = NEEDS_TWIST.includes(config.transform_kind)
 
   return (
     <div className="space-y-1 px-1 py-1.5 border border-gray-200 dark:border-prosota-line rounded bg-gray-50 dark:bg-prosota-panel2">
@@ -114,15 +113,19 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
         className="w-full text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 font-medium"
       />
 
-      <Row label="Trigger">
+      <ProfilePreview config={config}/>
+      <h3 className="text-xs font-semibold pt-3">Timing</h3>
+      <Row label="When to animate">
         <select value={config.trigger} onChange={e => set('trigger', e.target.value as Trigger)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
-          <option value="over_duration">Over duration</option>
-          <option value="on_start">On start</option>
-          <option value="on_finish">On finish</option>
+          <option value="over_duration">Across the activity</option>
+          <option value="on_start">After activity starts</option>
+          <option value="on_finish">Before activity finishes</option>
         </select>
       </Row>
 
-      <Row label="Transform">
+      <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{config.trigger==='over_duration'?'Movement spans the linked activity’s start and finish dates.':config.trigger==='on_start'?'The transition starts at the activity start date.':'The transition ends at the activity finish date.'} Colour transitions span the full activity.</p>
+      <h3 className="text-xs font-semibold pt-3">Movement</h3>
+      <Row label="Movement">
         <select value={config.transform_kind} onChange={e => set('transform_kind', e.target.value as TransformKind)} className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5">
           <option value="none">None</option>
           <option value="translate">Translate</option>
@@ -131,9 +134,16 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
           <option value="pop">Pop</option>
           <option value="spiral">Spiral</option>
           <option value="fall">Fall</option>
+          <option value="grow">Grow / reveal</option>
         </select>
       </Row>
 
+      {config.transform_kind === 'grow' && <>
+        <Row label="Geometry action"><select aria-label="Geometry action" value={config.grow_mode ?? 'legacy'} onChange={e=>setConfig(prev=>({...prev,grow_mode:e.target.value==='legacy'?null:e.target.value as 'reveal'|'remove',...(e.target.value==='legacy'?{}:{opacity_from:1,opacity_to:1})}))} className="text-xs border rounded dark:bg-prosota-panel2 px-1 py-1">
+          <option value="legacy">Original profile behaviour</option><option value="reveal">Reveal · build up</option><option value="remove">Remove · cut away</option>
+        </select></Row>
+        <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{config.grow_mode==='remove'?'Starts as a complete solid, then cuts away to nothing.':config.grow_mode==='reveal'?'Starts empty, then reveals the complete solid.':'Original Grow profiles keep their existing timing and opacity behaviour. Choose Reveal or Remove to control geometry explicitly.'} Choosing Reveal/Remove sets both opacity values to 1 so the remaining solid stays opaque. Add a fade separately if wanted.</p>
+      </>}
       {showAxis && (
         <>
           <Row label="Axis">
@@ -149,30 +159,22 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
               <option value={-1}>Negative</option>
             </select>
           </Row>
-          <Row label="Distance">
+          {config.transform_kind !== 'grow' && <Row label={config.transform_kind === 'rotate' ? 'Angle (°)' : 'Distance (model units)'}>
             <input
               type="number" step={0.1} value={config.distance}
               onChange={e => set('distance', Number(e.target.value) || 0)}
               className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
             />
-          </Row>
+          </Row>}
         </>
       )}
-      {showBounce && (
-        <Row label="Bounce">
-          <input type="checkbox" checked={config.bounce} onChange={e => set('bounce', e.target.checked)} />
-        </Row>
-      )}
-      {showTwist && (
-        <Row label="Twist">
-          <input type="checkbox" checked={config.twist} onChange={e => set('twist', e.target.checked)} />
-        </Row>
-      )}
-
-      <Row label="Opacity from">
+      {(config.bounce || config.twist) && <p className="text-[10px] text-amber-600 dark:text-amber-300">Legacy bounce/twist flags are preserved. Current playback uses the easing choice for bounce and the Spiral movement for rotation.</p>}
+      <h3 className="text-xs font-semibold pt-3">Appearance</h3>
+      <p className="text-[10px] text-gray-500 dark:text-prosota-muted">{config.transform_kind==='grow' && config.grow_mode ? 'Opacity runs from the start to the end of the transition, independently of clipping. Keep both at 1 for a solid cut or reveal.' : 'Opacity values describe the displaced and settled poses. Finish-triggered profiles run these in reverse. Check the preview before assigning.'}</p>
+      <Row label={config.transform_kind==='grow' && config.grow_mode ? 'Start opacity' : 'Displaced opacity'}>
         <input type="number" min={0} max={1} step={0.1} value={config.opacity_from} onChange={e => set('opacity_from', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right" />
       </Row>
-      <Row label="Opacity to">
+      <Row label={config.transform_kind==='grow' && config.grow_mode ? 'End opacity' : 'Settled opacity'}>
         <input type="number" min={0} max={1} step={0.1} value={config.opacity_to} onChange={e => set('opacity_to', Number(e.target.value) || 0)} className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right" />
       </Row>
       <Row label="Colour from">
@@ -191,13 +193,14 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
           <option value="bounce">Bounce</option>
         </select>
       </Row>
-      <Row label="Duration (frames)">
-        <input
-          type="number" min={1} value={config.duration_frames ?? ''} placeholder="Auto"
-          onChange={e => set('duration_frames', e.target.value === '' ? null : Number(e.target.value))}
-          className="w-16 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
-        />
-      </Row>
+      <h3 className="text-xs font-semibold pt-3">Transition length</h3>
+      {config.trigger==='over_duration' ? <p className="text-[11px]">Uses the activity’s full duration. Custom transition length is only used for start/finish triggers.</p> : <>
+      <Row label="Display units"><select aria-label="Transition duration units" value={durationUnit} onChange={e=>setDurationUnit(e.target.value)} className="text-xs border rounded dark:bg-prosota-panel2"><option value="days">Calendar days</option><option value="seconds">Playback seconds</option><option value="frames">Playback frames</option></select></Row>
+      <Row label="Length"><input aria-label="Transition length" type="number" min="0.000001" step="any" value={config.duration_frames==null?'':Number(durationValue(config.duration_frames,durationUnit,speedDaysPerSecond,fps).toFixed(6))} placeholder="Auto" onChange={e=>{const v=Number(e.target.value);if(e.target.value==='')set('duration_frames',null);else if(Number.isFinite(v)&&v>0)set('duration_frames',durationDays(v,durationUnit,speedDaysPerSecond,fps))}} className="w-24 text-xs border rounded dark:bg-prosota-panel2 px-1 py-1"/></Row>
+      <p className="text-[10px] text-gray-500 dark:text-prosota-muted">Auto = 1 calendar day. Seconds/frames use the timeline’s {speedDaysPerSecond} days/sec and {fps} fps. Changing playback speed changes the playback duration, not saved dates.</p>
+      </>}
+      <h3 className="text-xs font-semibold pt-3">Element order</h3>
+      <p className="text-[10px] text-gray-500 dark:text-prosota-muted">0% animates all linked elements together. Higher values delay later elements within the same animation window.</p>
 
       {/* Domino / offset (2026-10-02, per Maro) — see
           AnimationProfileConfig.stagger for the exact timing. */}
@@ -229,6 +232,7 @@ export function AnimationProfileEditor({ name: initialName, config: initialConfi
         </>
       )}
 
+      <p className="text-[11px] pt-3">Saving updates the recipe only. Assign it using Activity links &amp; profiles; element overrides take precedence over activity defaults.</p>
       <div className="flex items-center gap-1.5 pt-1">
         <button
           onClick={() => onSave(name, config)}

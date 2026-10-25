@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import type { Path } from './paths'
 import type { SiteItem, PathMotion } from './siteScene'
 import { buildPathCurve } from './pathCurve'
@@ -14,6 +15,7 @@ export function SitePathBindings({path,items,busy,onChange}:{path:Path;items:Sit
     const duration=(buildPathCurve(path.points,path.closed,path.curve_mode)?.getLength()||0)/motion.speed
     return <fieldset key={item.id} disabled={busy||item.locked} className="border rounded p-2 space-y-2 text-xs">
       <legend>Following: {item.name}</legend>
+      <ToolVisualGuide topic="path" mode={motion.orient?"orient":"fixed"} heading={motion.heading}/>
       <NumberField label="Travel speed (m/s)" value={motion.speed} onChange={speed=>change({speed})}/>
       <p>{duration.toFixed(1)} seconds per journey · Play or scrub the animation timeline.</p>
       <label className="flex gap-2"><input type="checkbox" checked={motion.loop} onChange={e=>change({loop:e.target.checked})}/>Loop journey</label>

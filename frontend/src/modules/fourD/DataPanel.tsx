@@ -1,3 +1,4 @@
+import { ToolVisualGuide } from './ToolVisualGuide'
 import { useState } from 'react'
 import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
 import type { Activity } from '@/modules/scheduling/types'
@@ -160,6 +161,7 @@ export function DataPanel({
       </div>
       <section aria-label="Activity links and profiles" className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-2 shrink-0 max-h-[50%] overflow-y-auto">
         <h3 className="text-xs font-semibold text-gray-700 dark:text-prosota-paper">Activity links &amp; profiles</h3>
+        <ToolVisualGuide topic="links"/>
         {isBulkSelection && (
           <div className="space-y-1.5">
             <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">
