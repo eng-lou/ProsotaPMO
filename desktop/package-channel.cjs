@@ -10,7 +10,7 @@ const result = spawnSync(process.execPath, [
   `-c.executableName=${settings.executableName}`,
   `-c.extraMetadata.releaseChannel=${settings.channel}`,
   `-c.directories.output=release/${settings.channel}`,
-  `-c.nsis.artifactName=Prosota-Planner-${settings.channel === 'stable' ? 'Stable' : 'Preview'}-${version}-Setup.${ext}`,
+  `-c.nsis.artifactName=Prosota-Planner-${settings.channel === 'stable' ? 'Stable' : 'Preview'}-` + '${version}-Setup.${ext}',
 ], { cwd: __dirname, stdio: 'inherit', windowsHide: true })
 if (result.error) throw result.error
 if (result.status === 0) {
