@@ -88,7 +88,8 @@ Cloudflare R2 now has a private `prosota-planner-preview` bucket in Western
 Europe. Its persistent Object Read & Write credential is scoped to this bucket
 only. After user approval, its access key, secret and bucket name were saved as
 Preview-only Vercel variables; the original three variables are Production-only.
-The account ID remains shared. CORS permits GET/HEAD/PUT from
+Preview also has its own explicit account-ID variable matching this bucket's
+Cloudflare account; the original account-ID entry is Production-only. CORS permits GET/HEAD/PUT from
 `https://preview.prosota.com`, Content-Type request headers and ETag responses.
 Public bucket access remains disabled. No credentials are recorded here.
 
@@ -99,7 +100,10 @@ sign-in passed; the new database presented zero projects before the named releas
 smoke project was created successfully. The first synthetic model upload failed;
 Preview storage credentials were re-entered from the captured Cloudflare fields
 and need a fresh deployment plus upload/reload verification. Do not mark Preview
-Web available until this passes.
+Web available until this passes. Stable's new build, Google sign-in, existing
+project list and dashboard load have passed. The two public GitHub releases
+were checked without credentials: both installer sizes and SHA-256 digests match
+the local manifests, with Preview marked prerelease and Stable not prerelease.
 The release catalogue keeps unavailable links disabled until these checks pass.
 
 Desktop channel packaging uses `npm run package:stable` and

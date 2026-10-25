@@ -6,7 +6,7 @@ export const releaseChannel: ReleaseChannel = import.meta.env.VITE_RELEASE_CHANN
 // Promotion changes this catalogue; it does not silently replace another channel.
 export const plannerReleases = {
   stable: {
-    web: { version: '0.2.41', url: 'https://www.prosota.com', available: false },
+    web: { version: '0.2.41', url: 'https://www.prosota.com', available: true },
     desktop: { version: '0.2.41', url: 'https://github.com/eng-lou/ProsotaPMO/releases/download/planner-stable-v0.2.41/Prosota-Planner-Stable-0.2.41-Setup.exe', available: true },
   },
   preview: {
