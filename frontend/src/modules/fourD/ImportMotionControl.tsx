@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, downloadLargeBlob } from '@/lib/api'
-import { importSiteAsset } from './siteAssets'
+import { importSiteAsset, downloadSiteAssetBytes } from './siteAssets'
 import { addAssetMotion } from './importAssetMotion'
 import type { SiteItem } from './siteScene'
 
@@ -12,8 +11,7 @@ export function ImportMotionControl({item,projectId,disabled,onApply}:{item:Site
   async function read(file:File) {
     const version=++generation.current;setBusy(true);setError('');setResult(null)
     try {
-      const {data}=await api.get<{download_url:string}>(`/api/v1/site-assets/${item.asset_id}/download`,{params:{direct:true}})
-      const bytes=await (await downloadLargeBlob(data.download_url,true)).arrayBuffer()
+      const bytes=await downloadSiteAssetBytes(item.asset_id!)
       const next=await addAssetMotion(bytes,file)
       if(version===generation.current)setResult(next)
     }catch(e){if(version===generation.current)setError(e instanceof Error?e.message:'Could not read motion.')}

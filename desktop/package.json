@@ -1,7 +1,7 @@
 {
   "name": "prosota-desktop",
   "productName": "Prosota Planner",
-  "version": "0.2.42-preview.1",
+  "version": "0.2.42-preview.2",
   "releaseChannel": "preview",
   "private": true,
   "description": "Prosota Planner for Windows",

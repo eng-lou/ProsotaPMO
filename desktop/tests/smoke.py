@@ -158,6 +158,15 @@ try:
     asset = request(f"/api/v1/site-assets/{asset_upload['id']}/ready", 'POST', {'width':6,'height':2.6,'depth':2.4})
     assert request(scene_url)['revision'] == 5  # library import never places geometry
     assert request(f"/api/v1/site-assets/{asset['id']}/download") == asset_bytes
+    direct = request(f"/api/v1/site-assets/{asset['id']}/download?direct=true")
+    assert isinstance(direct, dict) and isinstance(direct.get('download_url'), str), 'Packaged backend must support the signed-URL JSON contract'
+    assert request(direct['download_url']) == asset_bytes
+    if '--worker-motion' in sys.argv:
+        motion = subprocess.run([str(desktop / 'node_modules/electron/dist/electron.exe'), str(desktop / 'tests/site-motion.cjs')],
+            input=json.dumps({'origin': origin, 'token': token, 'folder': 'D:/BIM Assets/Prosota Assets/Construction Workers/Worker F-0014'}),
+            text=True, capture_output=True, timeout=180, creationflags=subprocess.CREATE_NO_WINDOW)
+        print(motion.stdout, flush=True)
+        assert motion.returncode == 0, motion.stderr
     request(asset_upload['upload_url'], 'PUT', b'overwritten pending upload', content_type='model/gltf-binary')
     assert request(f"/api/v1/site-assets/{asset['id']}/download") == asset_bytes  # saved version is immutable
     asset_item = {**recipe, 'id':str(uuid.uuid4()), 'kind':'asset', 'asset_id':asset['id'], 'path_id':None, 'points':[], 'width':6,'height':2.6,'depth':2.4}

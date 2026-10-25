@@ -37,12 +37,18 @@ export async function parseAsset(bytes: ArrayBuffer) {
   return { object: group, dimensions }
 }
 const loaded = new Map<string, Promise<THREE.Group>>()
+export async function downloadSiteAssetBytes(id: string) {
+  const {data}=await api.get<{download_url:string}>(`/api/v1/site-assets/${id}/download`,{params:{direct:true}})
+  if(!data || typeof data.download_url!=='string' || !data.download_url.trim())
+    throw Error('The asset service returned an invalid download response. Please update or restart Prosota before importing motion.')
+  const bytes=await (await downloadLargeBlob(data.download_url,true)).arrayBuffer()
+  checkPortableGlb(bytes)
+  return bytes
+}
 export async function loadSiteAsset(id: string) {
   let pending = loaded.get(id)
   if (!pending) {
-    pending = api.get<{ download_url: string }>(`/api/v1/site-assets/${id}/download`, { params: { direct: true } })
-      .then(({ data }) => downloadLargeBlob(data.download_url, true))
-      .then(blob => blob.arrayBuffer()).then(parseAsset).then(result => result.object)
+    pending = downloadSiteAssetBytes(id).then(parseAsset).then(result => result.object)
     loaded.set(id, pending)
     pending.catch(() => loaded.delete(id))
   }

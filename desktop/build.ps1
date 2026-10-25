@@ -29,6 +29,8 @@ try {
     if ($LASTEXITCODE) { throw "Backend packaging failed." }
     New-Item -ItemType Directory -Force -Path "runtime\backend", "runtime\postgres" | Out-Null
     Copy-Item -Path "runtime\prosota-backend\*" -Destination "runtime\backend" -Recurse -Force
+    & node backend-fingerprint.cjs --write
+    if ($LASTEXITCODE) { throw "Backend source fingerprint failed." }
     foreach ($part in @("bin", "lib", "share")) {
         Copy-Item -LiteralPath (Join-Path $PostgresRoot $part) -Destination "runtime\postgres" -Recurse -Force
     }

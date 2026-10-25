@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const crypto = require('node:crypto')
 const { channelSettings } = require('./release-channel.cjs')
 const settings = channelSettings(process.argv[2])
+require('./backend-fingerprint.cjs').verifyBackend()
 const result = spawnSync(process.execPath, [
   path.join(__dirname, 'node_modules/electron-builder/cli.js'), '--win', 'nsis', '--x64',
   `-c.appId=${settings.appId}`, `-c.productName=${settings.title}`,

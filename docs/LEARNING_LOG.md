@@ -7444,3 +7444,11 @@ Verified the actual Worker F-0014 FBX without clips: arms-down pose, intact face
 
 ## 2026-10-25 — Preview mini-push includes desktop
 The owner clarified that a Preview "mini push" means rebuilding and supplying the Preview Windows installer as well as pushing Preview Web. Do not stop at the Git push or reuse an older installer. Preview 0.2.42-preview.1 packages the character opacity/pose and separate FBX motion work. Preview homepage is now channel-aware with its own sign-in action and version; Stable remains 0.2.41. Build and publish Preview only; do not promote main without approval.
+
+## 2026-10-25 — Installer-first development delivery
+Owner clarified routine development updates should deliver the updated Preview installer directly; do not delay delivery for web publication. "Push to main" or "fully push" explicitly requests the complete Stable update on prosota.com, including web and desktop download. Preview 0.2.42-preview.1 was built from clean dff93a7, packaged metadata checked, and published as a GitHub prerelease. Main remains cbf544b.
+
+## 2026-10-25 — Packaged motion import download failure
+Preview.1 bundled a rebuilt UI but reused an older frozen backend. That backend ignores the new site-assets download?direct=true JSON contract and redirects to binary GLB data. The UI read download_url as undefined, downloaded the SPA homepage, then GLTFLoader reported Unexpected token '<'. Reproduced against the actual packaged executable with a disposable database; the direct-contract assertion failed before the rebuild. Fresh import cache had masked the same restore-path incompatibility.
+
+Rebuild UI and backend together for Preview.2. Shared downloadSiteAssetBytes now validates the signed-URL response and GLB bytes before motion parsing or asset restore; legacy binary/HTML responses fail with an actionable service-version error instead of fetching the homepage. Package-channel now checks a backend source fingerprint produced by the full build and refuses stale runtimes. Added a packaged direct-download assertion and an opt-in renderer test that uploads each actual worker FBX with clips excluded, downloads through the desktop service, adds welding motion, saves a new asset, downloads it again, and confirms animation advances after reload. No Stable changes or web publication requested.
