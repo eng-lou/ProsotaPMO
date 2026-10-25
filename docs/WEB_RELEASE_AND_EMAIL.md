@@ -70,14 +70,36 @@ Neon project `young-rice-65534909` now has a schema-only branch named
 `prosota-planner-preview` (`br-tiny-field-za7am7o2`), with no copied production
 records and no expiry. SQL checks confirmed 93 tables, zero projects and zero
 users. Its initially empty Alembic revision table was initialized to
-`b068e02893a1`, after reading that exact revision from the source branch. It is
-not yet connected to Vercel. Schema-only cloning does not copy Alembic's revision
+`b068e02893a1`, after reading that exact revision from the source branch. Its
+connection is now saved as a Preview-only Vercel `DATABASE_url` secret, using
+the application's `postgresql+psycopg` driver. The UI verified separate Preview
+and Production entries. This applies on the next deployment; a live connection
+test remains pending. `VITE_RELEASE_CHANNEL=preview` is also saved for Preview
+only, so its badge cannot be mistaken for Stable. Schema-only cloning does not copy Alembic's revision
 row: verify/stamp the matching source schema revision before applying newer
 migrations. Do not blindly stamp head.
 
-Remaining deployment gates: preview database assignment and schema verification,
-separate R2 bucket/credentials, Auth0 callback verification, preview domain and
-branch configuration, release packaging/publication, and live smoke tests.
+Auth0 application `ProsotaPMO Web` now includes `https://preview.prosota.com` in
+its callback, logout, and web-origin allowlists, after explicit user approval.
+Existing entries and authentication protections were preserved. A live Preview
+sign-in test still remains pending.
+
+Cloudflare R2 now has a private `prosota-planner-preview` bucket in Western
+Europe. Its persistent Object Read & Write credential is scoped to this bucket
+only. After user approval, its access key, secret and bucket name were saved as
+Preview-only Vercel variables; the original three variables are Production-only.
+The account ID remains shared. CORS permits GET/HEAD/PUT from
+`https://preview.prosota.com`, Content-Type request headers and ETag responses.
+Public bucket access remains disabled. No credentials are recorded here.
+
+The `preview` Git branch was pushed at `47d0d69`; Vercel reports its first build
+Ready. `preview.prosota.com` is assigned to that branch; the Namecheap CNAME
+`preview` to `7e3a6b087dc7d2f0.vercel-dns-017.com.` is saved. HTTPS and Google
+sign-in passed; the new database presented zero projects before the named release
+smoke project was created successfully. The first synthetic model upload failed;
+Preview storage credentials were re-entered from the captured Cloudflare fields
+and need a fresh deployment plus upload/reload verification. Do not mark Preview
+Web available until this passes.
 The release catalogue keeps unavailable links disabled until these checks pass.
 
 Desktop channel packaging uses `npm run package:stable` and
@@ -92,6 +114,13 @@ passed; 199 frontend tests passed with two optional fixture tests skipped; all
 11 desktop configuration tests passed. Web and desktop UI production builds
 passed. Packaged backend smoke checks passed. These checks do not replace live
 deployment/login/upload testing, which remains pending.
+
+Both channel installers were built from commit
+`47d0d6960c4660c6c6c0f7ba22bc36af81bddf74` with clean source manifests; packaged
+application metadata confirms the appropriate channel and version 0.2.41.
+They are unsigned and now published as `planner-stable-v0.2.41` and
+`planner-preview-v0.2.41` in eng-lou/ProsotaPMO (Preview is a prerelease). The release-page Electron check also
+passed at 1440x1100 and 390x1100 with no overflow or renderer errors.
 
 ## Verification recorded 24 October 2026
 
