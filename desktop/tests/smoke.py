@@ -162,11 +162,13 @@ try:
     assert isinstance(direct, dict) and isinstance(direct.get('download_url'), str), 'Packaged backend must support the signed-URL JSON contract'
     assert request(direct['download_url']) == asset_bytes
     if '--worker-motion' in sys.argv:
-        motion = subprocess.run([str(desktop / 'node_modules/electron/dist/electron.exe'), str(desktop / 'tests/site-motion.cjs')],
-            input=json.dumps({'origin': origin, 'token': token, 'folder': 'D:/BIM Assets/Prosota Assets/Construction Workers/Worker F-0014'}),
+        motion_config = data / 'motion-test.json'
+        motion_config.write_text(json.dumps({'origin': origin, 'token': token, 'projectId': project_id, 'folder': 'D:/BIM Assets/Prosota Assets/Construction Workers/Worker F-0014'}))
+        motion = subprocess.run([str(desktop / 'node_modules/electron/dist/electron.exe'), str(desktop / 'tests/site-motion.cjs'), str(motion_config)],
             text=True, capture_output=True, timeout=180, creationflags=subprocess.CREATE_NO_WINDOW)
         print(motion.stdout, flush=True)
         assert motion.returncode == 0, motion.stderr
+        assert 'PASS packaged renderer motion workflow' in motion.stdout, motion.stderr or 'Renderer test exited without completing'
     request(asset_upload['upload_url'], 'PUT', b'overwritten pending upload', content_type='model/gltf-binary')
     assert request(f"/api/v1/site-assets/{asset['id']}/download") == asset_bytes  # saved version is immutable
     asset_item = {**recipe, 'id':str(uuid.uuid4()), 'kind':'asset', 'asset_id':asset['id'], 'path_id':None, 'points':[], 'width':6,'height':2.6,'depth':2.4}
@@ -335,3 +337,4 @@ finally:
     if process.poll() is None:
         process.stdin.close()
         process.wait(timeout=40)
+

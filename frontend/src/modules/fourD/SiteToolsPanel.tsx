@@ -135,7 +135,7 @@ export function SiteToolsPanel({ selectedShapeSources, hideShapeSources, importR
   async function commit() {
     if (!draft || state.placing) return
     const items = scene.items.filter(i => i.id !== draft.id)
-    try { await save([...items, draft], `Site tools: ${draft.name}`); cancel() } catch { /* state shows error */ }
+    try { await save([...items, draft], `3D Site tools: ${draft.name}`); cancel() } catch { /* state shows error */ }
   }
   async function update(item: SiteItem, patch: Partial<SiteItem> | null) {
     try { await save(patch ? scene.items.map(i => i.id === item.id ? { ...i, ...patch } : i) : scene.items.filter(i => i.id !== item.id), `${patch ? 'Update' : 'Remove'} ${item.name}`) } catch { /* state shows error */ }

@@ -425,7 +425,7 @@ export function PropertiesPanel({
               own Up Axis picker, on purpose — one control, same choice,
               available both at import time and any time after. */}
           <fieldset disabled={activeObject.locked} className="min-w-0">
-          {activeObject.locked && <p className="px-3 text-xs">Unlock this object in Site Tools to edit it.</p>}
+          {activeObject.locked && <p className="px-3 text-xs">Unlock this object in 3D Site tools to edit it.</p>}
           {!activeObject.isSite && <Row label="Source Up Axis">
             <div className="flex gap-1">
               {(['z', 'y'] as const).map(axis => (

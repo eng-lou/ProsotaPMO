@@ -9,7 +9,7 @@ export function SiteTransformPanel({ name, object, locked, mode, space, onMode, 
 }) {
   return <section className="p-3 border-t border-gray-200 dark:border-prosota-line text-xs" aria-label="Selected library asset">
     <h3 className="font-semibold mb-2">Selected: {name}</h3>
-    {locked ? <p>Unlock this asset in Site Tools to change its transform.</p> : <>
+    {locked ? <p>Unlock this asset in 3D Site tools to change its transform.</p> : <>
       <div className="flex gap-1 mb-2">{(['translate','rotate','scale'] as const).map((value,i) => <button key={value} onClick={() => onMode(value)} className={`px-2 py-1 border rounded ${mode === value ? 'bg-blue-600 text-white' : ''}`}>{['Move','Rotate','Scale'][i]}</button>)}</div>
       <div className="flex gap-1 mb-2">{(['world','local'] as const).map(value => <button key={value} onClick={() => onSpace(value)} className={`px-2 py-1 border rounded ${space === value ? 'bg-blue-600 text-white' : ''}`}>{value === 'world' ? 'Global' : 'Local'}</button>)}</div>
       {(['position','rotation','scale'] as const).map(field => <div key={field} className="mb-2">

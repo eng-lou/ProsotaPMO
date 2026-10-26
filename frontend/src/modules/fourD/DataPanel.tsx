@@ -5,17 +5,13 @@ import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
 import type { IfcModelHandle } from './ifcModel'
 import { IfcDataPanel } from './IfcDataPanel'
-import { MeshDataPanel, type MeshImportItem } from './MeshDataPanel'
 import type { ModelElementLink, ModelElementLinkSourceKind } from './modelElementLinks'
 import type { IfcUnitDisplay } from './ifcUnitDisplay'
 
-export type DataPanelTab = 'ifc' | '3d'
 
 interface Props {
   open: boolean
   onToggle: () => void
-  activeTab: DataPanelTab
-  onTabChange: (tab: DataPanelTab) => void
   ifcHandles: IfcModelHandle[]
   activeObjectId: string | null
   selectedExpressId: number | null
@@ -30,10 +26,6 @@ interface Props {
   // see that component's own doc comment on these two.
   unloadedCountByModelId: Map<string, number>
   onReloadIfc: (id: string) => void
-  meshImports: MeshImportItem[]
-  hiddenIds: Set<string>
-  onToggleMeshVisible: (id: string) => void
-  onUnloadMesh: (id: string) => void
   selectedObjectIds: Set<string>
   onSelectObject: (id: string | null, additive?: boolean) => void
   // Passed straight through to both tabs — see IfcDataPanel.tsx's own
@@ -71,34 +63,11 @@ interface Props {
   onAssignProfile: (linkId: string, profileId: string | null) => void
 }
 
-// Far-right panel (2026-07-11, per Maro: "two contextual side panels one for
-// ifc and one for 3d") — one w-72 slot, tabbed between IFC Data (spatial
-// structure/properties, IfcDataPanel.tsx) and 3D Data (list of plain
-// GLTF/OBJ/FBX imports with visibility + unload, MeshDataPanel.tsx). Owns
-// the shared chrome (width/border/tab bar); the two panels are content-only.
-// Per-object texture editing used to live in the 3D Data tab but moved to
-// the left "3D View Properties" panel (2026-07-11, per Maro — see
-// TextureFields.tsx), so this panel no longer threads customTextures
-// through at all.
-//
-// Section Box (2026-07-09) briefly lived here as a third tab, but Maro
-// asked for it to be dockable like Animation Profiles instead ("make
-// section contextual like profiles, i can fit in the profile panel or
-// dock on each side") — it now lives in SideDock.tsx alongside
-// AnimationProfilePanel, not fixed to this panel's own IFC/3D split.
-//
-// Collapsible (2026-07-11, per Maro: "hideable like the left one") — same
-// open/collapsed-strip pattern as PropertiesPanel.tsx, mirrored to the
-// right edge (border-l instead of border-r, ◂/▸ swapped since expanding
-// this panel grows leftward instead of rightward).
-//
-// activities/modelElementLinks/onLink.../onUnlink... just pass through to
-// both tabs' own Activity Link sections (ElementLinkFields.tsx) — this
-// panel doesn't otherwise touch linking itself.
+// IFC structure and properties. Imported 3D assets are managed in 3D Site tools.
 export function DataPanel({
-  open, onToggle, activeTab, onTabChange, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
+  open, onToggle, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
   unloadedCountByModelId, onReloadIfc,
-  meshImports, hiddenIds, onToggleMeshVisible, onUnloadMesh, selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
+  selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
   activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
   activityProfileMapper, onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
   selectedElementLinks, selectionLinksLoading, selectionLinksError, unlinkingSelection,
@@ -113,7 +82,7 @@ export function DataPanel({
     return (
       <button
         onClick={onToggle}
-        title="Show IFC/3D Data"
+        title="Show IFC Data"
         className="w-6 shrink-0 flex items-start justify-center pt-3 bg-white dark:bg-prosota-panel border-l border-gray-200 dark:border-prosota-line text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper"
       >
         ◂
@@ -141,22 +110,9 @@ export function DataPanel({
   return (
     <div className="w-72 shrink-0 bg-white dark:bg-prosota-panel border-l border-gray-200 dark:border-prosota-line flex flex-col overflow-hidden">
       <div className="flex items-center border-b border-gray-200 dark:border-prosota-line shrink-0">
-        <button
-          onClick={() => onTabChange('ifc')}
-          className={`flex-1 text-xs font-bold px-3 py-2 border-b-2 ${
-            activeTab === 'ifc' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
-          }`}
-        >
+        <h2 className="flex-1 text-xs font-bold px-3 py-2 text-gray-900 dark:text-prosota-paper">
           IFC Data{ifcHandles.length > 0 ? ` (${ifcHandles.length})` : ''}
-        </button>
-        <button
-          onClick={() => onTabChange('3d')}
-          className={`flex-1 text-xs font-bold px-3 py-2 border-b-2 ${
-            activeTab === '3d' ? 'border-gray-900 text-gray-900 dark:text-prosota-paper' : 'border-transparent text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper'
-          }`}
-        >
-          3D Data{meshImports.length > 0 ? ` (${meshImports.length})` : ''}
-        </button>
+        </h2>
         <button onClick={onToggle} title="Hide" className="px-2 text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper shrink-0">▸</button>
       </div>
       <section aria-label="Activity links and profiles" className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line bg-gray-50 dark:bg-prosota-panel2 space-y-2 shrink-0 max-h-[50%] overflow-y-auto">
@@ -218,7 +174,6 @@ export function DataPanel({
           {activityProfileMapper}
         </div>
       </section>
-      {activeTab === 'ifc' ? (
         <IfcDataPanel
           handles={ifcHandles}
           activeObjectId={activeObjectId}
@@ -242,23 +197,7 @@ export function DataPanel({
           onAssignProfile={onAssignProfile}
           hideActivityLink={isBulkSelection}
         />
-      ) : (
-        <MeshDataPanel
-          items={meshImports}
-          hiddenIds={hiddenIds}
-          onToggleVisible={onToggleMeshVisible}
-          onUnload={onUnloadMesh}
-          selectedObjectIds={selectedObjectIds}
-          onSelectObject={onSelectObject}
-          unsavedObjectIds={unsavedObjectIds}
-          activities={activities}
-          links={modelElementLinks}
-          animationProfiles={animationProfiles}
-          onLinkElement={onLinkElement}
-          onUnlinkElement={onUnlinkElement}
-          onAssignProfile={onAssignProfile}
-        />
-      )}
+
     </div>
   )
 }

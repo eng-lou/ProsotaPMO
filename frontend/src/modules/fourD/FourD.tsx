@@ -94,7 +94,7 @@ import type { IfcModelHandle } from './ifcModel'
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
 import { ensureMaterialized, hasGeometry, removeElementsFromModel } from './elementBatching'
-import { DataPanel, type DataPanelTab } from './DataPanel'
+import { DataPanel } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
 import { captureSiteObjectState } from './siteObjectTransform'
@@ -3100,7 +3100,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // also isolated the same-numbered element of every other isolated model.
   // An isolated model with no keys of its own is isolated whole.
   const [isolatedElementKeys, setIsolatedElementKeys] = useState<Set<string>>(new Set())
-  const [dataTab, setDataTab] = useState<DataPanelTab>('ifc')
   // Federated/assembly modeling (2026-07-09, per Maro: "allow me to import
   // more than one IFC model or 3d model. so I can start building an
   // assembly or federated model e.g structural IFC, architecture IFC, road
@@ -3751,7 +3750,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       object.userData.siteCaptureId = capture.id
       setSceneObjects(prev => [...prev, { id, name: capture.name, kind: 'mesh', sourceUpAxis: capture.source_up_axis, object, fileId: null }])
       setCaptureSceneObjectIds(prev => ({ ...prev, [capture.id]: id }))
-      setDataTab('3d')
     } catch (err) {
       setProgressVarianceError(progressVarianceErrorMessage(err, 'Failed to load site capture'))
     }
@@ -4269,7 +4267,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       object.userData.siteCaptureId = capture.id
       setSceneObjects(prev => [...prev, { id, name, kind: 'mesh', sourceUpAxis, object, fileId: null }])
       setCaptureSceneObjectIds(prev => ({ ...prev, [capture.id]: id }))
-      setDataTab('3d')
       addImportError(`"${name}" (${cloud.count.toLocaleString()} points) imported and saved as a Site Capture dated today — open the Point Cloud panel to rename/re-date it or run a variance test against it.`)
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import point cloud')
@@ -4297,7 +4294,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setSelectedExpressId(null)
       setSelectedExpressIds(new Set())
       setSceneObjects(prev => [...prev, { id, name, kind: 'ifc', sourceUpAxis, object: handle.object, fileId: null }])
-      setDataTab('ifc')
       await enqueueUpload(() => persistModelFile(id, file, 'ifc', sourceUpAxis, name))
     } catch (err) {
       addImportError(err instanceof Error ? err.message : 'Failed to import IFC file — see console for detail')
@@ -5280,15 +5276,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       console.error('Failed to reload IFC model', err)
       addImportError(`Failed to reload "${fileName}" (${err instanceof Error ? err.message : String(err)}).`)
     }
-  }
-
-  const toggleMeshVisible = (id: string) => {
-    setHiddenIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
   }
 
   // Fixes a wrongly-guessed import axis without re-importing (2026-07-08,
@@ -7134,7 +7121,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // panel later is just a third entry here, not a new rendering path.
   const dockablePanels: (DockedPanel & { dock: PanelSide })[] = []
   if (siteToolsOpen && selectedProject) dockablePanels.push({
-    id: 'site-tools', label: 'Site Tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
+    id: 'site-tools', label: '3D Site tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
     onClose: () => { setSiteToolsOpen(false); siteScene.setDraft(null) },
     content: <SiteToolsPanel selectedShapeSources={() => {
       if (selectedExpressIds.size && activeObjectId) {
@@ -8015,7 +8002,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           Split by Level
         </button>
         <button className={`text-xs px-2.5 py-1 rounded-md border font-medium ${siteToolsOpen ? 'bg-gray-900 text-white' : 'bg-white dark:bg-prosota-panel dark:text-prosota-paper dark:border-prosota-line'}`}
-          onClick={() => { setSiteToolsOpen(v => !v); siteScene.setDraft(null) }}>Site Tools</button>
+          onClick={() => { setSiteToolsOpen(v => !v); siteScene.setDraft(null) }}>3D Site tools</button>
         <button
           onClick={togglePathsPanel}
           className={`text-xs px-2.5 py-1 rounded-md border font-medium ${
@@ -8277,8 +8264,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         <DataPanel
           open={dataPanelOpen}
           onToggle={toggleDataPanel}
-          activeTab={dataTab}
-          onTabChange={setDataTab}
           ifcHandles={ifcHandles}
           activeObjectId={activeObjectId}
           selectedExpressId={selectedExpressId}
@@ -8291,10 +8276,6 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const target = sceneObjects.find(o => o.id === id)
             if (target?.fileId) setReloadIfcTarget({ objectId: id, fileId: target.fileId, fileName: target.name })
           }}
-          meshImports={meshImports}
-          hiddenIds={hiddenIds}
-          onToggleMeshVisible={toggleMeshVisible}
-          onUnloadMesh={requestUnloadModel}
           selectedObjectIds={selectedObjectIds}
           onSelectObject={handleSelectObject}
           unsavedObjectIds={unsavedObjectIds}
